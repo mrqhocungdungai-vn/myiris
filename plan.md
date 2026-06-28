@@ -28,6 +28,14 @@ isProject: false
 
 # Gemini Live Manager + Hermes Worker Plan
 
+> **Note (implemented):** This file captures the original pre-build plan, which
+> assumed a Python voice sidecar. The shipped app moved the Gemini Live + audio
+> path into Electron-native code for better laptop-speaker echo cancellation, and
+> added **camera hand-gesture control** via MediaPipe `GestureRecognizer`
+> (`src/useHandControl.ts`) plus an `html2canvas`-based card disintegration
+> effect. See `README.md` → "Hand & Gesture Control (MediaPipe)" for the full,
+> current details and diagrams.
+
 ## Core Decision
 Use your AI Studio sample as the voice backend foundation, with `MODEL = "models/gemini-3.1-flash-live-preview"`, Zephyr voice, 16 kHz mic input, 24 kHz audio output, and optional camera/screen streaming.
 
