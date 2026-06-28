@@ -3,6 +3,7 @@ import { GoogleGenAI } from "@google/genai";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import os from "node:os";
 
 const { app, BrowserWindow, ipcMain, session, nativeImage, Menu } = electron;
 
@@ -16,10 +17,8 @@ app.setName("Iris");
 const iconPath = path.join(repoRoot, "build", "icon.png");
 const appIcon = fs.existsSync(iconPath) ? nativeImage.createFromPath(iconPath) : null;
 
-function loadEnvFile() {
-  const envPath = path.join(repoRoot, ".env");
-  if (!fs.existsSync(envPath)) return;
-
+function parseEnvFile(envPath) {
+  if (!envPath || !fs.existsSync(envPath)) return;
   const contents = fs.readFileSync(envPath, "utf8");
   for (const rawLine of contents.split(/\r?\n/)) {
     const line = rawLine.trim();
@@ -34,6 +33,17 @@ function loadEnvFile() {
     }
     process.env[key] = value;
   }
+}
+
+// Look for .env in several places so both the dev repo run and a packaged
+// Iris.app can find credentials. First match for a given key wins.
+function loadEnvFile() {
+  const candidates = [
+    path.join(repoRoot, ".env"),
+    path.join(os.homedir(), ".iris", ".env"),
+    process.resourcesPath ? path.join(process.resourcesPath, ".env") : null,
+  ];
+  for (const candidate of candidates) parseEnvFile(candidate);
 }
 
 loadEnvFile();
@@ -505,7 +515,8 @@ function createWindow() {
     },
   });
   const devUrl = process.env.VITE_DEV_SERVER_URL ?? "http://127.0.0.1:5173";
-  if (app.isPackaged) mainWindow.loadFile(path.join(repoRoot, "dist", "index.html"));
+  const useProd = app.isPackaged || process.env.IRIS_START_PROD === "1";
+  if (useProd) mainWindow.loadFile(path.join(repoRoot, "dist", "index.html"));
   else mainWindow.loadURL(devUrl);
 }
 

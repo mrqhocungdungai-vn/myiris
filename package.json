@@ -10,6 +10,10 @@
     "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on tcp:5173 && env -u ELECTRON_RUN_AS_NODE electron .\"",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
+    "start": "npm run build && env -u ELECTRON_RUN_AS_NODE IRIS_START_PROD=1 electron .",
+    "start:prod": "env -u ELECTRON_RUN_AS_NODE IRIS_START_PROD=1 electron .",
+    "package:mac": "npm run build && electron-builder --mac --dir",
+    "dist:mac": "npm run build && electron-builder --mac",
     "electron": "env -u ELECTRON_RUN_AS_NODE electron .",
     "sidecar": ".venv/bin/python sidecar/voice_server.py --mode none",
     "check:python": ".venv/bin/python -m py_compile sidecar/*.py"
@@ -32,6 +36,28 @@
     "@types/react-dom": "latest",
     "concurrently": "latest",
     "electron": "latest",
+    "electron-builder": "^26.15.3",
     "wait-on": "latest"
+  },
+  "build": {
+    "appId": "com.ashr12.iris",
+    "productName": "Iris",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**",
+      "electron/**",
+      "build/icon.png",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "icon": "build/icon.png",
+      "target": [
+        "dir"
+      ]
+    }
   }
 }
