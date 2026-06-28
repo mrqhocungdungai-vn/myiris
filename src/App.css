@@ -748,6 +748,22 @@ button:disabled {
 
 .reader-card.closing {
   pointer-events: none;
+  animation: reader-out 0.18s ease forwards;
+}
+
+.reader-backdrop.closing {
+  animation: reader-fade-out 0.18s ease forwards;
+}
+
+@keyframes reader-out {
+  to {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+@keyframes reader-fade-out {
+  to { opacity: 0; }
 }
 
 .reader-grab {

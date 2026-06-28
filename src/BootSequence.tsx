@@ -35,7 +35,7 @@ export default function BootSequence({ visible }: { visible: boolean }) {
         <span />
       </div>
       <div className="boot-core" />
-      <div className="boot-title">J.A.R.V.I.S</div>
+      <div className="boot-title">I.R.I.S</div>
       <div className="boot-sub">SYSTEM INITIALIZATION</div>
 
       <div className="boot-log">

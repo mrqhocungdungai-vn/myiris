@@ -14,9 +14,9 @@ The app is designed as a voice-first front-end: you speak naturally, Gemini Live
 - Shows conversation in the Comms panel and Hermes jobs in the Hermes Tasks panel.
 - Proactively announces Hermes results when a background task finishes.
 - Supports interruption/barge-in: when you speak over Gemini, playback is flushed.
-- Includes light/dark UI themes, an animated voice orb, and keyboard shortcuts.
-- Adds **camera hand-gesture control** (MediaPipe) so you can drive the UI in the air: point to move a cursor, dwell to open a task, open-palm to scroll, and make a fist to dismiss.
-- Closes expanded task cards with a **Thanos-style disintegration** effect (the card rasterizes and scatters into drifting dust).
+- Uses a dark-only "Orbital Deck" UI with an animated voice orb, waveform, keyboard shortcuts, Comms, Camera/Gesture, and Work Stream columns.
+- Adds **camera hand-gesture control** (MediaPipe) after wake so you can drive the UI in the air: point to move a cursor, dwell to open a task, open-palm to scroll, and make a fist to dismiss.
+- Uses a simple polished reader open/close animation for expanded Hermes results.
 
 ## Current Architecture
 
@@ -63,7 +63,7 @@ flowchart TD
   GeminiLive -->|"serverContent.interrupted"| ElectronMain
   ElectronMain -->|"Flush playback"| ElectronRenderer
 
-  User -->|"Hand in front of webcam"| Camera["Webcam getUserMedia"]
+  User -->|"After wake: hand in front of webcam"| Camera["Webcam getUserMedia"]
   Camera --> MediaPipe["MediaPipe GestureRecognizer (on-device)"]
   MediaPipe -->|"Landmarks + gesture class"| HandHook["useHandControl hook"]
   HandHook -->|"Smoothed pointer + gesture state"| ElectronRenderer
@@ -159,6 +159,7 @@ Files:
 
 - `src/App.tsx`
 - `src/App.css`
+- `src/deck.css`
 - `src/ReactorCore.tsx`
 - `src/BootSequence.tsx`
 - `src/useHandControl.ts` (MediaPipe hand/gesture hook)
@@ -170,9 +171,9 @@ Responsibilities:
 - Downsamples mic audio to 16 kHz PCM.
 - Plays Gemini audio through `AudioContext`.
 - Shows Comms and Hermes Tasks.
-- Supports light/dark theme.
+- Renders the dark-only Orbital Deck layout.
 - Provides keyboard shortcuts.
-- Runs camera hand-gesture control and the card disintegration effect (see below).
+- Runs camera hand-gesture control after wake and simple reader open/close animation.
 
 ### Python Sidecar
 
@@ -182,7 +183,9 @@ This was the original Gemini Live/PyAudio prototype. The current app now uses El
 
 ## Hand & Gesture Control (MediaPipe)
 
-The app can be driven in the air with your webcam. Hand tracking and gesture
+The app can be driven in the air with your webcam. The camera does **not** start
+on app boot; it is enabled automatically after wake, once Gemini Live and mic
+capture are initialized. Hand tracking and gesture
 classification run **fully on-device** using Google's
 [MediaPipe Tasks Vision](https://ai.google.dev/edge/mediapipe/solutions/vision/gesture_recognizer)
 `GestureRecognizer`. No camera frames ever leave your machine — only the derived
@@ -222,8 +225,8 @@ recognizer = await GestureRecognizer.createFromOptions(fileset, {
 
 ### The processing pipeline
 
-1. `navigator.mediaDevices.getUserMedia` opens the front camera at 640×480 into a
-   hidden `<video>` element.
+1. After wake, `navigator.mediaDevices.getUserMedia` opens the front camera at
+   640×480 into a hidden `<video>` element.
 2. A `requestAnimationFrame` loop calls
    `recognizer.recognizeForVideo(video, performance.now())` each frame.
 3. From the result we read the first hand's **landmarks** and the **top gesture**.
@@ -245,7 +248,7 @@ recognizer = await GestureRecognizer.createFromOptions(fileset, {
 | --- | --- |
 | `Pointing_Up` | Move the on-screen cursor; **dwell ~850 ms** over a task card to open it |
 | `Open_Palm` | **Hold-to-scroll** the open reader (joystick: hold high = scroll up, low = scroll down, middle = neutral; speed scales with distance) |
-| `Closed_Fist` | Close the expanded reader (triggers the disintegration effect) |
+| `Closed_Fist` | Close the expanded reader |
 | `None` / other | Idle — pointer hidden |
 
 ### Gesture control flow
@@ -271,21 +274,14 @@ flowchart TD
 
   AppUI -->|"Pointing_Up + dwell 850ms"| OpenCard["Open task card"]
   AppUI -->|"Open_Palm"| Scroll["Hold-to-scroll reader"]
-  AppUI -->|"Closed_Fist"| Close["Close reader -> disintegrate"]
+  AppUI -->|"Closed_Fist"| Close["Close reader"]
 ```
 
-### Card disintegration effect
+### Reader animation
 
-Closing an expanded task card (via fist, ×, Esc, click-out, or drag-away) plays a
-"Thanos snap" dissolve, implemented in `src/App.tsx`:
-
-1. `html2canvas` rasterizes the live card DOM into a single canvas.
-2. Every opaque pixel is distributed across **26 canvases** using a weighted
-   distribution keyed to vertical position, so the dissolve sweeps top-to-bottom.
-3. Each canvas slice is animated with the Web Animations API to drift up/out,
-   rotate, blur, and fade — staggered per slice.
-
-Dependency: [`html2canvas`](https://html2canvas.hertzen.com/).
+Expanded Hermes task results open with a simple scale/fade pop and close with a
+short fade/scale animation. The intentionally simple animation keeps the UI
+clean and avoids expensive DOM rasterization.
 
 ## Gemini Tools
 
@@ -419,15 +415,20 @@ npm run build
 
 - **W**: Wake
 - **S**: Sleep
-- Top-right Sun/Moon icon: toggle light/dark theme
 - Top-right signal icon: live connection indicator
-- Hand-control toggle: enables/disables camera gesture tracking (on by default)
+- Top-right hand icon: manually enables/disables camera gesture tracking
+
+Camera/gesture behavior:
+
+- App boot: camera is off.
+- Wake (`W`): Gemini Live starts, mic capture starts, then camera/gesture control starts automatically.
+- Sleep (`S`): Gemini, mic, and camera/gesture control stop.
 
 ### Hand gestures (when camera control is enabled)
 
 - **Point (index up)**: move the cursor; hold over a task card ~0.85s to open it
 - **Open palm**: hold-to-scroll inside the open reader (high = up, low = down)
-- **Closed fist**: close the reader (plays the disintegration effect)
+- **Closed fist**: close the reader
 
 > The first launch will prompt for camera permission. Frames are processed
 > on-device by MediaPipe and never uploaded.
@@ -438,4 +439,4 @@ npm run build
 - Gemini Live model: `gemini-3.1-flash-live-preview`.
 - Gemini 3.1 Live function calls are synchronous, so Hermes tasks return a `run_id` immediately and finish in the background.
 - Hermes remains your actual worker agent for tool-heavy tasks.
-- Hand tracking uses `@mediapipe/tasks-vision` (`GestureRecognizer`) entirely on-device; the card disintegration effect uses `html2canvas`.
+- Hand tracking uses `@mediapipe/tasks-vision` (`GestureRecognizer`) entirely on-device and starts only after wake unless manually enabled.

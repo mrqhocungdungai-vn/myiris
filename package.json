@@ -17,7 +17,6 @@
     "@google/genai": "^2.10.0",
     "@mediapipe/tasks-vision": "^0.10.35",
     "@vitejs/plugin-react": "latest",
-    "html2canvas": "^1.4.1",
     "lucide-react": "latest",
     "react": "latest",
     "react-dom": "latest",
