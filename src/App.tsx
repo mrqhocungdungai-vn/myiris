@@ -17,6 +17,7 @@ import remarkGfm from "remark-gfm";
 import ReactorCore from "./ReactorCore";
 import BootSequence from "./BootSequence";
 import { useHandControl, type HandState } from "./useHandControl";
+import { makeUiTestData } from "./uiTestData";
 
 type ReactorState = "idle" | "online" | "listening" | "speaking" | "working";
 
@@ -54,6 +55,15 @@ const ORB_ACCENT: Record<ReactorState, string> = {
   speaking: "238, 122, 92",
   working: "120, 180, 120",
 };
+
+const HAND_CONNECTIONS = [
+  [0, 1], [1, 2], [2, 3], [3, 4],
+  [0, 5], [5, 6], [6, 7], [7, 8],
+  [5, 9], [9, 10], [10, 11], [11, 12],
+  [9, 13], [13, 14], [14, 15], [15, 16],
+  [13, 17], [17, 18], [18, 19], [19, 20],
+  [0, 17],
+] as const;
 
 function eventTime(event: SidecarEvent): number {
   return typeof event.timestamp === "number" ? event.timestamp * 1000 : Date.now();
@@ -139,6 +149,7 @@ export default function App() {
   const [logs, setLogs] = useState<LogLine[]>([]);
   const [tasks, setTasks] = useState<TaskCard[]>([]);
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
+  const [focusedTaskId, setFocusedTaskId] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
   const [muted, setMuted] = useState(false);
   const [handControl, setHandControl] = useState(false);
@@ -189,6 +200,9 @@ export default function App() {
       } else if (key === "s" && sidecarRunning) {
         event.preventDefault();
         stop();
+      } else if (key === "d" && import.meta.env.DEV) {
+        event.preventDefault();
+        loadUiTestData();
       }
     }
     window.addEventListener("keydown", onKey);
@@ -511,6 +525,7 @@ export default function App() {
       dwellRef.current = null;
       return;
     }
+    setFocusedTaskId(taskId);
 
     const now = performance.now();
     if (dwellRef.current?.id !== taskId) {
@@ -560,12 +575,13 @@ export default function App() {
 
   const handAction = useMemo(() => {
     if (!hand.present) return { label: "Show your hand", tone: "idle" };
+    if (hand.hands.filter((item) => item.openPalm).length >= 2) return { label: "Two palms · resize", tone: "open" };
     if (hand.fist) return { label: "Closed_Fist · close", tone: "fist" };
     if (hand.openPalm) return { label: "Open_Palm · scroll", tone: "open" };
     if (!hand.pointing) return { label: `${hand.gesture} · idle`, tone: "idle" };
     if (dwellRef.current) return { label: "Hold · opening", tone: "move" };
     return { label: "Pointing_Up · hover", tone: "move" };
-  }, [hand.present, hand.fist, hand.openPalm, hand.pointing, hand.gesture, hand.point?.x, hand.point?.y]);
+  }, [hand.present, hand.hands, hand.fist, hand.openPalm, hand.pointing, hand.gesture, hand.point?.x, hand.point?.y]);
 
   function toggleMute() {
     const stream = inputStreamRef.current;
@@ -582,6 +598,67 @@ export default function App() {
       return b.updatedAt - a.updatedAt;
     });
   }, [tasks]);
+
+  const latestResultTask = useMemo(
+    () => sortedTasks.find((task) => Boolean(task.output || task.error)) ?? null,
+    [sortedTasks],
+  );
+
+  useEffect(() => {
+    if (!hasBridge) return;
+    window.iris.sendUiContext({
+      expandedTaskId,
+      focusedTaskId,
+      latestResultTaskId: latestResultTask?.id ?? null,
+      showHistory,
+      tasks: sortedTasks.map((task) => ({
+        id: task.id,
+        task: task.task,
+        status: task.status,
+        hasResult: Boolean(task.output || task.error),
+        updatedAt: task.updatedAt,
+      })),
+    });
+  }, [hasBridge, expandedTaskId, focusedTaskId, latestResultTask?.id, showHistory, sortedTasks]);
+
+  useEffect(() => {
+    if (!hasBridge) return;
+    return window.iris.onUiAction(({ action, target_id }) => {
+      const taskById = target_id ? tasks.find((task) => task.id === target_id) : null;
+      const currentTask = expandedTaskId ? tasks.find((task) => task.id === expandedTaskId) : null;
+      const focusedTask = focusedTaskId ? tasks.find((task) => task.id === focusedTaskId) : null;
+      const fallbackTask = currentTask || focusedTask || latestResultTask;
+
+      if (action === "open_task") {
+        if (taskById) openTask(taskById);
+        return;
+      }
+      if (action === "open_current_hermes_result") {
+        if (fallbackTask) openTask(fallbackTask);
+        return;
+      }
+      if (action === "open_latest_hermes_result") {
+        if (latestResultTask) openTask(latestResultTask);
+        return;
+      }
+      if (action === "open_hermes_history") {
+        setShowHistory(true);
+        return;
+      }
+      if (action === "close_reader") {
+        closeReader();
+        return;
+      }
+      if (action === "close_history") {
+        setShowHistory(false);
+        return;
+      }
+      if (action === "close_all_overlays") {
+        closeReader();
+        setShowHistory(false);
+      }
+    });
+  }, [hasBridge, tasks, expandedTaskId, focusedTaskId, latestResultTask]);
 
   const caption = useMemo(() => {
     if (!sidecarRunning) return { text: "Press W to wake Iris", dim: true };
@@ -602,6 +679,23 @@ export default function App() {
 
   function closeReader() {
     setExpandedTaskId(null);
+  }
+
+  function loadUiTestData() {
+    const fixture = makeUiTestData();
+    setTasks(fixture.tasks);
+    setTranscript(fixture.transcript);
+    setLogs((current) =>
+      [
+        {
+          id: crypto.randomUUID(),
+          level: "info",
+          message: "Loaded UI test fixture data.",
+          timestamp: Date.now(),
+        },
+        ...current,
+      ].slice(0, MAX_LOGS),
+    );
   }
 
   return (
@@ -663,7 +757,14 @@ export default function App() {
             </div>
             <div className="comms-scroll" ref={commsScrollRef}>
               {transcript.length === 0 ? (
-                <p className="empty">No conversation yet. Wake Iris and start talking.</p>
+                <div className="empty">
+                  <p>No conversation yet. Wake Iris and start talking.</p>
+                  {import.meta.env.DEV ? (
+                    <button className="demo-load" onClick={loadUiTestData}>
+                      Load demo comms
+                    </button>
+                  ) : null}
+                </div>
               ) : (
                 transcript.map((line) => {
                   const self = /you|user/i.test(line.speaker);
@@ -688,6 +789,7 @@ export default function App() {
               <div className="camera-frame">
                 <video ref={handCamRef} autoPlay playsInline muted />
                 <div className="cam-scan" />
+                <HandSkeleton hands={hand.hands} />
                 <span className="cam-status">
                   <i />
                   {hand.present ? "tracking" : "no hand"}
@@ -752,6 +854,11 @@ export default function App() {
             <Terminal size={14} />
             <span>Work Stream</span>
             {tasks.length > 0 ? <span className="count">{tasks.length}</span> : null}
+            {import.meta.env.DEV ? (
+              <button className="view-all" onClick={loadUiTestData} title="Load UI test fixture data">
+                Load demo
+              </button>
+            ) : null}
             {tasks.length > 3 ? (
               <button className="view-all" onClick={() => setShowHistory(true)}>
                 View all <ChevronRight size={12} />
@@ -760,10 +867,22 @@ export default function App() {
           </div>
           <div className="work-scroll" ref={workScrollRef}>
             {tasks.length === 0 ? (
-              <p className="empty">No Hermes runs yet. Ask Iris to take on a task.</p>
+              <div className="empty">
+                <p>No Hermes runs yet. Ask Iris to take on a task.</p>
+                {import.meta.env.DEV ? (
+                  <button className="demo-load" onClick={loadUiTestData}>
+                    Load demo tasks
+                  </button>
+                ) : null}
+              </div>
             ) : (
               sortedTasks.map((task) => (
-                <WorkCard key={task.id} task={task} onOpen={() => openTask(task)} />
+                <WorkCard
+                  key={task.id}
+                  task={task}
+                  onFocus={() => setFocusedTaskId(task.id)}
+                  onOpen={() => openTask(task)}
+                />
               ))
             )}
           </div>
@@ -802,15 +921,22 @@ export default function App() {
       />
     ) : null}
 
-    {handControl && hand.present && hand.point ? (
-      <div
-        className={`hand-reticle ${dwellRef.current ? "dwell" : ""} ${hand.pointing ? "pointing" : ""} ${hand.openPalm ? "open" : ""} ${hand.fist ? "fist" : ""}`}
-        style={{ transform: `translate(${hand.point.x}px, ${hand.point.y}px)` }}
-      >
-        <span className="hand-ring" />
-        <span className="hand-dot" />
-      </div>
-    ) : null}
+    {handControl && hand.present
+      ? (hand.hands.length ? hand.hands : hand.point ? [{ ...hand, id: "hand-0", point: hand.point }] : []).map(
+          (item, index) => (
+            <div
+              key={item.id}
+              className={`hand-reticle ${index > 0 ? "secondary" : ""} ${
+                index === 0 && dwellRef.current ? "dwell" : ""
+              } ${item.pointing ? "pointing" : ""} ${item.openPalm ? "open" : ""} ${item.fist ? "fist" : ""}`}
+              style={{ transform: `translate(${item.point.x}px, ${item.point.y}px)` }}
+            >
+              <span className="hand-ring" />
+              <span className="hand-dot" />
+            </div>
+          ),
+        )
+      : null}
     </>
   );
 }
@@ -821,6 +947,35 @@ function StatusDot({ tone, state, label }: { tone: string; state: string; label:
       <i />
       {label}
     </span>
+  );
+}
+
+function HandSkeleton({ hands }: { hands: HandState["hands"] }) {
+  if (!hands.length) return null;
+  return (
+    <svg className="hand-skeleton" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+      {hands.map((hand, handIndex) => (
+        <g key={hand.id} className={handIndex > 0 ? "secondary" : ""}>
+          {HAND_CONNECTIONS.map(([from, to]) => {
+            const a = hand.landmarks[from];
+            const b = hand.landmarks[to];
+            if (!a || !b) return null;
+            return (
+              <line
+                key={`${from}-${to}`}
+                x1={a.x * 100}
+                y1={a.y * 100}
+                x2={b.x * 100}
+                y2={b.y * 100}
+              />
+            );
+          })}
+          {hand.landmarks.map((landmark, index) => (
+            <circle key={index} cx={landmark.x * 100} cy={landmark.y * 100} r={index === 8 ? 1.45 : 1.05} />
+          ))}
+        </g>
+      ))}
+    </svg>
   );
 }
 
@@ -872,7 +1027,7 @@ function Telemetry({
   );
 }
 
-function WorkCard({ task, onOpen }: { task: TaskCard; onOpen: () => void }) {
+function WorkCard({ task, onFocus, onOpen }: { task: TaskCard; onFocus: () => void; onOpen: () => void }) {
   const expandable = Boolean(task.output || task.error);
   const status = task.status.toLowerCase();
   const active = !TERMINAL.has(status);
@@ -880,7 +1035,10 @@ function WorkCard({ task, onOpen }: { task: TaskCard; onOpen: () => void }) {
     <article
       className={`wcard ${active ? "working" : ""} ${expandable ? "expandable" : ""}`}
       data-task-id={expandable ? task.id : undefined}
+      onPointerEnter={onFocus}
+      onFocus={onFocus}
       onClick={onOpen}
+      tabIndex={expandable ? 0 : -1}
     >
       <div className="wcard-top">
         <span className={`badge ${status}`}>{task.status}</span>
@@ -933,7 +1091,7 @@ function HistoryDrawer({
         </div>
         <div className="history-grid">
           {tasks.map((task) => (
-            <WorkCard key={task.id} task={task} onOpen={() => onOpen(task)} />
+            <WorkCard key={task.id} task={task} onFocus={() => undefined} onOpen={() => onOpen(task)} />
           ))}
         </div>
       </div>
@@ -951,11 +1109,14 @@ function ExpandedReader({
   onClose: () => void;
 }) {
   const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const [readerScale, setReaderScale] = useState(1);
   const [dragging, setDragging] = useState(false);
   const [closing, setClosing] = useState(false);
   const startRef = useRef<{ x: number; y: number } | null>(null);
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const handRef = useRef<HandState | null>(hand);
+  const readerScaleRef = useRef(1);
+  const zoomRef = useRef<{ distance: number; scale: number } | null>(null);
   handRef.current = hand;
 
   const CLOSE_DISTANCE = 160;
@@ -983,10 +1144,28 @@ function ExpandedReader({
   // Speed is proportional to the distance from center and continues while held.
   useEffect(() => {
     let raf = 0;
+    const distance = (a: { x: number; y: number }, b: { x: number; y: number }) =>
+      Math.hypot(a.x - b.x, a.y - b.y);
     const loop = () => {
       const h = handRef.current;
       const body = bodyRef.current;
-      if (h?.openPalm && h.point && body) {
+      const openHands = h?.hands.filter((item) => item.openPalm && item.point) ?? [];
+      if (openHands.length >= 2) {
+        const currentDistance = distance(openHands[0].point, openHands[1].point);
+        if (!zoomRef.current) {
+          zoomRef.current = { distance: currentDistance, scale: readerScaleRef.current };
+        }
+        const ratio = currentDistance / Math.max(80, zoomRef.current.distance);
+        const next = Math.max(0.72, Math.min(1.28, zoomRef.current.scale * ratio));
+        if (Math.abs(next - readerScaleRef.current) > 0.004) {
+          readerScaleRef.current = next;
+          setReaderScale(next);
+        }
+      } else {
+        zoomRef.current = null;
+      }
+
+      if (openHands.length < 2 && h?.openPalm && h.point && body) {
         const rect = body.getBoundingClientRect();
         const center = rect.top + rect.height / 2;
         const deadZone = Math.max(40, rect.height * 0.12);
@@ -1043,7 +1222,7 @@ function ExpandedReader({
       <article
         className={`reader-card ${dragging ? "dragging" : ""} ${closing ? "closing" : ""}`}
         style={{
-          "--reader-transform": `translate(${offset.x}px, ${offset.y}px) scale(${1 - dim * 0.08})`,
+          "--reader-transform": `translate(${offset.x}px, ${offset.y}px) scale(${readerScale * (1 - dim * 0.08)})`,
         } as CSSProperties}
       >
         <header
@@ -1077,7 +1256,7 @@ function ExpandedReader({
         </div>
         <div className="reader-hint">
           {hand
-            ? "Open palm — hold high to scroll up, low to scroll down · Fist to close"
+            ? "Open palm — hold high/low to scroll · Two open palms resize · Fist to close"
             : "Scroll to read · Esc or × to close"}
         </div>
       </article>

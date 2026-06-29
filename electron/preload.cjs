@@ -5,7 +5,13 @@ contextBridge.exposeInMainWorld("iris", {
   stopSidecar: () => ipcRenderer.invoke("sidecar:stop"),
   getSidecarStatus: () => ipcRenderer.invoke("sidecar:status"),
   sendCommand: (command) => ipcRenderer.invoke("sidecar:command", command),
+  sendUiContext: (context) => ipcRenderer.send("iris:ui-context", context),
   sendAudioChunk: (chunk) => ipcRenderer.send("live:audio", chunk),
+  onUiAction: (callback) => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on("iris:ui-action", handler);
+    return () => ipcRenderer.removeListener("iris:ui-action", handler);
+  },
   onAudioChunk: (callback) => {
     const handler = (_event, payload) => callback(payload);
     ipcRenderer.on("live:audio", handler);

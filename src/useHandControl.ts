@@ -2,6 +2,18 @@ import { useEffect, useState } from "react";
 import { FilesetResolver, GestureRecognizer } from "@mediapipe/tasks-vision";
 
 export type HandPoint = { x: number; y: number };
+export type HandLandmark = { x: number; y: number };
+
+export type TrackedHand = {
+  id: string;
+  point: HandPoint;
+  landmarks: HandLandmark[];
+  gesture: string;
+  gestureScore: number;
+  pointing: boolean;
+  openPalm: boolean;
+  fist: boolean;
+};
 
 export type HandState = {
   active: boolean;
@@ -12,6 +24,7 @@ export type HandState = {
   pointing: boolean;
   openPalm: boolean;
   fist: boolean;
+  hands: TrackedHand[];
 };
 
 // Keep this version in sync with the @mediapipe/tasks-vision version in
@@ -47,6 +60,7 @@ const EMPTY_STATE: HandState = {
   pointing: false,
   openPalm: false,
   fist: false,
+  hands: [],
 };
 
 /**
@@ -77,9 +91,11 @@ export function useHandControl(enabled: boolean) {
     video.muted = true;
 
     let smooth: HandPoint | null = null;
-    let stableGesture = "None";
-    let candidateGesture = "None";
-    let candidateFrames = 0;
+    let primaryId = "";
+    let primaryPoint: HandPoint | null = null;
+    const stableGestureById = new Map<string, string>();
+    const candidateGestureById = new Map<string, string>();
+    const candidateFramesById = new Map<string, number>();
 
     async function setup() {
       try {
@@ -87,7 +103,7 @@ export function useHandControl(enabled: boolean) {
         recognizer = await GestureRecognizer.createFromOptions(fileset, {
           baseOptions: { modelAssetPath: MODEL_URL, delegate: "GPU" },
           runningMode: "VIDEO",
-          numHands: 1,
+          numHands: 2,
           minHandDetectionConfidence: 0.6,
           minHandPresenceConfidence: 0.6,
           minTrackingConfidence: 0.6,
@@ -111,17 +127,49 @@ export function useHandControl(enabled: boolean) {
       }
     }
 
-    function stabilizeGesture(rawGesture: string) {
+    function stabilizeGesture(id: string, rawGesture: string) {
+      const candidateGesture = candidateGestureById.get(id) ?? "None";
+      const candidateFrames = candidateFramesById.get(id) ?? 0;
       if (rawGesture === candidateGesture) {
-        candidateFrames = Math.min(candidateFrames + 1, 8);
+        candidateFramesById.set(id, Math.min(candidateFrames + 1, 8));
       } else {
-        candidateGesture = rawGesture;
-        candidateFrames = 1;
+        candidateGestureById.set(id, rawGesture);
+        candidateFramesById.set(id, 1);
       }
-      if (candidateFrames >= 3) {
-        stableGesture = candidateGesture;
+      if ((candidateFramesById.get(id) ?? 0) >= 3) {
+        stableGestureById.set(id, rawGesture);
       }
-      return stableGesture;
+      return stableGestureById.get(id) ?? "None";
+    }
+
+    function nearestTo(point: HandPoint, hands: TrackedHand[]) {
+      return hands.reduce((best, hand) => {
+        const bestDistance = Math.hypot(best.point.x - point.x, best.point.y - point.y);
+        const handDistance = Math.hypot(hand.point.x - point.x, hand.point.y - point.y);
+        return handDistance < bestDistance ? hand : best;
+      }, hands[0]);
+    }
+
+    function choosePrimary(hands: TrackedHand[]) {
+      const pointingHands = hands.filter((hand) => hand.pointing);
+      const previous = hands.find((hand) => hand.id === primaryId);
+
+      // If only one hand is intentionally pointing, switch to it immediately.
+      // This fixes the "wrong hand stays primary" issue when both hands are visible.
+      if (pointingHands.length === 1) return pointingHands[0];
+
+      // If both point, avoid flicker by keeping the existing primary if possible.
+      if (pointingHands.length > 1) {
+        const previousPointing = pointingHands.find((hand) => hand.id === primaryId);
+        if (previousPointing) return previousPointing;
+        if (primaryPoint) return nearestTo(primaryPoint, pointingHands);
+        return pointingHands[0];
+      }
+
+      // No pointing hand: preserve continuity for scroll/resize/read states.
+      if (previous) return previous;
+      if (primaryPoint) return nearestTo(primaryPoint, hands);
+      return hands[0];
     }
 
     function loop() {
@@ -129,42 +177,72 @@ export function useHandControl(enabled: boolean) {
       if (video.readyState >= 2) {
         const now = performance.now();
         const result = recognizer.recognizeForVideo(video, now);
-        const hand = result.landmarks?.[0];
-        const topGesture = result.gestures?.[0]?.[0];
+        const landmarks = result.landmarks ?? [];
+        const gestures = result.gestures ?? [];
 
-        if (hand && topGesture) {
-          const score = topGesture.score ?? 0;
-          const rawGesture = score >= 0.55 ? topGesture.categoryName ?? "None" : "None";
-          const gesture = stabilizeGesture(rawGesture);
-          const indexTip = hand[8];
+        if (landmarks.length > 0) {
+          const detected = landmarks.slice(0, 2).map((hand, index) => {
+            const topGesture = gestures[index]?.[0];
+            const score = topGesture?.score ?? 0;
+            const rawGesture = score >= 0.55 ? topGesture?.categoryName ?? "None" : "None";
+            const indexTip = hand[8];
+            const mirroredX = 1 - indexTip.x;
+            const point = {
+              x: remapToScreen(mirroredX, INPUT_RANGE.xMin, INPUT_RANGE.xMax, window.innerWidth),
+              y: remapToScreen(indexTip.y, INPUT_RANGE.yMin, INPUT_RANGE.yMax, window.innerHeight),
+            };
+            return {
+              rawGesture,
+              score,
+              point,
+              landmarks: hand.map((landmark) => ({ x: 1 - landmark.x, y: landmark.y })),
+            };
+          });
 
-          const mirroredX = 1 - indexTip.x;
-          const raw: HandPoint = {
-            x: remapToScreen(mirroredX, INPUT_RANGE.xMin, INPUT_RANGE.xMax, window.innerWidth),
-            y: remapToScreen(indexTip.y, INPUT_RANGE.yMin, INPUT_RANGE.yMax, window.innerHeight),
-          };
+          const byX = [...detected].sort((a, b) => a.point.x - b.point.x);
+          const hands: TrackedHand[] = detected.map((hand) => {
+            const id = detected.length === 1 ? "single" : hand === byX[0] ? "left" : "right";
+            const gesture = stabilizeGesture(id, hand.rawGesture);
+            return {
+              id,
+              point: hand.point,
+              landmarks: hand.landmarks,
+              gesture,
+              gestureScore: hand.score,
+              pointing: gesture === "Pointing_Up",
+              openPalm: gesture === "Open_Palm",
+              fist: gesture === "Closed_Fist",
+            };
+          });
+
+          const primary = choosePrimary(hands);
+          primaryId = primary.id;
           smooth = smooth
-            ? { x: smooth.x + (raw.x - smooth.x) * 0.5, y: smooth.y + (raw.y - smooth.y) * 0.5 }
-            : raw;
+            ? {
+                x: smooth.x + (primary.point.x - smooth.x) * 0.5,
+                y: smooth.y + (primary.point.y - smooth.y) * 0.5,
+              }
+            : primary.point;
+          primaryPoint = smooth;
 
-          const pointing = gesture === "Pointing_Up";
-          const openPalm = gesture === "Open_Palm";
-          const fist = gesture === "Closed_Fist";
           setState({
             active: true,
             present: true,
             point: smooth,
-            gesture,
-            gestureScore: score,
-            pointing,
-            openPalm,
-            fist,
+            gesture: primary.gesture,
+            gestureScore: primary.gestureScore,
+            pointing: primary.pointing,
+            openPalm: primary.openPalm,
+            fist: primary.fist,
+            hands: hands.map((item) => (item === primary ? { ...item, point: smooth! } : item)),
           });
         } else {
           smooth = null;
-          candidateGesture = "None";
-          candidateFrames = 0;
-          stableGesture = "None";
+          primaryId = "";
+          primaryPoint = null;
+          stableGestureById.clear();
+          candidateGestureById.clear();
+          candidateFramesById.clear();
           setState({ ...EMPTY_STATE, active: true });
         }
       }

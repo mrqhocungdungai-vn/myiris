@@ -56,6 +56,13 @@ let userTranscriptBuffer = "";
 let modelTranscriptBuffer = "";
 const hermesRuns = new Map();
 const pendingHermesAnnouncements = [];
+let irisUiContext = {
+  tasks: [],
+  expandedTaskId: null,
+  focusedTaskId: null,
+  latestResultTaskId: null,
+  showHistory: false,
+};
 
 function emitToRenderer(channel, payload) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
@@ -154,7 +161,28 @@ async function approveHermesAction({ run_id, choice }) {
   return hermesRequest("POST", `/v1/runs/${run_id}/approval`, { choice });
 }
 
-async function executeHermesTool(name, args = {}) {
+function getIrisUiContext() {
+  return irisUiContext;
+}
+
+function controlIrisUi({ action, target_id = undefined }) {
+  const allowed = new Set([
+    "open_latest_hermes_result",
+    "open_current_hermes_result",
+    "open_task",
+    "open_hermes_history",
+    "close_reader",
+    "close_history",
+    "close_all_overlays",
+  ]);
+  if (!allowed.has(action)) {
+    return { status: "error", error: `Unknown UI action: ${action}` };
+  }
+  emitToRenderer("iris:ui-action", { action, target_id });
+  return { status: "sent", action, target_id };
+}
+
+async function executeTool(name, args = {}) {
   switch (name) {
     case "check_hermes_status":
       return checkHermesStatus();
@@ -166,6 +194,10 @@ async function executeHermesTool(name, args = {}) {
       return stopHermesTask(args);
     case "approve_hermes_action":
       return approveHermesAction(args);
+    case "get_iris_ui_context":
+      return getIrisUiContext();
+    case "control_iris_ui":
+      return controlIrisUi(args);
     default:
       return { status: "error", error: `Unknown tool: ${name}` };
   }
@@ -297,6 +329,41 @@ function buildHermesTools() {
   ];
 }
 
+function buildIrisUiTools() {
+  return [
+    {
+      functionDeclarations: [
+        {
+          name: "get_iris_ui_context",
+          description:
+            "Get the current Iris UI context: visible Hermes tasks, latest result task, focused task, expanded task, and whether history is open. Use before UI-only voice commands like 'open that', 'show latest result', 'close it', or 'show history'.",
+          parameters: { type: "object", properties: {} },
+        },
+        {
+          name: "control_iris_ui",
+          description:
+            "Control the Iris UI directly for UI-only requests. Use this instead of Hermes when the user asks to open/show/close the current result, latest Hermes result, task history, or overlays.",
+          parameters: {
+            type: "object",
+            properties: {
+              action: {
+                type: "string",
+                description:
+                  "One of: open_latest_hermes_result, open_current_hermes_result, open_task, open_hermes_history, close_reader, close_history, close_all_overlays.",
+              },
+              target_id: {
+                type: "string",
+                description: "Optional Hermes task id for open_task.",
+              },
+            },
+            required: ["action"],
+          },
+        },
+      ],
+    },
+  ];
+}
+
 function buildLiveConfig() {
   return {
     responseModalities: ["AUDIO"],
@@ -317,6 +384,7 @@ function buildLiveConfig() {
     tools: [
       { googleSearch: {} },
       ...buildHermesTools(),
+      ...buildIrisUiTools(),
     ],
     systemInstruction: {
       parts: [
@@ -327,6 +395,8 @@ function buildLiveConfig() {
             "You also have built-in Google Search. Use Google Search directly for quick current facts, simple web lookups, and lightweight questions that do not need Hermes to do work.",
             `CRITICAL: Be decisive. Do not ask clarifying questions for actionable tasks. If ${userDisplayName()} asks for a deal, research, coding, checking something, building something, or any work, immediately call submit_hermes_task with the request.`,
             "Routing rule: quick answer or fact lookup -> Google Search; multi-step work, monitoring, files, email, deals, coding, automation, or anything that should continue in the background -> Hermes.",
+            "UI control rule: If the user says things like 'open it', 'open that result', 'show latest Hermes result', 'show history', 'close it', 'go back', or 'open the current task', use get_iris_ui_context and control_iris_ui. Do not send those UI-only commands to Hermes.",
+            "When a UI command is ambiguous, prefer the expanded task first, then the focused task, then the latest Hermes result. Keep the spoken acknowledgement short.",
             `When you call submit_hermes_task, write the 'task' as a COMPLETE, self-contained brief. Hermes cannot hear this conversation, so do not send a short paraphrase. Expand what ${userDisplayName()} said into a precise, detailed instruction that captures the goal, every concrete detail mentioned (names, numbers, URLs, dates, budgets, preferences, constraints), any reasonable defaults you are assuming, and the expected result/format. Write it as if Hermes has zero prior context.`,
             `After submit_hermes_task returns, say one short acknowledgement like: On it, Hermes is handling that now. (Keep what you SAY to ${userDisplayName()} short, even though the task you SENT to Hermes is detailed.)`,
             `When you receive SYSTEM_EVENT_SESSION_START, immediately speak a warm welcome-back greeting to ${userDisplayName()} as instructed, without waiting for the user to talk first.`,
@@ -416,7 +486,7 @@ async function handleToolCall(toolCall) {
   for (const call of toolCall.functionCalls || []) {
     emitEvent({ type: "tool_call", name: call.name, args: call.args || {} });
     try {
-      const result = await executeHermesTool(call.name, call.args || {});
+      const result = await executeTool(call.name, call.args || {});
       functionResponses.push({ id: call.id, name: call.name, response: { result } });
     } catch (error) {
       functionResponses.push({
@@ -565,6 +635,11 @@ app.whenReady().then(() => {
   ipcMain.handle("sidecar:status", () => liveStatus);
   ipcMain.handle("sidecar:command", (_event, command) => sendCommand(command));
   ipcMain.on("live:audio", (_event, chunk) => sendAudioChunk(chunk));
+  ipcMain.on("iris:ui-context", (_event, context) => {
+    if (context && typeof context === "object") {
+      irisUiContext = context;
+    }
+  });
   createWindow();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

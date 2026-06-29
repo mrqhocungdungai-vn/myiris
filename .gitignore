@@ -9,3 +9,4 @@ __pycache__/
 *.pyc
 *.log
 sidecar/runtime/
+roadmap.md

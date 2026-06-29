@@ -365,6 +365,17 @@ button:disabled {
   box-shadow: 0 0 12px rgba(255, 210, 122, 0.95);
 }
 
+.hand-reticle.secondary .hand-ring {
+  border-style: dashed;
+  opacity: 0.82;
+}
+
+.hand-reticle.secondary .hand-dot {
+  width: 6px;
+  height: 6px;
+  margin: -3px 0 0 -3px;
+}
+
 .hand-hint {
   position: fixed;
   left: 50%;
