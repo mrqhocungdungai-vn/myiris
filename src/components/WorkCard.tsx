@@ -20,6 +20,38 @@ export function StepIcon({ tool }: { tool: string }) {
   return <Cpu size={13} />;
 }
 
+// Shared tool-step timeline (used on cards and inside the open reader).
+export function StepTimeline({ steps }: { steps: NonNullable<TaskCard["steps"]> }) {
+  return (
+    <ul className="activity-timeline">
+      {steps.map((step) => {
+        const detail = stepDetail(step);
+        return (
+          <li key={step.id} className={`activity-step ${step.status} ${toolCategory(step.tool)}`}>
+            <span className="step-icon">
+              <StepIcon tool={step.tool} />
+            </span>
+            <span className="step-main">
+              <span className="step-tool">{prettyToolName(step.tool)}</span>
+              {detail ? <span className="step-detail">{detail}</span> : null}
+            </span>
+            <span className="step-meta">
+              {step.duration !== undefined ? <em>{step.duration.toFixed(1)}s</em> : null}
+              {step.status === "running" ? (
+                <span className="step-run" />
+              ) : step.status === "error" ? (
+                <X size={12} className="step-x" />
+              ) : (
+                <Check size={12} className="step-ok" />
+              )}
+            </span>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 export default function WorkCard({
   task,
   accepted = false,
@@ -86,34 +118,7 @@ export default function WorkCard({
             {steps.length} step{steps.length === 1 ? "" : "s"}
             <ChevronDown size={12} className="chev" />
           </button>
-          {showSteps ? (
-            <ul className="activity-timeline">
-              {steps.map((step) => {
-                const detail = stepDetail(step);
-                return (
-                  <li key={step.id} className={`activity-step ${step.status} ${toolCategory(step.tool)}`}>
-                    <span className="step-icon">
-                      <StepIcon tool={step.tool} />
-                    </span>
-                    <span className="step-main">
-                      <span className="step-tool">{prettyToolName(step.tool)}</span>
-                      {detail ? <span className="step-detail">{detail}</span> : null}
-                    </span>
-                    <span className="step-meta">
-                      {step.duration !== undefined ? <em>{step.duration.toFixed(1)}s</em> : null}
-                      {step.status === "running" ? (
-                        <span className="step-run" />
-                      ) : step.status === "error" ? (
-                        <X size={12} className="step-x" />
-                      ) : (
-                        <Check size={12} className="step-ok" />
-                      )}
-                    </span>
-                  </li>
-                );
-              })}
-            </ul>
-          ) : null}
+          {showSteps ? <StepTimeline steps={steps} /> : null}
         </div>
       ) : null}
 

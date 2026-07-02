@@ -1,4 +1,4 @@
-import { type RefObject } from "react";
+import { useEffect, useRef } from "react";
 import { Camera } from "lucide-react";
 import type { HandState } from "../hooks/useHandControl";
 
@@ -43,16 +43,22 @@ export function HandSkeleton({ hands }: { hands: HandState["hands"] }) {
 export default function CameraDock({
   handControl,
   hand,
-  videoRef,
+  stream,
   actionLabel,
   actionTone,
 }: {
   handControl: boolean;
   hand: HandState;
-  videoRef: RefObject<HTMLVideoElement | null>;
+  stream: MediaStream | null;
   actionLabel: string;
   actionTone: string;
 }) {
+  // Owns its own srcObject assignment so the feed survives remounts (e.g.
+  // returning from HUD mode re-creates this video element).
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  useEffect(() => {
+    if (videoRef.current) videoRef.current.srcObject = stream;
+  }, [stream, handControl]);
   return (
     <section className={`deck-panel camera-dock ${handControl ? "" : "off"}`}>
       <div className="col-head">

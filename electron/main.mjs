@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import os from "node:os";
 
-const { app, BrowserWindow, ipcMain, session, nativeImage, Menu } = electron;
+const { app, BrowserWindow, ipcMain, session, nativeImage, Menu, Tray, screen, globalShortcut } = electron;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
@@ -917,17 +917,17 @@ function buildIrisUiTools() {
               action: {
                 type: "string",
                 description:
-                  "One of: open_latest_hermes_result, open_current_hermes_result, open_task, open_task_by_query, open_hermes_history, close_reader, close_history, close_all_overlays, show_task_steps, hide_task_steps. Use show_task_steps/hide_task_steps to expand or collapse the live tool-step timeline on a Hermes card (defaults to the currently running task).",
+                  "One of: open_latest_hermes_result, open_current_hermes_result, open_task, open_task_by_query, open_hermes_history, close_reader, close_history, close_all_overlays, show_task_steps, hide_task_steps. Use show_task_steps/hide_task_steps to expand or collapse the tool-step timeline for a Hermes task; when the user names a specific card, pass its words in `query` (or its exact id in `target_id`). With no target, steps default to the card the user is currently viewing (open reader / focused), then the running task.",
               },
               target_id: {
                 type: "string",
                 description:
-                  "Optional Hermes task id for open_task, show_task_steps, or hide_task_steps. If omitted for steps, Iris uses the currently running task.",
+                  "Optional Hermes task id for open_task, show_task_steps, or hide_task_steps.",
               },
               query: {
                 type: "string",
                 description:
-                  "Loose words from the user for open_task_by_query, e.g. 'failed one', 'Hermes API', 'package Iris', 'two hand design'. The renderer will fuzzy-match this against visible task titles/status. If several cards match closely, Iris will show a chooser overlay with the top matches instead of guessing.",
+                  "Loose words from the user identifying a card, usable with open_task_by_query, show_task_steps, and hide_task_steps — e.g. 'failed one', 'Hermes API', 'the deals card', 'second one'. The renderer fuzzy-matches this against visible task titles/status. For open_task_by_query, close matches show a chooser overlay instead of guessing.",
               },
             },
             required: ["action"],
@@ -973,7 +973,7 @@ function buildLiveConfig() {
             "After submitting a task, your only statement is a short acknowledgement that Hermes has started. Never phrase it as if any result exists yet.",
             "Routing rule: quick answer, fact lookup, or general chat -> answer directly or use Google Search; dispatch to Hermes ONLY when explicitly requested as described above.",
             "UI control rule: If the user says things like 'open it', 'open that result', 'show latest Hermes result', 'show history', 'close it', 'go back', or 'open the current task', use get_iris_ui_context and control_iris_ui. Do not send those UI-only commands to Hermes.",
-            "Also handle these UI-only commands with control_iris_ui (never Hermes): 'show the steps' / 'what is it doing' / 'show what tools it used' -> show_task_steps (defaults to the running task; pass target_id only if they name a specific card); 'hide the steps' -> hide_task_steps.",
+            "Also handle these UI-only commands with control_iris_ui (never Hermes): 'show the steps' / 'what is it doing' / 'show what tools it used' -> show_task_steps; 'hide the steps' -> hide_task_steps. If they name a specific card ('steps for the deals one', 'steps for the second card'), pass those words in query. With no target named, steps apply to the card they are viewing (open reader first), else the running task.",
             "If the user refers to a task by partial words from the task header, like 'open the failed one', 'open Hermes API', 'open package Iris', or 'open two hand design', call control_iris_ui with action open_task_by_query and put those words in query. Do not require an exact title match.",
             "If Iris shows a task chooser because multiple cards matched, the user can click a choice or say first/second/third; use get_iris_ui_context to inspect pendingTaskMatches before opening a specific task.",
             "When a UI command is ambiguous, prefer the expanded task first, then the focused task, then the latest Hermes result. Keep the spoken acknowledgement short.",
@@ -1069,6 +1069,7 @@ async function startLive() {
         emitEvent({ type: "sidecar_status", status: { running: true, pid: process.pid, model, mode: "webrtc-aec" } });
         emitEvent({ type: "gemini_status", status: "connected", model });
         emitEvent({ type: "audio_state", state: "listening" });
+        updateTrayMenu();
       },
       onmessage(message) {
         handleLiveMessage(message);
@@ -1189,6 +1190,7 @@ async function stopLive() {
   emitEvent({ type: "gemini_status", status: "offline" });
   emitEvent({ type: "audio_state", state: "idle" });
   emitEvent({ type: "sidecar_status", status: liveStatus });
+  updateTrayMenu();
   return liveStatus;
 }
 
@@ -1214,26 +1216,137 @@ function sendCommand(command) {
 }
 
 function createWindow() {
+  // Frameless + transparent from birth so the same window can morph into the
+  // Glass HUD overlay. The deck paints its own rounded background in CSS, and
+  // the top bar provides custom window controls (native traffic lights don't
+  // exist on transparent windows).
   mainWindow = new BrowserWindow({
     width: 1180,
     height: 860,
     minWidth: 1120,
     minHeight: 820,
-    backgroundColor: "#050712",
+    show: false,
+    frame: false,
+    transparent: true,
+    backgroundColor: "#00000000",
+    hasShadow: true,
+    fullscreenable: false,
     ...(appIcon ? { icon: appIcon } : {}),
-    titleBarStyle: "hiddenInset",
-    trafficLightPosition: { x: 14, y: 14 },
-    vibrancy: "under-window",
     webPreferences: {
       preload: path.join(repoRoot, "electron", "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
+      // Audio capture/playback and the HUD must keep running when occluded.
+      backgroundThrottling: false,
     },
   });
   const devUrl = process.env.VITE_DEV_SERVER_URL ?? "http://127.0.0.1:5173";
   const useProd = app.isPackaged || process.env.IRIS_START_PROD === "1";
   if (useProd) mainWindow.loadFile(path.join(repoRoot, "dist", "index.html"));
   else mainWindow.loadURL(devUrl);
+  // Avoid a translucent first-paint flash on the transparent window.
+  mainWindow.once("ready-to-show", () => mainWindow?.show());
+  mainWindow.on("closed", () => {
+    mainWindow = null;
+    uiMode = "deck";
+  });
+}
+
+// ===== Glass HUD =====
+// One window, two shapes. Deck: a normal rounded app window. HUD: the same
+// window stretched over the whole screen, transparent, always on top, and
+// click-through except where the renderer marks interactive elements — Iris
+// floats over everything while you keep working underneath.
+let uiMode = "deck";
+let deckBounds = null;
+
+function enterHud() {
+  if (!mainWindow || uiMode === "hud") return;
+  uiMode = "hud";
+  deckBounds = mainWindow.getBounds();
+  // Let the renderer fade the deck out before the window jumps to full screen.
+  emitToRenderer("hud:mode", { mode: "hud" });
+  setTimeout(() => {
+    if (!mainWindow || uiMode !== "hud") return;
+    const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+    mainWindow.setHasShadow(false);
+    mainWindow.setMinimumSize(1, 1);
+    mainWindow.setBounds(display.bounds);
+    mainWindow.setAlwaysOnTop(true, "screen-saver");
+    mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    mainWindow.setIgnoreMouseEvents(true, { forward: true });
+    mainWindow.show();
+  }, 170);
+}
+
+function exitHud() {
+  if (!mainWindow || uiMode === "deck") return;
+  uiMode = "deck";
+  mainWindow.setIgnoreMouseEvents(false);
+  // Tell the renderer first (the deck mounts invisible and fades in), then
+  // restore the window while it's still transparent — no stretched flash.
+  emitToRenderer("hud:mode", { mode: "deck" });
+  setTimeout(() => {
+    if (!mainWindow || uiMode !== "deck") return;
+    mainWindow.setAlwaysOnTop(false);
+    mainWindow.setVisibleOnAllWorkspaces(false);
+    mainWindow.setHasShadow(true);
+    mainWindow.setMinimumSize(1120, 820);
+    if (deckBounds) mainWindow.setBounds(deckBounds);
+    mainWindow.show();
+    mainWindow.focus();
+  }, 170);
+}
+
+function toggleHud() {
+  if (!mainWindow) {
+    createWindow();
+    return;
+  }
+  if (uiMode === "hud") exitHud();
+  else enterHud();
+}
+
+// ===== Tray (menu-bar presence) =====
+let tray = null;
+
+function updateTrayMenu() {
+  if (!tray) return;
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      {
+        label: liveStatus.running ? "Sleep Iris" : "Wake Iris",
+        click: () => emitToRenderer(liveStatus.running ? "iris:sleep" : "iris:wake", {}),
+      },
+      { label: uiMode === "hud" ? "Exit Glass HUD" : "Enter Glass HUD", click: () => toggleHud() },
+      { type: "separator" },
+      {
+        label: "Show Deck",
+        click: () => {
+          if (!mainWindow) createWindow();
+          else {
+            exitHud();
+            mainWindow.show();
+            mainWindow.focus();
+          }
+        },
+      },
+      { type: "separator" },
+      { label: "Quit Iris", role: "quit" },
+    ]),
+  );
+}
+
+function createTray() {
+  const trayIconPath = path.join(repoRoot, "build", "trayTemplate.png");
+  if (!fs.existsSync(trayIconPath)) return;
+  tray = new Tray(trayIconPath);
+  tray.setToolTip("Iris");
+  updateTrayMenu();
+}
+
+function hudHotkey() {
+  return process.env.IRIS_HUD_HOTKEY || "Alt+Space";
 }
 
 function installAppMenu() {
@@ -1294,6 +1407,21 @@ app.whenReady().then(() => {
   ipcMain.handle("hermes:history", () => fetchHermesHistory());
   ipcMain.handle("hermes:sessions", () => listHermesSessions());
   ipcMain.handle("hermes:create-session", () => createHermesSession());
+  ipcMain.handle("hud:toggle", () => {
+    toggleHud();
+    updateTrayMenu();
+    return { mode: uiMode };
+  });
+  ipcMain.on("hud:interactive", (_event, on) => {
+    if (mainWindow && uiMode === "hud") {
+      mainWindow.setIgnoreMouseEvents(!on, { forward: true });
+    }
+  });
+  ipcMain.on("win:control", (_event, action) => {
+    if (!mainWindow) return;
+    if (action === "close") mainWindow.close();
+    else if (action === "minimize") mainWindow.minimize();
+  });
   ipcMain.handle("sidecar:command", (_event, command) => sendCommand(command));
   ipcMain.on("live:audio", (_event, chunk) => sendAudioChunk(chunk));
   ipcMain.on("iris:boot-done", () => sendWelcomeGreeting());
@@ -1303,11 +1431,20 @@ app.whenReady().then(() => {
     }
   });
   createWindow();
+  createTray();
+  const registered = globalShortcut.register(hudHotkey(), () => {
+    toggleHud();
+    updateTrayMenu();
+  });
+  if (!registered) {
+    emitEvent({ type: "log", level: "error", message: `Could not register HUD hotkey ${hudHotkey()}.` });
+  }
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 });
 
+app.on("will-quit", () => globalShortcut.unregisterAll());
 app.on("before-quit", () => stopLive());
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();

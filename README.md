@@ -585,6 +585,10 @@ it writes your settings to:
 
 - **W**: Wake
 - **S**: Sleep
+- **⌥ Space** (global, configurable via `IRIS_HUD_HOTKEY`): toggle the **Glass HUD** — Iris floats transparent over your whole screen, click-through except its own elements (orb + controls bottom-right, live task cards top-right), so you keep working in the apps underneath while talking to Iris
+- Top-right overlay icon: same Glass HUD toggle from the deck
+- Menu-bar (tray) icon: wake/sleep, HUD toggle, show deck, quit — Iris keeps living there even with the window closed
+- Top-left dots: close / minimize (the window is frameless; these replace the native traffic lights)
 - Top-right gear icon: open **Settings** (and "Run setup wizard")
 - Top-right signal icon: live connection indicator
 - Top-right hand icon: manually enables/disables camera gesture tracking
@@ -597,7 +601,7 @@ Camera/gesture behavior:
 
 ### Hand gestures (when camera control is enabled)
 
-- **Point (index up)**: move the cursor; hold over a task card briefly to open it
+- **Point (index up)**: move the cursor; hold over ANY clickable element (~0.5s) to click it — task cards, step toggles, close buttons, the HUD comms chip, HUD controls. The reticle ring contracts while the "click" charges.
 - **Open palm**: hold-to-scroll inside Comms, Work Stream, and the open reader (high = up, low = down)
 - **Closed fist**: close the reader
 

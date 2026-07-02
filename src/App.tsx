@@ -25,8 +25,11 @@ import HandoffLayer from "./components/HandoffLayer";
 import HandReticles from "./components/HandReticles";
 import BootSequence from "./components/BootSequence";
 import SetupPanel from "./components/SetupPanel";
+import HudShell from "./components/HudShell";
 
 const MAX_LOGS = 80;
+// Point-and-hold duration before the finger pointer "clicks" what it's over.
+const DWELL_MS = 300;
 
 export default function App() {
   const [sidecarRunning, setSidecarRunning] = useState(false);
@@ -38,6 +41,9 @@ export default function App() {
   const [, setLogs] = useState<LogLine[]>([]);
   const [tasks, setTasks] = useState<TaskCard[]>([]);
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
+  // The reader's steps section is independent from the card's steps toggle —
+  // opening steps while reading must not also expand the card behind it.
+  const [readerStepsOpen, setReaderStepsOpen] = useState(false);
   const [focusedTaskId, setFocusedTaskId] = useState<string | null>(null);
   const [taskChooser, setTaskChooser] = useState<{ query: string; matches: TaskCard[] } | null>(null);
   const [showHistory, setShowHistory] = useState(false);
@@ -48,12 +54,12 @@ export default function App() {
   const [setup, setSetup] = useState<{ mode: "onboarding" | "settings" } | null>(null);
   const [wakeWordEnabled, setWakeWordEnabled] = useState(false);
   const [hermesSession, setHermesSession] = useState<string | null>(null);
+  const [uiMode, setUiMode] = useState<"deck" | "hud">("deck");
   const [bootActive, setBootActive] = useState(false);
   const [bootClosing, setBootClosing] = useState(false);
   const bootStartRef = useRef(0);
 
   const hasBridge = typeof window.iris !== "undefined";
-  const transcriptEndRef = useRef<HTMLDivElement | null>(null);
   const sessionStartRef = useRef<number | null>(null);
   const orbStageRef = useRef<HTMLDivElement | null>(null);
   const workScrollRef = useRef<HTMLDivElement | null>(null);
@@ -166,6 +172,83 @@ export default function App() {
     });
   }, [hasBridge]);
 
+  // Glass HUD mode: main process drives the window shape; we mirror it in a
+  // root class and re-layout. Tray/hotkey wake+sleep requests run the same
+  // renderer flows as W/S so mic capture stays renderer-owned.
+  // Choreography: entering HUD, the deck plays a 170ms collapse while the
+  // window is still deck-sized, THEN the layout swaps as main goes fullscreen
+  // (HUD elements enter with a matching delay). Exiting, the deck mounts
+  // invisible and fades in right as main restores the window bounds.
+  const [modeTransition, setModeTransition] = useState<"to-hud" | "to-deck" | null>(null);
+  const modeTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!hasBridge) return;
+    const offMode = window.iris.onHudMode(({ mode }) => {
+      if (modeTimerRef.current) window.clearTimeout(modeTimerRef.current);
+      if (mode === "hud") {
+        setModeTransition("to-hud");
+        modeTimerRef.current = window.setTimeout(() => {
+          setUiMode("hud");
+          setModeTransition(null);
+        }, 170);
+      } else {
+        setUiMode("deck");
+        setModeTransition("to-deck");
+        modeTimerRef.current = window.setTimeout(() => setModeTransition(null), 600);
+      }
+    });
+    const offWake = window.iris.onWakeRequest(() => {
+      if (!sidecarRunning) start();
+    });
+    const offSleep = window.iris.onSleepRequest(() => {
+      if (sidecarRunning) stop();
+    });
+    return () => {
+      offMode();
+      offWake();
+      offSleep();
+    };
+  }, [hasBridge, sidecarRunning]);
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("hud-mode", uiMode === "hud");
+  }, [uiMode]);
+
+  // Click-through management: in HUD mode the window ignores the mouse except
+  // when the pointer is over a `.hud-hit` element. elementFromPoint respects
+  // pointer-events, so it only returns elements that opted in.
+  useEffect(() => {
+    if (!hasBridge || uiMode !== "hud") return;
+    let interactive = false;
+    let raf = 0;
+    window.iris.setHudInteractive(false);
+
+    const onMove = (event: MouseEvent) => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        const el = document.elementFromPoint(event.clientX, event.clientY);
+        const next = Boolean(
+          el?.closest?.(
+            ".hud-hit, .reader-backdrop, .history-backdrop, .match-backdrop, .setup-backdrop, .boot",
+          ),
+        );
+        if (next !== interactive) {
+          interactive = next;
+          window.iris.setHudInteractive(next);
+        }
+      });
+    };
+
+    window.addEventListener("mousemove", onMove, { passive: true });
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      if (raf) cancelAnimationFrame(raf);
+      window.iris.setHudInteractive(false);
+    };
+  }, [hasBridge, uiMode]);
+
   // Local "Hey Iris" wake word: only listens while asleep; a detection wakes Iris
   // exactly like pressing W. Fully on-device, opt-in via Settings.
   useWakeWord(
@@ -208,8 +291,12 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [sidecarRunning, hasBridge, testDataEnabled]);
 
+  // Scoped autoscroll: scrollIntoView would also scroll every scrollable
+  // ancestor (the rounded deck clips with overflow:hidden), shifting the whole
+  // layout up. Scroll the comms panel directly instead.
   useEffect(() => {
-    transcriptEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    const el = commsScrollRef.current;
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
   }, [transcript]);
 
   const working = useMemo(
@@ -428,10 +515,9 @@ export default function App() {
     () => tasks.find((task) => task.id === expandedTaskId) ?? null,
     [tasks, expandedTaskId],
   );
-  const dwellRef = useRef<{ id: string; startedAt: number } | null>(null);
+  const dwellRef = useRef<{ el: HTMLElement; startedAt: number; fired: boolean } | null>(null);
 
   const { state: hand, error: handError, stream: handStream } = useHandControl(handControl);
-  const handCamRef = useRef<HTMLVideoElement | null>(null);
   const liveHandRef = useRef<HandState | null>(hand);
   liveHandRef.current = hand;
 
@@ -439,64 +525,67 @@ export default function App() {
     if (handError) pushLog("error", `Hand control: ${handError}`);
   }, [handError]);
 
+  // Universal point-and-hold: the finger pointer can activate ANY clickable
+  // element — task cards, step toggles, the comms chip, close buttons, HUD
+  // controls. Holding over a target for DWELL_MS fires a real click; the
+  // target must be left and re-entered before it can fire again.
   useEffect(() => {
-    if (handCamRef.current) {
-      handCamRef.current.srcObject = handStream;
-    }
-  }, [handStream]);
-
-  useEffect(() => {
-    if (!handControl || !hand.present || !hand.point || !hand.pointing || expandedTaskId) {
+    if (!handControl || !hand.present || !hand.point || !hand.pointing) {
       dwellRef.current = null;
       return;
     }
 
     const el = document.elementFromPoint(hand.point.x, hand.point.y);
-    const card = el?.closest<HTMLElement>("[data-task-id]");
-    const taskId = card?.dataset.taskId;
-    if (!taskId || !card) {
+    // A steps region (strip + expanded timeline, on cards or in the reader) is
+    // one big toggle target: pointing anywhere inside it opens/closes steps —
+    // it must never fall through to the card underneath.
+    const stepsArea = el?.closest<HTMLElement>(".activity, .reader-steps");
+    const actionable = stepsArea
+      ? stepsArea.querySelector<HTMLElement>(".activity-toggle")
+      : el?.closest<HTMLElement>('button, a, [data-task-id], [role="button"]') ?? null;
+    if (!actionable) {
       dwellRef.current = null;
       return;
     }
-    setFocusedTaskId(taskId);
+
+    const taskId = actionable.closest<HTMLElement>("[data-task-id]")?.dataset.taskId;
+    if (taskId) setFocusedTaskId(taskId);
 
     const now = performance.now();
-    if (dwellRef.current?.id !== taskId) {
-      dwellRef.current = { id: taskId, startedAt: now };
+    if (dwellRef.current?.el !== actionable) {
+      dwellRef.current = { el: actionable, startedAt: now, fired: false };
       return;
     }
 
-    if (now - dwellRef.current.startedAt > 300) {
-      const task = tasks.find((item) => item.id === taskId);
-      if (task) openTask(task);
-      dwellRef.current = null;
+    if (!dwellRef.current.fired && now - dwellRef.current.startedAt > DWELL_MS) {
+      dwellRef.current.fired = true;
+      actionable.click();
     }
-  }, [handControl, hand.present, hand.point?.x, hand.point?.y, expandedTaskId, tasks]);
+  }, [handControl, hand.present, hand.point?.x, hand.point?.y, hand.pointing, tasks]);
 
-  // Open-palm hold-to-scroll for whichever scrollable section the hand is over
-  // (Comms or Work Stream): hold the hand high to scroll up, low to scroll down.
+  // Open-palm hold-to-scroll: scrolls whichever scrollable region is under the
+  // hand — an expanded steps timeline inside a card, the Comms/Work columns
+  // (deck or HUD), or the history grid. Innermost region wins, so palm over a
+  // card's step list scrolls the steps, not the column behind it. The open
+  // reader runs its own loop.
   useEffect(() => {
     let raf = 0;
-    const isInside = (el: HTMLElement | null, x: number, y: number) => {
-      if (!el) return false;
-      const r = el.getBoundingClientRect();
-      return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
-    };
+    const SCROLLABLES =
+      ".activity-timeline, .hud-comms, .comms-scroll, .work-scroll, .hud-work, .history-grid";
     const loop = () => {
       const h = liveHandRef.current;
-      if (handControl && h?.openPalm && h.point && !expandedTaskId && !showHistory) {
-        const { x, y } = h.point;
-        const body =
-          [commsScrollRef.current, workScrollRef.current].find((el) => isInside(el, x, y)) ?? null;
-        if (body) {
-          const rect = body.getBoundingClientRect();
+      if (handControl && h?.openPalm && h.point && !expandedTaskId) {
+        const el = document.elementFromPoint(h.point.x, h.point.y);
+        const target = el?.closest<HTMLElement>(SCROLLABLES) ?? null;
+        if (target) {
+          const rect = target.getBoundingClientRect();
           const center = rect.top + rect.height / 2;
-          const deadZone = Math.max(40, rect.height * 0.12);
-          const delta = y - center;
+          const deadZone = Math.max(24, rect.height * 0.12);
+          const delta = h.point.y - center;
           if (Math.abs(delta) > deadZone) {
             const reach = rect.height / 2 - deadZone;
             const norm = Math.max(-1, Math.min(1, (delta - Math.sign(delta) * deadZone) / reach));
-            body.scrollTop += norm * 26;
+            target.scrollTop += norm * 26;
           }
         }
       }
@@ -504,7 +593,7 @@ export default function App() {
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [handControl, expandedTaskId, showHistory]);
+  }, [handControl, expandedTaskId]);
 
   const handAction = useMemo(() => {
     if (!hand.present) return { label: "Show your hand", tone: "idle" };
@@ -620,15 +709,25 @@ export default function App() {
         return;
       }
       if (action === "show_task_steps" || action === "hide_task_steps") {
-        // Default to the running task ("the hub that's going on"), then fall back
-        // to whatever the user is focused on / the latest result.
+        // Priority: explicit id -> spoken query words -> the card the user is
+        // looking at (expanded reader, then focused) -> the running task ->
+        // latest result. The old order preferred the running task over the
+        // card being viewed, which targeted the wrong card by voice.
+        const byQuery = !taskById && query ? findTaskMatches(sortedTasks, query)[0]?.task ?? null : null;
         const activeTask = tasks.find((task) => !TERMINAL.has(task.status.toLowerCase()));
-        const target = taskById || activeTask || focusedTask || fallbackTask;
-        if (target) setTaskStepsOpen(target.id, action === "show_task_steps");
+        const target = taskById || byQuery || currentTask || focusedTask || activeTask || latestResultTask;
+        if (!target) return;
+        // Steps for the card being read open INSIDE the reader, not on the
+        // card hidden behind it.
+        if (expandedTaskId && target.id === expandedTaskId) {
+          setReaderStepsOpen(action === "show_task_steps");
+        } else {
+          setTaskStepsOpen(target.id, action === "show_task_steps");
+        }
         return;
       }
     });
-  }, [hasBridge, tasks, expandedTaskId, focusedTaskId, latestResultTask]);
+  }, [hasBridge, tasks, sortedTasks, expandedTaskId, focusedTaskId, latestResultTask]);
 
   const caption = useMemo(() => {
     if (!sidecarRunning)
@@ -649,11 +748,13 @@ export default function App() {
     if (!(task.output || task.error)) return;
     setTaskChooser(null);
     setExpandedTaskId(task.id);
+    setReaderStepsOpen(false);
     setShowHistory(false);
   }
 
   function closeReader() {
     setExpandedTaskId(null);
+    setReaderStepsOpen(false);
   }
 
   // Dev-only (testDataEnabled): drive a full delegation -> completion through the
@@ -700,7 +801,44 @@ export default function App() {
 
   return (
     <>
-      <div className={`deck ${sidecarRunning ? "awake" : "asleep"}`}>
+      {uiMode === "hud" ? (
+        <HudShell
+          reactorState={reactorState}
+          audioLevelRef={audio.audioLevelRef}
+          orbStageRef={orbStageRef}
+          orbFlash={orbFlash}
+          onOrbFlashEnd={clearOrbFlash}
+          awake={sidecarRunning}
+          caption={caption.text}
+          captionDim={caption.dim}
+          wakeWordEnabled={wakeWordEnabled}
+          muted={audio.muted}
+          onToggleMute={audio.toggleMute}
+          onWake={start}
+          onSleep={stop}
+          onExitHud={() => window.iris.toggleHud()}
+          tasks={sortedTasks}
+          acceptedIds={acceptedIds}
+          stepsOpenIds={stepsOpenIds}
+          workScrollRef={workScrollRef}
+          onToggleSteps={toggleTaskSteps}
+          onFocusTask={setFocusedTaskId}
+          onOpenTask={openTask}
+          transcript={transcript}
+          commsScrollRef={commsScrollRef}
+          handControl={handControl}
+          onToggleHand={() => setHandControl((current) => !current)}
+          hand={hand}
+          handStream={handStream}
+          handActionLabel={handAction.label}
+          handActionTone={handAction.tone}
+        />
+      ) : (
+      <div
+        className={`deck ${sidecarRunning ? "awake" : "asleep"} ${
+          modeTransition === "to-hud" ? "deck-leaving" : ""
+        } ${modeTransition === "to-deck" ? "deck-entering" : ""}`}
+      >
         <div className="hud-nebula" />
         <div className="hud-glow" />
         <div className="hud-vignette" />
@@ -722,14 +860,13 @@ export default function App() {
             <CommsPanel
               transcript={transcript}
               scrollRef={commsScrollRef}
-              endRef={transcriptEndRef}
               testDataEnabled={testDataEnabled}
               onLoadDemo={loadUiTestData}
             />
             <CameraDock
               handControl={handControl}
               hand={hand}
-              videoRef={handCamRef}
+              stream={handStream}
               actionLabel={handAction.label}
               actionTone={handAction.tone}
             />
@@ -787,9 +924,16 @@ export default function App() {
           </span>
         </footer>
       </div>
+      )}
 
       {expandedTask ? (
-        <ReaderOverlay task={expandedTask} hand={handControl ? hand : null} onClose={closeReader} />
+        <ReaderOverlay
+          task={expandedTask}
+          hand={handControl ? hand : null}
+          stepsOpen={readerStepsOpen}
+          onToggleSteps={() => setReaderStepsOpen((current) => !current)}
+          onClose={closeReader}
+        />
       ) : null}
 
       {showHistory ? (
@@ -805,7 +949,7 @@ export default function App() {
         />
       ) : null}
 
-      {bootActive ? <BootSequence visible closing={bootClosing} /> : null}
+      {bootActive ? <BootSequence visible closing={bootClosing} compact={uiMode === "hud"} /> : null}
 
       {setup && fullConfig ? (
         <SetupPanel
@@ -827,7 +971,7 @@ export default function App() {
       <HandoffLayer pulses={pulses} onPulseEnd={removePulse} />
 
       {handControl && hand.present ? (
-        <HandReticles hand={hand} dwelling={Boolean(dwellRef.current)} />
+        <HandReticles hand={hand} dwelling={Boolean(dwellRef.current && !dwellRef.current.fired)} />
       ) : null}
     </>
   );

@@ -217,6 +217,24 @@
   box-shadow: 0 0 20px rgba(var(--cyan-rgb), 0.55);
 }
 
+/* Dwell charge: the ring contracts onto the target for the hold duration so
+   you can see the "click" arming before it fires. */
+.hand-reticle.dwell .hand-ring {
+  animation: dwell-charge 0.55s linear forwards;
+}
+
+@keyframes dwell-charge {
+  from {
+    transform: scale(1);
+    border-color: rgba(var(--cyan-rgb), 0.9);
+  }
+  to {
+    transform: scale(0.4);
+    border-color: #ffffff;
+    box-shadow: 0 0 26px rgba(var(--cyan-rgb), 0.9);
+  }
+}
+
 /* Open palm — violet (scroll/resize) */
 .hand-reticle.open .hand-ring {
   width: 72px;

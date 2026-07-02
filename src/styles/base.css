@@ -10,6 +10,8 @@ body,
   height: 100%;
 }
 
+/* The window itself is transparent (frameless, HUD-capable); the deck paints
+   its own rounded background instead of the body. */
 body {
   margin: 0;
   overflow: hidden;
@@ -18,9 +20,7 @@ body {
   font-size: 14px;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
-  background:
-    radial-gradient(85% 70% at 50% 30%, rgba(17, 34, 64, 0.5), transparent 70%),
-    linear-gradient(180deg, var(--bg-1) 0%, var(--bg-0) 100%);
+  background: transparent;
 }
 
 ::selection {
@@ -49,9 +49,10 @@ input:focus-visible {
 
 /* ===== Ambient layers (decorative, pointer-transparent) ===== */
 
-/* Faint drifting nebula: cyan + violet depth, kept very low so panels read clean */
+/* Faint drifting nebula: cyan + violet depth, kept very low so panels read clean.
+   Absolute (not fixed) so the deck's rounded corners clip them. */
 .hud-nebula {
-  position: fixed;
+  position: absolute;
   inset: -22%;
   z-index: 0;
   pointer-events: none;
@@ -65,7 +66,7 @@ input:focus-visible {
 
 /* Halo behind the orb so the core feels like the light source of the room */
 .hud-glow {
-  position: fixed;
+  position: absolute;
   inset: 0;
   z-index: 0;
   pointer-events: none;
@@ -83,7 +84,7 @@ input:focus-visible {
 }
 
 .hud-vignette {
-  position: fixed;
+  position: absolute;
   inset: 0;
   z-index: 0;
   pointer-events: none;

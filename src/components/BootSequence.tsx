@@ -11,7 +11,15 @@ const BOOT_LINES = [
   "establishing secure channel",
 ];
 
-export default function BootSequence({ visible, closing = false }: { visible: boolean; closing?: boolean }) {
+export default function BootSequence({
+  visible,
+  closing = false,
+  compact = false,
+}: {
+  visible: boolean;
+  closing?: boolean;
+  compact?: boolean;
+}) {
   const [step, setStep] = useState(0);
 
   useEffect(() => {
@@ -27,13 +35,17 @@ export default function BootSequence({ visible, closing = false }: { visible: bo
 
   if (!visible) return null;
 
+  // Compact variant for HUD mode: a small glass card near the orb instead of
+  // taking over the whole (transparent) screen.
   return (
-    <div className={`boot ${closing ? "closing" : ""}`}>
-      <div className="orb-stage boot-orb" style={{ "--orb-accent": "18, 163, 148" } as CSSProperties}>
-        <span className="orb-ring" />
-        <span className="orb-radar" />
-        <ReactorCore state="online" />
-      </div>
+    <div className={`boot ${compact ? "compact" : ""} ${closing ? "closing" : ""}`}>
+      {!compact ? (
+        <div className="orb-stage boot-orb" style={{ "--orb-accent": "18, 163, 148" } as CSSProperties}>
+          <span className="orb-ring" />
+          <span className="orb-radar" />
+          <ReactorCore state="online" />
+        </div>
+      ) : null}
       <div className="boot-title">I.R.I.S</div>
       <div className="boot-sub">SYSTEM INITIALIZATION</div>
 

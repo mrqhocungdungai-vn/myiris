@@ -1,0 +1,468 @@
+/* =====================================================================
+   Glass HUD mode — Iris floating over the whole desktop.
+   The window is transparent + click-through; only `.hud-hit` elements
+   (and open overlays) accept the pointer. Everything else lets you keep
+   working in the apps underneath.
+   ===================================================================== */
+
+html.hud-mode,
+html.hud-mode body {
+  background: transparent !important;
+}
+
+.hud-mode body {
+  pointer-events: none;
+}
+
+.hud-mode .hud-hit,
+.hud-mode .reader-backdrop,
+.hud-mode .history-backdrop,
+.hud-mode .match-backdrop,
+.hud-mode .setup-backdrop,
+.hud-mode .boot {
+  pointer-events: auto;
+}
+
+/* In windowed deck mode the window is transparent, so full-bleed overlays
+   must follow the deck's rounded corners. */
+html:not(.hud-mode) .boot,
+html:not(.hud-mode) .reader-backdrop,
+html:not(.hud-mode) .history-backdrop,
+html:not(.hud-mode) .match-backdrop,
+html:not(.hud-mode) .setup-backdrop {
+  border-radius: 14px;
+}
+
+/* ===== Mode transitions ===== */
+/* Entering HUD: the deck collapses while the window is still deck-sized. */
+.deck.deck-leaving {
+  animation: deck-out 0.17s ease forwards;
+}
+
+@keyframes deck-out {
+  to {
+    opacity: 0;
+    transform: scale(0.965);
+  }
+}
+
+/* Exiting HUD: the deck mounts invisible and fades in as the window bounds
+   are restored (the hold hides the resize). */
+.deck.deck-entering {
+  animation: deck-in 0.38s cubic-bezier(0.2, 0.8, 0.2, 1) 0.22s backwards;
+}
+
+@keyframes deck-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+
+/* ===== Shell ===== */
+.hud-shell {
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+}
+
+/* ===== Orb cluster (bottom-right) ===== */
+.hud-orb-cluster {
+  position: absolute;
+  right: 26px;
+  bottom: 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  /* Delayed + backwards-filled so elements stay invisible until the window
+     has finished jumping to fullscreen bounds. */
+  animation: hud-rise 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) 0.16s backwards;
+}
+
+.hud-orb.orb-stage {
+  width: 190px;
+  height: 190px;
+}
+
+.hud-shell.awake .orb-ring { opacity: 1; }
+.hud-shell.awake .orb-radar { opacity: 0.7; }
+.hud-shell.awake .hud-orb { animation: orb-ignite 0.9s ease; }
+
+.hud-shell.asleep .hud-orb {
+  filter: grayscale(0.82) brightness(0.55) saturate(0.4);
+  opacity: 0.72;
+}
+
+.hud-caption {
+  max-width: 360px;
+  padding: 8px 15px;
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(26, 36, 57, 0.68), rgba(10, 16, 28, 0.72));
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 1px 8px rgba(0, 0, 0, 0.18);
+  font-size: 13px;
+  line-height: 1.45;
+  text-align: center;
+  color: #f2f7ff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.65);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.hud-caption.dim {
+  color: #c3cfe0;
+}
+
+.hud-controls {
+  display: flex;
+  gap: 8px;
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.hud-orb-cluster:hover .hud-controls,
+.hud-orb-cluster:focus-within .hud-controls,
+.hud-controls.show {
+  opacity: 1;
+  transform: none;
+}
+
+.hud-btn {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  color: #dbe6f5;
+  background: rgba(22, 30, 47, 0.68);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.16);
+  transition: color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.hud-btn:hover {
+  transform: translateY(-1px);
+  color: var(--cyan-bright);
+  box-shadow: inset 0 0 0 1px rgba(var(--cyan-rgb), 0.4);
+}
+
+.hud-btn.danger:hover {
+  color: var(--coral);
+  box-shadow: inset 0 0 0 1px rgba(var(--coral-rgb), 0.45);
+}
+
+.hud-btn.wake {
+  color: var(--cyan-bright);
+  box-shadow: inset 0 0 0 1px rgba(var(--cyan-rgb), 0.4);
+}
+
+.hud-btn.muted {
+  color: var(--amber);
+  box-shadow: inset 0 0 0 1px rgba(var(--amber-rgb), 0.45);
+}
+
+.hud-btn.active {
+  color: #06222b;
+  background: linear-gradient(180deg, var(--cyan-bright), var(--cyan));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.45),
+    0 0 18px rgba(var(--cyan-rgb), 0.4);
+}
+
+/* ===== Slim work stream (top-right) ===== */
+.hud-right {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  animation: hud-slide 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) 0.16s backwards;
+}
+
+.hud-work {
+  width: 342px;
+  max-height: 70vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  scrollbar-width: none;
+  animation: hud-rise 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.hud-work::-webkit-scrollbar {
+  display: none;
+}
+
+/* ===== Left column: camera + comms (bottom-left) ===== */
+.hud-left {
+  position: absolute;
+  left: 22px;
+  bottom: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 300px;
+  animation: hud-rise 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) 0.16s backwards;
+}
+
+.hud-camera .camera-frame {
+  margin: 0;
+  aspect-ratio: 4 / 3;
+  border-radius: var(--r-card);
+  box-shadow:
+    inset 0 0 0 1px var(--hairline-strong),
+    0 1px 8px rgba(0, 0, 0, 0.2);
+}
+
+.hud-comms-toggle {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #dbe6f5;
+  background: rgba(22, 30, 47, 0.68);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.16);
+  transition: color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.hud-comms-toggle:hover {
+  color: var(--cyan-bright);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    inset 0 0 0 1px rgba(var(--cyan-rgb), 0.4);
+}
+
+.hud-comms-toggle .count {
+  display: inline-grid;
+  place-items: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 999px;
+  font-size: 9px;
+  color: var(--cyan-bright);
+  background: rgba(var(--cyan-rgb), 0.14);
+}
+
+.hud-comms-toggle .chev {
+  transition: transform 0.18s ease;
+}
+
+.hud-comms-toggle.open .chev {
+  transform: rotate(180deg);
+}
+
+.hud-comms {
+  max-height: 34vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 2px;
+  scrollbar-width: none;
+  animation: hud-rise 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.hud-comms::-webkit-scrollbar {
+  display: none;
+}
+
+/* Keep the left/right speaker offset readable: Iris hugs the left edge, you
+   hug the right, with clear opposite-side indents. */
+.hud-comms .bubble {
+  max-width: 84%;
+}
+
+/* ===== HUD glass surfaces =====
+   The OS behind a transparent window can't be backdrop-blurred, so readable
+   glass here = a light (~60%) tinted fill you can see the desktop through, a
+   bright 1px edge highlight to define the pane, and text shadows so text
+   survives worst-case bright wallpapers (per NN/g glassmorphism guidance). */
+/* No big drop shadows on stacked HUD elements: overlapping shadows fuse into a
+   dark plate behind the whole column. A crisp edge + hairline is enough. */
+.hud-mode .wcard {
+  background: linear-gradient(180deg, rgba(26, 36, 57, 0.58), rgba(10, 16, 28, 0.6));
+  border-color: rgba(255, 255, 255, 0.18);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    0 1px 6px rgba(0, 0, 0, 0.16);
+}
+
+.hud-mode .wcard.expandable:hover {
+  background: linear-gradient(180deg, rgba(33, 46, 72, 0.7), rgba(13, 20, 34, 0.72));
+  border-color: rgba(var(--cyan-rgb), 0.45);
+}
+
+.hud-mode .wcard.working {
+  border-color: rgba(var(--amber-rgb), 0.4);
+}
+
+.hud-mode .wcard-task {
+  color: #f2f7ff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.65);
+}
+
+.hud-mode .wcard-preview {
+  color: #c6d2e4;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+
+.hud-mode .wcard-top code {
+  color: #a7b7cd;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
+}
+
+.hud-mode .badge {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
+}
+
+.hud-mode .step-tool,
+.hud-mode .activity-now {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
+}
+
+.hud-mode .step-detail {
+  color: #aebdd3;
+}
+
+.hud-mode .activity-step {
+  background: rgba(24, 34, 54, 0.5);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+}
+
+.hud-mode .bubble {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+
+.hud-mode .bubble.iris {
+  background: rgba(15, 30, 43, 0.6);
+  border-color: rgba(var(--cyan-rgb), 0.32);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1), 0 1px 6px rgba(0, 0, 0, 0.14);
+}
+
+.hud-mode .bubble.self {
+  background: rgba(22, 29, 45, 0.6);
+  border-color: rgba(255, 255, 255, 0.18);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1), 0 1px 6px rgba(0, 0, 0, 0.14);
+}
+
+.hud-mode .bubble .who {
+  text-shadow: none;
+}
+
+/* The open reader/history/chooser use the SAME glass language as the Hermes
+   cards (slightly stronger fill for dense text, plus text shadows). Settings
+   stays near-opaque — forms on live glass are unreadable. */
+.hud-mode .reader-card,
+.hud-mode .history-card,
+.hud-mode .match-card {
+  background: linear-gradient(180deg, rgba(26, 36, 57, 0.68), rgba(10, 16, 28, 0.72));
+  border-color: rgba(255, 255, 255, 0.18);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    0 30px 90px rgba(0, 0, 0, 0.5);
+}
+
+.hud-mode .reader-title,
+.hud-mode .markdown-body,
+.hud-mode .match-copy strong {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
+}
+
+.hud-mode .markdown-body {
+  color: #d3ddec;
+}
+
+.hud-mode .markdown-body pre {
+  background: rgba(3, 8, 16, 0.72);
+}
+
+.hud-mode .setup-card {
+  background: rgba(10, 15, 26, 0.96);
+}
+
+/* Overlay backdrops must NOT black out the desktop in HUD mode — that defeats
+   the whole overlay. A whisper of a veil keeps the open card focused while
+   your screen stays visible; clicking anywhere outside still closes it. */
+.hud-mode .reader-backdrop,
+.hud-mode .history-backdrop,
+.hud-mode .match-backdrop,
+.hud-mode .setup-backdrop {
+  background: rgba(2, 5, 10, 0.16);
+  backdrop-filter: none;
+}
+
+/* ===== Compact boot card (HUD mode) =====
+   The fullscreen boot takeover would blank the whole desktop; in HUD mode the
+   boot log becomes a small glass card above the orb cluster instead. */
+.hud-mode .boot.compact {
+  position: fixed;
+  inset: auto 26px 250px auto;
+  z-index: 55;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 320px;
+  padding: 16px 18px 14px;
+  border-radius: 16px;
+  background: rgba(8, 12, 22, 0.94);
+  border: 1px solid var(--hairline-strong);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55);
+  animation: hud-rise 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.boot.compact .boot-title {
+  font-size: 15px;
+}
+
+.boot.compact .boot-sub {
+  font-size: 7.5px;
+}
+
+.boot.compact .boot-log {
+  width: 100%;
+  margin-top: 4px;
+  font-size: 10px;
+}
+
+.boot.compact .boot-bar {
+  width: 100%;
+}
+
+@keyframes hud-rise {
+  from { opacity: 0; transform: translateY(26px) scale(0.92); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes hud-slide {
+  from { opacity: 0; transform: translateX(30px); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hud-orb-cluster,
+  .hud-work {
+    animation: none;
+  }
+}

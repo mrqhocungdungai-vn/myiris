@@ -13,6 +13,24 @@ contextBridge.exposeInMainWorld("iris", {
   getHermesHistory: () => ipcRenderer.invoke("hermes:history"),
   listHermesSessions: () => ipcRenderer.invoke("hermes:sessions"),
   createHermesSession: () => ipcRenderer.invoke("hermes:create-session"),
+  toggleHud: () => ipcRenderer.invoke("hud:toggle"),
+  setHudInteractive: (on) => ipcRenderer.send("hud:interactive", Boolean(on)),
+  windowControl: (action) => ipcRenderer.send("win:control", action),
+  onHudMode: (callback) => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on("hud:mode", handler);
+    return () => ipcRenderer.removeListener("hud:mode", handler);
+  },
+  onWakeRequest: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on("iris:wake", handler);
+    return () => ipcRenderer.removeListener("iris:wake", handler);
+  },
+  onSleepRequest: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on("iris:sleep", handler);
+    return () => ipcRenderer.removeListener("iris:sleep", handler);
+  },
   sendCommand: (command) => ipcRenderer.invoke("sidecar:command", command),
   sendUiContext: (context) => ipcRenderer.send("iris:ui-context", context),
   sendAudioChunk: (chunk) => ipcRenderer.send("live:audio", chunk),

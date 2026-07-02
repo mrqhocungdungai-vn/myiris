@@ -151,6 +151,24 @@
   color: var(--text);
 }
 
+/* Hermes tool-step timeline inside the reader (voice: "show the steps") */
+.reader-steps {
+  flex: 0 0 auto;
+  padding: 0 22px 12px;
+}
+
+.reader-steps-list {
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+/* The wrapper is the scroller here — undo the card timeline's own cap so
+   there's exactly one scrollable region in the reader steps. */
+.reader-steps-list .activity-timeline {
+  max-height: none;
+  overflow-y: visible;
+}
+
 .reader-body {
   flex: 1;
   min-height: 0;

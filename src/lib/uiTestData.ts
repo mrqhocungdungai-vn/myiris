@@ -1,3 +1,5 @@
+import type { TaskStep } from "../types";
+
 type TaskFixture = {
   id: string;
   task: string;
@@ -5,6 +7,7 @@ type TaskFixture = {
   output?: string;
   error?: string;
   updatedAt: number;
+  steps?: TaskStep[];
 };
 
 type TranscriptFixture = {
@@ -93,6 +96,21 @@ export function makeUiTestData(now = Date.now()): {
         status: "completed",
         output: longResearchResult,
         updatedAt: now - 120_000,
+        steps: [
+          { id: "fx-step-1", tool: "web_search", preview: "https://memtools.ai/comparison", status: "done" as const, duration: 3.2, ts: now - 126_000 },
+          { id: "fx-step-2", tool: "browser_navigate", preview: "https://github.com/topics/ai-memory", status: "done" as const, duration: 5.1, ts: now - 125_000 },
+          { id: "fx-step-3", tool: "run_python", preview: "score_tools.py", status: "done" as const, duration: 1.8, ts: now - 124_000 },
+          { id: "fx-step-4", tool: "file_write", preview: "memory-tools-report.md", status: "done" as const, duration: 0.6, ts: now - 123_000 },
+          // Enough steps to exercise the scrollable timeline (long runs).
+          ...Array.from({ length: 10 }, (_, index) => ({
+            id: `fx-step-extra-${index}`,
+            tool: index % 2 ? "browser_navigate" : "execute_code",
+            preview: index % 2 ? `https://example.com/page-${index}` : `analysis_pass_${index}.py`,
+            status: "done" as const,
+            duration: 1 + (index % 4) * 0.7,
+            ts: now - 122_000 + index * 500,
+          })),
+        ],
       },
       {
         id: "fixture-run-002b-email-digest",

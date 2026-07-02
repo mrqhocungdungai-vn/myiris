@@ -22,7 +22,9 @@ type IrisUiAction = {
     | "open_hermes_history"
     | "close_reader"
     | "close_history"
-    | "close_all_overlays";
+    | "close_all_overlays"
+    | "show_task_steps"
+    | "hide_task_steps";
   target_id?: string;
   query?: string;
 };
@@ -95,6 +97,12 @@ type IrisApi = {
   getHermesHistory: () => Promise<HermesHistoryResult>;
   listHermesSessions: () => Promise<HermesSessionsResult>;
   createHermesSession: () => Promise<{ ok: boolean; id?: string; error?: string }>;
+  toggleHud: () => Promise<{ mode: "deck" | "hud" }>;
+  setHudInteractive: (on: boolean) => void;
+  windowControl: (action: "close" | "minimize") => void;
+  onHudMode: (callback: (payload: { mode: "deck" | "hud" }) => void) => () => void;
+  onWakeRequest: (callback: () => void) => () => void;
+  onSleepRequest: (callback: () => void) => () => void;
   sendCommand: (command: Record<string, unknown>) => Promise<void>;
   sendUiContext: (context: Record<string, unknown>) => void;
   sendAudioChunk: (chunk: ArrayBuffer) => void;

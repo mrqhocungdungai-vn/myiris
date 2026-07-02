@@ -5,13 +5,11 @@ import type { TranscriptLine } from "../types";
 export default function CommsPanel({
   transcript,
   scrollRef,
-  endRef,
   testDataEnabled,
   onLoadDemo,
 }: {
   transcript: TranscriptLine[];
   scrollRef: RefObject<HTMLDivElement | null>;
-  endRef: RefObject<HTMLDivElement | null>;
   testDataEnabled: boolean;
   onLoadDemo: () => void;
 }) {
@@ -42,7 +40,6 @@ export default function CommsPanel({
             );
           })
         )}
-        <div ref={endRef} />
       </div>
     </section>
   );

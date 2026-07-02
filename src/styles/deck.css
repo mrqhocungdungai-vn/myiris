@@ -9,6 +9,13 @@
   height: 100vh;
   padding: 12px 18px 12px;
   gap: 12px;
+  /* The window is transparent; the deck owns its background + rounded frame. */
+  border-radius: 14px;
+  overflow: hidden;
+  background:
+    radial-gradient(85% 70% at 50% 30%, rgba(17, 34, 64, 0.5), transparent 70%),
+    linear-gradient(180deg, var(--bg-1) 0%, var(--bg-0) 100%);
+  box-shadow: inset 0 0 0 1px rgba(148, 196, 255, 0.06);
 }
 
 .deck > *:not(.hud-nebula):not(.hud-glow):not(.hud-vignette) {
@@ -41,8 +48,36 @@
 .deck-top-left {
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding-left: 84px;
+  gap: 16px;
+  padding-left: 6px;
+}
+
+/* Custom window controls (native traffic lights don't exist on the
+   transparent frameless window). */
+.win-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  -webkit-app-region: no-drag;
+}
+
+.win-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.14);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+  transition: background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.win-dot.close:hover {
+  background: #f16a5d;
+  box-shadow: 0 0 10px rgba(241, 106, 93, 0.5);
+}
+
+.win-dot.min:hover {
+  background: #f5b04a;
+  box-shadow: 0 0 10px rgba(var(--amber-rgb), 0.5);
 }
 
 .deck-top-right {
@@ -989,21 +1024,29 @@
   margin-top: 10px;
 }
 
+/* Full-width strip (not a small pill): a comfortable target for the finger
+   pointer — anywhere along the steps band toggles steps, never the card. */
 .activity-toggle {
-  display: inline-flex;
+  display: flex;
+  width: 100%;
   align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  border-radius: 999px;
+  gap: 7px;
+  padding: 8px 11px;
+  border-radius: var(--r-sm);
   font-family: var(--font-mono);
   font-size: 9.5px;
   font-weight: 500;
   letter-spacing: 0.1em;
   text-transform: uppercase;
+  text-align: left;
   color: var(--text-soft);
   background: rgba(var(--cyan-rgb), 0.06);
   box-shadow: inset 0 0 0 1px rgba(var(--cyan-rgb), 0.14);
   transition: background 0.15s ease, color 0.15s ease;
+}
+
+.activity-toggle .chev {
+  margin-left: auto;
 }
 
 .activity-toggle:hover {
@@ -1022,11 +1065,14 @@
 .activity-timeline {
   list-style: none;
   margin: 9px 0 0;
-  padding: 0;
+  padding: 0 2px 0 0;
   display: flex;
   flex-direction: column;
   gap: 5px;
   animation: timeline-in 0.2s ease;
+  /* Long runs (30+ steps) scroll inside the card instead of elongating it. */
+  max-height: 236px;
+  overflow-y: auto;
 }
 
 @keyframes timeline-in {
