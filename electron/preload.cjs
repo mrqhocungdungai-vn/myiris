@@ -4,8 +4,42 @@ contextBridge.exposeInMainWorld("iris", {
   startSidecar: (options) => ipcRenderer.invoke("sidecar:start", options),
   stopSidecar: () => ipcRenderer.invoke("sidecar:stop"),
   getSidecarStatus: () => ipcRenderer.invoke("sidecar:status"),
+  getAppConfig: () => ipcRenderer.invoke("app:config"),
+  getConfig: () => ipcRenderer.invoke("config:get"),
+  saveConfig: (updates) => ipcRenderer.invoke("config:save", updates),
+  testGemini: (key) => ipcRenderer.invoke("config:test-gemini", { key }),
+  testHermes: (payload) => ipcRenderer.invoke("config:test-hermes", payload),
+  previewVoice: (payload) => ipcRenderer.invoke("config:preview-voice", payload),
+  getHermesHistory: () => ipcRenderer.invoke("hermes:history"),
+  listHermesSessions: () => ipcRenderer.invoke("hermes:sessions"),
+  createHermesSession: () => ipcRenderer.invoke("hermes:create-session"),
+  toggleHud: () => ipcRenderer.invoke("hud:toggle"),
+  setHudInteractive: (on) => ipcRenderer.send("hud:interactive", Boolean(on)),
+  windowControl: (action) => ipcRenderer.send("win:control", action),
+  onHudMode: (callback) => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on("hud:mode", handler);
+    return () => ipcRenderer.removeListener("hud:mode", handler);
+  },
+  onWakeRequest: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on("iris:wake", handler);
+    return () => ipcRenderer.removeListener("iris:wake", handler);
+  },
+  onSleepRequest: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on("iris:sleep", handler);
+    return () => ipcRenderer.removeListener("iris:sleep", handler);
+  },
   sendCommand: (command) => ipcRenderer.invoke("sidecar:command", command),
+  sendUiContext: (context) => ipcRenderer.send("iris:ui-context", context),
   sendAudioChunk: (chunk) => ipcRenderer.send("live:audio", chunk),
+  notifyBootDone: () => ipcRenderer.send("iris:boot-done"),
+  onUiAction: (callback) => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on("iris:ui-action", handler);
+    return () => ipcRenderer.removeListener("iris:ui-action", handler);
+  },
   onAudioChunk: (callback) => {
     const handler = (_event, payload) => callback(payload);
     ipcRenderer.on("live:audio", handler);

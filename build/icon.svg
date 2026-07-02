@@ -1,0 +1,129 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <!--
+    Iris app icon - the ReactorCore orb in its "speaking" palette (coral/amber)
+    on the app's deep-space background. macOS squircle: 824px rounded rect on a
+    1024 canvas (100px transparent margin), rasterized to build/icon.png by
+    scripts/render-icon.mjs.
+  -->
+  <defs>
+    <clipPath id="squircle">
+      <rect x="100" y="100" width="824" height="824" rx="186" />
+    </clipPath>
+
+    <!-- Deep-space base, slightly lifted at the top like the app background -->
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0c111c" />
+      <stop offset="0.5" stop-color="#070b13" />
+      <stop offset="1" stop-color="#04060c" />
+    </linearGradient>
+
+    <!-- Warm ambient halo behind the orb -->
+    <radialGradient id="ambient" cx="0.5" cy="0.48" r="0.5">
+      <stop offset="0" stop-color="#ee7a5c" stop-opacity="0.3" />
+      <stop offset="0.55" stop-color="#ee7a5c" stop-opacity="0.09" />
+      <stop offset="1" stop-color="#ee7a5c" stop-opacity="0" />
+    </radialGradient>
+
+    <!-- Core glow: white-hot center -> coral -> warm falloff (ReactorCore) -->
+    <radialGradient id="coreglow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#fffae6" stop-opacity="1" />
+      <stop offset="0.22" stop-color="#ee7a5c" stop-opacity="0.85" />
+      <stop offset="0.48" stop-color="#ff9a68" stop-opacity="0.3" />
+      <stop offset="1" stop-color="#ff9a68" stop-opacity="0" />
+    </radialGradient>
+
+    <radialGradient id="corehot" cx="0.42" cy="0.4" r="0.65">
+      <stop offset="0" stop-color="#ffffff" />
+      <stop offset="0.6" stop-color="#fffae6" />
+      <stop offset="1" stop-color="#ffd9a8" />
+    </radialGradient>
+
+    <!-- Corner vignette inside the squircle -->
+    <radialGradient id="vignette" cx="0.5" cy="0.5" r="0.72">
+      <stop offset="0.62" stop-color="#000000" stop-opacity="0" />
+      <stop offset="1" stop-color="#000000" stop-opacity="0.4" />
+    </radialGradient>
+
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="7" result="b" />
+      <feMerge>
+        <feMergeNode in="b" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+
+    <filter id="bigglow" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="16" result="b" />
+      <feMerge>
+        <feMergeNode in="b" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Squircle plate -->
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#bg)" />
+
+  <g clip-path="url(#squircle)">
+    <!-- Ambient warm halo -->
+    <circle cx="512" cy="500" r="420" fill="url(#ambient)" />
+
+    <!-- Outer fine tick ring (two dashed rings: fine + major ticks) -->
+    <circle cx="512" cy="512" r="340" fill="none"
+      stroke="#ee7a5c" stroke-opacity="0.34" stroke-width="26"
+      stroke-dasharray="2.5 24.2" />
+    <circle cx="512" cy="512" r="340" fill="none"
+      stroke="#ffbc6c" stroke-opacity="0.75" stroke-width="26"
+      stroke-dasharray="3.5 174.6" transform="rotate(-8 512 512)" />
+
+    <!-- Segmented ring -->
+    <circle cx="512" cy="512" r="300" fill="none"
+      stroke="#ee7a5c" stroke-opacity="0.4" stroke-width="6.5"
+      stroke-dasharray="47 19" />
+    <!-- Three "active" bright segments -->
+    <circle cx="512" cy="512" r="300" fill="none" filter="url(#glow)"
+      stroke="#ffbc6c" stroke-opacity="0.95" stroke-width="8.5"
+      stroke-dasharray="47 581.3" transform="rotate(22 512 512)" />
+
+    <!-- Counter-rotating scan arcs -->
+    <circle cx="512" cy="512" r="262" fill="none" filter="url(#glow)"
+      stroke="#ee7a5c" stroke-opacity="0.98" stroke-width="17" stroke-linecap="round"
+      stroke-dasharray="700 946.3" transform="rotate(-34 512 512)" />
+    <circle cx="512" cy="512" r="228" fill="none"
+      stroke="#ffbc6c" stroke-opacity="0.65" stroke-width="8" stroke-linecap="round"
+      stroke-dasharray="430 1002.5" transform="rotate(150 512 512)" />
+    <circle cx="512" cy="512" r="262" fill="none"
+      stroke="#ee7a5c" stroke-opacity="0.35" stroke-width="5" stroke-linecap="round"
+      stroke-dasharray="260 1386.3" transform="rotate(118 512 512)" />
+
+    <!-- Middle circuit ring -->
+    <circle cx="512" cy="512" r="176" fill="none"
+      stroke="#ee7a5c" stroke-opacity="0.35" stroke-width="4"
+      stroke-dasharray="26 35.4" transform="rotate(9 512 512)" />
+
+    <!-- Technical hexagon + spokes -->
+    <polygon points="646,512 579,628.1 445,628.1 378,512 445,395.9 579,395.9"
+      fill="none" stroke="#ffbc6c" stroke-opacity="0.26" stroke-width="3" />
+    <g stroke="#ffbc6c" stroke-opacity="0.2" stroke-width="2.5">
+      <line x1="512" y1="472" x2="512" y2="402" />
+      <line x1="546.6" y1="532" x2="607.3" y2="567" />
+      <line x1="477.4" y1="532" x2="416.7" y2="567" />
+    </g>
+
+    <!-- Core -->
+    <circle cx="512" cy="512" r="192" fill="url(#coreglow)" />
+    <circle cx="512" cy="512" r="104" fill="none" stroke="#ee7a5c" stroke-opacity="0.65"
+      stroke-width="4" stroke-linecap="round" stroke-dasharray="336 317.4"
+      transform="rotate(70 512 512)" />
+    <circle cx="512" cy="512" r="72" fill="none" stroke="#fffae6" stroke-opacity="0.92"
+      stroke-width="4" filter="url(#glow)" />
+    <circle cx="512" cy="512" r="44" fill="url(#corehot)" filter="url(#bigglow)" />
+
+    <!-- Corner vignette -->
+    <rect x="100" y="100" width="824" height="824" fill="url(#vignette)" />
+  </g>
+
+  <!-- Hairline edge highlight, like the app's glass panels -->
+  <rect x="101.5" y="101.5" width="821" height="821" rx="184.5" fill="none"
+    stroke="#ffffff" stroke-opacity="0.07" stroke-width="3" />
+</svg>

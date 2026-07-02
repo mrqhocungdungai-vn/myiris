@@ -39,8 +39,14 @@ the active app path is:
 - Gemini delegates long-running work to Hermes via the local API server.
 - Hermes returns a `run_id` immediately; Iris keeps talking while Hermes works.
 - Source/dev workflows are cross-platform (`npm run dev` works on macOS,
-  Windows, and Linux). Packaged apps read config from `.env` in development or
-  `~/.iris/.env` / `%USERPROFILE%\.iris\.env` once packaged.
+  Windows, and Linux).
+- First-run onboarding wizard (and a Settings panel) collects the Gemini key,
+  Hermes connection, name, voice, and permissions, and writes them to
+  `~/.iris/.env` (`%USERPROFILE%\.iris\.env` on Windows). Manual `.env` editing is
+  an optional power-user path; a repo `.env` still works in development.
+- Personal context comes from Hermes's own memory files
+  (`~/.hermes/memories/USER.md` and `MEMORY.md`), injected into Gemini's system
+  prompt so it writes accurate Hermes briefs.
 
 ## Architecture
 ```mermaid
@@ -65,9 +71,10 @@ flowchart TD
 ```
 
 ## Implementation Shape
-- `electron/main.mjs`: Gemini Live session, tool declarations, Hermes API bridge, Hermes polling, completion announcements, audio IPC.
-- `electron/preload.cjs`: Safe `window.iris` IPC bridge.
+- `electron/main.mjs`: Gemini Live session, tool declarations, Hermes API bridge, Hermes polling + SSE activity stream, completion announcements, audio IPC, config read/write (`~/.iris/.env`), key/Hermes tests, voice preview, and user-context loading from Hermes memory.
+- `electron/preload.cjs`: Safe `window.iris` IPC bridge (incl. config get/save, tests, voice preview).
 - `src/App.tsx`: Voice UI state, WebRTC mic capture, PCM playback, task reader, gestures, Orbital Deck layout.
+- `src/SetupPanel.tsx`: First-run onboarding wizard and Settings panel.
 - `src/deck.css`: Dark-only Orbital Deck layout styles.
 - `src/useHandControl.ts`: MediaPipe `GestureRecognizer` camera/gesture hook.
 - `scripts/run-electron.mjs`: Cross-platform Electron launcher that clears
