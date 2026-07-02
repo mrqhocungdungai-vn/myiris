@@ -17,7 +17,9 @@ Talk naturally. Delegate real work. Control it with your hands. Let it float ove
 
 [Demo](#-demo) · [Features](#-features) · [Glass HUD](#-glass-hud-mode) · [Quick Start](#-quick-start) · [How It Works](#-how-it-works) · [Roadmap](#-roadmap)
 
-<img src="media/deck.png" alt="Iris deck — deep-space voice UI with live Hermes work stream" width="880" />
+<img src="media/demo.gif" alt="Iris live demo — waking by voice, delegating to Hermes, gestures, and Glass HUD" width="880" />
+
+*Real session at 5× speed — **[▶ watch the full demo with audio](media/demo.mp4)***
 
 </div>
 
@@ -27,15 +29,17 @@ Talk naturally. Delegate real work. Control it with your hands. Let it float ove
 
 <!--
   MAINTAINER NOTE (inline playback): GitHub only renders an embedded video
-  player for videos uploaded through the web UI. After merging, open this
-  README in the GitHub editor, drag media/demo.mp4 into it, and replace the
-  link below with the generated user-attachments URL — it becomes a real
-  inline player.
+  player for videos uploaded through the web UI. To upgrade the link below to
+  a real inline player, open this README in the GitHub editor, drag
+  media/demo.mp4 into it, and replace the link with the generated
+  user-attachments URL.
 -->
 
-**[▶ Watch the demo — media/demo.mp4](media/demo.mp4)**
+The hero above is the actual app. For the full tour with audio: **[▶ media/demo.mp4](media/demo.mp4)** — waking Iris by voice, delegating a task to Hermes mid-conversation, live tool steps streaming in, opening the result hands-free with a finger point, and Glass HUD mode over the desktop.
 
-A small tour: waking Iris by voice, delegating a task to Hermes mid-conversation, watching the live tool steps stream in, opening the result hands-free with a finger point, and sending Iris into Glass HUD mode to keep working while it listens.
+<div align="center">
+<img src="media/deck.png" alt="Iris deck — deep-space voice UI with live Hermes work stream" width="880" />
+</div>
 
 ---
 
@@ -85,6 +89,12 @@ When Hermes finishes a background task, Iris **proactively speaks up**: *"Quick 
 - **The orb** — a canvas-drawn arc reactor that breathes with the actual audio level, changes palette per state (listening / speaking / working), and flashes when work is handed off
 - **Comet handoff** — a particle streaks from the orb to the task card when Gemini delegates, and back when Hermes returns
 - **Cinematic boot sequence**, animated transitions, and a custom app icon rendered from the orb itself
+
+<div align="center">
+<img src="media/reader-steps.png" alt="A Hermes result open in the reader with the tool-step timeline expanded" width="880" />
+
+*Every tool Hermes used — searches, browsing, code, files — with timings, one voice command away.*
+</div>
 
 ---
 
