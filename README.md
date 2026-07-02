@@ -25,15 +25,9 @@ Talk naturally. Delegate real work. Control it with your hands. Let it float ove
 
 ## 🎬 Demo
 
-> 🔊 **Sound on — Iris is a voice tool.** The demo is a real session: waking Iris by voice, delegating a task to Hermes mid-conversation, live tool steps streaming in, opening the result hands-free with a finger point, and Glass HUD mode over the desktop.
+> 🔊 **Sound on — Iris is a voice tool.** A real session: waking Iris by voice, delegating a task to Hermes mid-conversation, live tool steps streaming in, opening the result hands-free with a finger point, and Glass HUD mode over the desktop.
 
-<!--
-  MAINTAINER NOTE (inline playback): drag media/demo.mp4 into this README in
-  the GitHub web editor and replace the link below with the generated
-  user-attachments URL — GitHub then renders a real inline video player.
--->
-
-**[▶ Watch the demo — media/demo.mp4](media/demo.mp4)**
+https://github.com/user-attachments/assets/735eb3eb-d98e-4e45-913c-66105ae076b1
 
 ---
 
