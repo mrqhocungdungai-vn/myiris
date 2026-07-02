@@ -1,5 +1,12 @@
 import electron from "electron";
 import { GoogleGenAI } from "@google/genai";
+import {
+  proposeHermesTask as gatePropose,
+  claimConfirmedProposal,
+  markModelTurnComplete,
+  markUserSpoke,
+  resetHermesGate,
+} from "./hermesGate.mjs";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -56,6 +63,8 @@ let userTranscriptBuffer = "";
 let modelTranscriptBuffer = "";
 const hermesRuns = new Map();
 const pendingHermesAnnouncements = [];
+let welcomeGreeted = false;
+let welcomeFallbackTimer = null;
 let irisUiContext = {
   tasks: [],
   expandedTaskId: null,
@@ -73,14 +82,20 @@ function emitEvent(event) {
   emitToRenderer("sidecar:event", { timestamp: Date.now() / 1000, ...event });
 }
 
-function flushTranscripts() {
+// Emit the user's line on its own. Called as soon as Iris starts responding so
+// "You: …" shows up immediately, instead of waiting for the whole turn to end.
+function flushUserTranscript() {
   if (userTranscriptBuffer.trim()) {
     emitEvent({ type: "transcript", speaker: "you", text: userTranscriptBuffer.trim() });
   }
+  userTranscriptBuffer = "";
+}
+
+function flushTranscripts() {
+  flushUserTranscript();
   if (modelTranscriptBuffer.trim()) {
     emitEvent({ type: "transcript", speaker: "gemini", text: modelTranscriptBuffer.trim() });
   }
-  userTranscriptBuffer = "";
   modelTranscriptBuffer = "";
 }
 
@@ -99,6 +114,64 @@ function userDisplayName() {
   return (process.env.IRIS_USER_NAME || process.env.USER || process.env.USERNAME || "there").trim();
 }
 
+function resolveContextPath(value) {
+  if (!value) return null;
+  let resolved = value.trim();
+  if (!resolved) return null;
+  if (resolved.startsWith("~")) resolved = path.join(os.homedir(), resolved.slice(1));
+  if (!path.isAbsolute(resolved)) resolved = path.join(repoRoot, resolved);
+  return resolved;
+}
+
+// Load the user's personal context (the SOUL.md / USER.md / MEMORY.md pattern):
+// concise, authoritative facts about who the user is and what they want, so Gemini
+// can resolve vague requests and write complete Hermes briefs. Configure explicit
+// files with IRIS_CONTEXT_FILE (comma-separated); otherwise auto-discover the
+// conventional files in ~/.iris and the repo root. Best-effort and capped.
+function loadUserContext() {
+  const MAX_CHARS = 12000;
+  // Single source of truth: Hermes's own learned context (USER.md + MEMORY.md), so
+  // Iris and Hermes stay in sync — no copying, no override files. We do NOT load
+  // Hermes's SOUL.md (that's Hermes's persona and would fight Iris's identity).
+  // Override the location with HERMES_HOME if Hermes lives somewhere else.
+  const hermesHome = process.env.HERMES_HOME
+    ? resolveContextPath(process.env.HERMES_HOME)
+    : path.join(os.homedir(), ".hermes");
+  const candidates = [
+    path.join(hermesHome, "memories", "USER.md"),
+    path.join(hermesHome, "memories", "MEMORY.md"),
+  ];
+
+  const seen = new Set();
+  const blocks = [];
+  const files = [];
+  for (const file of candidates) {
+    if (!file) continue;
+    let realKey;
+    try {
+      if (!fs.existsSync(file)) continue;
+      realKey = fs.realpathSync(file);
+    } catch {
+      continue;
+    }
+    if (seen.has(realKey)) continue;
+    seen.add(realKey);
+    try {
+      const text = fs.readFileSync(file, "utf8").trim();
+      if (!text) continue;
+      const label = path.join(path.basename(path.dirname(file)), path.basename(file));
+      blocks.push(`# ${label}\n${text}`);
+      files.push(label);
+    } catch {
+      // Skip unreadable context files.
+    }
+  }
+
+  let text = blocks.join("\n\n");
+  if (text.length > MAX_CHARS) text = `${text.slice(0, MAX_CHARS)}\n…(user context truncated)`;
+  return { text, files };
+}
+
 function envFlag(name, fallback = false) {
   const value = process.env[name];
   if (value == null || value === "") return fallback;
@@ -109,7 +182,188 @@ function appConfig() {
   return {
     loadTestData: envFlag("IRIS_LOAD_TEST_DATA", false),
     userName: userDisplayName(),
+    configured: Boolean((process.env.GEMINI_API_KEY || "").trim()),
   };
+}
+
+// ===== Onboarding / Settings =====
+const GEMINI_VOICES = [
+  "Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Aoede",
+  "Leda", "Orus", "Callirrhoe", "Autonoe", "Enceladus", "Iapetus",
+];
+const GEMINI_LIVE_MODELS = ["models/gemini-3.1-flash-live-preview"];
+const ALLOWED_CONFIG_KEYS = new Set([
+  "GEMINI_API_KEY",
+  "GEMINI_LIVE_MODEL",
+  "GEMINI_LIVE_VOICE",
+  "HERMES_API_URL",
+  "API_SERVER_KEY",
+  "HERMES_BIN",
+  "HERMES_HOME",
+  "IRIS_USER_NAME",
+  "IRIS_LOAD_TEST_DATA",
+  "IRIS_WAKE_WORD",
+  "IRIS_HERMES_SESSION",
+]);
+
+function userConfigPath() {
+  return path.join(os.homedir(), ".iris", ".env");
+}
+
+function ensureIncludes(list, value) {
+  if (value && !list.includes(value)) return [value, ...list];
+  return list;
+}
+
+// Full settings snapshot for the onboarding/settings UI. Values come from
+// process.env (populated from .env at boot and updated live on save).
+function getFullConfig() {
+  return {
+    geminiApiKey: process.env.GEMINI_API_KEY || "",
+    geminiModel: process.env.GEMINI_LIVE_MODEL || "models/gemini-3.1-flash-live-preview",
+    geminiVoice: process.env.GEMINI_LIVE_VOICE || "Zephyr",
+    hermesUrl: process.env.HERMES_API_URL || "http://127.0.0.1:8642",
+    hermesKey: process.env.API_SERVER_KEY || "iris-local-dev",
+    hermesBin: process.env.HERMES_BIN || "",
+    hermesHome: process.env.HERMES_HOME || "",
+    hermesSession: hermesSessionId(),
+    userName: process.env.IRIS_USER_NAME || "",
+    loadTestData: envFlag("IRIS_LOAD_TEST_DATA", false),
+    wakeWord: envFlag("IRIS_WAKE_WORD", false),
+    configured: Boolean((process.env.GEMINI_API_KEY || "").trim()),
+    voices: GEMINI_VOICES,
+    models: ensureIncludes(GEMINI_LIVE_MODELS, process.env.GEMINI_LIVE_MODEL),
+    configPath: userConfigPath(),
+    // Read-only defaults surfaced in the UI (not editable from settings).
+    voiceDuplexMode: process.env.VOICE_DUPLEX_MODE || "speaker",
+    speakerEchoGuard: process.env.SPEAKER_ECHO_GUARD_SECONDS || "0.9",
+  };
+}
+
+function serializeConfigValue(value) {
+  const str = String(value ?? "").trim();
+  return /[\s"#]/.test(str) ? `"${str.replace(/"/g, '\\"')}"` : str;
+}
+
+// Merge updates into ~/.iris/.env (preserving comments/other keys) and apply them
+// to process.env so they take effect on the next wake without a full restart.
+function writeUserConfig(rawUpdates) {
+  const updates = {};
+  for (const [key, value] of Object.entries(rawUpdates || {})) {
+    if (ALLOWED_CONFIG_KEYS.has(key)) updates[key] = value;
+  }
+  if (!Object.keys(updates).length) return getFullConfig();
+
+  const file = userConfigPath();
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+
+  const existing = fs.existsSync(file) ? fs.readFileSync(file, "utf8").split(/\r?\n/) : [];
+  const remaining = new Set(Object.keys(updates));
+  const out = [];
+  for (const line of existing) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) {
+      out.push(line);
+      continue;
+    }
+    const eq = trimmed.indexOf("=");
+    const key = eq === -1 ? trimmed : trimmed.slice(0, eq).trim();
+    if (remaining.has(key)) {
+      out.push(`${key}=${serializeConfigValue(updates[key])}`);
+      remaining.delete(key);
+    } else {
+      out.push(line);
+    }
+  }
+  for (const key of remaining) out.push(`${key}=${serializeConfigValue(updates[key])}`);
+
+  fs.writeFileSync(file, `${out.join("\n").replace(/\n+$/, "")}\n`, "utf8");
+  for (const [key, value] of Object.entries(updates)) process.env[key] = String(value ?? "").trim();
+  return getFullConfig();
+}
+
+// Validate a Gemini key by forcing one authenticated round-trip (ListModels).
+async function testGeminiKey(candidateKey) {
+  const key = (candidateKey || process.env.GEMINI_API_KEY || "").trim();
+  if (!key) return { ok: false, error: "No API key provided." };
+  try {
+    const testAi = new GoogleGenAI({ apiKey: key });
+    const pager = await testAi.models.list();
+    for await (const _model of pager) break;
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error?.message || String(error) };
+  }
+}
+
+async function testHermesConnection(payload = {}) {
+  const base = (payload.url || hermesBaseUrl()).replace(/\/$/, "");
+  const apiKey = payload.key || process.env.API_SERVER_KEY || "iris-local-dev";
+  try {
+    const res = await fetch(`${base}/health`, { headers: { Authorization: `Bearer ${apiKey}` } });
+    const text = await res.text();
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}: ${text.slice(0, 160)}` };
+    let health = {};
+    try { health = JSON.parse(text); } catch { /* non-JSON health */ }
+    return { ok: true, health };
+  } catch (error) {
+    return { ok: false, error: error?.message || String(error) };
+  }
+}
+
+// Speak a short sample with the chosen voice via a throwaway Live session. Audio
+// streams to the renderer over the existing live:audio channel.
+let previewSession = null;
+async function previewVoice(payload = {}) {
+  if (liveSession) return { ok: false, error: "Sleep Iris before previewing a voice." };
+  const apiKey = (payload.key || process.env.GEMINI_API_KEY || "").trim();
+  if (!apiKey) return { ok: false, error: "Save your Gemini key first." };
+  const voiceName = payload.voice || process.env.GEMINI_LIVE_VOICE || "Zephyr";
+  const model = process.env.GEMINI_LIVE_MODEL || "models/gemini-3.1-flash-live-preview";
+  try {
+    if (previewSession) {
+      try { previewSession.close(); } catch { /* ignore */ }
+      previewSession = null;
+    }
+    const previewAi = new GoogleGenAI({ apiKey });
+    previewSession = await previewAi.live.connect({
+      model,
+      config: {
+        responseModalities: ["AUDIO"],
+        speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } },
+        systemInstruction: {
+          parts: [{ text: "You are a short voice sample. Say exactly the line you are asked to say, nothing more." }],
+        },
+      },
+      callbacks: {
+        onmessage(message) {
+          const content = message.serverContent;
+          if (!content) return;
+          for (const part of content.modelTurn?.parts || []) {
+            const inlineData = part.inlineData;
+            if (inlineData?.data && (inlineData.mimeType || "").startsWith("audio/")) {
+              emitToRenderer("live:audio", { data: inlineData.data, mimeType: inlineData.mimeType });
+            }
+          }
+          if (content.turnComplete) {
+            try { previewSession?.close(); } catch { /* ignore */ }
+            previewSession = null;
+          }
+        },
+        onerror() { previewSession = null; },
+        onclose() { previewSession = null; },
+      },
+    });
+    // Send AFTER connect resolves: onopen can fire before the session variable is
+    // assigned, so triggering inside onopen would no-op (silent preview).
+    previewSession.sendRealtimeInput({
+      text: `Say exactly: Hi, I'm Iris. This is the ${voiceName} voice.`,
+    });
+    return { ok: true };
+  } catch (error) {
+    previewSession = null;
+    return { ok: false, error: error?.message || String(error) };
+  }
 }
 
 async function hermesRequest(method, pathName, body = undefined) {
@@ -144,7 +398,14 @@ async function checkHermesStatus() {
   }
 }
 
-async function submitHermesTask({ task, session_id = "iris-voice", urgency = "normal" }) {
+// All Iris work lands in ONE pinned Hermes session. Gemini used to be allowed to
+// pass its own session_id, which quietly fragmented history across multiple
+// Hermes chat threads — so the model no longer gets a say.
+function hermesSessionId() {
+  return (process.env.IRIS_HERMES_SESSION || "iris-voice").trim() || "iris-voice";
+}
+
+async function submitHermesTask({ task, urgency = "normal" }) {
   if (!task || !String(task).trim()) {
     return { status: "error", error: "Task is required." };
   }
@@ -152,18 +413,192 @@ async function submitHermesTask({ task, session_id = "iris-voice", urgency = "no
   emitEvent({ type: "hermes_task_update", status: "starting", task: cleanTask });
   const run = await hermesRequest("POST", "/v1/runs", {
     input: cleanTask,
-    session_id,
+    session_id: hermesSessionId(),
     instructions:
       "You are invoked from Iris voice. Work autonomously. Do not ask Iris for clarification unless absolutely impossible. Use sensible defaults and report concise final results.",
   });
   const runId = run.run_id || run.id;
   emitEvent({ type: "hermes_task_update", status: "started", task: cleanTask, run_id: runId, urgency });
   if (runId) watchHermesRun(runId, cleanTask);
-  return { status: "started", run_id: runId, message: "Hermes has started the task." };
+  return {
+    status: "started",
+    run_id: runId,
+    message: "Hermes has started the task.",
+    instructions:
+      "Say ONE short acknowledgement (e.g. 'On it — Hermes is handling that now.'). The task has only STARTED: you have NO result yet. Do not describe, predict, or summarize any outcome until SYSTEM_EVENT_HERMES_COMPLETE arrives or get_hermes_task_status returns a terminal status.",
+  };
+}
+
+// Stage a Hermes task without sending it (STEP 1 of the enforced dispatch flow;
+// the state machine lives in hermesGate.mjs).
+function proposeHermesTask({ task, urgency = "normal" }) {
+  const staged = gatePropose(task, urgency);
+  if (!staged.ok) return { status: "error", error: "A complete task brief is required." };
+  return {
+    status: "proposed",
+    task: staged.task,
+    instructions: [
+      `Now read this brief back to ${userDisplayName()} in one or two short sentences, ask "Should I send this to Hermes?", and END YOUR TURN.`,
+      "Do NOT call submit_hermes_task yet — it will be rejected until they answer.",
+      `If ${userDisplayName()} declines, drop it. If they change any detail, call propose_hermes_task again with the updated brief.`,
+    ].join(" "),
+  };
 }
 
 async function getHermesTaskStatus({ run_id }) {
-  return hermesRequest("GET", `/v1/runs/${run_id}`);
+  const terminal = new Set(["completed", "failed", "cancelled", "canceled", "error"]);
+  try {
+    const run = await hermesRequest("GET", `/v1/runs/${run_id}`);
+    const status = String(run.status || "unknown");
+    if (terminal.has(status)) {
+      return {
+        status,
+        run_id,
+        output: String(run.output || run.final_response || "").slice(0, 2500),
+        instructions: "The run is finished. Report ONLY what is in `output` above — nothing else.",
+      };
+    }
+    return {
+      status,
+      run_id,
+      instructions:
+        "The run is STILL IN PROGRESS. There is NO result yet. Tell the user it is still working and stop there — do not guess, predict, or invent any findings. You will receive SYSTEM_EVENT_HERMES_COMPLETE when it finishes.",
+    };
+  } catch (error) {
+    return {
+      status: "error",
+      run_id,
+      error: error?.message || String(error),
+      instructions:
+        "You could not fetch the status. Say exactly that. Do not make up a status or a result.",
+    };
+  }
+}
+
+// ===== Hermes sessions & history restore =====
+// Hermes semantics: a session is created lazily the first time any client
+// references its id (POST /v1/runs with an unknown session_id creates it), and
+// the Hermes TUI/desktop creates its own `tui`-source sessions per chat. Hermes
+// never spawns extra sessions for API clients on its own — the old strays came
+// from Gemini choosing session ids, which is now pinned to hermesSessionId().
+//
+// The Work Stream mirrors ONE selected session (like picking a chat in Hermes
+// desktop): submissions go to it, and history is restored from it alone — no
+// mix and match. Hermes has no "list runs" endpoint, but it persists the full
+// transcript, so past completed work is rebuilt from user/assistant messages.
+const HERMES_HISTORY_LIMIT = 12;
+
+// Create a brand-new chat thread and let HERMES name it: native `api_…` id and
+// NO custom title — like every chat tool, the thread takes its name from the
+// first prompt sent into it (Hermes exposes that as the session preview).
+async function createHermesSession() {
+  try {
+    const json = await hermesRequest("POST", "/api/sessions", {});
+    const id = json?.session?.id || json?.id;
+    if (!id) throw new Error("Hermes did not return a session id.");
+    return { ok: true, id: String(id) };
+  } catch (error) {
+    return { ok: false, error: error?.message || String(error) };
+  }
+}
+
+// Iris-born sessions for the main-page session switcher: `api_server` source
+// only (Iris is the API client) — the user's own Hermes TUI/desktop chats are
+// intentionally excluded. Newest first.
+async function listHermesSessions() {
+  try {
+    const json = await hermesRequest("GET", "/api/sessions");
+    const sessions = (Array.isArray(json.data) ? json.data : [])
+      .filter((session) => session?.id && session.source === "api_server")
+      .sort((a, b) => (b.last_active || 0) - (a.last_active || 0))
+      .slice(0, 25)
+      .map((session) => ({
+        id: String(session.id),
+        source: String(session.source || ""),
+        title: typeof session.title === "string" ? session.title : "",
+        preview: typeof session.preview === "string" ? session.preview : "",
+        messageCount: typeof session.message_count === "number" ? session.message_count : 0,
+        lastActive: typeof session.last_active === "number" ? session.last_active * 1000 : 0,
+      }));
+    return { ok: true, sessions };
+  } catch (error) {
+    return { ok: false, error: error?.message || String(error), sessions: [] };
+  }
+}
+
+function historyStepsFromToolCalls(message) {
+  const calls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+  const ts = (typeof message.timestamp === "number" ? message.timestamp : 0) * 1000;
+  const steps = [];
+  calls.forEach((call, index) => {
+    const name = call?.function?.name;
+    if (!name) return;
+    let preview;
+    try {
+      const args = JSON.parse(call.function.arguments || "{}");
+      const firstString = Object.values(args).find(
+        (value) => typeof value === "string" && value.trim(),
+      );
+      if (firstString) preview = String(firstString).slice(0, 80);
+    } catch {
+      // Arguments are best-effort preview material only.
+    }
+    steps.push({ id: `hist-${message.id}-${index}`, tool: name, preview, status: "done", ts });
+  });
+  return steps;
+}
+
+async function sessionRunsFromTranscript(sessionId) {
+  const json = await hermesRequest(
+    "GET",
+    `/api/sessions/${encodeURIComponent(sessionId)}/messages`,
+  );
+  const messages = Array.isArray(json.data) ? json.data : [];
+  const runs = [];
+  let current = null;
+
+  for (const message of messages) {
+    const ts = (typeof message.timestamp === "number" ? message.timestamp : 0) * 1000;
+    if (
+      message.role === "user" &&
+      typeof message.content === "string" &&
+      message.content.trim() &&
+      !message.content.startsWith("SYSTEM_EVENT")
+    ) {
+      // Runs that never produced a final response (stopped/interrupted) are
+      // skipped — there is no result to restore for them.
+      if (current?.output) runs.push(current);
+      current = {
+        id: `history:${sessionId}:${message.id}`,
+        task: message.content.trim(),
+        status: "completed",
+        output: "",
+        updatedAt: ts,
+        steps: [],
+      };
+      continue;
+    }
+    if (!current || message.role !== "assistant") continue;
+
+    current.steps = [...current.steps, ...historyStepsFromToolCalls(message)].slice(-40);
+    if (typeof message.content === "string" && message.content.trim()) {
+      current.output = message.content.trim().slice(0, 8000);
+      if (ts) current.updatedAt = ts;
+    }
+  }
+  if (current?.output) runs.push(current);
+  return runs;
+}
+
+async function fetchHermesHistory() {
+  try {
+    const sessionId = hermesSessionId();
+    const runs = await sessionRunsFromTranscript(sessionId).catch(() => []);
+    const tasks = runs.sort((a, b) => b.updatedAt - a.updatedAt).slice(0, HERMES_HISTORY_LIMIT);
+    return { ok: true, tasks, sessions: [sessionId] };
+  } catch (error) {
+    return { ok: false, error: error?.message || String(error) };
+  }
 }
 
 async function stopHermesTask({ run_id }) {
@@ -202,8 +637,29 @@ async function executeTool(name, args = {}) {
   switch (name) {
     case "check_hermes_status":
       return checkHermesStatus();
-    case "submit_hermes_task":
-      return submitHermesTask(args);
+    case "propose_hermes_task":
+      return proposeHermesTask(args);
+    case "submit_hermes_task": {
+      const claim = claimConfirmedProposal();
+      if (!claim.ok) {
+        return claim.reason === "no_proposal"
+          ? {
+              status: "blocked",
+              error:
+                "REJECTED: no proposed task. First call propose_hermes_task with the complete brief, read it back to the user, and wait for their explicit yes.",
+            }
+          : {
+              status: "blocked",
+              error: `REJECTED: ${userDisplayName()} has not confirmed yet. Read the proposed brief aloud, ask "Should I send this to Hermes?", END your turn, and submit only after they explicitly say yes.`,
+            };
+      }
+      // Submit the confirmed brief; a task arg is only honored as a refinement
+      // of the proposal (e.g. the user corrected a detail while confirming).
+      return submitHermesTask({
+        task: typeof args.task === "string" && args.task.trim() ? args.task : claim.proposal.task,
+        urgency: args.urgency || claim.proposal.urgency,
+      });
+    }
     case "get_hermes_task_status":
       return getHermesTaskStatus(args);
     case "stop_hermes_task":
@@ -373,26 +829,42 @@ function buildHermesTools() {
           parameters: { type: "object", properties: {} },
         },
         {
-          name: "submit_hermes_task",
+          name: "propose_hermes_task",
           description:
-            "Immediately hand actionable work to Hermes. Invoke for deals, shopping, research, coding, file work, terminal tasks, summaries, automations, or anything requiring tools. Do not ask the user clarifying questions first. IMPORTANT: Hermes cannot see this voice conversation — the 'task' string is the ONLY context it gets. So you must write a complete, self-contained brief, not a short paraphrase.",
+            "STEP 1 of dispatching work to Hermes (deals, shopping, research, coding, file work, terminal tasks, summaries, automations — anything requiring tools). Stages the task brief WITHOUT sending it. After calling this, read the brief back to the user, ask for confirmation, and end your turn. IMPORTANT: Hermes cannot see this voice conversation — the 'task' string is the ONLY context it gets, so write a complete, self-contained brief, not a short paraphrase.",
           parameters: {
             type: "object",
             properties: {
               task: {
                 type: "string",
                 description:
-                  "A complete, self-contained task brief for Hermes written in clear English. Expand the user's spoken request into a precise instruction: include the goal, every concrete detail the user gave (names, numbers, URLs, dates, budgets, preferences, constraints), any sensible defaults you assumed, and the expected output/format. Do NOT compress it into a few words; write the full task as if Hermes has no prior context.",
+                  "A complete, self-contained task brief for Hermes written in clear English. Expand the user's spoken request into a precise instruction: include the goal, every concrete detail the user gave (names, numbers, URLs, dates, budgets, preferences, constraints), any sensible defaults you assumed, and the expected output/format. Write it as if Hermes has no prior context.",
               },
-              session_id: { type: "string", description: "Stable session id. Default iris-voice." },
               urgency: { type: "string", description: "low, normal, or high." },
             },
             required: ["task"],
           },
         },
         {
+          name: "submit_hermes_task",
+          description:
+            "STEP 2: actually send the proposed task to Hermes. Only call this AFTER propose_hermes_task AND after the user explicitly said yes in their own turn. Calls made without a confirmed proposal are automatically REJECTED by the system.",
+          parameters: {
+            type: "object",
+            properties: {
+              task: {
+                type: "string",
+                description:
+                  "Optional: only pass this to refine the proposed brief with corrections the user gave while confirming. Omit it to send the proposal as staged.",
+              },
+              urgency: { type: "string", description: "low, normal, or high." },
+            },
+          },
+        },
+        {
           name: "get_hermes_task_status",
-          description: "Fetch the latest status for a Hermes run.",
+          description:
+            "Fetch the REAL status of a Hermes run. You MUST call this before saying anything about how a run is going — never guess or answer from memory. If it returns a non-terminal status, the result does not exist yet.",
           parameters: {
             type: "object",
             properties: { run_id: { type: "string" } },
@@ -495,27 +967,62 @@ function buildLiveConfig() {
             `You are Iris, the realtime voice front-end for ${userDisplayName()}.`,
             "Hermes is your worker brain for tools, terminal, files, web, deals, coding, research, and automations.",
             "You also have built-in Google Search. Use Google Search directly for quick current facts, simple web lookups, and lightweight questions that do not need Hermes to do work.",
-            `CRITICAL: Be decisive. Do not ask clarifying questions for actionable tasks. If ${userDisplayName()} asks for a deal, research, coding, checking something, building something, or any work, immediately call submit_hermes_task with the request.`,
-            "Routing rule: quick answer or fact lookup -> Google Search; multi-step work, monitoring, files, email, deals, coding, automation, or anything that should continue in the background -> Hermes.",
+            `CRITICAL Hermes dispatch flow — two steps, enforced by the system: (1) call propose_hermes_task with the complete brief, then read it back to ${userDisplayName()} in one or two sentences, ask "Should I send this to Hermes?", and END your turn. (2) Only after ${userDisplayName()} explicitly answers yes ("yes", "go", "do it", "send it") in their OWN turn, call submit_hermes_task. Any submit without a confirmed proposal is automatically rejected. Never dispatch on your own initiative. If they decline or stay silent, drop it. If they change details, call propose_hermes_task again with the updated brief and re-confirm.`,
+            "CRITICAL truthfulness rule — you have NO knowledge of what Hermes is doing or has found. NEVER invent, guess, predict, or summarize a Hermes result from your own imagination. Facts about a run come ONLY from: a SYSTEM_EVENT_HERMES_COMPLETE message, or the exact `output` field of a get_hermes_task_status response with a terminal status. Until one of those exists, the ONLY honest answer is that Hermes is still working.",
+            "When asked how a task is going or what Hermes found: FIRST call get_hermes_task_status (or check_hermes_status for connectivity), THEN speak strictly from its response. If the status is not terminal, say it is still in progress and stop — do not speculate about partial findings, likely outcomes, or timing.",
+            "After submitting a task, your only statement is a short acknowledgement that Hermes has started. Never phrase it as if any result exists yet.",
+            "Routing rule: quick answer, fact lookup, or general chat -> answer directly or use Google Search; dispatch to Hermes ONLY when explicitly requested as described above.",
             "UI control rule: If the user says things like 'open it', 'open that result', 'show latest Hermes result', 'show history', 'close it', 'go back', or 'open the current task', use get_iris_ui_context and control_iris_ui. Do not send those UI-only commands to Hermes.",
             "Also handle these UI-only commands with control_iris_ui (never Hermes): 'show the steps' / 'what is it doing' / 'show what tools it used' -> show_task_steps (defaults to the running task; pass target_id only if they name a specific card); 'hide the steps' -> hide_task_steps.",
             "If the user refers to a task by partial words from the task header, like 'open the failed one', 'open Hermes API', 'open package Iris', or 'open two hand design', call control_iris_ui with action open_task_by_query and put those words in query. Do not require an exact title match.",
             "If Iris shows a task chooser because multiple cards matched, the user can click a choice or say first/second/third; use get_iris_ui_context to inspect pendingTaskMatches before opening a specific task.",
             "When a UI command is ambiguous, prefer the expanded task first, then the focused task, then the latest Hermes result. Keep the spoken acknowledgement short.",
-            `When you call submit_hermes_task, write the 'task' as a COMPLETE, self-contained brief. Hermes cannot hear this conversation, so do not send a short paraphrase. Expand what ${userDisplayName()} said into a precise, detailed instruction that captures the goal, every concrete detail mentioned (names, numbers, URLs, dates, budgets, preferences, constraints), any reasonable defaults you are assuming, and the expected result/format. Write it as if Hermes has zero prior context.`,
-            `After submit_hermes_task returns, say one short acknowledgement like: On it, Hermes is handling that now. (Keep what you SAY to ${userDisplayName()} short, even though the task you SENT to Hermes is detailed.)`,
+            `When you call propose_hermes_task, write the 'task' as a COMPLETE, self-contained brief. Hermes cannot hear this conversation, so do not send a short paraphrase. Expand what ${userDisplayName()} said into a precise, detailed instruction that captures the goal, every concrete detail mentioned (names, numbers, URLs, dates, budgets, preferences, constraints), any reasonable defaults you are assuming, and the expected result/format. Write it as if Hermes has zero prior context.`,
+            `After submit_hermes_task returns "started", say one short acknowledgement like: On it, Hermes is handling that now. (Keep what you SAY to ${userDisplayName()} short, even though the task you SENT to Hermes is detailed.) If it returns "blocked", follow its instructions instead — do not claim the task was sent.`,
             `When you receive SYSTEM_EVENT_SESSION_START, immediately speak a warm welcome-back greeting to ${userDisplayName()} as instructed, without waiting for the user to talk first.`,
             `When you receive SYSTEM_EVENT_HERMES_COMPLETE, treat it as a high-priority background result from Hermes. Proactively announce it even if ${userDisplayName()} was chatting with you. Keep it polite and short: say Hermes is back, summarize the result, and ask whether they want to go through it before continuing.`,
             "Only answer directly for greetings, quick chat, or status questions.",
             "Keep voice responses natural and short.",
           ].join("\n"),
         },
+        ...userContextParts(),
       ],
     },
   };
 }
 
+// Personal context injected as its own system-instruction part. Kept separate so
+// it is easy to see and so the brief-writing rules above can lean on it.
+function userContextParts() {
+  const { text, files } = loadUserContext();
+  if (!text) return [];
+  emitEvent({
+    type: "log",
+    level: "info",
+    message: `Loaded user context (${text.length} chars) from ${files.join(", ")}.`,
+  });
+  return [
+    {
+      text: [
+        `USER CONTEXT — personal profile and memory provided by ${userDisplayName()}.`,
+        "Treat it as authoritative about who they are, their preferences, locations, budgets, tools, and recurring projects.",
+        "Use it to resolve vague or shorthand requests and, most importantly, to write COMPLETE and ACCURATE Hermes briefs (for example, infer what 'deals' or 'the usual' means for this user, and fill in concrete details they did not say out loud).",
+        "Never read this context aloud verbatim; just use it to act correctly.",
+        "----- BEGIN USER CONTEXT -----",
+        text,
+        "----- END USER CONTEXT -----",
+      ].join("\n"),
+    },
+  ];
+}
+
 function sendWelcomeGreeting() {
+  if (welcomeGreeted || !liveSession) return;
+  welcomeGreeted = true;
+  if (welcomeFallbackTimer) {
+    clearTimeout(welcomeFallbackTimer);
+    welcomeFallbackTimer = null;
+  }
   (async () => {
     let reachable = false;
     try {
@@ -548,6 +1055,7 @@ async function startLive() {
   }
 
   const model = process.env.GEMINI_LIVE_MODEL || "models/gemini-3.1-flash-live-preview";
+  resetHermesGate();
   ai = new GoogleGenAI({ apiKey });
   emitEvent({ type: "sidecar_status", status: { running: true, model, mode: "webrtc-aec" } });
   emitEvent({ type: "gemini_status", status: "connecting", model });
@@ -561,10 +1069,6 @@ async function startLive() {
         emitEvent({ type: "sidecar_status", status: { running: true, pid: process.pid, model, mode: "webrtc-aec" } });
         emitEvent({ type: "gemini_status", status: "connected", model });
         emitEvent({ type: "audio_state", state: "listening" });
-        while (pendingHermesAnnouncements.length > 0 && liveSession) {
-          liveSession.sendRealtimeInput({ text: pendingHermesAnnouncements.shift() });
-        }
-        sendWelcomeGreeting();
       },
       onmessage(message) {
         handleLiveMessage(message);
@@ -582,6 +1086,19 @@ async function startLive() {
       },
     },
   });
+
+  // Send AFTER connect resolves: onopen can fire before liveSession is assigned,
+  // which would otherwise skip the queued announcements.
+  while (pendingHermesAnnouncements.length > 0 && liveSession) {
+    liveSession.sendRealtimeInput({ text: pendingHermesAnnouncements.shift() });
+  }
+
+  // Defer the welcome greeting until the renderer's boot screen finishes
+  // (iris:boot-done) so Iris doesn't start talking over the loading animation.
+  // Safety net: greet anyway if that signal never arrives.
+  welcomeGreeted = false;
+  if (welcomeFallbackTimer) clearTimeout(welcomeFallbackTimer);
+  welcomeFallbackTimer = setTimeout(() => sendWelcomeGreeting(), 8000);
 
   return { running: true, pid: process.pid };
 }
@@ -618,12 +1135,25 @@ function handleLiveMessage(message) {
 
   if (content.interrupted) {
     flushTranscripts();
+    // Barge-in counts as the read-back turn ending: the user is reacting to it.
+    markModelTurnComplete();
     emitToRenderer("live:interrupt", {});
     emitEvent({ type: "audio_state", state: "listening" });
     return;
   }
 
-  if (content.inputTranscription?.text) userTranscriptBuffer += content.inputTranscription.text;
+  if (content.inputTranscription?.text) {
+    userTranscriptBuffer += content.inputTranscription.text;
+    if (userTranscriptBuffer.trim()) markUserSpoke();
+  }
+
+  // The first sign of Iris responding means the user's turn is over, so push
+  // their transcript to Comms right away instead of waiting for turnComplete.
+  const hasModelOutput =
+    Boolean(content.outputTranscription?.text) ||
+    (content.modelTurn?.parts || []).some((part) => part.text || part.inlineData?.data);
+  if (hasModelOutput) flushUserTranscript();
+
   if (content.outputTranscription?.text) modelTranscriptBuffer += content.outputTranscription.text;
 
   for (const part of content.modelTurn?.parts || []) {
@@ -638,11 +1168,18 @@ function handleLiveMessage(message) {
 
   if (content.turnComplete) {
     flushTranscripts();
+    markModelTurnComplete();
     emitEvent({ type: "audio_state", state: "listening" });
   }
 }
 
 async function stopLive() {
+  welcomeGreeted = true;
+  resetHermesGate();
+  if (welcomeFallbackTimer) {
+    clearTimeout(welcomeFallbackTimer);
+    welcomeFallbackTimer = null;
+  }
   if (liveSession) {
     try { liveSession.close(); } catch { /* ignore close races */ }
   }
@@ -670,7 +1207,7 @@ function sendCommand(command) {
     liveSession.sendRealtimeInput({ text: command.text });
   }
   if (command?.type === "submit_hermes_task" && command.task) {
-    submitHermesTask({ task: command.task, session_id: command.session_id || "iris-voice" }).catch((error) => {
+    submitHermesTask({ task: command.task }).catch((error) => {
       emitEvent({ type: "hermes_task_update", status: "error", task: command.task, error: error.message });
     });
   }
@@ -680,8 +1217,8 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1180,
     height: 860,
-    minWidth: 980,
-    minHeight: 800,
+    minWidth: 1120,
+    minHeight: 820,
     backgroundColor: "#050712",
     ...(appIcon ? { icon: appIcon } : {}),
     titleBarStyle: "hiddenInset",
@@ -720,6 +1257,16 @@ function installAppMenu() {
       ],
     },
     { role: "editMenu" },
+    {
+      label: "View",
+      submenu: [
+        { role: "reload" },
+        { role: "forceReload" },
+        { role: "toggleDevTools" },
+        { type: "separator" },
+        { role: "togglefullscreen" },
+      ],
+    },
     { role: "windowMenu" },
   ]);
   Menu.setApplicationMenu(menu);
@@ -739,8 +1286,17 @@ app.whenReady().then(() => {
   ipcMain.handle("sidecar:stop", () => stopLive());
   ipcMain.handle("sidecar:status", () => liveStatus);
   ipcMain.handle("app:config", () => appConfig());
+  ipcMain.handle("config:get", () => getFullConfig());
+  ipcMain.handle("config:save", (_event, updates) => writeUserConfig(updates));
+  ipcMain.handle("config:test-gemini", (_event, payload) => testGeminiKey(payload?.key));
+  ipcMain.handle("config:test-hermes", (_event, payload) => testHermesConnection(payload || {}));
+  ipcMain.handle("config:preview-voice", (_event, payload) => previewVoice(payload || {}));
+  ipcMain.handle("hermes:history", () => fetchHermesHistory());
+  ipcMain.handle("hermes:sessions", () => listHermesSessions());
+  ipcMain.handle("hermes:create-session", () => createHermesSession());
   ipcMain.handle("sidecar:command", (_event, command) => sendCommand(command));
   ipcMain.on("live:audio", (_event, chunk) => sendAudioChunk(chunk));
+  ipcMain.on("iris:boot-done", () => sendWelcomeGreeting());
   ipcMain.on("iris:ui-context", (_event, context) => {
     if (context && typeof context === "object") {
       irisUiContext = context;

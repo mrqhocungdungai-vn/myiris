@@ -5,9 +5,18 @@ contextBridge.exposeInMainWorld("iris", {
   stopSidecar: () => ipcRenderer.invoke("sidecar:stop"),
   getSidecarStatus: () => ipcRenderer.invoke("sidecar:status"),
   getAppConfig: () => ipcRenderer.invoke("app:config"),
+  getConfig: () => ipcRenderer.invoke("config:get"),
+  saveConfig: (updates) => ipcRenderer.invoke("config:save", updates),
+  testGemini: (key) => ipcRenderer.invoke("config:test-gemini", { key }),
+  testHermes: (payload) => ipcRenderer.invoke("config:test-hermes", payload),
+  previewVoice: (payload) => ipcRenderer.invoke("config:preview-voice", payload),
+  getHermesHistory: () => ipcRenderer.invoke("hermes:history"),
+  listHermesSessions: () => ipcRenderer.invoke("hermes:sessions"),
+  createHermesSession: () => ipcRenderer.invoke("hermes:create-session"),
   sendCommand: (command) => ipcRenderer.invoke("sidecar:command", command),
   sendUiContext: (context) => ipcRenderer.send("iris:ui-context", context),
   sendAudioChunk: (chunk) => ipcRenderer.send("live:audio", chunk),
+  notifyBootDone: () => ipcRenderer.send("iris:boot-done"),
   onUiAction: (callback) => {
     const handler = (_event, payload) => callback(payload);
     ipcRenderer.on("iris:ui-action", handler);

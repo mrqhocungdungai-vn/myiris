@@ -1,0 +1,261 @@
+/* ===== Visual FX: handoff comets, orb flash, accepted stamp, hand reticles ===== */
+
+/* --- Handoff: Gemini -> Hermes -> back. A comet flies between the orb and the
+   Work Stream, the orb flashes, and the new card stamps "task submitted". --- */
+.handoff-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.handoff-pulse {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  transform: translate(var(--fx), var(--fy));
+  will-change: transform, opacity;
+}
+
+.handoff-pulse.amber { --tone: var(--amber-rgb); }
+.handoff-pulse.success { --tone: var(--mint-rgb); }
+.handoff-pulse.error { --tone: var(--coral-rgb); }
+
+.handoff-pulse.out,
+.handoff-pulse.in {
+  animation: handoff-travel 860ms cubic-bezier(0.42, 0, 0.2, 1) forwards;
+}
+
+.handoff-pulse .comet-head {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 18px;
+  height: 18px;
+  margin: -9px 0 0 -9px;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    rgba(255, 255, 255, 0.98) 0%,
+    rgba(var(--tone), 0.95) 42%,
+    rgba(var(--tone), 0) 74%
+  );
+  box-shadow:
+    0 0 16px 4px rgba(var(--tone), 0.85),
+    0 0 40px 12px rgba(var(--tone), 0.45);
+}
+
+.handoff-pulse .comet-tail {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 120px;
+  height: 7px;
+  transform-origin: 100% 50%;
+  transform: translate(-100%, -50%) rotate(var(--angle));
+  background: linear-gradient(90deg, rgba(var(--tone), 0) 0%, rgba(var(--tone), 0.85) 100%);
+  border-radius: 999px;
+  filter: blur(2px);
+  opacity: 0.85;
+}
+
+@keyframes handoff-travel {
+  0% {
+    transform: translate(var(--fx), var(--fy)) scale(0.25);
+    opacity: 0;
+  }
+  12% {
+    opacity: 1;
+  }
+  50% {
+    transform: translate(
+        calc(var(--fx) + var(--dx) * 0.5),
+        calc(var(--fy) + var(--dy) * 0.5 - var(--lift))
+      )
+      scale(1.15);
+    opacity: 1;
+  }
+  88% {
+    opacity: 0.9;
+  }
+  100% {
+    transform: translate(calc(var(--fx) + var(--dx)), calc(var(--fy) + var(--dy))) scale(0.55);
+    opacity: 0;
+  }
+}
+
+/* --- Orb flash burst when a handoff starts (amber) or completes (mint/coral) --- */
+.orb-flash {
+  position: absolute;
+  inset: -10%;
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 4;
+}
+
+.orb-flash.amber { --tone: var(--amber-rgb); }
+.orb-flash.success { --tone: var(--mint-rgb); }
+.orb-flash.error { --tone: var(--coral-rgb); }
+
+.orb-flash::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(var(--tone), 0.5) 0%, rgba(var(--tone), 0) 62%);
+  animation: orb-flash-burst 900ms ease-out forwards;
+}
+
+.orb-flash::after {
+  content: "";
+  position: absolute;
+  inset: 16%;
+  border-radius: 50%;
+  border: 2px solid rgba(var(--tone), 0.7);
+  box-shadow: 0 0 24px rgba(var(--tone), 0.55), inset 0 0 24px rgba(var(--tone), 0.4);
+  animation: orb-flash-ring 900ms cubic-bezier(0.2, 0.7, 0.2, 1) forwards;
+}
+
+@keyframes orb-flash-burst {
+  0% { opacity: 0; transform: scale(0.6); }
+  22% { opacity: 1; transform: scale(1); }
+  100% { opacity: 0; transform: scale(1.18); }
+}
+
+@keyframes orb-flash-ring {
+  0% { opacity: 0; transform: scale(0.45); }
+  28% { opacity: 0.95; }
+  100% { opacity: 0; transform: scale(1.45); }
+}
+
+/* --- Card materialization + "task submitted" stamp --- */
+.wcard.accepted {
+  animation: wcard-land 0.7s cubic-bezier(0.2, 0.8, 0.2, 1);
+  border-color: rgba(var(--amber-rgb), 0.5);
+  box-shadow:
+    0 0 0 1px rgba(var(--amber-rgb), 0.25),
+    0 16px 36px rgba(var(--amber-rgb), 0.14);
+}
+
+@keyframes wcard-land {
+  0% { transform: scale(0.95); }
+  45% { transform: scale(1.025); }
+  100% { transform: scale(1); }
+}
+
+.wcard-accepted {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #1c1305;
+  background: linear-gradient(180deg, #ffd589, #f0a93f);
+  box-shadow: 0 0 16px rgba(var(--amber-rgb), 0.7);
+  animation:
+    accepted-stamp 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both,
+    accepted-out 0.45s ease 2.7s forwards;
+}
+
+@keyframes accepted-stamp {
+  0% { opacity: 0; transform: scale(1.55) rotate(-7deg); }
+  60% { opacity: 1; transform: scale(0.9) rotate(-2deg); }
+  100% { opacity: 1; transform: scale(1) rotate(-2deg); }
+}
+
+@keyframes accepted-out {
+  to { opacity: 0; transform: translateY(-5px) scale(0.9); }
+}
+
+/* --- Hand control reticles --- */
+.hand-reticle {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 60;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+  will-change: transform;
+}
+
+.hand-ring {
+  position: absolute;
+  width: 54px;
+  height: 54px;
+  margin: -27px 0 0 -27px;
+  border-radius: 50%;
+  border: 2px solid rgba(var(--cyan-rgb), 0.8);
+  box-shadow: 0 0 18px rgba(var(--cyan-rgb), 0.5);
+  transition: width 0.12s ease, height 0.12s ease, border-color 0.12s ease, margin 0.12s ease;
+}
+
+.hand-dot {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  margin: -4px 0 0 -4px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 0 12px rgba(var(--cyan-rgb), 0.9);
+}
+
+/* Pointing — cyan (primary cursor) */
+.hand-reticle.pointing .hand-ring {
+  border-color: rgba(var(--cyan-rgb), 0.9);
+  box-shadow: 0 0 20px rgba(var(--cyan-rgb), 0.55);
+}
+
+/* Open palm — violet (scroll/resize) */
+.hand-reticle.open .hand-ring {
+  width: 72px;
+  height: 72px;
+  margin: -36px 0 0 -36px;
+  border-color: rgba(var(--violet-rgb), 0.9);
+  box-shadow: 0 0 20px rgba(var(--violet-rgb), 0.5);
+}
+
+.hand-reticle.open .hand-dot {
+  box-shadow: 0 0 12px rgba(var(--violet-rgb), 0.95);
+}
+
+/* Closed fist — amber (close) */
+.hand-reticle.fist .hand-ring {
+  width: 22px;
+  height: 22px;
+  margin: -11px 0 0 -11px;
+  border-color: var(--amber);
+  box-shadow: 0 0 18px rgba(var(--amber-rgb), 0.65);
+}
+
+.hand-reticle.fist .hand-dot {
+  box-shadow: 0 0 12px rgba(var(--amber-rgb), 0.95);
+}
+
+.hand-reticle.secondary .hand-ring {
+  border-style: dashed;
+  opacity: 0.82;
+}
+
+.hand-reticle.secondary .hand-dot {
+  width: 6px;
+  height: 6px;
+  margin: -3px 0 0 -3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .handoff-layer { display: none; }
+  .wcard.accepted { animation: none; }
+  .wcard-accepted { animation: accepted-stamp 0.2s ease both; }
+}

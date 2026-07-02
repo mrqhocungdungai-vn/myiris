@@ -1,331 +1,32 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { ReactorState, TaskCard, LogLine, TranscriptLine } from "./types";
 import {
-  Camera,
-  Check,
-  ChevronDown,
-  ChevronRight,
-  Code2,
-  Cpu,
-  FileText,
-  Globe,
-  Hand,
-  History,
-  MessageSquare,
-  Mic,
-  MicOff,
-  Power,
-  Radio,
-  Search,
-  Terminal,
-  Wrench,
-  X,
-} from "lucide-react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import ReactorCore from "./ReactorCore";
-import BootSequence from "./BootSequence";
-import { useHandControl, type HandState } from "./useHandControl";
-import { makeUiTestData } from "./uiTestData";
-
-type ReactorState = "idle" | "online" | "listening" | "speaking" | "working";
-
-// One Hermes tool invocation, surfaced live from the SSE event stream.
-type TaskStep = {
-  id: string;
-  tool: string;
-  preview?: string;
-  status: "running" | "done" | "error";
-  duration?: number;
-  ts: number;
-};
-
-type TaskCard = {
-  id: string;
-  task: string;
-  status: string;
-  output?: string;
-  error?: string;
-  updatedAt: number;
-  steps?: TaskStep[];
-  notes?: string;
-};
-
-type LogLine = {
-  id: string;
-  level: string;
-  message: string;
-  timestamp: number;
-};
-
-type TranscriptLine = {
-  id: string;
-  speaker: string;
-  text: string;
-};
-
-// Purely-visual delegation handoff effects (orb <-> Work Stream). These never
-// touch task/voice logic; they only react to changes in the tasks array.
-type HandoffTone = "amber" | "success" | "error";
-
-type Pulse = {
-  id: string;
-  kind: "out" | "in";
-  tone: HandoffTone;
-  fromX: number;
-  fromY: number;
-  dx: number;
-  dy: number;
-  lift: number;
-  angle: number;
-};
+  TERMINAL,
+  eventTime,
+  findTaskMatches,
+  readString,
+  readStatusObject,
+  taskKeyFor,
+} from "./lib/tasks";
+import { makeUiTestData } from "./lib/uiTestData";
+import { useAudioPipeline } from "./hooks/useAudioPipeline";
+import { useHandoffFx } from "./hooks/useHandoffFx";
+import { useHandControl, type HandState } from "./hooks/useHandControl";
+import { useWakeWord } from "./hooks/useWakeWord";
+import TopBar from "./components/TopBar";
+import CommsPanel from "./components/CommsPanel";
+import CameraDock from "./components/CameraDock";
+import CenterStage from "./components/CenterStage";
+import WorkStream from "./components/WorkStream";
+import ReaderOverlay from "./components/ReaderOverlay";
+import HistoryDrawer from "./components/HistoryDrawer";
+import TaskChooser from "./components/TaskChooser";
+import HandoffLayer from "./components/HandoffLayer";
+import HandReticles from "./components/HandReticles";
+import BootSequence from "./components/BootSequence";
+import SetupPanel from "./components/SetupPanel";
 
 const MAX_LOGS = 80;
-const TERMINAL = new Set(["completed", "failed", "cancelled", "canceled", "error"]);
-
-// Arc-reactor accent color per state (matches ReactorCore palettes) — drives the
-// surrounding ring/radar so it stays the same color as the orb.
-const ORB_ACCENT: Record<ReactorState, string> = {
-  idle: "120, 170, 150",
-  online: "18, 163, 148",
-  listening: "40, 205, 170",
-  speaking: "238, 122, 92",
-  working: "120, 180, 120",
-};
-
-const HAND_CONNECTIONS = [
-  [0, 1], [1, 2], [2, 3], [3, 4],
-  [0, 5], [5, 6], [6, 7], [7, 8],
-  [5, 9], [9, 10], [10, 11], [11, 12],
-  [9, 13], [13, 14], [14, 15], [15, 16],
-  [13, 17], [17, 18], [18, 19], [19, 20],
-  [0, 17],
-] as const;
-
-function eventTime(event: SidecarEvent): number {
-  return typeof event.timestamp === "number" ? event.timestamp * 1000 : Date.now();
-}
-
-function readString(value: unknown, fallback = ""): string {
-  return typeof value === "string" ? value : fallback;
-}
-
-function readStatusObject(value: unknown): {
-  running?: boolean;
-  pid?: number | null;
-  model?: string;
-  mode?: string;
-} {
-  if (!value || typeof value !== "object") return {};
-  return value as { running?: boolean; pid?: number | null; model?: string; mode?: string };
-}
-
-function taskKeyFor(task: string): string {
-  return `starting:${task.toLowerCase().trim()}`;
-}
-
-// Stable key for the transient "mission accepted" stamp. Keyed by task text so it
-// survives Hermes swapping the placeholder card for the real run_id card.
-function acceptedKey(task: string): string {
-  return task.toLowerCase().trim();
-}
-
-function shortRunId(id: string): string {
-  if (!id || id === "pending") return "pending";
-  if (id.startsWith("starting:")) return "starting";
-  if (id.length <= 14) return id;
-  return `${id.slice(0, 7)}…${id.slice(-5)}`;
-}
-
-function downsampleTo16k(input: Float32Array, inputRate: number): Int16Array {
-  const outputRate = 16000;
-  if (inputRate === outputRate) {
-    const output = new Int16Array(input.length);
-    for (let i = 0; i < input.length; i++) {
-      const sample = Math.max(-1, Math.min(1, input[i]));
-      output[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
-    }
-    return output;
-  }
-
-  const ratio = inputRate / outputRate;
-  const outputLength = Math.floor(input.length / ratio);
-  const output = new Int16Array(outputLength);
-  for (let i = 0; i < outputLength; i++) {
-    const start = Math.floor(i * ratio);
-    const end = Math.min(Math.floor((i + 1) * ratio), input.length);
-    let sum = 0;
-    for (let j = start; j < end; j++) sum += input[j];
-    const sample = Math.max(-1, Math.min(1, sum / Math.max(1, end - start)));
-    output[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
-  }
-  return output;
-}
-
-function parsePcmRate(mimeType?: string): number {
-  const match = /rate=(\d+)/i.exec(mimeType ?? "");
-  return match ? Number(match[1]) : 24000;
-}
-
-function base64ToBytes(base64: string): Uint8Array {
-  const binary = window.atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes;
-}
-
-function normalizeMarkdown(text?: string): string {
-  if (!text) return "";
-  return text
-    .replace(/\\r\\n/g, "\n")
-    .replace(/\\n/g, "\n")
-    .replace(/\\t/g, "  ");
-}
-
-type ToolCategory = "browser" | "search" | "code" | "file" | "tool";
-
-function toolCategory(tool: string): ToolCategory {
-  const t = tool.toLowerCase();
-  if (t.includes("search")) return "search";
-  if (t.includes("browser") || t.includes("navigate") || t.includes("fetch") || t.includes("web") || t.includes("url"))
-    return "browser";
-  if (
-    t.includes("code") ||
-    t.includes("python") ||
-    t.includes("shell") ||
-    t.includes("bash") ||
-    t.includes("exec") ||
-    t.includes("terminal") ||
-    t.includes("command") ||
-    t.includes("run")
-  )
-    return "code";
-  if (t.includes("file") || t.includes("read") || t.includes("write") || t.includes("edit") || t.includes("patch"))
-    return "file";
-  return "tool";
-}
-
-function prettyToolName(tool: string): string {
-  return tool.replace(/[_.]+/g, " ").trim();
-}
-
-function hostFromUrl(value?: string): string {
-  if (!value) return "";
-  try {
-    return new URL(value).hostname.replace(/^www\./, "");
-  } catch {
-    return "";
-  }
-}
-
-function baseName(value?: string): string {
-  if (!value) return "";
-  const cleaned = value.split(/[?#]/)[0].replace(/[\\/]+$/, "");
-  const parts = cleaned.split(/[\\/]/).filter(Boolean);
-  return parts[parts.length - 1] ?? "";
-}
-
-// Short secondary detail for a tool step: a host for URLs, a filename for file
-// tools, or a trimmed single-line snippet for code/other tools.
-function stepDetail(step: TaskStep): string {
-  if (!step.preview) return "";
-  const category = toolCategory(step.tool);
-  if (category === "browser" || category === "search") {
-    return hostFromUrl(step.preview) || step.preview.slice(0, 60);
-  }
-  if (category === "file") {
-    return baseName(step.preview) || step.preview.slice(0, 48);
-  }
-  const oneLine = step.preview.replace(/\s+/g, " ").trim();
-  return oneLine.length > 64 ? `${oneLine.slice(0, 64)}…` : oneLine;
-}
-
-// One-line "what Hermes is doing right now" headline for an active step.
-function stepHeadline(step: TaskStep): string {
-  const category = toolCategory(step.tool);
-  const detail = stepDetail(step);
-  if (category === "browser") return detail ? `Browsing ${detail}` : "Browsing the web";
-  if (category === "search") return detail ? `Searching ${detail}` : "Searching the web";
-  if (category === "code") return "Running code";
-  if (category === "file") return detail ? `Working on ${detail}` : "Working with files";
-  return `Using ${prettyToolName(step.tool)}`;
-}
-
-function StepIcon({ tool }: { tool: string }) {
-  const category = toolCategory(tool);
-  if (category === "browser") return <Globe size={13} />;
-  if (category === "search") return <Search size={13} />;
-  if (category === "code") return <Code2 size={13} />;
-  if (category === "file") return <FileText size={13} />;
-  return <Cpu size={13} />;
-}
-
-const QUERY_STOP_WORDS = new Set([
-  "open",
-  "show",
-  "me",
-  "the",
-  "a",
-  "an",
-  "one",
-  "task",
-  "card",
-  "result",
-  "latest",
-  "current",
-]);
-
-const QUERY_SYNONYMS: Record<string, string> = {
-  herems: "hermes",
-  herme: "hermes",
-  pakage: "package",
-  pkg: "package",
-  fialed: "failed",
-  fail: "failed",
-  errored: "failed",
-  error: "failed",
-  hands: "hand",
-  hadn: "hand",
-  deisgn: "design",
-  desing: "design",
-};
-
-function normalizeQuery(value: string): string[] {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((token) => QUERY_SYNONYMS[token] ?? token)
-    .filter((token) => !QUERY_STOP_WORDS.has(token));
-}
-
-function editDistance(a: string, b: string): number {
-  if (a === b) return 0;
-  if (!a.length) return b.length;
-  if (!b.length) return a.length;
-  const prev = Array.from({ length: b.length + 1 }, (_, i) => i);
-  const curr = new Array<number>(b.length + 1);
-  for (let i = 1; i <= a.length; i++) {
-    curr[0] = i;
-    for (let j = 1; j <= b.length; j++) {
-      curr[j] = Math.min(
-        prev[j] + 1,
-        curr[j - 1] + 1,
-        prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1),
-      );
-    }
-    for (let j = 0; j <= b.length; j++) prev[j] = curr[j];
-  }
-  return prev[b.length];
-}
-
-function fuzzyTokenMatch(queryToken: string, candidateToken: string): boolean {
-  if (candidateToken.includes(queryToken) || queryToken.includes(candidateToken)) return true;
-  if (queryToken.length < 4 || candidateToken.length < 4) return false;
-  const maxDistance = Math.min(queryToken.length, candidateToken.length) >= 6 ? 2 : 1;
-  return editDistance(queryToken, candidateToken) <= maxDistance;
-}
 
 export default function App() {
   const [sidecarRunning, setSidecarRunning] = useState(false);
@@ -334,38 +35,42 @@ export default function App() {
   const [hermesStatus, setHermesStatus] = useState("offline");
   const [audioState, setAudioState] = useState("idle");
   const [transcript, setTranscript] = useState<TranscriptLine[]>([]);
-  const [logs, setLogs] = useState<LogLine[]>([]);
+  const [, setLogs] = useState<LogLine[]>([]);
   const [tasks, setTasks] = useState<TaskCard[]>([]);
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
   const [focusedTaskId, setFocusedTaskId] = useState<string | null>(null);
   const [taskChooser, setTaskChooser] = useState<{ query: string; matches: TaskCard[] } | null>(null);
   const [showHistory, setShowHistory] = useState(false);
   const [stepsOpenIds, setStepsOpenIds] = useState<Record<string, boolean>>({});
-  const [muted, setMuted] = useState(false);
   const [handControl, setHandControl] = useState(false);
   const [testDataEnabled, setTestDataEnabled] = useState(false);
-
-  // Visual handoff (Gemini -> Hermes -> back). Purely decorative.
-  const [pulses, setPulses] = useState<Pulse[]>([]);
-  const [orbFlash, setOrbFlash] = useState<{ id: string; tone: HandoffTone } | null>(null);
-  const [acceptedIds, setAcceptedIds] = useState<Record<string, number>>({});
-  const orbStageRef = useRef<HTMLDivElement | null>(null);
-  const taskStatusRef = useRef<Map<string, string>>(new Map());
-  const lastDelegationRef = useRef<Map<string, number>>(new Map());
+  const [fullConfig, setFullConfig] = useState<IrisConfig | null>(null);
+  const [setup, setSetup] = useState<{ mode: "onboarding" | "settings" } | null>(null);
+  const [wakeWordEnabled, setWakeWordEnabled] = useState(false);
+  const [hermesSession, setHermesSession] = useState<string | null>(null);
+  const [bootActive, setBootActive] = useState(false);
+  const [bootClosing, setBootClosing] = useState(false);
+  const bootStartRef = useRef(0);
 
   const hasBridge = typeof window.iris !== "undefined";
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
-  const inputContextRef = useRef<AudioContext | null>(null);
-  const inputStreamRef = useRef<MediaStream | null>(null);
-  const inputSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
-  const inputProcessorRef = useRef<ScriptProcessorNode | null>(null);
-  const outputContextRef = useRef<AudioContext | null>(null);
-  const playbackTimeRef = useRef(0);
-  const playbackSourcesRef = useRef<AudioBufferSourceNode[]>([]);
-  const inputAnalyserRef = useRef<AnalyserNode | null>(null);
-  const outputAnalyserRef = useRef<AnalyserNode | null>(null);
-  const audioLevelRef = useRef(0);
   const sessionStartRef = useRef<number | null>(null);
+  const orbStageRef = useRef<HTMLDivElement | null>(null);
+  const workScrollRef = useRef<HTMLDivElement | null>(null);
+  const commsScrollRef = useRef<HTMLDivElement | null>(null);
+
+  function pushLog(level: string, message: string, timestamp = Date.now()) {
+    setLogs((current) =>
+      [{ id: crypto.randomUUID(), level, message, timestamp }, ...current].slice(0, MAX_LOGS),
+    );
+  }
+
+  const audio = useAudioPipeline(hasBridge, pushLog);
+  const { pulses, removePulse, orbFlash, clearOrbFlash, acceptedIds } = useHandoffFx(
+    tasks,
+    orbStageRef,
+    workScrollRef,
+  );
 
   useEffect(() => {
     if (!hasBridge) return;
@@ -381,18 +86,102 @@ export default function App() {
     window.iris.getAppConfig().then((config) => {
       setTestDataEnabled(Boolean(config.loadTestData));
       if (config.loadTestData) loadUiTestData();
+      else initHermesSession();
     });
   }, [hasBridge]);
 
+  // Resolve which Hermes chat thread to mirror on boot: the last one used
+  // (persisted on every switch). If that thread was deleted in Hermes, fall
+  // back to the most recently active Iris session.
+  async function initHermesSession() {
+    try {
+      const [config, list] = await Promise.all([
+        window.iris.getConfig(),
+        window.iris.listHermesSessions(),
+      ]);
+      let session = config.hermesSession;
+      if (list.ok && list.sessions.length && !list.sessions.some((item) => item.id === session)) {
+        session = list.sessions[0].id; // newest first
+        await window.iris.saveConfig({ IRIS_HERMES_SESSION: session });
+        pushLog("info", `Configured Hermes session was deleted; now using ${session}.`);
+      }
+      setHermesSession(session);
+    } catch {
+      // Chip stays hidden if config can't load; history restore still runs.
+    }
+    restoreHermesHistory();
+  }
+
+  // Switch the pinned Hermes chat thread: persists the choice, drops cards
+  // restored from the old thread, and hydrates from the new one. Live runs keep
+  // updating until they finish regardless of thread.
+  async function switchHermesSession(id: string) {
+    const clean = id.trim();
+    if (!hasBridge || !clean || clean === hermesSession) return;
+    const config = await window.iris.saveConfig({ IRIS_HERMES_SESSION: clean });
+    setFullConfig(config);
+    setHermesSession(config.hermesSession);
+    setTasks((current) => current.filter((task) => !task.id.startsWith("history:")));
+    pushLog("info", `Hermes chat session: ${config.hermesSession}`);
+    await restoreHermesHistory();
+  }
+
+  // New thread ids come from Hermes itself (native `api_…` format + an
+  // "Iris Voice — <date>" title) so sessions look the same in the Hermes app.
+  async function newHermesSession() {
+    if (!hasBridge) return;
+    const created = await window.iris.createHermesSession();
+    if (created.ok && created.id) {
+      await switchHermesSession(created.id);
+    } else {
+      pushLog("error", `Could not create a new Hermes session: ${created.error ?? "Hermes unreachable"}`);
+    }
+  }
+
+  // Rebuild past completed work from Hermes's own session transcript so results
+  // survive an app restart. Live cards always take precedence over restored ones.
+  async function restoreHermesHistory() {
+    try {
+      const history = await window.iris.getHermesHistory();
+      if (!history.ok || !history.tasks?.length) return;
+      const restoredTasks = history.tasks;
+      setTasks((current) => {
+        const seen = new Set(current.map((task) => task.task.toLowerCase().trim()));
+        const restored = restoredTasks.filter((task) => !seen.has(task.task.toLowerCase().trim()));
+        if (!restored.length) return current;
+        return [...current, ...restored].slice(0, 20);
+      });
+      pushLog("info", `Restored ${restoredTasks.length} past Hermes runs from this session.`);
+    } catch {
+      // History restore is best-effort; a fresh stream is not an error.
+    }
+  }
+
   useEffect(() => {
     if (!hasBridge) return;
-    const offAudio = window.iris.onAudioChunk((chunk) => playGeminiAudio(chunk));
-    const offInterrupt = window.iris.onAudioInterrupt(() => flushPlayback());
-    return () => {
-      offAudio();
-      offInterrupt();
-    };
+    window.iris.getConfig().then((config) => {
+      setFullConfig(config);
+      setWakeWordEnabled(config.wakeWord);
+      if (!config.configured) setSetup({ mode: "onboarding" });
+    });
   }, [hasBridge]);
+
+  // Local "Hey Iris" wake word: only listens while asleep; a detection wakes Iris
+  // exactly like pressing W. Fully on-device, opt-in via Settings.
+  useWakeWord(
+    hasBridge && wakeWordEnabled && !sidecarRunning,
+    () => {
+      if (!sidecarRunning) start();
+    },
+    (message) => pushLog("error", `Wake word: ${message}`),
+  );
+
+  async function openSettings() {
+    if (!hasBridge) return;
+    const config = await window.iris.getConfig();
+    setFullConfig(config);
+    setSetup({ mode: "settings" });
+  }
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
@@ -423,36 +212,42 @@ export default function App() {
     transcriptEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [transcript]);
 
-  // Passive audio level meter (mic in / Gemini out) for the reactive HUD.
-  useEffect(() => {
-    let raf = 0;
-    const buf = new Uint8Array(256);
-    const rms = (analyser: AnalyserNode | null) => {
-      if (!analyser) return 0;
-      analyser.getByteTimeDomainData(buf);
-      let sum = 0;
-      for (let i = 0; i < buf.length; i++) {
-        const v = (buf[i] - 128) / 128;
-        sum += v * v;
-      }
-      return Math.sqrt(sum / buf.length);
-    };
-    const tick = () => {
-      const level = Math.max(rms(inputAnalyserRef.current), rms(outputAnalyserRef.current));
-      const boosted = Math.min(1, level * 2.6);
-      audioLevelRef.current += (boosted - audioLevelRef.current) * 0.4;
-      raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, []);
-
   const working = useMemo(
     () => tasks.some((task) => !TERMINAL.has(task.status.toLowerCase())) && tasks.length > 0,
     [tasks],
   );
 
   const booting = sidecarRunning && geminiStatus !== "connected";
+
+  // Keep the boot sequence on screen for a minimum time so it plays as an
+  // intentional intro instead of a sub-second flicker (Gemini connects fast).
+  useEffect(() => {
+    if (!booting) return;
+    bootStartRef.current = Date.now();
+    setBootClosing(false);
+    setBootActive(true);
+  }, [booting]);
+
+  useEffect(() => {
+    if (booting || !bootActive) return;
+    const MIN_VISIBLE_MS = 2400;
+    const FADE_MS = 450;
+    const elapsed = Date.now() - bootStartRef.current;
+    let doneTimer: number | undefined;
+    const closeTimer = window.setTimeout(() => {
+      setBootClosing(true);
+      doneTimer = window.setTimeout(() => {
+        setBootActive(false);
+        setBootClosing(false);
+        // Tell main the boot screen is gone so Iris can speak its welcome now.
+        if (hasBridge) window.iris.notifyBootDone();
+      }, FADE_MS);
+    }, Math.max(0, MIN_VISIBLE_MS - elapsed));
+    return () => {
+      window.clearTimeout(closeTimer);
+      if (doneTimer) window.clearTimeout(doneTimer);
+    };
+  }, [booting, bootActive]);
 
   const reactorState: ReactorState = useMemo(() => {
     if (!sidecarRunning) return "idle";
@@ -462,197 +257,6 @@ export default function App() {
     if (geminiStatus === "connected") return "online";
     return "idle";
   }, [audioState, geminiStatus, sidecarRunning, working]);
-
-  function pushLog(level: string, message: string, timestamp = Date.now()) {
-    setLogs((current) =>
-      [{ id: crypto.randomUUID(), level, message, timestamp }, ...current].slice(0, MAX_LOGS),
-    );
-  }
-
-  function centerOf(el: HTMLElement | null): { x: number; y: number } | null {
-    if (!el) return null;
-    const r = el.getBoundingClientRect();
-    if (r.width === 0 && r.height === 0) return null;
-    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
-  }
-
-  // Where a Hermes card lives in the Work Stream: prefer the actual card, fall
-  // back to the top of the work column for brand-new (not yet expandable) runs.
-  function workStreamPoint(taskId: string): { x: number; y: number } | null {
-    const card = document.querySelector<HTMLElement>(`[data-task-id="${CSS.escape(taskId)}"]`);
-    if (card) return centerOf(card);
-    const panel = workScrollRef.current;
-    if (!panel) return null;
-    const r = panel.getBoundingClientRect();
-    return { x: r.left + r.width / 2, y: r.top + 46 };
-  }
-
-  function flashOrb(tone: HandoffTone) {
-    setOrbFlash({ id: crypto.randomUUID(), tone });
-  }
-
-  function spawnPulse(
-    from: { x: number; y: number } | null,
-    to: { x: number; y: number } | null,
-    kind: "out" | "in",
-    tone: HandoffTone,
-  ) {
-    if (!from || !to) return;
-    const dx = to.x - from.x;
-    const dy = to.y - from.y;
-    const dist = Math.hypot(dx, dy);
-    const lift = Math.min(150, Math.max(40, dist * 0.22));
-    const angle = (Math.atan2(dy, dx) * 180) / Math.PI;
-    setPulses((current) => [
-      ...current,
-      { id: crypto.randomUUID(), kind, tone, fromX: from.x, fromY: from.y, dx, dy, lift, angle },
-    ]);
-  }
-
-  // Gemini delegates -> orb flashes amber, a comet flies to the Work Stream, and
-  // the card stamps "mission accepted" as the comet lands.
-  function handoffOut(task: TaskCard) {
-    flashOrb("amber");
-    spawnPulse(centerOf(orbStageRef.current), workStreamPoint(task.id), "out", "amber");
-    // Key the "mission accepted" stamp by task TEXT, not id: Hermes swaps the
-    // placeholder ("starting:…") card for the real run_id card right after submit,
-    // so an id-keyed flag would land on a card that no longer exists. The text
-    // survives that swap, so the stamp reliably shows on the real card.
-    const key = acceptedKey(task.task);
-    window.setTimeout(() => {
-      setAcceptedIds((current) => ({ ...current, [key]: Date.now() }));
-      window.setTimeout(() => {
-        setAcceptedIds((current) => {
-          const next = { ...current };
-          delete next[key];
-          return next;
-        });
-      }, 3200);
-    }, 560);
-  }
-
-  // Hermes finishes -> a comet flies from the card back to the orb, then the orb
-  // flashes (teal for success, coral for failure) as it arrives.
-  function handoffIn(task: TaskCard) {
-    const tone: HandoffTone = TERMINAL.has(task.status.toLowerCase())
-      ? task.error || task.status.toLowerCase().includes("fail") || task.status.toLowerCase().includes("error")
-        ? "error"
-        : "success"
-      : "success";
-    spawnPulse(workStreamPoint(task.id), centerOf(orbStageRef.current), "in", tone);
-    window.setTimeout(() => flashOrb(tone), 680);
-  }
-
-  async function startAudioCapture() {
-    if (!hasBridge || inputContextRef.current) return;
-
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-        channelCount: 1,
-      },
-      video: false,
-    });
-
-    const context = new AudioContext();
-    const source = context.createMediaStreamSource(stream);
-    const processor = context.createScriptProcessor(1024, 1, 1);
-
-    // Passive meter tap for the reactive HUD (does not affect what is sent).
-    const analyser = context.createAnalyser();
-    analyser.fftSize = 256;
-    source.connect(analyser);
-    inputAnalyserRef.current = analyser;
-
-    processor.onaudioprocess = (event) => {
-      const input = event.inputBuffer.getChannelData(0);
-      const output = event.outputBuffer.getChannelData(0);
-      output.fill(0);
-
-      const pcm = downsampleTo16k(input, context.sampleRate);
-      if (pcm.byteLength > 0) {
-        const chunk = new ArrayBuffer(pcm.byteLength);
-        new Uint8Array(chunk).set(new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength));
-        window.iris.sendAudioChunk(chunk);
-      }
-    };
-
-    source.connect(processor);
-    processor.connect(context.destination);
-
-    inputContextRef.current = context;
-    inputStreamRef.current = stream;
-    inputSourceRef.current = source;
-    inputProcessorRef.current = processor;
-    pushLog("info", "WebRTC echo cancellation enabled for microphone.");
-  }
-
-  async function stopAudioCapture() {
-    inputProcessorRef.current?.disconnect();
-    inputSourceRef.current?.disconnect();
-    inputStreamRef.current?.getTracks().forEach((track) => track.stop());
-    await inputContextRef.current?.close().catch(() => undefined);
-
-    inputProcessorRef.current = null;
-    inputSourceRef.current = null;
-    inputStreamRef.current = null;
-    inputContextRef.current = null;
-    inputAnalyserRef.current = null;
-  }
-
-  function flushPlayback() {
-    for (const source of playbackSourcesRef.current) {
-      try {
-        source.stop();
-      } catch {
-        // Already stopped.
-      }
-    }
-    playbackSourcesRef.current = [];
-    if (outputContextRef.current) {
-      playbackTimeRef.current = outputContextRef.current.currentTime;
-    }
-  }
-
-  async function playGeminiAudio(chunk: LiveAudioChunk) {
-    const rate = parsePcmRate(chunk.mimeType);
-    const bytes = base64ToBytes(chunk.data);
-    const sampleCount = Math.floor(bytes.byteLength / 2);
-    if (!sampleCount) return;
-
-    const context = outputContextRef.current ?? new AudioContext();
-    outputContextRef.current = context;
-    if (context.state === "suspended") await context.resume();
-
-    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    const buffer = context.createBuffer(1, sampleCount, rate);
-    const channel = buffer.getChannelData(0);
-    for (let i = 0; i < sampleCount; i++) {
-      channel[i] = view.getInt16(i * 2, true) / 32768;
-    }
-
-    let analyser = outputAnalyserRef.current;
-    if (!analyser || analyser.context !== context) {
-      analyser = context.createAnalyser();
-      analyser.fftSize = 256;
-      analyser.connect(context.destination);
-      outputAnalyserRef.current = analyser;
-    }
-
-    const source = context.createBufferSource();
-    source.buffer = buffer;
-    source.connect(analyser);
-    source.onended = () => {
-      playbackSourcesRef.current = playbackSourcesRef.current.filter((item) => item !== source);
-    };
-
-    const startAt = Math.max(context.currentTime + 0.03, playbackTimeRef.current || 0);
-    source.start(startAt);
-    playbackTimeRef.current = startAt + buffer.duration;
-    playbackSourcesRef.current.push(source);
-  }
 
   function handleSidecarEvent(event: SidecarEvent) {
     if (event.type === "sidecar_status") {
@@ -798,19 +402,18 @@ export default function App() {
     setSidecarRunning(status.running);
     setSidecarPid(status.pid);
     sessionStartRef.current = Date.now();
-    await startAudioCapture();
+    await audio.startCapture();
     setHandControl(true);
   }
 
   async function stop() {
     if (!hasBridge) return;
-    await stopAudioCapture();
-    flushPlayback();
+    await audio.stopCapture();
+    audio.flushPlayback();
     await window.iris.stopSidecar();
     setGeminiStatus("offline");
     setHermesStatus("offline");
     setAudioState("idle");
-    setMuted(false);
     setHandControl(false);
     sessionStartRef.current = null;
   }
@@ -829,44 +432,8 @@ export default function App() {
 
   const { state: hand, error: handError, stream: handStream } = useHandControl(handControl);
   const handCamRef = useRef<HTMLVideoElement | null>(null);
-  const workScrollRef = useRef<HTMLDivElement | null>(null);
-  const commsScrollRef = useRef<HTMLDivElement | null>(null);
   const liveHandRef = useRef<HandState | null>(hand);
   liveHandRef.current = hand;
-
-  // Visual handoff detector: diff the tasks array to know when Gemini delegated a
-  // new run (one card appears) and when a run completes (active -> terminal). A
-  // bulk load (e.g. demo/history fixture) adds many cards at once, so we only
-  // animate single-card deltas. This reads task state but never mutates it.
-  useEffect(() => {
-    const prev = taskStatusRef.current;
-    const added = tasks.filter((task) => !prev.has(task.id));
-
-    for (const task of tasks) {
-      const before = prev.get(task.id);
-      const now = task.status.toLowerCase();
-      if (before && !TERMINAL.has(before) && TERMINAL.has(now)) {
-        handoffIn(task);
-      }
-    }
-
-    if (added.length === 1) {
-      const task = added[0];
-      if (!TERMINAL.has(task.status.toLowerCase())) {
-        const key = task.task.toLowerCase().trim();
-        const last = lastDelegationRef.current.get(key) ?? 0;
-        // Dedupe the "starting:" placeholder -> real run_id swap.
-        if (Date.now() - last > 5000) {
-          lastDelegationRef.current.set(key, Date.now());
-          handoffOut(task);
-        }
-      }
-    }
-
-    const next = new Map<string, string>();
-    for (const task of tasks) next.set(task.id, task.status.toLowerCase());
-    taskStatusRef.current = next;
-  }, [tasks]);
 
   useEffect(() => {
     if (handError) pushLog("error", `Hand control: ${handError}`);
@@ -949,13 +516,6 @@ export default function App() {
     return { label: "Pointing_Up · hover", tone: "move" };
   }, [hand.present, hand.hands, hand.fist, hand.openPalm, hand.pointing, hand.gesture, hand.point?.x, hand.point?.y]);
 
-  function toggleMute() {
-    const stream = inputStreamRef.current;
-    const next = !muted;
-    stream?.getAudioTracks().forEach((track) => (track.enabled = !next));
-    setMuted(next);
-  }
-
   function setTaskStepsOpen(id: string, open: boolean) {
     setStepsOpenIds((current) => ({ ...current, [id]: open }));
   }
@@ -978,37 +538,8 @@ export default function App() {
     [sortedTasks],
   );
 
-  function findTaskMatches(query?: string): Array<{ task: TaskCard; score: number }> {
-    const queryTokens = normalizeQuery(query ?? "");
-    if (!queryTokens.length) return [];
-
-    const scored: Array<{ task: TaskCard; score: number }> = [];
-    for (const task of sortedTasks) {
-      const haystack = `${task.task} ${task.status} ${task.id}`;
-      const candidateTokens = normalizeQuery(haystack);
-      let score = 0;
-
-      for (const token of queryTokens) {
-        const exact = candidateTokens.includes(token);
-        const fuzzy = exact || candidateTokens.some((candidate) => fuzzyTokenMatch(token, candidate));
-        if (exact) score += 4;
-        else if (fuzzy) score += 2;
-      }
-
-      if ((task.output || task.error) && score > 0) score += 2;
-      if (task.status.toLowerCase() === "failed" && queryTokens.includes("failed")) score += 6;
-      if (!TERMINAL.has(task.status.toLowerCase())) score -= 1;
-
-      if (score > 0) scored.push({ task, score });
-    }
-
-    return scored
-      .sort((a, b) => b.score - a.score || b.task.updatedAt - a.task.updatedAt)
-      .slice(0, 3);
-  }
-
   function openTaskByQuery(query?: string) {
-    const matches = findTaskMatches(query);
+    const matches = findTaskMatches(sortedTasks, query);
     if (matches.length === 0) return;
 
     const [best, second] = matches;
@@ -1100,7 +631,11 @@ export default function App() {
   }, [hasBridge, tasks, expandedTaskId, focusedTaskId, latestResultTask]);
 
   const caption = useMemo(() => {
-    if (!sidecarRunning) return { text: "Press W to wake Iris", dim: true };
+    if (!sidecarRunning)
+      return {
+        text: wakeWordEnabled ? "Say “Hey Iris” or press W to wake" : "Press W to wake Iris",
+        dim: true,
+      };
     if (audioState === "speaking") return { text: "Speaking…", dim: false };
     if (audioState === "listening") return { text: "Listening…", dim: false };
     if (working) return { text: "Working on it…", dim: false };
@@ -1108,7 +643,7 @@ export default function App() {
     if (last) return { text: last.text, dim: false };
     if (geminiStatus === "connected") return { text: "How can I help?", dim: true };
     return { text: "Connecting…", dim: true };
-  }, [sidecarRunning, audioState, working, transcript, geminiStatus]);
+  }, [sidecarRunning, audioState, working, transcript, geminiStatus, wakeWordEnabled]);
 
   function openTask(task: TaskCard) {
     if (!(task.output || task.error)) return;
@@ -1150,759 +685,150 @@ export default function App() {
     const fixture = makeUiTestData();
     setTasks(fixture.tasks);
     setTranscript(fixture.transcript);
-    setLogs((current) =>
-      [
-        {
-          id: crypto.randomUUID(),
-          level: "info",
-          message: "Loaded UI test fixture data.",
-          timestamp: Date.now(),
-        },
-        ...current,
-      ].slice(0, MAX_LOGS),
-    );
+    pushLog("info", "Loaded UI test fixture data.");
   }
+
+  const audioDot = !sidecarRunning
+    ? "off"
+    : audio.muted
+      ? "warn"
+      : audioState === "speaking"
+        ? "speaking"
+        : audioState === "idle"
+          ? "warn"
+          : "on";
 
   return (
     <>
-    <div className={`deck ${sidecarRunning ? "awake" : "asleep"}`}>
-      <div className="hud-aurora" />
-      <div className="hud-vignette" />
-      <div className="hud-scanlines" />
+      <div className={`deck ${sidecarRunning ? "awake" : "asleep"}`}>
+        <div className="hud-nebula" />
+        <div className="hud-glow" />
+        <div className="hud-vignette" />
 
-      <header className="deck-top">
-        <div className="deck-top-left">
-          <div className="deck-status">
-            <StatusDot tone="gemini" state={dotState(geminiStatus, ["connected"])} label="Gemini" />
-            <StatusDot tone="hermes" state={dotState(hermesStatus, ["ready"])} label="Hermes" />
-            <StatusDot
-              tone="audio"
-              state={
-                !sidecarRunning
-                  ? "off"
-                  : muted
-                    ? "warn"
-                    : audioState === "speaking"
-                      ? "speaking"
-                      : audioState === "idle"
-                        ? "warn"
-                        : "on"
-              }
-              label="Audio"
+        <TopBar
+          geminiDot={dotState(geminiStatus, ["connected"])}
+          hermesDot={dotState(hermesStatus, ["ready"])}
+          audioDot={audioDot}
+          linked={sidecarRunning}
+          pid={sidecarPid}
+          handControl={handControl}
+          onToggleHand={() => setHandControl((current) => !current)}
+          onOpenSettings={openSettings}
+        />
+
+        <div className="deck-body">
+          {/* LEFT — You */}
+          <div className="deck-left">
+            <CommsPanel
+              transcript={transcript}
+              scrollRef={commsScrollRef}
+              endRef={transcriptEndRef}
+              testDataEnabled={testDataEnabled}
+              onLoadDemo={loadUiTestData}
+            />
+            <CameraDock
+              handControl={handControl}
+              hand={hand}
+              videoRef={handCamRef}
+              actionLabel={handAction.label}
+              actionTone={handAction.tone}
             />
           </div>
-        </div>
-        <div className="deck-brand">
-          <span className="brand-mark">I.R.I.S</span>
-        </div>
-        <div className="deck-top-right">
-          <button
-            className={`theme-toggle ${handControl ? "active" : ""}`}
-            onClick={() => setHandControl((current) => !current)}
-            title={handControl ? "Disable hand control" : "Enable hand control (camera)"}
-          >
-            <Hand size={16} />
-          </button>
-          <span
-            className={`link-indicator ${sidecarRunning ? "on" : "off"}`}
-            title={sidecarRunning ? `Linked${sidecarPid ? ` · ${sidecarPid}` : ""}` : "Offline"}
-          >
-            <Radio size={16} />
-          </span>
-        </div>
-      </header>
 
-      <div className="deck-body">
-        {/* LEFT — You */}
-        <div className="deck-left">
-          <section className="deck-panel comms">
-            <div className="col-head">
-              <MessageSquare size={14} />
-              <span>Comms</span>
-            </div>
-            <div className="comms-scroll" ref={commsScrollRef}>
-              {transcript.length === 0 ? (
-                <div className="empty">
-                  <p>No conversation yet. Wake Iris and start talking.</p>
-                  {testDataEnabled ? (
-                    <button className="demo-load" onClick={loadUiTestData}>
-                      Load demo comms
-                    </button>
-                  ) : null}
-                </div>
-              ) : (
-                transcript.map((line) => {
-                  const self = /you|user/i.test(line.speaker);
-                  return (
-                    <div className={`bubble ${self ? "self" : "iris"}`} key={line.id}>
-                      <span className="who">{self ? "You" : "Iris"}</span>
-                      {line.text}
-                    </div>
-                  );
-                })
-              )}
-              <div ref={transcriptEndRef} />
-            </div>
-          </section>
-
-          <section className="deck-panel camera-dock">
-            <div className="col-head">
-              <Camera size={14} />
-              <span>Camera / Gesture</span>
-            </div>
-            {handControl ? (
-              <div className="camera-frame">
-                <video ref={handCamRef} autoPlay playsInline muted />
-                <div className="cam-scan" />
-                <HandSkeleton hands={hand.hands} />
-                <span className="cam-status">
-                  <i />
-                  {hand.present ? "tracking" : "no hand"}
-                </span>
-                <span className={`gesture-chip ${handAction.tone}`}>
-                  <span className="dot" />
-                  {handAction.label}
-                </span>
-              </div>
-            ) : (
-              <div className="camera-off">
-                Gesture control is off. Tap the hand icon to enable the camera.
-              </div>
-            )}
-          </section>
-        </div>
-
-        {/* CENTER — Iris */}
-        <div className="deck-center">
-          <div
-            className="orb-stage"
-            ref={orbStageRef}
-            style={{ "--orb-accent": ORB_ACCENT[reactorState] } as CSSProperties}
-          >
-            <span className="orb-ring" />
-            <span className="orb-radar" />
-            <ReactorCore state={reactorState} levelRef={audioLevelRef} />
-            {orbFlash ? (
-              <span
-                key={orbFlash.id}
-                className={`orb-flash ${orbFlash.tone}`}
-                onAnimationEnd={() => setOrbFlash(null)}
-              />
-            ) : null}
-          </div>
-          <Telemetry
+          {/* CENTER — Iris */}
+          <CenterStage
+            reactorState={reactorState}
+            audioLevelRef={audio.audioLevelRef}
+            orbStageRef={orbStageRef}
+            orbFlash={orbFlash}
+            onOrbFlashEnd={clearOrbFlash}
             awake={sidecarRunning}
-            gemini={geminiStatus}
-            hermes={hermesStatus}
+            geminiStatus={geminiStatus}
+            hermesStatus={hermesStatus}
             runs={tasks.length}
             sessionStartRef={sessionStartRef}
+            caption={caption.text}
+            captionDim={caption.dim}
+            muted={audio.muted}
+            onToggleMute={audio.toggleMute}
+            onSleep={stop}
+            wakeWordEnabled={wakeWordEnabled}
           />
-          <div className={`caption ${caption.dim ? "dim" : ""}`}>
-            {caption.text}
-            {sidecarRunning ? <span className="caption-caret" /> : null}
-          </div>
-          {sidecarRunning ? (
-            <div className="transport">
-              <button
-                className={`t-btn small ${muted ? "muted" : ""}`}
-                onClick={toggleMute}
-                title={muted ? "Unmute microphone" : "Mute microphone"}
-              >
-                {muted ? <MicOff size={18} /> : <Mic size={18} />}
-              </button>
-              <button className="t-btn small danger" onClick={stop} title="Sleep (S)">
-                <Power size={18} />
-              </button>
-            </div>
-          ) : (
-            <div className="transport-hint">
-              <span className="key">W</span> wake · <span className="key">S</span> sleep
-            </div>
-          )}
+
+          {/* RIGHT — Work */}
+          <WorkStream
+            tasks={tasks}
+            sortedTasks={sortedTasks}
+            scrollRef={workScrollRef}
+            acceptedIds={acceptedIds}
+            stepsOpenIds={stepsOpenIds}
+            testDataEnabled={testDataEnabled}
+            session={testDataEnabled ? null : hermesSession}
+            onSwitchSession={switchHermesSession}
+            onNewSession={newHermesSession}
+            onLoadDemo={loadUiTestData}
+            onShowHistory={() => setShowHistory(true)}
+            onToggleSteps={toggleTaskSteps}
+            onFocusTask={setFocusedTaskId}
+            onOpenTask={openTask}
+          />
         </div>
 
-        {/* RIGHT — Work */}
-        <aside className="deck-panel deck-right">
-          <div className="col-head">
-            <Terminal size={14} />
-            <span>Work Stream</span>
-            {tasks.length > 0 ? <span className="count">{tasks.length}</span> : null}
-            {testDataEnabled ? (
-              <button className="view-all" onClick={loadUiTestData} title="Load UI test fixture data">
-                Load demo
-              </button>
-            ) : null}
-            {tasks.length > 3 ? (
-              <button className="view-all" onClick={() => setShowHistory(true)}>
-                View all <ChevronRight size={12} />
-              </button>
-            ) : null}
-          </div>
-          <div className="work-scroll" ref={workScrollRef}>
-            {tasks.length === 0 ? (
-              <div className="empty">
-                <p>No Hermes runs yet. Ask Iris to take on a task.</p>
-                {testDataEnabled ? (
-                  <button className="demo-load" onClick={loadUiTestData}>
-                    Load demo tasks
-                  </button>
-                ) : null}
-              </div>
-            ) : (
-              sortedTasks.map((task) => (
-                <WorkCard
-                  key={task.id}
-                  task={task}
-                  accepted={Boolean(acceptedIds[acceptedKey(task.task)])}
-                  stepsOpen={Boolean(stepsOpenIds[task.id])}
-                  onToggleSteps={() => toggleTaskSteps(task.id)}
-                  onFocus={() => setFocusedTaskId(task.id)}
-                  onOpen={() => openTask(task)}
-                />
-              ))
-            )}
-          </div>
-        </aside>
-      </div>
-
-      <footer className="deck-foot">
-        <span className="build-meta">
-          IRIS · build 0.1.0 · by Ashutosh Shrivastava ·{" "}
-          <a href="https://x.com/ai_for_success" target="_blank" rel="noreferrer">
-            X
-          </a>{" "}
-          ·{" "}
-          <a href="https://github.com/ASHR12/iris" target="_blank" rel="noreferrer">
-            GitHub
-          </a>
-        </span>
-      </footer>
-
-      {booting && <BootSequence visible={booting} />}
-    </div>
-
-    {expandedTask ? (
-      <ExpandedReader
-        task={expandedTask}
-        hand={handControl ? hand : null}
-        onClose={closeReader}
-      />
-    ) : null}
-
-    {showHistory ? (
-      <HistoryDrawer
-        tasks={sortedTasks}
-        onOpen={openTask}
-        onClose={() => setShowHistory(false)}
-      />
-    ) : null}
-
-    {taskChooser ? (
-      <TaskMatchChooser
-        query={taskChooser.query}
-        matches={taskChooser.matches}
-        onOpen={openTask}
-        onClose={() => setTaskChooser(null)}
-      />
-    ) : null}
-
-    <div className="handoff-layer" aria-hidden="true">
-      {pulses.map((pulse) => (
-        <span
-          key={pulse.id}
-          className={`handoff-pulse ${pulse.kind} ${pulse.tone}`}
-          style={
-            {
-              "--fx": `${pulse.fromX}px`,
-              "--fy": `${pulse.fromY}px`,
-              "--dx": `${pulse.dx}px`,
-              "--dy": `${pulse.dy}px`,
-              "--lift": `${pulse.lift}px`,
-              "--angle": `${pulse.angle}deg`,
-            } as CSSProperties
-          }
-          onAnimationEnd={(event) => {
-            if (event.target === event.currentTarget) {
-              setPulses((current) => current.filter((item) => item.id !== pulse.id));
-            }
-          }}
-        >
-          <span className="comet-tail" />
-          <span className="comet-head" />
-        </span>
-      ))}
-    </div>
-
-    {handControl && hand.present
-      ? (hand.hands.length ? hand.hands : hand.point ? [{ ...hand, id: "hand-0", point: hand.point }] : []).map(
-          (item, index) => (
-            <div
-              key={item.id}
-              className={`hand-reticle ${index > 0 ? "secondary" : ""} ${
-                index === 0 && dwellRef.current ? "dwell" : ""
-              } ${item.pointing ? "pointing" : ""} ${item.openPalm ? "open" : ""} ${item.fist ? "fist" : ""}`}
-              style={{ transform: `translate(${item.point.x}px, ${item.point.y}px)` }}
-            >
-              <span className="hand-ring" />
-              <span className="hand-dot" />
-            </div>
-          ),
-        )
-      : null}
-    </>
-  );
-}
-
-function StatusDot({ tone, state, label }: { tone: string; state: string; label: string }) {
-  return (
-    <span className={`status-dot ${tone} ${state}`}>
-      <i />
-      {label}
-    </span>
-  );
-}
-
-function HandSkeleton({ hands }: { hands: HandState["hands"] }) {
-  if (!hands.length) return null;
-  return (
-    <svg className="hand-skeleton" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-      {hands.map((hand, handIndex) => (
-        <g key={hand.id} className={handIndex > 0 ? "secondary" : ""}>
-          {HAND_CONNECTIONS.map(([from, to]) => {
-            const a = hand.landmarks[from];
-            const b = hand.landmarks[to];
-            if (!a || !b) return null;
-            return (
-              <line
-                key={`${from}-${to}`}
-                x1={a.x * 100}
-                y1={a.y * 100}
-                x2={b.x * 100}
-                y2={b.y * 100}
-              />
-            );
-          })}
-          {hand.landmarks.map((landmark, index) => (
-            <circle key={index} cx={landmark.x * 100} cy={landmark.y * 100} r={index === 8 ? 1.45 : 1.05} />
-          ))}
-        </g>
-      ))}
-    </svg>
-  );
-}
-
-function Telemetry({
-  awake,
-  gemini,
-  hermes,
-  runs,
-  sessionStartRef,
-}: {
-  awake: boolean;
-  gemini: string;
-  hermes: string;
-  runs: number;
-  sessionStartRef: { current: number | null };
-}) {
-  const [, force] = useState(0);
-  useEffect(() => {
-    const id = window.setInterval(() => force((n) => n + 1), 1000);
-    return () => window.clearInterval(id);
-  }, []);
-
-  const elapsed = awake && sessionStartRef.current ? Date.now() - sessionStartRef.current : 0;
-  const mm = String(Math.floor(elapsed / 60000)).padStart(2, "0");
-  const ss = String(Math.floor((elapsed % 60000) / 1000)).padStart(2, "0");
-
-  return (
-    <div className={`telemetry ${awake ? "live" : ""}`} aria-hidden="true">
-      <span>
-        <i>UPLINK</i>
-        {gemini === "connected" ? "LIVE" : awake ? "SYNC" : "OFFLINE"}
-      </span>
-      <span className="sep">/</span>
-      <span>
-        <i>HERMES</i>
-        {hermes === "ready" ? "READY" : awake ? "···" : "—"}
-      </span>
-      <span className="sep">/</span>
-      <span>
-        <i>RUNS</i>
-        {String(runs).padStart(2, "0")}
-      </span>
-      <span className="sep">/</span>
-      <span>
-        <i>SESSION</i>
-        {mm}:{ss}
-      </span>
-    </div>
-  );
-}
-
-function WorkCard({
-  task,
-  accepted = false,
-  stepsOpen = false,
-  onToggleSteps,
-  onFocus,
-  onOpen,
-}: {
-  task: TaskCard;
-  accepted?: boolean;
-  stepsOpen?: boolean;
-  onToggleSteps?: () => void;
-  onFocus: () => void;
-  onOpen: () => void;
-}) {
-  const [localStepsOpen, setLocalStepsOpen] = useState(false);
-  const showSteps = onToggleSteps ? stepsOpen : localStepsOpen;
-  const expandable = Boolean(task.output || task.error);
-  const status = task.status.toLowerCase();
-  const active = !TERMINAL.has(status);
-  const steps = task.steps ?? [];
-  const runningStep = [...steps].reverse().find((step) => step.status === "running");
-
-  return (
-    <article
-      className={`wcard ${active ? "working" : ""} ${expandable ? "expandable" : ""} ${
-        accepted ? "accepted" : ""
-      }`}
-      data-task-id={expandable ? task.id : undefined}
-      onPointerEnter={onFocus}
-      onFocus={onFocus}
-      onClick={onOpen}
-      tabIndex={expandable ? 0 : -1}
-    >
-      {accepted ? <span className="wcard-accepted">Mission accepted</span> : null}
-      <div className="wcard-top">
-        <span className={`badge ${status}`}>{task.status}</span>
-        <code title={task.id}>{shortRunId(task.id)}</code>
-      </div>
-      <p className="wcard-task">{task.task}</p>
-      {expandable ? (
-        <div className="wcard-preview">{normalizeMarkdown(task.error || task.output)}</div>
-      ) : null}
-
-      {active && (runningStep || steps.length > 0) ? (
-        <div className="activity-now">
-          <span className="activity-spark" />
-          <span className="activity-now-text">
-            {runningStep ? stepHeadline(runningStep) : "Thinking…"}
+        <footer className="deck-foot">
+          <span className="build-meta">
+            IRIS · build 0.1.0 · by Ashutosh Shrivastava ·{" "}
+            <a href="https://x.com/ai_for_success" target="_blank" rel="noreferrer">
+              X
+            </a>{" "}
+            ·{" "}
+            <a href="https://github.com/ASHR12/iris" target="_blank" rel="noreferrer">
+              GitHub
+            </a>
           </span>
-        </div>
-      ) : null}
-
-      {active && task.notes ? <p className="activity-notes">{task.notes.slice(-180)}</p> : null}
-
-      {steps.length > 0 ? (
-        <div className="activity" onClick={(event) => event.stopPropagation()}>
-          <button
-            type="button"
-            className={`activity-toggle ${showSteps ? "open" : ""}`}
-            onClick={() => (onToggleSteps ? onToggleSteps() : setLocalStepsOpen((current) => !current))}
-          >
-            <Wrench size={11} />
-            {steps.length} step{steps.length === 1 ? "" : "s"}
-            <ChevronDown size={12} className="chev" />
-          </button>
-          {showSteps ? (
-            <ul className="activity-timeline">
-              {steps.map((step) => {
-                const detail = stepDetail(step);
-                return (
-                  <li key={step.id} className={`activity-step ${step.status} ${toolCategory(step.tool)}`}>
-                    <span className="step-icon">
-                      <StepIcon tool={step.tool} />
-                    </span>
-                    <span className="step-main">
-                      <span className="step-tool">{prettyToolName(step.tool)}</span>
-                      {detail ? <span className="step-detail">{detail}</span> : null}
-                    </span>
-                    <span className="step-meta">
-                      {step.duration !== undefined ? <em>{step.duration.toFixed(1)}s</em> : null}
-                      {step.status === "running" ? (
-                        <span className="step-run" />
-                      ) : step.status === "error" ? (
-                        <X size={12} className="step-x" />
-                      ) : (
-                        <Check size={12} className="step-ok" />
-                      )}
-                    </span>
-                  </li>
-                );
-              })}
-            </ul>
-          ) : null}
-        </div>
-      ) : null}
-
-      {active ? (
-        <div className="wcard-progress">
-          <i />
-        </div>
-      ) : null}
-    </article>
-  );
-}
-
-function HistoryDrawer({
-  tasks,
-  onOpen,
-  onClose,
-}: {
-  tasks: TaskCard[];
-  onOpen: (task: TaskCard) => void;
-  onClose: () => void;
-}) {
-  useEffect(() => {
-    function onKey(event: KeyboardEvent) {
-      if (event.key === "Escape") onClose();
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
-  return (
-    <div
-      className="history-backdrop"
-      onPointerDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-    >
-      <div className="history-card">
-        <div className="history-head">
-          <History size={15} />
-          <span>Hermes History · {tasks.length}</span>
-          <button className="reader-close" onClick={onClose} title="Close">
-            <X size={16} />
-          </button>
-        </div>
-        <div className="history-grid">
-          {tasks.map((task) => (
-            <WorkCard key={task.id} task={task} onFocus={() => undefined} onOpen={() => onOpen(task)} />
-          ))}
-        </div>
+        </footer>
       </div>
-    </div>
-  );
-}
 
-function TaskMatchChooser({
-  query,
-  matches,
-  onOpen,
-  onClose,
-}: {
-  query: string;
-  matches: TaskCard[];
-  onOpen: (task: TaskCard) => void;
-  onClose: () => void;
-}) {
-  useEffect(() => {
-    function onKey(event: KeyboardEvent) {
-      if (event.key === "Escape") onClose();
-      const index = Number(event.key);
-      if (index >= 1 && index <= matches.length) {
-        onOpen(matches[index - 1]);
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [matches, onClose, onOpen]);
+      {expandedTask ? (
+        <ReaderOverlay task={expandedTask} hand={handControl ? hand : null} onClose={closeReader} />
+      ) : null}
 
-  return (
-    <div
-      className="match-backdrop"
-      onPointerDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-    >
-      <section className="match-card">
-        <div className="match-head">
-          <span>Which task did you mean?</span>
-          <button className="reader-close" onClick={onClose} title="Close">
-            <X size={16} />
-          </button>
-        </div>
-        <p className="match-query">Matched voice query: “{query || "task"}”</p>
-        <div className="match-list">
-          {matches.map((task, index) => (
-            <button key={task.id} className="match-option" onClick={() => onOpen(task)}>
-              <span className="match-number">{index + 1}</span>
-              <span className="match-copy">
-                <strong>{task.task}</strong>
-                <em>{task.status} · {shortRunId(task.id)}</em>
-              </span>
-            </button>
-          ))}
-        </div>
-        <div className="match-hint">Press 1-{matches.length}, click a result, or press Esc.</div>
-      </section>
-    </div>
-  );
-}
+      {showHistory ? (
+        <HistoryDrawer tasks={sortedTasks} onOpen={openTask} onClose={() => setShowHistory(false)} />
+      ) : null}
 
-function ExpandedReader({
-  task,
-  hand,
-  onClose,
-}: {
-  task: TaskCard;
-  hand: HandState | null;
-  onClose: () => void;
-}) {
-  const [offset, setOffset] = useState({ x: 0, y: 0 });
-  const [readerScale, setReaderScale] = useState(1);
-  const [dragging, setDragging] = useState(false);
-  const [closing, setClosing] = useState(false);
-  const startRef = useRef<{ x: number; y: number } | null>(null);
-  const bodyRef = useRef<HTMLDivElement | null>(null);
-  const handRef = useRef<HandState | null>(hand);
-  const readerScaleRef = useRef(1);
-  const zoomRef = useRef<{ distance: number; scale: number } | null>(null);
-  handRef.current = hand;
+      {taskChooser ? (
+        <TaskChooser
+          query={taskChooser.query}
+          matches={taskChooser.matches}
+          onOpen={openTask}
+          onClose={() => setTaskChooser(null)}
+        />
+      ) : null}
 
-  const CLOSE_DISTANCE = 160;
+      {bootActive ? <BootSequence visible closing={bootClosing} /> : null}
 
-  function closeWithSnap() {
-    if (closing) return;
-    setClosing(true);
-    window.setTimeout(onClose, 180);
-  }
+      {setup && fullConfig ? (
+        <SetupPanel
+          mode={setup.mode}
+          config={fullConfig}
+          onClose={() => setSetup(null)}
+          onSaved={(config) => {
+            setFullConfig(config);
+            setTestDataEnabled(config.loadTestData);
+            setWakeWordEnabled(config.wakeWord);
+          }}
+          onStart={() => {
+            if (!sidecarRunning) start();
+          }}
+          onRunWizard={() => setSetup({ mode: "onboarding" })}
+        />
+      ) : null}
 
-  useEffect(() => {
-    function onKey(event: KeyboardEvent) {
-      if (event.key === "Escape") closeWithSnap();
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [closing, onClose]);
+      <HandoffLayer pulses={pulses} onPulseEnd={removePulse} />
 
-  useEffect(() => {
-    if (hand?.fist) closeWithSnap();
-  }, [hand?.fist]);
-
-  // Joystick-style hold-to-scroll: with an open palm, holding the hand above the
-  // card's center scrolls up, below scrolls down, and the middle is a dead zone.
-  // Speed is proportional to the distance from center and continues while held.
-  useEffect(() => {
-    let raf = 0;
-    const distance = (a: { x: number; y: number }, b: { x: number; y: number }) =>
-      Math.hypot(a.x - b.x, a.y - b.y);
-    const loop = () => {
-      const h = handRef.current;
-      const body = bodyRef.current;
-      const openHands = h?.hands.filter((item) => item.openPalm && item.point) ?? [];
-      if (openHands.length >= 2) {
-        const currentDistance = distance(openHands[0].point, openHands[1].point);
-        if (!zoomRef.current) {
-          zoomRef.current = { distance: currentDistance, scale: readerScaleRef.current };
-        }
-        const ratio = currentDistance / Math.max(80, zoomRef.current.distance);
-        const next = Math.max(0.72, Math.min(1.28, zoomRef.current.scale * ratio));
-        if (Math.abs(next - readerScaleRef.current) > 0.004) {
-          readerScaleRef.current = next;
-          setReaderScale(next);
-        }
-      } else {
-        zoomRef.current = null;
-      }
-
-      if (openHands.length < 2 && h?.openPalm && h.point && body) {
-        const rect = body.getBoundingClientRect();
-        const center = rect.top + rect.height / 2;
-        const deadZone = Math.max(40, rect.height * 0.12);
-        const delta = h.point.y - center;
-        if (Math.abs(delta) > deadZone) {
-          const reach = rect.height / 2 - deadZone;
-          const norm = Math.max(-1, Math.min(1, (delta - Math.sign(delta) * deadZone) / reach));
-          body.scrollTop += norm * 26;
-        }
-      }
-      raf = requestAnimationFrame(loop);
-    };
-    raf = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(raf);
-  }, []);
-
-  function beginDrag(clientX: number, clientY: number, target: HTMLElement, pointerId: number) {
-    startRef.current = { x: clientX, y: clientY };
-    setDragging(true);
-    try {
-      target.setPointerCapture?.(pointerId);
-    } catch {
-      // Pointer capture is best-effort; dragging still works without it.
-    }
-  }
-
-  function moveDrag(clientX: number, clientY: number) {
-    if (!startRef.current) return;
-    setOffset({ x: clientX - startRef.current.x, y: clientY - startRef.current.y });
-  }
-
-  function endDrag() {
-    if (!startRef.current) return;
-    const distance = Math.hypot(offset.x, offset.y);
-    startRef.current = null;
-    setDragging(false);
-    if (distance > CLOSE_DISTANCE) {
-      closeWithSnap();
-    } else {
-      setOffset({ x: 0, y: 0 });
-    }
-  }
-
-  const dim = Math.min(1, Math.hypot(offset.x, offset.y) / (CLOSE_DISTANCE * 2));
-
-  return (
-    <div
-      className={`reader-backdrop ${closing ? "closing" : ""}`}
-      style={{ opacity: 1 - dim * 0.6 }}
-      onPointerDown={(event) => {
-        if (event.target === event.currentTarget) closeWithSnap();
-      }}
-    >
-      <article
-        className={`reader-card ${dragging ? "dragging" : ""} ${closing ? "closing" : ""}`}
-        style={{
-          "--reader-transform": `translate(${offset.x}px, ${offset.y}px) scale(${readerScale * (1 - dim * 0.08)})`,
-        } as CSSProperties}
-      >
-        <header
-          className="reader-grab"
-          onPointerDown={(event) =>
-            beginDrag(event.clientX, event.clientY, event.currentTarget, event.pointerId)
-          }
-          onPointerMove={(event) => dragging && moveDrag(event.clientX, event.clientY)}
-          onPointerUp={endDrag}
-          onPointerCancel={endDrag}
-        >
-          <div className="reader-grip" />
-          <span className={`badge ${task.status.toLowerCase()}`}>{task.status}</span>
-          <code title={task.id}>{shortRunId(task.id)}</code>
-          <button
-            className="reader-close"
-            onPointerDown={(event) => event.stopPropagation()}
-            onClick={closeWithSnap}
-            title="Close"
-          >
-            <X size={16} />
-          </button>
-        </header>
-        <h2 className="reader-title">{task.task}</h2>
-        <div className="reader-body" ref={bodyRef}>
-          <div className={`markdown-body ${task.error ? "error" : ""}`}>
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-              {normalizeMarkdown(task.error || task.output)}
-            </ReactMarkdown>
-          </div>
-        </div>
-        <div className="reader-hint">
-          {hand
-            ? "Open palm — hold high/low to scroll · Two open palms resize · Fist to close"
-            : "Scroll to read · Esc or × to close"}
-        </div>
-      </article>
-    </div>
+      {handControl && hand.present ? (
+        <HandReticles hand={hand} dwelling={Boolean(dwellRef.current)} />
+      ) : null}
+    </>
   );
 }

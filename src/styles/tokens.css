@@ -1,0 +1,57 @@
+/* =====================================================================
+   Iris design tokens — "Deep Space" system
+   Dark-only. Electric cyan primary, violet secondary, deep navy-black base.
+   The orb (ReactorCore) keeps its own state palettes and is NOT themed here.
+   ===================================================================== */
+
+:root {
+  /* Base space */
+  --bg-0: #030509;
+  --bg-1: #05070d;
+  --bg-2: #0a0f1a;
+
+  /* Accents */
+  --cyan: #22d3ee;
+  --cyan-bright: #67e8f9;
+  --cyan-rgb: 34, 211, 238;
+  --violet: #8b5cf6;
+  --violet-soft: #a78bfa;
+  --violet-rgb: 139, 92, 246;
+
+  /* Status */
+  --amber: #f5b04a;
+  --amber-rgb: 245, 176, 74;
+  --mint: #2dd2af;
+  --mint-rgb: 45, 210, 175;
+  --coral: #f87171;
+  --coral-rgb: 248, 113, 113;
+
+  /* Text */
+  --text: #e8f0fa;
+  --text-soft: #a9b9cd;
+  --muted: #64748e;
+
+  /* Glass surfaces */
+  --panel: rgba(13, 20, 33, 0.52);
+  --panel-strong: rgba(12, 19, 32, 0.86);
+  --panel-solid: #0b1220;
+  --hairline: rgba(148, 196, 255, 0.09);
+  --hairline-strong: rgba(148, 210, 255, 0.16);
+  --edge-light: rgba(255, 255, 255, 0.05);
+
+  /* Radii */
+  --r-panel: 18px;
+  --r-card: 14px;
+  --r-sm: 10px;
+
+  /* Type */
+  --font-ui: "Inter Variable", "Inter", system-ui, sans-serif;
+  --font-display: "Space Grotesk Variable", "Space Grotesk", var(--font-ui);
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  /* Shadows */
+  --shadow-panel: 0 24px 64px rgba(0, 0, 0, 0.5);
+  --shadow-float: 0 40px 110px rgba(0, 0, 0, 0.66);
+
+  color-scheme: dark;
+}

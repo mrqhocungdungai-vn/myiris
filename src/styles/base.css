@@ -1,0 +1,267 @@
+/* ===== Base: reset, body canvas, ambient layers, shared primitives ===== */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  background:
+    radial-gradient(85% 70% at 50% 30%, rgba(17, 34, 64, 0.5), transparent 70%),
+    linear-gradient(180deg, var(--bg-1) 0%, var(--bg-0) 100%);
+}
+
+::selection {
+  background: rgba(var(--cyan-rgb), 0.28);
+}
+
+button {
+  font-family: var(--font-ui);
+  border: 0;
+  padding: 0;
+  background: none;
+  cursor: pointer;
+  color: inherit;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+button:focus-visible,
+input:focus-visible {
+  outline: 2px solid rgba(var(--cyan-rgb), 0.55);
+  outline-offset: 2px;
+}
+
+/* ===== Ambient layers (decorative, pointer-transparent) ===== */
+
+/* Faint drifting nebula: cyan + violet depth, kept very low so panels read clean */
+.hud-nebula {
+  position: fixed;
+  inset: -22%;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(42% 42% at 24% 22%, rgba(var(--cyan-rgb), 0.07), transparent 70%),
+    radial-gradient(40% 44% at 80% 18%, rgba(var(--violet-rgb), 0.07), transparent 72%),
+    radial-gradient(50% 50% at 62% 88%, rgba(56, 89, 179, 0.09), transparent 76%);
+  filter: blur(60px);
+  animation: nebula-drift 40s ease-in-out infinite alternate;
+}
+
+/* Halo behind the orb so the core feels like the light source of the room */
+.hud-glow {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: radial-gradient(
+    36% 44% at 50% 42%,
+    rgba(var(--cyan-rgb), 0.075),
+    rgba(var(--cyan-rgb), 0.02) 55%,
+    transparent 75%
+  );
+  transition: opacity 1.2s ease;
+}
+
+.deck.asleep .hud-glow {
+  opacity: 0.35;
+}
+
+.hud-vignette {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  box-shadow: inset 0 0 220px rgba(0, 0, 0, 0.72);
+}
+
+@keyframes nebula-drift {
+  0% { transform: translate3d(-1.5%, -1%, 0) scale(1); }
+  50% { transform: translate3d(2%, 1.5%, 0) scale(1.06); }
+  100% { transform: translate3d(-1%, 2%, 0) scale(1.02); }
+}
+
+/* ===== Shared scrollbars ===== */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(148, 196, 255, 0.14);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 196, 255, 0.24);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* ===== Shared micro-label (panel headers etc.) ===== */
+.col-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 15px 16px 11px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.col-head svg {
+  color: rgba(var(--cyan-rgb), 0.66);
+}
+
+.col-head .count {
+  display: inline-grid;
+  place-items: center;
+  min-width: 19px;
+  height: 19px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  color: var(--cyan-bright);
+  background: rgba(var(--cyan-rgb), 0.1);
+  box-shadow: inset 0 0 0 1px rgba(var(--cyan-rgb), 0.18);
+}
+
+.col-head .head-state {
+  margin-left: auto;
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  color: var(--muted);
+  opacity: 0.7;
+}
+
+.col-head .view-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 8px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-soft);
+  transition: color 0.15s ease;
+}
+
+.col-head .count + .view-all,
+.col-head span + .view-all {
+  margin-left: auto;
+}
+
+.col-head .view-all + .view-all {
+  margin-left: 10px;
+}
+
+.col-head .view-all:hover {
+  color: var(--cyan-bright);
+}
+
+/* ===== Shared empty state ===== */
+.empty {
+  margin: auto;
+  padding: 30px 18px;
+  text-align: center;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.empty p {
+  margin: 0 0 12px;
+}
+
+.demo-load {
+  padding: 7px 13px;
+  border-radius: 999px;
+  color: var(--cyan-bright);
+  background: rgba(var(--cyan-rgb), 0.07);
+  box-shadow: inset 0 0 0 1px rgba(var(--cyan-rgb), 0.2);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  transition: background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.demo-load:hover {
+  background: rgba(var(--cyan-rgb), 0.13);
+  box-shadow: inset 0 0 0 1px rgba(var(--cyan-rgb), 0.34);
+}
+
+/* ===== Shared status badge (dot + mono uppercase, no filled pill) ===== */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--text-soft);
+}
+
+.badge::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 9px currentColor;
+}
+
+.badge.completed { color: var(--mint); }
+.badge.working,
+.badge.started,
+.badge.running,
+.badge.pending { color: var(--amber); }
+.badge.failed,
+.badge.error,
+.badge.cancelled,
+.badge.canceled { color: var(--coral); }
+
+.badge.working::before,
+.badge.started::before,
+.badge.running::before {
+  animation: badge-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes badge-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hud-nebula,
+  .badge.working::before,
+  .badge.started::before,
+  .badge.running::before {
+    animation: none;
+  }
+}

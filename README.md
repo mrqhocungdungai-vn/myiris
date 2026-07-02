@@ -10,11 +10,16 @@ The app is designed as a voice-first front-end: you speak naturally, Gemini Live
 - Streams cleaned audio to Gemini Live as 16 kHz PCM.
 - Plays Gemini Live audio responses through the app using browser `AudioContext`.
 - Lets Gemini use built-in Google Search for quick current facts.
-- Lets Gemini hand serious work to Hermes through the Hermes local API server.
+- Lets Gemini hand serious work to Hermes through the Hermes local API server — behind a **system-enforced confirmation gate**: Gemini must stage the brief with `propose_hermes_task`, read it back, and can only `submit_hermes_task` after you explicitly say yes in your own turn (unconfirmed submits are rejected in code, not just by prompt).
+- Anti-hallucination guardrails: status/result answers must come from `get_hermes_task_status` or the completion event — tool responses carry explicit "no result exists yet" instructions so Iris can't invent Hermes findings.
 - Shows conversation in the Comms panel and Hermes jobs in the Hermes Tasks panel.
+- Talks to Hermes in **one pinned chat session** at a time — every task lands in that thread, exactly like picking a chat in Hermes desktop. The session chip at the top of the Work Stream switches between your Iris sessions (API-created only; your Hermes TUI chats are never touched), and the **+** button asks Hermes to create a fresh thread — Hermes assigns its own native session id, and like any chat tool the thread shows as "New chat" until your first task names it (from the first prompt's opening words). The last-used session loads by default (`IRIS_HERMES_SESSION` in `~/.iris/.env`).
+- Restores past completed work into the Work Stream after a restart by reading that session's transcript from Hermes (`/api/sessions/{id}/messages`), so results are not lost when you close Iris. Switching sessions re-syncs the Work Stream to the new thread.
 - Proactively announces Hermes results when a background task finishes.
 - Supports interruption/barge-in: when you speak over Gemini, playback is flushed.
 - Uses a dark-only "Orbital Deck" UI with an animated voice orb, keyboard shortcuts, Comms, Camera/Gesture, and Work Stream columns.
+- Ships a **first-run onboarding wizard** plus a **Settings panel** (gear icon) to set your Gemini key, Hermes connection, name, voice, and permissions — no manual file editing required. Settings are saved to `~/.iris/.env`.
+- Reads your personal context from Hermes's own memory (`~/.hermes/memories/USER.md` and `MEMORY.md`) so Gemini writes accurate, well-formed task briefs.
 - Adds **camera hand-gesture control** (MediaPipe) after wake so you can drive the UI in the air: point to move a cursor, dwell to open a task, open-palm to scroll, and make a fist to dismiss.
 - Uses a simple polished reader open/close animation for expanded Hermes results.
 
@@ -134,12 +139,14 @@ File: `electron/main.mjs`
 
 Responsibilities:
 
-- Loads `.env`.
+- Loads configuration (from `~/.iris/.env` written by the onboarding wizard, plus optional `.env` files).
+- Powers the onboarding/settings UI: read/save config, validate the Gemini key, health-check Hermes, and preview voices.
+- Reads your personal context from Hermes memory (`USER.md` / `MEMORY.md`) and injects it into Gemini's system prompt.
 - Creates the Gemini Live session.
 - Defines Gemini tools.
 - Bridges Gemini tool calls to Hermes.
 - Sends/receives Gemini audio.
-- Polls Hermes runs.
+- Polls Hermes runs and streams live tool/activity events to the UI.
 - Announces Hermes completion back into Gemini.
 
 ### Electron Preload
@@ -157,12 +164,11 @@ Responsibilities:
 
 Files:
 
-- `src/App.tsx`
-- `src/App.css`
-- `src/deck.css`
-- `src/ReactorCore.tsx`
-- `src/BootSequence.tsx`
-- `src/useHandControl.ts` (MediaPipe hand/gesture hook)
+- `src/App.tsx` — top-level state + composition
+- `src/components/` — UI components (TopBar, CommsPanel, CameraDock, CenterStage, WorkStream, WorkCard, ReaderOverlay, HistoryDrawer, TaskChooser, HandoffLayer, HandReticles, BootSequence, SetupPanel, ReactorCore)
+- `src/hooks/` — `useAudioPipeline`, `useHandoffFx`, `useHandControl` (MediaPipe), `useWakeWord`
+- `src/lib/` — audio/PCM helpers, task utilities, demo fixtures
+- `src/styles/` — "Deep Space" design system (tokens, base, deck, overlays, fx)
 
 Responsibilities:
 
@@ -342,51 +348,74 @@ Expected output:
 {"status":"ok"}
 ```
 
-## App Environment
+> Tip: you don't have to use `curl` — Iris's setup wizard (and Settings) has a
+> **Test Hermes** button that checks this connection for you and shows the Hermes
+> version.
 
-Iris reads environment values from:
+## First-Run Setup (Onboarding)
 
-1. `.env` in this repo (development and `npm start`).
-2. `~/.iris/.env` (packaged app on macOS/Linux).
-3. `%USERPROFILE%\\.iris\\.env` (packaged app on Windows).
-4. `.env` bundled next to app resources (optional packaging flow).
+Iris configures itself through a built-in **setup wizard** — you do **not** need to
+hand-edit any files to get started.
 
-Copy the example file:
+- On first launch (when no Gemini key is found), Iris opens the **onboarding
+  wizard** automatically.
+- You can reopen it anytime from the **gear icon (top-right) → Settings → Run
+  setup wizard**.
+- Everything you enter is saved to **`~/.iris/.env`** (per-user; the exact path is
+  shown at the bottom of Settings). Your repo stays clean — no secrets committed.
+
+### What the wizard asks for
+
+| Step | Field | What to enter |
+| --- | --- | --- |
+| **Gemini** | API key *(required)* | A free key from [Google AI Studio](https://aistudio.google.com/apikey). Press **Test Gemini** to verify it works. |
+| **Hermes** | API URL | Address of your local Hermes API server. Default `http://127.0.0.1:8642` — keep it unless you changed Hermes's port. |
+| **Hermes** | API key | Must match `API_SERVER_KEY` in Hermes's own `~/.hermes/.env`. Default for local dev is `iris-local-dev`. Press **Test Hermes** to verify. |
+| **Hermes** | Hermes home *(optional)* | Folder where Hermes stores data + memory (`memories/USER.md`, `MEMORY.md`). Leave blank to use `~/.hermes`. |
+| **Hermes** | Hermes binary *(optional)* | Full path to the `hermes` executable. Leave blank — only set it if Iris can't find Hermes on your PATH. |
+| **You & voice** | Display name | What Iris calls you out loud. |
+| **You & voice** | Voice | Pick a Gemini Live voice and press **Preview** to hear a sample. |
+| **You & voice** | Model | Gemini Live model (keep the default). |
+| **Permissions** | Microphone *(required)* / Camera *(optional)* | Allow the mic so Iris can hear you; the camera is only needed for hand gestures. |
+| **Advanced** | Load demo / test data | **On** fills the UI with fake tasks/conversation for screenshots and trying things out; keep **Off** for normal use. |
+
+Read-only values (voice duplex mode, speaker echo guard) are shown for reference
+and can only be changed in `.env`.
+
+### Personal context (shared with Hermes)
+
+Iris automatically reads Hermes's own memory files —
+`~/.hermes/memories/USER.md` and `~/.hermes/memories/MEMORY.md` — and feeds them
+into Gemini so it understands who you are and can write accurate, well-formed task
+briefs. There is nothing to copy. If Hermes lives somewhere other than `~/.hermes`,
+set **Hermes home** in Settings (or `HERMES_HOME` in `.env`).
+
+### Advanced: manual configuration (optional)
+
+Power users can set values directly instead of using the wizard. Iris reads config
+from these locations (first match wins per key):
+
+1. `.env` in the repo (developer convenience when running from source)
+2. `~/.iris/.env` (written by the setup wizard; used by the packaged app — on
+   Windows this is `%USERPROFILE%\\.iris\\.env`)
+3. `.env` bundled next to app resources (optional packaging flow)
+
+Supported keys:
 
 ```bash
-cp .env.example .env
-```
-
-On Windows PowerShell:
-
-```powershell
-Copy-Item .env.example .env
-```
-
-Minimum required:
-
-```bash
-GEMINI_API_KEY=your_google_ai_studio_key
-```
-
-Recommended example:
-
-```bash
-GEMINI_API_KEY=your_google_ai_studio_key
-IRIS_USER_NAME=there
-IRIS_LOAD_TEST_DATA=false
+GEMINI_API_KEY=your_google_ai_studio_key          # required
+IRIS_USER_NAME=your name
 GEMINI_LIVE_MODEL=models/gemini-3.1-flash-live-preview
 GEMINI_LIVE_VOICE=Zephyr
 HERMES_API_URL=http://127.0.0.1:8642
 API_SERVER_KEY=iris-local-dev
+HERMES_HOME=~/.hermes                             # optional (auto-detected)
+HERMES_BIN=/full/path/to/hermes                   # optional (auto-detected on PATH)
+IRIS_LOAD_TEST_DATA=false                         # true = load demo UI data
 ```
 
-`HERMES_BIN` is optional. Set it only if the packaged GUI app cannot find the
-Hermes binary on PATH. If the Hermes gateway is already running, Iris only needs
-`HERMES_API_URL` and `API_SERVER_KEY`.
-
-Set `IRIS_LOAD_TEST_DATA=true` to auto-load demo Comms messages and Hermes task
-cards at startup for UI testing. Leave it `false` for normal use.
+A `.env.example` is included for reference, but most users should just run Iris and
+complete the wizard.
 
 ## Exact Google Models, SDKs & Assets (pinned reference)
 
@@ -441,7 +470,13 @@ npm install
 
 ### 2. Configure Gemini and Iris
 
-Create `.env` from `.env.example` and set at least `GEMINI_API_KEY`.
+No file editing needed — just run the app (next steps) and complete the
+**onboarding wizard**, which saves your settings to `~/.iris/.env`. You'll paste a
+Gemini key from [Google AI Studio](https://aistudio.google.com/apikey) and can
+**Test Gemini** / **Test Hermes** right in the wizard.
+
+Prefer files? Copy `.env.example` to `.env` and set at least `GEMINI_API_KEY`
+(see [First-Run Setup](#first-run-setup-onboarding) for all keys).
 
 ### 3. Enable Hermes gateway API
 
@@ -521,9 +556,8 @@ From Windows:
 
 ```powershell
 npm install
-Copy-Item .env.example .env
-# edit .env and set GEMINI_API_KEY, HERMES_API_URL, API_SERVER_KEY
 npm run dev
+# then complete the onboarding wizard (saves to %USERPROFILE%\.iris\.env)
 ```
 
 To create an unpacked Windows app directory:
@@ -538,18 +572,20 @@ To create a distributable Windows build:
 npm run dist:win
 ```
 
-For the packaged Windows app, copy `.env.example` to:
+For the packaged Windows app, just launch it and complete the onboarding wizard —
+it writes your settings to:
 
 ```text
 %USERPROFILE%\\.iris\\.env
 ```
 
-Then set `GEMINI_API_KEY` and Hermes values there.
+(You can also create/edit that file by hand if you prefer.)
 
 ## Controls
 
 - **W**: Wake
 - **S**: Sleep
+- Top-right gear icon: open **Settings** (and "Run setup wizard")
 - Top-right signal icon: live connection indicator
 - Top-right hand icon: manually enables/disables camera gesture tracking
 

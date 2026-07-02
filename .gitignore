@@ -10,3 +10,5 @@ __pycache__/
 *.log
 sidecar/runtime/
 roadmap.md
+.env_test*
+.ui-shots/
