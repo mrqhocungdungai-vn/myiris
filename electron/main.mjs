@@ -418,7 +418,8 @@ async function submitHermesTask({ task, urgency = "normal" }) {
     input: cleanTask,
     session_id: hermesSessionId(),
     instructions:
-      "You are invoked from Iris voice. Work autonomously. Do not ask Iris for clarification unless absolutely impossible. Use sensible defaults and report concise final results.",
+      "You are invoked from Iris voice. Work autonomously. Do not ask Iris for clarification unless absolutely impossible. Use sensible defaults and report concise final results. " +
+      "This session may contain your own earlier runs: when the task repeats or extends previous work in this conversation, REUSE those results, scripts, and resolved IDs instead of re-deriving everything — re-check only what could have changed since.",
   });
   const runId = run.run_id || run.id;
   emitEvent({ type: "hermes_task_update", status: "started", task: cleanTask, run_id: runId, urgency });
@@ -802,6 +803,7 @@ function announceHermesCompletion({ runId, task, status, output }) {
     "- If another conversation is in progress, politely pause it with a short bridge like: Quick update, Hermes is back with a result.",
     "- Give a concise spoken summary in 1-3 sentences.",
     "- Ask whether he wants to go through the details before continuing the current conversation.",
+    "- IMPORTANT: this interruption must NOT end the earlier conversation. Once the result is handled (or he says he'll look later), actively RETURN to the topic you two were discussing before this update — briefly recall it (e.g. \"Anyway, back to <topic> — you were saying...\") and pick up exactly where you left off.",
     "- Do not say you personally did the work; Hermes did.",
     "hermes_result:",
     output || "(Hermes returned no text output.)",
@@ -834,14 +836,14 @@ function buildHermesTools() {
         {
           name: "propose_hermes_task",
           description:
-            "STEP 1 of dispatching work to Hermes (deals, shopping, research, coding, file work, terminal tasks, summaries, automations — anything requiring tools). Stages the task brief WITHOUT sending it. After calling this, read the brief back to the user, ask for confirmation, and end your turn. IMPORTANT: Hermes cannot see this voice conversation — the 'task' string is the ONLY context it gets, so write a complete, self-contained brief, not a short paraphrase.",
+            "STEP 1 of dispatching work to Hermes (deals, shopping, research, coding, file work, terminal tasks, summaries, automations — anything requiring tools). Stages the task brief WITHOUT sending it. After calling this, read the brief back to the user, ask for confirmation, and end your turn. IMPORTANT: Hermes cannot see this voice conversation — the 'task' string is the ONLY context it gets, so write a complete, self-contained brief for NEW tasks. For re-runs/follow-ups of a task already dispatched this session, write a SHORT continuation brief instead that tells Hermes to reuse its earlier work (it shares the session transcript) — this runs much faster.",
           parameters: {
             type: "object",
             properties: {
               task: {
                 type: "string",
                 description:
-                  "A complete, self-contained task brief for Hermes written in clear English. Expand the user's spoken request into a precise instruction: include the goal, every concrete detail the user gave (names, numbers, URLs, dates, budgets, preferences, constraints), any sensible defaults you assumed, and the expected output/format. Write it as if Hermes has no prior context.",
+                  "A clear, self-contained brief of WHAT the user wants: the goal, every concrete detail they actually said (names, numbers, dates, budgets, constraints), and the expected output/format. Do NOT include implementation details — no tools, file paths, Notion pages/databases, scripts, or workflow internals. Hermes's own skills and memory cover the how.",
               },
               urgency: { type: "string", description: "low, normal, or high." },
             },
@@ -980,10 +982,11 @@ function buildLiveConfig() {
             "If the user refers to a task by partial words from the task header, like 'open the failed one', 'open Hermes API', 'open package Iris', or 'open two hand design', call control_iris_ui with action open_task_by_query and put those words in query. Do not require an exact title match.",
             "If Iris shows a task chooser because multiple cards matched, the user can click a choice or say first/second/third; use get_iris_ui_context to inspect pendingTaskMatches before opening a specific task.",
             "When a UI command is ambiguous, prefer the expanded task first, then the focused task, then the latest Hermes result. Keep the spoken acknowledgement short.",
-            `When you call propose_hermes_task, write the 'task' as a COMPLETE, self-contained brief. Hermes cannot hear this conversation, so do not send a short paraphrase. Expand what ${userDisplayName()} said into a precise, detailed instruction that captures the goal, every concrete detail mentioned (names, numbers, URLs, dates, budgets, preferences, constraints), any reasonable defaults you are assuming, and the expected result/format. Write it as if Hermes has zero prior context.`,
+            `When you call propose_hermes_task, write the 'task' as a clear brief about ${userDisplayName()}'s INTENT: the goal, the concrete details they actually said (names, numbers, dates, budgets, constraints), and the expected output/format. Hermes cannot hear this conversation, so the brief must stand alone — but NEVER tell Hermes HOW to do the work. Do not mention tools, skills, scripts, file paths, Notion pages, databases, planner pages, or any workflow mechanics, even if you know them from the user context: Hermes has its own skills and shares the same memory, and your guesses about mechanics can be stale and send it down the wrong path. Example: "Check this month's deals and summarize payment status" — NOT "Check the deals database linked from the active planner page".`,
+            `EXCEPTION — repeats and follow-ups: if ${userDisplayName()} asks to re-run, refresh, or slightly tweak a task you ALREADY dispatched in this session, do NOT re-specify the whole task. Write a short continuation brief that names the previous task and tells Hermes to reuse its earlier work, e.g. "Re-run the July 2026 Notion deals analysis from earlier in this session and report the updated numbers — reuse your previous approach and results, re-checking only what may have changed." Hermes shares this session's transcript, so short continuation briefs run dramatically faster.`,
             `After submit_hermes_task returns "started", say one short acknowledgement like: On it, Hermes is handling that now. (Keep what you SAY to ${userDisplayName()} short, even though the task you SENT to Hermes is detailed.) If it returns "blocked", follow its instructions instead — do not claim the task was sent.`,
             `When you receive SYSTEM_EVENT_SESSION_START, immediately speak a warm welcome-back greeting to ${userDisplayName()} as instructed, without waiting for the user to talk first.`,
-            `When you receive SYSTEM_EVENT_HERMES_COMPLETE, treat it as a high-priority background result from Hermes. Proactively announce it even if ${userDisplayName()} was chatting with you. Keep it polite and short: say Hermes is back, summarize the result, and ask whether they want to go through it before continuing.`,
+            `When you receive SYSTEM_EVENT_HERMES_COMPLETE, treat it as a high-priority background result from Hermes. Proactively announce it even if ${userDisplayName()} was chatting with you. Keep it polite and short: say Hermes is back, summarize the result, and ask whether they want to go through it before continuing. Then — CRITICAL — resume the conversation the update interrupted: once the result is handled, bring back the earlier topic yourself ("Anyway, back to what we were discussing...") and continue it exactly where it paused. Never let a Hermes update silently kill the previous thread.`,
             "Only answer directly for greetings, quick chat, or status questions.",
             "Keep voice responses natural and short.",
           ].join("\n"),
@@ -1009,7 +1012,8 @@ function userContextParts() {
       text: [
         `USER CONTEXT — personal profile and memory provided by ${userDisplayName()}.`,
         "Treat it as authoritative about who they are, their preferences, locations, budgets, tools, and recurring projects.",
-        "Use it to resolve vague or shorthand requests and, most importantly, to write COMPLETE and ACCURATE Hermes briefs (for example, infer what 'deals' or 'the usual' means for this user, and fill in concrete details they did not say out loud).",
+        "Use it to resolve vague or shorthand requests (for example, understand what 'deals' or 'the usual' means for this user) and to speak to them naturally.",
+        "Do NOT copy operational details from this context into Hermes briefs — no page names, database structure, script names, or workflow mechanics. Hermes shares this same memory and its skills own those mechanics; briefs carry the user's intent only.",
         "Never read this context aloud verbatim; just use it to act correctly.",
         "----- BEGIN USER CONTEXT -----",
         text,
