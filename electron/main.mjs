@@ -672,6 +672,15 @@ async function executeTool(name, args = {}) {
       return approveHermesAction(args);
     case "get_iris_ui_context":
       return getIrisUiContext();
+    case "go_to_sleep":
+      // Give the goodbye a moment to play before the renderer tears down
+      // audio (its stop() flushes playback immediately).
+      setTimeout(() => emitToRenderer("iris:sleep", {}), 3000);
+      return {
+        status: "sleeping",
+        instructions:
+          "Say a one-line goodbye right now (nothing else, no new topics). Iris goes to sleep in about 3 seconds.",
+      };
     case "control_iris_ui":
       return controlIrisUi(args);
     default:
@@ -803,7 +812,7 @@ function announceHermesCompletion({ runId, task, status, output }) {
     "- If another conversation is in progress, politely pause it with a short bridge like: Quick update, Hermes is back with a result.",
     "- Give a concise spoken summary in 1-3 sentences.",
     "- Ask whether he wants to go through the details before continuing the current conversation.",
-    "- IMPORTANT: this interruption must NOT end the earlier conversation. Once the result is handled (or he says he'll look later), actively RETURN to the topic you two were discussing before this update — briefly recall it (e.g. \"Anyway, back to <topic> — you were saying...\") and pick up exactly where you left off.",
+    "- If (and ONLY if) this update interrupted a discussion that was actively in progress, return to it afterwards by naming the topic yourself (e.g. \"Anyway, back to <topic> — you were saying...\"). If there was no ongoing discussion, or it had naturally finished, just end after the summary. NEVER ask \"what were we discussing\" — if you cannot name the interrupted topic yourself, there is nothing to resume.",
     "- Do not say you personally did the work; Hermes did.",
     "hermes_result:",
     output || "(Hermes returned no text output.)",
@@ -913,6 +922,12 @@ function buildIrisUiTools() {
           parameters: { type: "object", properties: {} },
         },
         {
+          name: "go_to_sleep",
+          description:
+            "Put Iris to sleep (end this voice session). Call ONLY when the user explicitly asks — e.g. 'go to sleep', 'sleep now', 'goodnight Iris', 'that's all for today'. Say a very short goodbye BEFORE calling this; the session ends about 3 seconds later. The wake word keeps working, so they can wake Iris again by voice.",
+          parameters: { type: "object", properties: {} },
+        },
+        {
           name: "control_iris_ui",
           description:
             "Control the Iris UI directly for UI-only requests. Use this instead of Hermes when the user asks to open/show/close the current result, latest Hermes result, task history, or overlays.",
@@ -978,6 +993,7 @@ function buildLiveConfig() {
             "After submitting a task, your only statement is a short acknowledgement that Hermes has started. Never phrase it as if any result exists yet.",
             "Routing rule: quick answer, fact lookup, or general chat -> answer directly or use Google Search; dispatch to Hermes ONLY when explicitly requested as described above.",
             "UI control rule: If the user says things like 'open it', 'open that result', 'show latest Hermes result', 'show history', 'close it', 'go back', or 'open the current task', use get_iris_ui_context and control_iris_ui. Do not send those UI-only commands to Hermes.",
+            `Sleep rule: when ${userDisplayName()} asks you to sleep ('go to sleep', 'sleep now', 'goodnight', 'that's all for now'), say a short warm goodbye and call go_to_sleep. Never call it unless explicitly asked.`,
             "Also handle these UI-only commands with control_iris_ui (never Hermes): 'show the steps' / 'what is it doing' / 'show what tools it used' -> show_task_steps; 'hide the steps' -> hide_task_steps. If they name a specific card ('steps for the deals one', 'steps for the second card'), pass those words in query. With no target named, steps apply to the card they are viewing (open reader first), else the running task.",
             "If the user refers to a task by partial words from the task header, like 'open the failed one', 'open Hermes API', 'open package Iris', or 'open two hand design', call control_iris_ui with action open_task_by_query and put those words in query. Do not require an exact title match.",
             "If Iris shows a task chooser because multiple cards matched, the user can click a choice or say first/second/third; use get_iris_ui_context to inspect pendingTaskMatches before opening a specific task.",
@@ -986,7 +1002,7 @@ function buildLiveConfig() {
             `EXCEPTION — repeats and follow-ups: if ${userDisplayName()} asks to re-run, refresh, or slightly tweak a task you ALREADY dispatched in this session, do NOT re-specify the whole task. Write a short continuation brief that names the previous task and tells Hermes to reuse its earlier work, e.g. "Re-run the July 2026 Notion deals analysis from earlier in this session and report the updated numbers — reuse your previous approach and results, re-checking only what may have changed." Hermes shares this session's transcript, so short continuation briefs run dramatically faster.`,
             `After submit_hermes_task returns "started", say one short acknowledgement like: On it, Hermes is handling that now. (Keep what you SAY to ${userDisplayName()} short, even though the task you SENT to Hermes is detailed.) If it returns "blocked", follow its instructions instead — do not claim the task was sent.`,
             `When you receive SYSTEM_EVENT_SESSION_START, immediately speak a warm welcome-back greeting to ${userDisplayName()} as instructed, without waiting for the user to talk first.`,
-            `When you receive SYSTEM_EVENT_HERMES_COMPLETE, treat it as a high-priority background result from Hermes. Proactively announce it even if ${userDisplayName()} was chatting with you. Keep it polite and short: say Hermes is back, summarize the result, and ask whether they want to go through it before continuing. Then — CRITICAL — resume the conversation the update interrupted: once the result is handled, bring back the earlier topic yourself ("Anyway, back to what we were discussing...") and continue it exactly where it paused. Never let a Hermes update silently kill the previous thread.`,
+            `When you receive SYSTEM_EVENT_HERMES_COMPLETE, treat it as a high-priority background result from Hermes. Proactively announce it even if ${userDisplayName()} was chatting with you. Keep it polite and short: say Hermes is back, summarize the result, and ask whether they want to go through it before continuing. If — and only if — the update interrupted a discussion that was genuinely mid-flow, pick it back up afterwards by naming the topic yourself. If there was no active discussion, simply stop after handling the result. Never ask "what were we discussing" — if you can't name the topic yourself, there is nothing to resume.`,
             "Only answer directly for greetings, quick chat, or status questions.",
             "Keep voice responses natural and short.",
           ].join("\n"),
