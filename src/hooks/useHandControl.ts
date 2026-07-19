@@ -13,6 +13,8 @@ export type TrackedHand = {
   pointing: boolean;
   openPalm: boolean;
   fist: boolean;
+  /** Normalized thumb-tip-to-index-tip distance (landmarks 4/8); smaller = tighter pinch. */
+  pinchDistance: number;
 };
 
 export type HandState = {
@@ -24,6 +26,7 @@ export type HandState = {
   pointing: boolean;
   openPalm: boolean;
   fist: boolean;
+  pinchDistance: number;
   hands: TrackedHand[];
 };
 
@@ -60,6 +63,7 @@ const EMPTY_STATE: HandState = {
   pointing: false,
   openPalm: false,
   fist: false,
+  pinchDistance: 0,
   hands: [],
 };
 
@@ -70,7 +74,16 @@ const EMPTY_STATE: HandState = {
  * heuristics. Supported classes include Closed_Fist, Open_Palm, Pointing_Up,
  * Thumb_Up, Thumb_Down, Victory, ILoveYou, and None.
  */
-export function useHandControl(enabled: boolean) {
+export const SYSTEM_DEFAULT_CAMERA = "default";
+
+function videoConstraintsFor(deviceId: string): MediaTrackConstraints {
+  if (!deviceId || deviceId === SYSTEM_DEFAULT_CAMERA) {
+    return { width: 640, height: 480, facingMode: "user" };
+  }
+  return { width: 640, height: 480, deviceId: { exact: deviceId } };
+}
+
+export function useHandControl(enabled: boolean, deviceId: string = SYSTEM_DEFAULT_CAMERA) {
   const [state, setState] = useState<HandState>(EMPTY_STATE);
   const [error, setError] = useState<string | null>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
@@ -113,7 +126,7 @@ export function useHandControl(enabled: boolean) {
         });
 
         stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: 640, height: 480, facingMode: "user" },
+          video: videoConstraintsFor(deviceId),
         });
         video.srcObject = stream;
         await video.play();
@@ -186,16 +199,19 @@ export function useHandControl(enabled: boolean) {
             const score = topGesture?.score ?? 0;
             const rawGesture = score >= 0.55 ? topGesture?.categoryName ?? "None" : "None";
             const indexTip = hand[8];
+            const thumbTip = hand[4];
             const mirroredX = 1 - indexTip.x;
             const point = {
               x: remapToScreen(mirroredX, INPUT_RANGE.xMin, INPUT_RANGE.xMax, window.innerWidth),
               y: remapToScreen(indexTip.y, INPUT_RANGE.yMin, INPUT_RANGE.yMax, window.innerHeight),
             };
+            const pinchDistance = Math.hypot(indexTip.x - thumbTip.x, indexTip.y - thumbTip.y);
             return {
               rawGesture,
               score,
               point,
               landmarks: hand.map((landmark) => ({ x: 1 - landmark.x, y: landmark.y })),
+              pinchDistance,
             };
           });
 
@@ -212,6 +228,7 @@ export function useHandControl(enabled: boolean) {
               pointing: gesture === "Pointing_Up",
               openPalm: gesture === "Open_Palm",
               fist: gesture === "Closed_Fist",
+              pinchDistance: hand.pinchDistance,
             };
           });
 
@@ -234,6 +251,7 @@ export function useHandControl(enabled: boolean) {
             pointing: primary.pointing,
             openPalm: primary.openPalm,
             fist: primary.fist,
+            pinchDistance: primary.pinchDistance,
             hands: hands.map((item) => (item === primary ? { ...item, point: smooth! } : item)),
           });
         } else {
@@ -259,7 +277,7 @@ export function useHandControl(enabled: boolean) {
       video.srcObject = null;
       setStream(null);
     };
-  }, [enabled]);
+  }, [enabled, deviceId]);
 
   return { state, error, stream };
 }

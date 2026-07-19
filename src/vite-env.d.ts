@@ -13,107 +13,155 @@ type LiveAudioChunk = {
   mimeType?: string;
 };
 
-type IrisUiAction = {
-  action:
-    | "open_latest_hermes_result"
-    | "open_current_hermes_result"
-    | "open_task"
-    | "open_task_by_query"
-    | "open_hermes_history"
-    | "close_reader"
-    | "close_history"
-    | "close_all_overlays"
-    | "show_task_steps"
-    | "hide_task_steps";
-  target_id?: string;
-  query?: string;
+type AgentRole = "po" | "dev" | "study";
+
+type ClaudeSession = {
+  id: string;
+  label: string;
+  agent_sessions: Partial<Record<AgentRole | "default", string>>;
+  active_agent: AgentRole | null;
+  last_agent_used: AgentRole | null;
+  cwd: string | null;
+  created_at: number;
+  last_used_at: number;
+  last_task: string;
+};
+
+type SessionsSnapshot = {
+  active: string | null;
+  sessions: ClaudeSession[];
+};
+
+type AgentInfo = {
+  key: AgentRole;
+  label: string;
+  installed: boolean;
+  description: string;
+  model: string | null;
+};
+
+type AgentsSnapshot = {
+  roster: AgentInfo[];
+  installed: boolean;
+  hasProject: boolean;
+  gates: {
+    slug: string | null;
+    byRole: Partial<Record<AgentRole, boolean>>;
+  };
+};
+
+type AgentsInstallResult = {
+  status: "ok" | "partial" | "error";
+  error?: string;
+  installed: string[];
+  skipped: string[];
+  removed?: string[];
+  errors: string[];
+};
+
+type PoQuestionOption = {
+  label: string;
+  description: string;
+  preview?: string;
+};
+
+type PoQuestion = {
+  question: string;
+  header: string;
+  options: PoQuestionOption[];
+};
+
+type PoQuestionAnswer = {
+  question: string;
+  choice: string;
 };
 
 type IrisConfig = {
   geminiApiKey: string;
   geminiModel: string;
   geminiVoice: string;
-  hermesUrl: string;
-  hermesKey: string;
-  hermesBin: string;
-  hermesHome: string;
-  hermesSession: string;
   userName: string;
   loadTestData: boolean;
   wakeWord: boolean;
-  sounds: boolean;
   configured: boolean;
   voices: string[];
   models: string[];
   configPath: string;
-  voiceDuplexMode: string;
-  speakerEchoGuard: string;
 };
 
-type IrisTestResult = { ok: boolean; error?: string; health?: Record<string, unknown> };
-
-type HermesHistoryTask = {
-  id: string;
-  task: string;
-  status: string;
-  output?: string;
-  updatedAt: number;
-  steps?: Array<{
-    id: string;
-    tool: string;
-    preview?: string;
-    status: "running" | "done" | "error";
-    ts: number;
-  }>;
-};
-
-type HermesHistoryResult = {
-  ok: boolean;
-  tasks?: HermesHistoryTask[];
-  sessions?: string[];
+type ClaudeHealth = {
+  reachable: boolean;
+  version?: string;
   error?: string;
+  billingOk: boolean;
+  billingError?: string;
 };
 
-type HermesSessionInfo = {
-  id: string;
-  source: string;
-  title: string;
-  preview: string;
-  messageCount: number;
-  lastActive: number;
+type UiActionPayload = {
+  action: string;
+  target_id?: string;
+  query?: string;
 };
 
-type HermesSessionsResult = { ok: boolean; sessions: HermesSessionInfo[]; error?: string };
+type UiMode = "deck" | "hud";
+
+type UiContextSnapshot = {
+  expandedTaskId: string | null;
+  focusedTaskId: string | null;
+  latestResultTaskId: string | null;
+  pendingTaskMatches: Array<{ index: number; id: string; task: string; status: string }>;
+  showHistory: boolean;
+  tasks: Array<{
+    id: string;
+    task: string;
+    status: string;
+    hasResult: boolean;
+    stepCount: number;
+    stepsOpen: boolean;
+    updatedAt: number;
+  }>;
+  uiMode: UiMode;
+};
 
 type IrisApi = {
   startSidecar: (options?: { mode?: SidecarMode }) => Promise<{ running: boolean; pid: number | null }>;
   stopSidecar: () => Promise<{ running: boolean; pid: number | null }>;
   getSidecarStatus: () => Promise<{ running: boolean; pid: number | null }>;
-  getAppConfig: () => Promise<{
-    loadTestData: boolean;
-    sounds: boolean;
-    userName: string;
-    configured: boolean;
-  }>;
-  getConfig: () => Promise<IrisConfig>;
-  saveConfig: (updates: Record<string, string>) => Promise<IrisConfig>;
-  testGemini: (key?: string) => Promise<IrisTestResult>;
-  testHermes: (payload?: { url?: string; key?: string }) => Promise<IrisTestResult>;
-  previewVoice: (payload?: { voice?: string; key?: string }) => Promise<IrisTestResult>;
-  getHermesHistory: () => Promise<HermesHistoryResult>;
-  listHermesSessions: () => Promise<HermesSessionsResult>;
-  createHermesSession: () => Promise<{ ok: boolean; id?: string; error?: string }>;
-  toggleHud: () => Promise<{ mode: "deck" | "hud" }>;
+  sendCommand: (command: Record<string, unknown>) => Promise<void>;
+  getSessions: () => Promise<SessionsSnapshot>;
+  selectSession: (id: string) => Promise<SessionsSnapshot & { status?: string }>;
+  newSession: (label?: string) => Promise<SessionsSnapshot & { status?: string }>;
+  chooseProjectFolder: (
+    id?: string,
+  ) => Promise<SessionsSnapshot & { status?: string; error?: string }>;
+  listAgents: (workstreamId?: string) => Promise<AgentsSnapshot>;
+  selectAgent: (
+    workstreamId: string,
+    agent: AgentRole | null,
+  ) => Promise<SessionsSnapshot & { status?: string; error?: string }>;
+  installAgents: () => Promise<AgentsInstallResult>;
+  setAgentModel: (
+    workstreamId: string,
+    role: AgentRole,
+    model: string,
+  ) => Promise<SessionsSnapshot & { status?: string; error?: string }>;
+  answerPoQuestion: (answers: PoQuestionAnswer[]) => Promise<{ status: string; error?: string }>;
+  sendContextSupplement: (text: string) => Promise<{ status: string; error?: string }>;
+  toggleHud: () => Promise<{ mode: UiMode }>;
   setHudInteractive: (on: boolean) => void;
   windowControl: (action: "close" | "minimize") => void;
-  onHudMode: (callback: (payload: { mode: "deck" | "hud" }) => void) => () => void;
+  onHudMode: (callback: (payload: { mode: UiMode }) => void) => () => void;
   onWakeRequest: (callback: () => void) => () => void;
-  onSleepRequest: (callback: () => void) => () => void;
-  sendCommand: (command: Record<string, unknown>) => Promise<void>;
-  sendUiContext: (context: Record<string, unknown>) => void;
-  sendAudioChunk: (chunk: ArrayBuffer) => void;
+  getConfig: () => Promise<IrisConfig>;
+  saveConfig: (updates: Partial<Record<string, string>>) => Promise<IrisConfig>;
+  testGemini: (key: string) => Promise<{ ok: boolean; error?: string }>;
+  testClaude: () => Promise<ClaudeHealth>;
+  previewVoice: (payload: { voice: string; key: string }) => Promise<{ ok: boolean; error?: string }>;
+  sendUiContext: (context: UiContextSnapshot) => void;
   notifyBootDone: () => void;
-  onUiAction: (callback: (action: IrisUiAction) => void) => () => void;
+  onUiAction: (callback: (payload: UiActionPayload) => void) => () => void;
+  onSleepRequest: (callback: () => void) => () => void;
+  sendAudioChunk: (chunk: ArrayBuffer) => void;
   onAudioChunk: (callback: (chunk: LiveAudioChunk) => void) => () => void;
   onAudioInterrupt: (callback: () => void) => () => void;
   onSidecarEvent: (callback: (event: SidecarEvent) => void) => () => void;

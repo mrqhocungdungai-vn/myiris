@@ -1,25 +1,16 @@
-import { useEffect, useState, type CSSProperties } from "react";
-import ReactorCore from "./ReactorCore";
+import { useEffect, useState } from "react";
 
 const BOOT_LINES = [
   "initializing neural core",
   "linking gemini live uplink",
   "calibrating audio bus",
-  "spinning up hermes brain",
+  "spinning up claude brain",
   "loading skill matrix",
   "synchronizing memory lattice",
   "establishing secure channel",
 ];
 
-export default function BootSequence({
-  visible,
-  closing = false,
-  compact = false,
-}: {
-  visible: boolean;
-  closing?: boolean;
-  compact?: boolean;
-}) {
+export default function BootSequence({ visible }: { visible: boolean }) {
   const [step, setStep] = useState(0);
 
   useEffect(() => {
@@ -35,17 +26,15 @@ export default function BootSequence({
 
   if (!visible) return null;
 
-  // Compact variant for HUD mode: a small glass card near the orb instead of
-  // taking over the whole (transparent) screen.
   return (
-    <div className={`boot ${compact ? "compact" : ""} ${closing ? "closing" : ""}`}>
-      {!compact ? (
-        <div className="orb-stage boot-orb" style={{ "--orb-accent": "18, 163, 148" } as CSSProperties}>
-          <span className="orb-ring" />
-          <span className="orb-radar" />
-          <ReactorCore state="online" />
-        </div>
-      ) : null}
+    <div className="boot">
+      <div className="boot-rings">
+        <span />
+        <span />
+        <span />
+        <span />
+      </div>
+      <div className="boot-core" />
       <div className="boot-title">I.R.I.S</div>
       <div className="boot-sub">SYSTEM INITIALIZATION</div>
 

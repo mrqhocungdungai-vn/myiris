@@ -73,7 +73,7 @@ function sleep() {
   ]);
 }
 
-/** Quick upward glide + tiny tick: something just left for Hermes. */
+/** Quick upward glide + tiny tick: something just left for Claude. */
 function taskSent() {
   play([
     { freq: 523.3, dur: 0.16, peak: 0.34, glideTo: 784 }, // C5 → G5
@@ -98,7 +98,7 @@ function taskFailed() {
   ]);
 }
 
-/** Polite double-tap on one note — Hermes needs your attention. */
+/** Polite double-tap on one note — Claude needs your attention. */
 function approval() {
   play([
     { freq: 987.8, dur: 0.09, peak: 0.34 },

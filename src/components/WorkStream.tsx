@@ -1,4 +1,4 @@
-import { type RefObject } from "react";
+import { type ReactNode, type RefObject } from "react";
 import { ChevronRight, Terminal } from "lucide-react";
 import type { TaskCard } from "../types";
 import { acceptedKey } from "../lib/tasks";
@@ -10,31 +10,29 @@ export default function WorkStream({
   sortedTasks,
   scrollRef,
   acceptedIds,
-  stepsOpenIds,
-  testDataEnabled,
   session,
+  sessions,
   onSwitchSession,
   onNewSession,
-  onLoadDemo,
   onShowHistory,
-  onToggleSteps,
-  onFocusTask,
   onOpenTask,
+  stepsOpenIds,
+  onToggleTaskSteps,
+  children,
 }: {
   tasks: TaskCard[];
   sortedTasks: TaskCard[];
   scrollRef: RefObject<HTMLDivElement | null>;
   acceptedIds: Record<string, number>;
-  stepsOpenIds: Record<string, boolean>;
-  testDataEnabled: boolean;
-  session: string | null;
+  session: ClaudeSession | null;
+  sessions: ClaudeSession[];
   onSwitchSession: (id: string) => void;
   onNewSession: () => void;
-  onLoadDemo: () => void;
   onShowHistory: () => void;
-  onToggleSteps: (id: string) => void;
-  onFocusTask: (id: string) => void;
   onOpenTask: (task: TaskCard) => void;
+  stepsOpenIds: Record<string, boolean>;
+  onToggleTaskSteps: (id: string) => void;
+  children?: ReactNode;
 }) {
   return (
     <aside className="deck-panel deck-right">
@@ -42,35 +40,17 @@ export default function WorkStream({
         <Terminal size={13} />
         <span>Work Stream</span>
         {tasks.length > 0 ? <span className="count">{tasks.length}</span> : null}
-        {testDataEnabled ? (
-          <button className="view-all" onClick={onLoadDemo} title="Load UI test fixture data">
-            Load demo
-          </button>
-        ) : null}
         {tasks.length > 3 ? (
           <button className="view-all" onClick={onShowHistory}>
             View all <ChevronRight size={12} />
           </button>
         ) : null}
       </div>
-      {session !== null ? (
-        <SessionSwitcher
-          current={session}
-          refreshKey={tasks.length}
-          onSwitch={onSwitchSession}
-          onNew={onNewSession}
-        />
-      ) : null}
+      <SessionSwitcher session={session} sessions={sessions} onSwitch={onSwitchSession} onNew={onNewSession} />
+      {children}
       <div className="work-scroll" ref={scrollRef}>
         {tasks.length === 0 ? (
-          <div className="empty">
-            <p>No Hermes runs yet. Ask Iris to take on a task.</p>
-            {testDataEnabled ? (
-              <button className="demo-load" onClick={onLoadDemo}>
-                Load demo tasks
-              </button>
-            ) : null}
-          </div>
+          <p className="empty">No Claude runs yet. Ask Iris to take on a task.</p>
         ) : (
           sortedTasks.map((task) => (
             <WorkCard
@@ -78,8 +58,7 @@ export default function WorkStream({
               task={task}
               accepted={Boolean(acceptedIds[acceptedKey(task.task)])}
               stepsOpen={Boolean(stepsOpenIds[task.id])}
-              onToggleSteps={() => onToggleSteps(task.id)}
-              onFocus={() => onFocusTask(task.id)}
+              onToggleSteps={() => onToggleTaskSteps(task.id)}
               onOpen={() => onOpenTask(task)}
             />
           ))

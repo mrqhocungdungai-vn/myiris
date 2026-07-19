@@ -20,21 +20,22 @@ type Draft = {
   GEMINI_API_KEY: string;
   GEMINI_LIVE_MODEL: string;
   GEMINI_LIVE_VOICE: string;
-  HERMES_API_URL: string;
-  API_SERVER_KEY: string;
-  HERMES_BIN: string;
-  HERMES_HOME: string;
   IRIS_USER_NAME: string;
   IRIS_LOAD_TEST_DATA: string;
   IRIS_WAKE_WORD: string;
-  IRIS_SOUNDS: string;
 };
 
-const WIZARD_STEPS = ["welcome", "gemini", "hermes", "you", "permissions", "finish"] as const;
+const WIZARD_STEPS = ["welcome", "gemini", "claude", "you", "permissions", "finish"] as const;
+
+const SYSTEM_DEFAULT_CAMERA = "default";
 
 export default function SetupPanel({
   mode,
   config,
+  soundsEnabled,
+  onToggleSounds,
+  cameraDeviceId,
+  onChangeCameraDevice,
   onClose,
   onSaved,
   onStart,
@@ -42,6 +43,10 @@ export default function SetupPanel({
 }: {
   mode: Mode;
   config: IrisConfig;
+  soundsEnabled: boolean;
+  onToggleSounds: () => void;
+  cameraDeviceId: string;
+  onChangeCameraDevice: (deviceId: string) => void;
   onClose: () => void;
   onSaved: (config: IrisConfig) => void;
   onStart?: () => void;
@@ -51,21 +56,17 @@ export default function SetupPanel({
     GEMINI_API_KEY: config.geminiApiKey,
     GEMINI_LIVE_MODEL: config.geminiModel,
     GEMINI_LIVE_VOICE: config.geminiVoice,
-    HERMES_API_URL: config.hermesUrl,
-    API_SERVER_KEY: config.hermesKey,
-    HERMES_BIN: config.hermesBin,
-    HERMES_HOME: config.hermesHome,
     IRIS_USER_NAME: config.userName,
     IRIS_LOAD_TEST_DATA: config.loadTestData ? "true" : "false",
     IRIS_WAKE_WORD: config.wakeWord ? "true" : "false",
-    IRIS_SOUNDS: config.sounds ? "true" : "false",
   });
   const [step, setStep] = useState(0);
   const [gemini, setGemini] = useState<TestState>({ status: "idle" });
-  const [hermes, setHermes] = useState<TestState>({ status: "idle" });
+  const [claude, setClaude] = useState<TestState & { billing?: string }>({ status: "idle" });
   const [preview, setPreview] = useState<TestState>({ status: "idle" });
   const [mic, setMic] = useState<PermState>("idle");
   const [cam, setCam] = useState<PermState>("idle");
+  const [camDevices, setCamDevices] = useState<MediaDeviceInfo[]>([]);
   const [saving, setSaving] = useState(false);
 
   const set = (key: keyof Draft, value: string) => setDraft((current) => ({ ...current, [key]: value }));
@@ -96,23 +97,56 @@ export default function SetupPanel({
     };
   }, []);
 
+  // Device labels only come through once camera permission is granted, so the
+  // picker stays empty/hidden until then. While granted, keep the list live so
+  // a device that appears or disappears at runtime (e.g. starting OBS Virtual
+  // Camera) shows up without reopening Settings.
+  useEffect(() => {
+    if (cam !== "granted") {
+      setCamDevices([]);
+      return;
+    }
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        if (!cancelled) setCamDevices(devices.filter((device) => device.kind === "videoinput"));
+      } catch {
+        // Leave the list as-is; enumeration can fail transiently.
+      }
+    };
+    refresh();
+    navigator.mediaDevices.addEventListener?.("devicechange", refresh);
+    return () => {
+      cancelled = true;
+      navigator.mediaDevices.removeEventListener?.("devicechange", refresh);
+    };
+  }, [cam]);
+
+  // Run the Claude CLI + subscription-billing check once when the panel opens
+  // so Settings mode shows current status without an extra click.
+  useEffect(() => {
+    checkClaude();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   async function testGemini() {
     setGemini({ status: "testing" });
     const result = await window.iris.testGemini(draft.GEMINI_API_KEY.trim());
     setGemini(result.ok ? { status: "ok", message: "Key works." } : { status: "error", message: result.error });
   }
 
-  async function testHermes() {
-    setHermes({ status: "testing" });
-    const result = await window.iris.testHermes({
-      url: draft.HERMES_API_URL.trim(),
-      key: draft.API_SERVER_KEY.trim(),
-    });
-    const version =
-      result.health && typeof result.health.version === "string" ? ` · v${result.health.version}` : "";
-    setHermes(
-      result.ok ? { status: "ok", message: `Reachable${version}.` } : { status: "error", message: result.error },
-    );
+  async function checkClaude() {
+    setClaude({ status: "testing" });
+    const health = await window.iris.testClaude();
+    const billing = health.billingOk
+      ? "Subscription token found — PO bills against your Claude subscription."
+      : health.billingError || "No CLAUDE_CODE_OAUTH_TOKEN set — PO turns will fail until you run `claude setup-token`.";
+    if (health.reachable) {
+      setClaude({ status: "ok", message: health.version ? `Ready · ${health.version}` : "Ready", billing });
+    } else {
+      setClaude({ status: "error", message: health.error || "Claude CLI not found.", billing });
+    }
   }
 
   async function doPreview() {
@@ -194,106 +228,16 @@ export default function SetupPanel({
     </Section>
   );
 
-  const hermesSection = (
-    <Section title="Hermes" hint="Iris hands long-running work to your local Hermes agent.">
-      <label className="setup-field">
-        <span>API URL</span>
-        <input
-          value={draft.HERMES_API_URL}
-          placeholder="http://127.0.0.1:8642"
-          onChange={(event) => {
-            set("HERMES_API_URL", event.target.value);
-            setHermes({ status: "idle" });
-          }}
-          spellCheck={false}
-        />
-        <small className="setup-note">
-          Address of your local Hermes API server. Keep <code>http://127.0.0.1:8642</code> unless you changed Hermes's
-          port. Start it with <code>hermes gateway start</code>.
-        </small>
-      </label>
-      <label className="setup-field">
-        <span>API key</span>
-        <input
-          value={draft.API_SERVER_KEY}
-          placeholder="iris-local-dev"
-          onChange={(event) => {
-            set("API_SERVER_KEY", event.target.value);
-            setHermes({ status: "idle" });
-          }}
-          spellCheck={false}
-        />
-        <small className="setup-note">
-          Must match <code>API_SERVER_KEY</code> in Hermes's own <code>~/.hermes/.env</code>. Default for local dev is{" "}
-          <code>iris-local-dev</code>.
-        </small>
-      </label>
+  const claudeSection = (
+    <Section title="Claude" hint="Claude is Iris's worker brain — the PO/DEV pipeline runs on the Claude Code CLI.">
       <div className="setup-actions">
-        <button className="setup-btn" onClick={testHermes} disabled={hermes.status === "testing"}>
-          {hermes.status === "testing" ? <Loader2 size={14} className="spin" /> : null}
-          Test Hermes
+        <button className="setup-btn" onClick={checkClaude} disabled={claude.status === "testing"}>
+          {claude.status === "testing" ? <Loader2 size={14} className="spin" /> : null}
+          Check Claude
         </button>
-        <TestBadge state={hermes} okLabel="Reachable" />
+        <TestBadge state={claude} okLabel="Ready" />
       </div>
-      <label className="setup-field">
-        <span>Hermes home (optional)</span>
-        <input
-          value={draft.HERMES_HOME}
-          placeholder="~/.hermes"
-          onChange={(event) => set("HERMES_HOME", event.target.value)}
-          spellCheck={false}
-        />
-        <small className="setup-note">
-          Folder where Hermes keeps its data and memory (<code>memories/USER.md</code>, <code>MEMORY.md</code>) — Iris
-          reads these so it knows your context. Leave blank to use <code>~/.hermes</code>.
-        </small>
-      </label>
-      <label className="setup-field">
-        <span>Hermes binary (optional)</span>
-        <input
-          value={draft.HERMES_BIN}
-          placeholder="auto-detected on PATH"
-          onChange={(event) => set("HERMES_BIN", event.target.value)}
-          spellCheck={false}
-        />
-        <small className="setup-note">
-          Full path to the <code>hermes</code> program (e.g. <code>/Users/you/.local/bin/hermes</code>). Leave blank —
-          only set this if Iris can't find Hermes automatically.
-        </small>
-      </label>
-    </Section>
-  );
-
-  const advancedSection = (
-    <Section title="Advanced" hint="Demo data is selectable; voice defaults are read-only.">
-      <label className="setup-field">
-        <span>Load demo / test data</span>
-        <ThemedSelect
-          ariaLabel="Load demo data"
-          value={draft.IRIS_LOAD_TEST_DATA}
-          options={[
-            { value: "false", label: "Off" },
-            { value: "true", label: "On" },
-          ]}
-          onChange={(value) => set("IRIS_LOAD_TEST_DATA", value)}
-        />
-        <small className="setup-note">
-          Fills the UI with fake tasks and conversation so you can explore Iris (and take screenshots) without running
-          real Hermes work. Turn off for normal use.
-        </small>
-      </label>
-      <div className="setup-readonly">
-        <span>Voice duplex mode</span>
-        <code>{config.voiceDuplexMode}</code>
-      </div>
-      <div className="setup-readonly">
-        <span>Speaker echo guard</span>
-        <code>{config.speakerEchoGuard}s</code>
-      </div>
-      <small className="setup-note">
-        These two are tuned defaults for echo handling. They're read-only here — change them in <code>.env</code> only if
-        you know what you're doing.
-      </small>
+      {claude.billing ? <p className="setup-note">{claude.billing}</p> : null}
     </Section>
   );
 
@@ -307,7 +251,7 @@ export default function SetupPanel({
           onChange={(event) => set("IRIS_USER_NAME", event.target.value)}
           spellCheck={false}
         />
-        <small className="setup-note">What Iris calls you out loud, e.g. “Ashutosh”.</small>
+        <small className="setup-note">What Iris calls you out loud, e.g. “Alex”.</small>
       </label>
       <label className="setup-field">
         <span>Voice</span>
@@ -364,38 +308,75 @@ export default function SetupPanel({
         <span>Interface sounds</span>
         <ThemedSelect
           ariaLabel="Interface sounds"
-          value={draft.IRIS_SOUNDS}
+          value={soundsEnabled ? "true" : "false"}
           options={[
             { value: "true", label: "On" },
             { value: "false", label: "Off" },
           ]}
-          onChange={(value) => set("IRIS_SOUNDS", value)}
+          onChange={(value) => {
+            if ((value === "true") !== soundsEnabled) onToggleSounds();
+          }}
         />
         <small className="setup-note">
-          Subtle audio cues for wake, sleep, task sent, task done, and approval requests. Synthesized locally — quiet by
-          design.
+          Subtle audio cues for wake, sleep, task sent, and task done. Synthesized locally — quiet by design.
         </small>
       </label>
     </Section>
   );
 
+  const cameraOptions: Option[] = [{ value: SYSTEM_DEFAULT_CAMERA, label: "System Default" }].concat(
+    camDevices.map((device, index) => ({
+      value: device.deviceId,
+      label: device.label || `Camera ${index + 1}`,
+    })),
+  );
+  const cameraSelectionMissing =
+    cameraDeviceId !== SYSTEM_DEFAULT_CAMERA && !camDevices.some((device) => device.deviceId === cameraDeviceId);
+  if (cameraSelectionMissing) {
+    cameraOptions.push({ value: cameraDeviceId, label: "Previously selected camera (unavailable)" });
+  }
+
   const permissionsSection = (
     <Section title="Permissions" hint="Iris needs your mic to hear you. Camera is optional (hand gestures).">
       <div className="setup-perms">
-        <PermRow
-          icon={<Mic size={16} />}
-          label="Microphone"
-          required
-          state={mic}
-          onRequest={requestMic}
-        />
-        <PermRow
-          icon={<Camera size={16} />}
-          label="Camera (gestures)"
-          state={cam}
-          onRequest={requestCam}
-        />
+        <PermRow icon={<Mic size={16} />} label="Microphone" required state={mic} onRequest={requestMic} />
+        <PermRow icon={<Camera size={16} />} label="Camera (gestures)" state={cam} onRequest={requestCam} />
       </div>
+      <label className="setup-field">
+        <span>Gesture camera</span>
+        {cam === "granted" ? (
+          <ThemedSelect
+            ariaLabel="Gesture camera"
+            value={cameraDeviceId}
+            options={cameraOptions}
+            onChange={onChangeCameraDevice}
+          />
+        ) : (
+          <p className="setup-note">Grant Camera permission above to choose a specific device.</p>
+        )}
+        <small className="setup-note">
+          Which camera gesture control reads from — pick a specific device (e.g. OBS Virtual Camera) instead of the
+          system default. Applies immediately, including while gesture control is running.
+        </small>
+      </label>
+    </Section>
+  );
+
+  const advancedSection = (
+    <Section title="Advanced" hint="Demo data lets you explore Iris without dispatching real Claude work.">
+      <label className="setup-field">
+        <span>Load demo / test data</span>
+        <ThemedSelect
+          ariaLabel="Load demo data"
+          value={draft.IRIS_LOAD_TEST_DATA}
+          options={[
+            { value: "false", label: "Off" },
+            { value: "true", label: "On" },
+          ]}
+          onChange={(value) => set("IRIS_LOAD_TEST_DATA", value)}
+        />
+        <small className="setup-note">Fills the Work Stream with sample task cards for exploring the UI. Turn off for normal use.</small>
+      </label>
     </Section>
   );
 
@@ -412,7 +393,7 @@ export default function SetupPanel({
           </header>
           <div className="setup-scroll">
             {geminiSection}
-            {hermesSection}
+            {claudeSection}
             {youSection}
             {permissionsSection}
             {advancedSection}
@@ -454,14 +435,14 @@ export default function SetupPanel({
         <h2>Welcome to Iris</h2>
         <p>
           Iris is a hands-free voice command layer. Gemini Live handles the conversation and delegates real
-          work to your Hermes agent. Let's get you set up in under a minute.
+          work to Claude's PO/DEV pipeline. Let's get you set up in under a minute.
         </p>
       </div>
     );
   } else if (current === "gemini") {
     body = geminiSection;
-  } else if (current === "hermes") {
-    body = hermesSection;
+  } else if (current === "claude") {
+    body = claudeSection;
   } else if (current === "you") {
     body = youSection;
   } else if (current === "permissions") {
@@ -510,7 +491,7 @@ export default function SetupPanel({
           {isLast ? (
             <button className="setup-btn primary" onClick={finishWizard} disabled={saving || !keyReady}>
               {saving ? <Loader2 size={14} className="spin" /> : <Check size={14} />}
-              Save & Start Iris
+              Save &amp; Start Iris
             </button>
           ) : (
             <button

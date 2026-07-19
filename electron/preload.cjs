@@ -4,15 +4,18 @@ contextBridge.exposeInMainWorld("iris", {
   startSidecar: (options) => ipcRenderer.invoke("sidecar:start", options),
   stopSidecar: () => ipcRenderer.invoke("sidecar:stop"),
   getSidecarStatus: () => ipcRenderer.invoke("sidecar:status"),
-  getAppConfig: () => ipcRenderer.invoke("app:config"),
-  getConfig: () => ipcRenderer.invoke("config:get"),
-  saveConfig: (updates) => ipcRenderer.invoke("config:save", updates),
-  testGemini: (key) => ipcRenderer.invoke("config:test-gemini", { key }),
-  testHermes: (payload) => ipcRenderer.invoke("config:test-hermes", payload),
-  previewVoice: (payload) => ipcRenderer.invoke("config:preview-voice", payload),
-  getHermesHistory: () => ipcRenderer.invoke("hermes:history"),
-  listHermesSessions: () => ipcRenderer.invoke("hermes:sessions"),
-  createHermesSession: () => ipcRenderer.invoke("hermes:create-session"),
+  sendCommand: (command) => ipcRenderer.invoke("sidecar:command", command),
+  getSessions: () => ipcRenderer.invoke("sessions:get"),
+  selectSession: (id) => ipcRenderer.invoke("sessions:select", id),
+  newSession: (label) => ipcRenderer.invoke("sessions:new", label),
+  chooseProjectFolder: (id) => ipcRenderer.invoke("sessions:choose-cwd", id),
+  listAgents: (workstreamId) => ipcRenderer.invoke("agents:list", workstreamId),
+  selectAgent: (workstreamId, agent) => ipcRenderer.invoke("agents:select", { workstreamId, agent }),
+  installAgents: () => ipcRenderer.invoke("agents:install"),
+  setAgentModel: (workstreamId, role, model) =>
+    ipcRenderer.invoke("agents:set-model", { workstreamId, role, model }),
+  answerPoQuestion: (answers) => ipcRenderer.invoke("po:answer-question", answers),
+  sendContextSupplement: (text) => ipcRenderer.invoke("context-supplement:send", text),
   toggleHud: () => ipcRenderer.invoke("hud:toggle"),
   setHudInteractive: (on) => ipcRenderer.send("hud:interactive", Boolean(on)),
   windowControl: (action) => ipcRenderer.send("win:control", action),
@@ -26,20 +29,24 @@ contextBridge.exposeInMainWorld("iris", {
     ipcRenderer.on("iris:wake", handler);
     return () => ipcRenderer.removeListener("iris:wake", handler);
   },
-  onSleepRequest: (callback) => {
-    const handler = () => callback();
-    ipcRenderer.on("iris:sleep", handler);
-    return () => ipcRenderer.removeListener("iris:sleep", handler);
-  },
-  sendCommand: (command) => ipcRenderer.invoke("sidecar:command", command),
+  getConfig: () => ipcRenderer.invoke("config:get"),
+  saveConfig: (updates) => ipcRenderer.invoke("config:save", updates),
+  testGemini: (key) => ipcRenderer.invoke("config:test-gemini", { key }),
+  testClaude: () => ipcRenderer.invoke("config:test-claude"),
+  previewVoice: (payload) => ipcRenderer.invoke("config:preview-voice", payload),
   sendUiContext: (context) => ipcRenderer.send("iris:ui-context", context),
-  sendAudioChunk: (chunk) => ipcRenderer.send("live:audio", chunk),
   notifyBootDone: () => ipcRenderer.send("iris:boot-done"),
   onUiAction: (callback) => {
     const handler = (_event, payload) => callback(payload);
     ipcRenderer.on("iris:ui-action", handler);
     return () => ipcRenderer.removeListener("iris:ui-action", handler);
   },
+  onSleepRequest: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on("iris:sleep", handler);
+    return () => ipcRenderer.removeListener("iris:sleep", handler);
+  },
+  sendAudioChunk: (chunk) => ipcRenderer.send("live:audio", chunk),
   onAudioChunk: (callback) => {
     const handler = (_event, payload) => callback(payload);
     ipcRenderer.on("live:audio", handler);

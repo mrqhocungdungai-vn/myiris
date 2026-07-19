@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, type CSSProperties, type RefObject } from 
 import { ChevronDown, Hand, Maximize2, MessageSquare, Mic, MicOff, Power, Terminal } from "lucide-react";
 import ReactorCore from "./ReactorCore";
 import WorkCard from "./WorkCard";
+import PoQuestionBanner from "./PoQuestionBanner";
+import ContextSupplementInput from "./ContextSupplementInput";
 import { HandSkeleton } from "./CameraDock";
 import type { HandoffTone, ReactorState, TaskCard, TranscriptLine } from "../types";
 import type { HandState } from "../hooks/useHandControl";
@@ -81,16 +83,17 @@ export default function HudShell({
   stepsOpenIds,
   workScrollRef,
   onToggleSteps,
-  onFocusTask,
   onOpenTask,
   transcript,
   commsScrollRef,
+  onSendSupplement,
   handControl,
   onToggleHand,
   hand,
   handStream,
   handActionLabel,
   handActionTone,
+  poQuestion,
 }: {
   reactorState: ReactorState;
   inputLevelRef: { current: number };
@@ -115,16 +118,23 @@ export default function HudShell({
   stepsOpenIds: Record<string, boolean>;
   workScrollRef: RefObject<HTMLDivElement | null>;
   onToggleSteps: (id: string) => void;
-  onFocusTask: (id: string) => void;
   onOpenTask: (task: TaskCard) => void;
   transcript: TranscriptLine[];
   commsScrollRef: RefObject<HTMLDivElement | null>;
+  onSendSupplement: (text: string) => void;
   handControl: boolean;
   onToggleHand: () => void;
   hand: HandState;
   handStream: MediaStream | null;
   handActionLabel: string;
   handActionTone: string;
+  // Claude-specific delta vs upstream (design.md D2): a pending PO question
+  // must stay answerable (voice, click, or dwell-click) while floating.
+  poQuestion: {
+    questions: PoQuestion[];
+    answers: Record<string, string>;
+    onPick: (question: string, choice: string) => void;
+  } | null;
 }) {
   // Show the full stream (state caps at 20); the column has a fixed max height
   // and palm-scrolls like Comms.
@@ -138,6 +148,18 @@ export default function HudShell({
 
   return (
     <div className={`hud-shell ${awake ? "awake" : "asleep"}`}>
+      {/* A pending PO question outranks everything else in the HUD — it stays
+          a lit, always-visible island rather than tucked behind a toggle. */}
+      {poQuestion ? (
+        <div className="hud-po-question hud-hit">
+          <PoQuestionBanner
+            questions={poQuestion.questions}
+            answers={poQuestion.answers}
+            onPick={poQuestion.onPick}
+          />
+        </div>
+      ) : null}
+
       {/* Slim work stream, top-right — collapsible like Comms */}
       {visibleTasks.length > 0 ? (
         <div className="hud-right">
@@ -161,7 +183,6 @@ export default function HudShell({
                   accepted={Boolean(acceptedIds[acceptedKey(task.task)])}
                   stepsOpen={Boolean(stepsOpenIds[task.id])}
                   onToggleSteps={() => onToggleSteps(task.id)}
-                  onFocus={() => onFocusTask(task.id)}
                   onOpen={() => onOpenTask(task)}
                 />
               ))}
@@ -186,17 +207,22 @@ export default function HudShell({
               <ChevronDown size={12} className="chev" />
             </button>
             {commsOpen ? (
-              <div className="hud-comms hud-hit" ref={commsScrollRef}>
-                {recentTranscript.map((line) => {
-                  const self = /you|user/i.test(line.speaker);
-                  return (
-                    <div className={`bubble ${self ? "self" : "iris"}`} key={line.id}>
-                      <span className="who">{self ? "You" : "Iris"}</span>
-                      {line.text}
-                    </div>
-                  );
-                })}
-              </div>
+              <>
+                <div className="hud-comms hud-hit" ref={commsScrollRef}>
+                  {recentTranscript.map((line) => {
+                    const self = /you|user/i.test(line.speaker);
+                    return (
+                      <div className={`bubble ${self ? "self" : "iris"}`} key={line.id}>
+                        <span className="who">{self ? "You" : "Iris"}</span>
+                        {line.text}
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="hud-hit">
+                  <ContextSupplementInput disabled={!awake} onSubmit={onSendSupplement} />
+                </div>
+              </>
             ) : null}
           </>
         ) : null}

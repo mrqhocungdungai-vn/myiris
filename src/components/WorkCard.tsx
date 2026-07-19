@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { type CSSProperties } from "react";
 import { Check, ChevronDown, Code2, Cpu, FileText, Globe, Search, Wrench, X } from "lucide-react";
 import type { TaskCard } from "../types";
 import {
@@ -10,6 +10,17 @@ import {
   stepHeadline,
   toolCategory,
 } from "../lib/tasks";
+import { AGENT_COLORS, AGENT_LABELS, isAgentRole, modelLabel } from "../lib/agents";
+
+export function AgentBadge({ agent, model }: { agent?: AgentRole | null; model?: string | null }) {
+  if (!agent || !isAgentRole(agent)) return null;
+  return (
+    <span className="agent-badge" style={{ "--agent-color": AGENT_COLORS[agent] } as CSSProperties}>
+      {AGENT_LABELS[agent]}
+      {model ? <span className="agent-badge-model">{modelLabel(model)}</span> : null}
+    </span>
+  );
+}
 
 export function StepIcon({ tool }: { tool: string }) {
   const category = toolCategory(tool);
@@ -20,7 +31,8 @@ export function StepIcon({ tool }: { tool: string }) {
   return <Cpu size={13} />;
 }
 
-// Shared tool-step timeline (used on cards and inside the open reader).
+// Shared tool-step timeline (used on the work card; PO and DEV render it
+// identically since both flow through the same claude_task_update shape).
 export function StepTimeline({ steps }: { steps: NonNullable<TaskCard["steps"]> }) {
   return (
     <ul className="activity-timeline">
@@ -57,18 +69,14 @@ export default function WorkCard({
   accepted = false,
   stepsOpen = false,
   onToggleSteps,
-  onFocus,
   onOpen,
 }: {
   task: TaskCard;
   accepted?: boolean;
   stepsOpen?: boolean;
   onToggleSteps?: () => void;
-  onFocus: () => void;
   onOpen: () => void;
 }) {
-  const [localStepsOpen, setLocalStepsOpen] = useState(false);
-  const showSteps = onToggleSteps ? stepsOpen : localStepsOpen;
   const expandable = Boolean(task.output || task.error);
   const status = task.status.toLowerCase();
   const active = !TERMINAL.has(status);
@@ -77,48 +85,46 @@ export default function WorkCard({
 
   return (
     <article
-      className={`wcard ${active ? "working" : ""} ${expandable ? "expandable" : ""} ${
-        accepted ? "accepted" : ""
-      }`}
+      className={`wcard ${active ? "working" : ""} ${expandable ? "expandable" : ""} ${accepted ? "accepted" : ""}`}
       data-task-id={expandable ? task.id : undefined}
-      onPointerEnter={onFocus}
-      onFocus={onFocus}
       onClick={onOpen}
-      tabIndex={expandable ? 0 : -1}
     >
       {accepted ? <span className="wcard-accepted">Task submitted</span> : null}
       <div className="wcard-top">
         <span className={`badge ${status}`}>{task.status}</span>
-        <code title={task.id}>{shortRunId(task.id)}</code>
+        <AgentBadge agent={task.agent} model={task.model} />
+        <code
+          title={
+            task.claudeSessionId
+              ? `Claude session ${task.claudeSessionId} (run ${task.id})`
+              : `run ${task.id} — the Claude session id appears once the run starts`
+          }
+        >
+          {task.claudeSessionId ? `⛓ ${shortRunId(task.claudeSessionId)}` : shortRunId(task.id)}
+        </code>
       </div>
       <p className="wcard-task">{task.task}</p>
-      {expandable ? (
-        <div className="wcard-preview">{normalizeMarkdown(task.error || task.output)}</div>
-      ) : null}
+      {expandable ? <div className="wcard-preview">{normalizeMarkdown(task.error || task.output)}</div> : null}
 
-      {active && (runningStep || steps.length > 0) ? (
+      {active && runningStep ? (
         <div className="activity-now">
           <span className="activity-spark" />
-          <span className="activity-now-text">
-            {runningStep ? stepHeadline(runningStep) : "Thinking…"}
-          </span>
+          <span className="activity-now-text">{stepHeadline(runningStep)}</span>
         </div>
       ) : null}
-
-      {active && task.notes ? <p className="activity-notes">{task.notes.slice(-180)}</p> : null}
 
       {steps.length > 0 ? (
         <div className="activity" onClick={(event) => event.stopPropagation()}>
           <button
             type="button"
-            className={`activity-toggle ${showSteps ? "open" : ""}`}
-            onClick={() => (onToggleSteps ? onToggleSteps() : setLocalStepsOpen((current) => !current))}
+            className={`activity-toggle ${stepsOpen ? "open" : ""}`}
+            onClick={onToggleSteps}
           >
             <Wrench size={11} />
             {steps.length} step{steps.length === 1 ? "" : "s"}
             <ChevronDown size={12} className="chev" />
           </button>
-          {showSteps ? <StepTimeline steps={steps} /> : null}
+          {stepsOpen ? <StepTimeline steps={steps} /> : null}
         </div>
       ) : null}
 

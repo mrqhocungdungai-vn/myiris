@@ -7,10 +7,14 @@ export default function HistoryDrawer({
   tasks,
   onOpen,
   onClose,
+  stepsOpenIds,
+  onToggleTaskSteps,
 }: {
   tasks: TaskCard[];
   onOpen: (task: TaskCard) => void;
   onClose: () => void;
+  stepsOpenIds: Record<string, boolean>;
+  onToggleTaskSteps: (id: string) => void;
 }) {
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
@@ -30,14 +34,20 @@ export default function HistoryDrawer({
       <div className="history-card">
         <div className="history-head">
           <History size={15} />
-          <span>Hermes History · {tasks.length}</span>
+          <span>Claude History · {tasks.length}</span>
           <button className="reader-close" onClick={onClose} title="Close">
             <X size={16} />
           </button>
         </div>
         <div className="history-grid">
           {tasks.map((task) => (
-            <WorkCard key={task.id} task={task} onFocus={() => undefined} onOpen={() => onOpen(task)} />
+            <WorkCard
+              key={task.id}
+              task={task}
+              stepsOpen={Boolean(stepsOpenIds[task.id])}
+              onToggleSteps={() => onToggleTaskSteps(task.id)}
+              onOpen={() => onOpen(task)}
+            />
           ))}
         </div>
       </div>

@@ -1,6 +1,8 @@
 export type ReactorState = "idle" | "online" | "listening" | "speaking" | "working";
 
-// One Hermes tool invocation, surfaced live from the SSE event stream.
+// One Claude tool invocation, surfaced live from the DEV NDJSON / PO SDK
+// event stream (see electron/claude-stream.mjs). Keyed by the tool_use id
+// Claude itself assigns, so start/end pairing does not depend on tool name.
 export type TaskStep = {
   id: string;
   tool: string;
@@ -16,9 +18,11 @@ export type TaskCard = {
   status: string;
   output?: string;
   error?: string;
+  agent?: AgentRole | null;
+  model?: string | null;
+  claudeSessionId?: string | null;
   updatedAt: number;
   steps?: TaskStep[];
-  notes?: string;
 };
 
 export type LogLine = {

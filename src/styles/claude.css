@@ -1,0 +1,388 @@
+/* =====================================================================
+   Claude-custom UI, restated on Deep Space tokens (tokens.css). Everything
+   here is Claude/Iris-pipeline specific and has no upstream counterpart —
+   upstream's tokens/base/deck/overlays/fx.css stay untouched so future
+   upstream ports diff cleanly (see design D4).
+   ===================================================================== */
+
+/* ----- Claude status dot (deck.css only themes .hermes) ----- */
+.status-dot.claude.on i,
+.status-dot.claude.warn i {
+  background: var(--violet-soft);
+  box-shadow: 0 0 10px rgba(var(--violet-rgb), 0.65);
+}
+
+/* ----- Asleep-state wake hint (simpler than upstream's .wake-prompt — no
+   wake-word feature in this fork) ----- */
+.transport-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.transport-hint .key {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  margin-right: 6px;
+  border-radius: 5px;
+  font-size: 10px;
+  color: var(--cyan-bright);
+  background: rgba(var(--cyan-rgb), 0.16);
+}
+
+/* ----- Agent pipeline (PO → DEV) — switching roles is a gate ----- */
+.pipeline-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 12px 10px;
+  flex-wrap: wrap;
+}
+
+/* The exact Claude Code session id the next task resumes — the user's context anchor */
+.claude-session-line {
+  padding: 2px 12px 8px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+  cursor: default;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.claude-session-line.resumes {
+  color: rgba(var(--mint-rgb), 0.75);
+}
+
+.agent-chip {
+  --agent-color: 120, 170, 150;
+  display: inline-flex;
+  align-items: stretch;
+  height: 22px;
+  border-radius: 7px;
+  border: 1px solid rgba(var(--agent-color), 0.3);
+  background: transparent;
+  color: rgba(var(--agent-color), 0.85);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  position: relative;
+}
+
+/* Two independent click zones: the label selects the role (unchanged
+   behavior), the model segment opens the popover without switching roles. */
+.agent-chip-label,
+.agent-chip-model {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 8px;
+}
+
+.agent-chip-label {
+  border-radius: 7px 0 0 7px;
+}
+
+.agent-chip-label:hover {
+  background: rgba(var(--agent-color), 0.08);
+}
+
+.agent-chip-model {
+  border-left: 1px solid rgba(var(--agent-color), 0.22);
+  border-radius: 0 7px 7px 0;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  text-transform: none;
+  opacity: 0.8;
+}
+
+.agent-chip-model:hover {
+  background: rgba(var(--agent-color), 0.14);
+  opacity: 1;
+}
+
+.model-popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  min-width: 100px;
+  padding: 4px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--hairline-strong);
+  background: var(--panel-solid);
+  box-shadow: var(--shadow-float);
+}
+
+.model-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 5px;
+  border: none;
+  background: transparent;
+  color: var(--text-soft);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+.model-option:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.model-option.selected {
+  color: var(--cyan-bright);
+}
+
+.model-check {
+  font-size: 9px;
+}
+
+.agent-chip + .agent-chip::before {
+  content: "›";
+  position: absolute;
+  left: -5px;
+  top: 50%;
+  transform: translate(-50%, -52%);
+  color: var(--muted);
+  font-size: 10px;
+  pointer-events: none;
+}
+
+.agent-chip.iris + .agent-chip::before {
+  content: "";
+}
+
+.agent-chip:hover {
+  border-color: rgba(var(--agent-color), 0.65);
+  background: rgba(var(--agent-color), 0.08);
+}
+
+.agent-chip.active {
+  background: rgba(var(--agent-color), 0.18);
+  border-color: rgba(var(--agent-color), 0.8);
+  color: rgb(var(--agent-color));
+  box-shadow: 0 0 10px rgba(var(--agent-color), 0.25);
+}
+
+.agent-chip.iris {
+  --agent-color: var(--cyan-rgb);
+}
+
+.agent-chip .gate-check {
+  font-size: 9px;
+  color: rgba(var(--agent-color), 0.95);
+}
+
+.agent-install {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: var(--r-sm);
+  border: 1px dashed rgba(var(--cyan-rgb), 0.4);
+  color: var(--text-soft);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  cursor: pointer;
+}
+
+.agent-install:hover {
+  color: var(--cyan-bright);
+  border-color: rgba(var(--cyan-rgb), 0.7);
+}
+
+.agent-install:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+/* ----- Role badge on task cards / expanded reader ----- */
+.agent-badge {
+  --agent-color: 120, 170, 150;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 16px;
+  padding: 0 6px;
+  border-radius: 5px;
+  border: 1px solid rgba(var(--agent-color), 0.45);
+  background: rgba(var(--agent-color), 0.12);
+  color: rgb(var(--agent-color));
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+/* The model that run actually used — traceable even after the role's current
+   setting changes again. */
+.agent-badge-model {
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  text-transform: none;
+  opacity: 0.75;
+}
+
+/* ----- Project folder the active Claude session works in ----- */
+.project-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 12px 10px;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: var(--r-sm);
+  border: 1px solid rgba(var(--cyan-rgb), 0.25);
+  background: rgba(var(--cyan-rgb), 0.08);
+  color: var(--text-soft);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.project-bar:hover {
+  color: var(--cyan-bright);
+  border-color: rgba(var(--cyan-rgb), 0.5);
+}
+
+.project-bar.unset {
+  background: transparent;
+  border-style: dashed;
+  opacity: 0.8;
+}
+
+.project-bar .project-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ----- PO question banner (voice-decision relay) ----- */
+.po-question-banner {
+  margin: 0 12px 10px;
+  padding: 10px 12px;
+  border-radius: var(--r-card);
+  border: 1px solid rgba(var(--violet-rgb), 0.4);
+  background: rgba(var(--violet-rgb), 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.po-question-banner-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--violet-soft);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.po-question-block + .po-question-block {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(var(--violet-rgb), 0.16);
+}
+
+.po-question-text {
+  margin: 0 0 6px;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.po-question-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.po-question-option {
+  border: 1px solid rgba(var(--violet-rgb), 0.4);
+  background: transparent;
+  color: var(--violet-soft);
+  border-radius: 7px;
+  padding: 4px 9px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.po-question-option:hover {
+  background: rgba(var(--violet-rgb), 0.15);
+  border-color: rgba(var(--violet-rgb), 0.7);
+}
+
+.po-question-option.picked {
+  background: rgba(var(--violet-rgb), 0.3);
+  border-color: var(--violet-soft);
+  color: var(--text);
+}
+
+.po-question-hint {
+  margin: 0;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+/* ----- PO question banner, floating in the Glass HUD (glass-hud-mode) -----
+   A pending PO question outranks the HUD's minimal-surface philosophy: it is
+   a permanent lit island (not tucked behind a toggle like Comms/Tasks) so it
+   can't go unnoticed while floating over another app. Positioned top-center,
+   clear of the tasks column (top-right) and orb/camera/comms clusters
+   (bottom). */
+.hud-po-question {
+  position: absolute;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 380px;
+  max-width: calc(100vw - 40px);
+  animation: hud-rise 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) 0.16s backwards;
+}
+
+.hud-po-question .po-question-banner {
+  margin: 0;
+  background: linear-gradient(180deg, rgba(26, 36, 57, 0.72), rgba(10, 16, 28, 0.76));
+  border-color: rgba(var(--violet-rgb), 0.5);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    0 12px 40px rgba(0, 0, 0, 0.4);
+}
+
+.hud-po-question .po-question-text,
+.hud-po-question .po-question-hint {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}

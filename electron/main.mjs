@@ -1,18 +1,32 @@
 import electron from "electron";
 import { GoogleGenAI } from "@google/genai";
-import {
-  proposeHermesTask as gatePropose,
-  claimConfirmedProposal,
-  markModelTurnComplete,
-  markUserSpoke,
-  resetHermesGate,
-} from "./hermesGate.mjs";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import os from "node:os";
+import { spawn, execFile, execFileSync } from "node:child_process";
+import crypto from "node:crypto";
+import {
+  poBillingStatus,
+  poQuestionTimeoutMs,
+  getOrCreatePoSession,
+  deliverPoTurn,
+  closePoSession,
+  closeAllPoSessions,
+  setPoSessionModel,
+} from "./po-session.mjs";
+import {
+  studyBillingStatus,
+  getOrCreateStudySession,
+  deliverStudyTurn,
+  closeStudySession,
+  closeAllStudySessions,
+  setStudySessionModel,
+} from "./study-session.mjs";
+import { parseClaudeStreamMessage } from "./claude-stream.mjs";
+import { createRunQueue, RUN_STATUS, EMIT_STATUS, toUpdateEvent } from "./run-queue.mjs";
 
-const { app, BrowserWindow, ipcMain, session, nativeImage, Menu, Tray, screen, globalShortcut } = electron;
+const { app, BrowserWindow, ipcMain, session, nativeImage, Menu, dialog, Tray, screen, globalShortcut } = electron;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
@@ -54,6 +68,7 @@ function loadEnvFile() {
 }
 
 loadEnvFile();
+logPoBillingPathOnce();
 
 let mainWindow = null;
 let liveSession = null;
@@ -61,17 +76,111 @@ let ai = null;
 let liveStatus = { running: false, pid: null };
 let userTranscriptBuffer = "";
 let modelTranscriptBuffer = "";
-const hermesRuns = new Map();
-const pendingHermesAnnouncements = [];
-let welcomeGreeted = false;
-let welcomeFallbackTimer = null;
+// Gemini Live closes each WebSocket connection after ~10 minutes. With
+// sessionResumption enabled the server hands us refresh handles; on close we
+// reconnect with the latest handle so the conversation continues seamlessly
+// instead of dropping Iris back to the "Press W to wake" sleep screen.
+let resumptionHandle = null;
+let userStopped = false;
+let reconnectAttempts = 0;
+let reconnectTimer = null;
+const MAX_RECONNECT_ATTEMPTS = 5;
+const pendingClaudeAnnouncements = [];
+
+// Latest UI-state snapshot pushed by the renderer over iris:ui-context
+// (throttled — see App.tsx). Read by the get_ui_context Gemini tool so voice
+// commands like "open that" or "show history" can resolve without blocking on
+// a renderer round-trip (design.md D1).
 let irisUiContext = {
   tasks: [],
   expandedTaskId: null,
   focusedTaskId: null,
   latestResultTaskId: null,
+  pendingTaskMatches: [],
   showHistory: false,
+  uiMode: "deck",
 };
+
+// Defers the SYSTEM_EVENT_SESSION_START greeting until the renderer's boot
+// animation reports iris:boot-done, so Iris never talks over it (design.md
+// D6). Reset on every non-reconnect wake; a fallback timer greets anyway if
+// boot-done is somehow never signaled.
+const GreetGate = {
+  done: true,
+  timer: null,
+  arm() {
+    this.done = false;
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = setTimeout(() => this.fire(), 8000);
+  },
+  fire() {
+    if (this.done) return;
+    this.done = true;
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
+    sendWelcomeGreeting();
+  },
+};
+
+// At most one PO turn (or DEV run) is ever mid-execution system-wide — Claude
+// runs strictly one at a time (see runQueue below) — so at most one
+// AskUserQuestion can be pending across the whole app. This object owns that
+// single slot and the "raised → answered/expired/abandoned, exactly once"
+// invariant: every settlement path (answer, expire, abandon) funnels through
+// one settle() so nothing can resolve the same question twice or hang it
+// forever — see openspec/changes/architecture-deepening-refactors/design.md
+// decision 2 (an earlier bare-global version already caused exactly that bug).
+const PendingQuestion = {
+  current: null, // { workstreamId, questions, resolve, timer }
+
+  raise(workstreamId, questions, { timeoutMs, role = "po" }) {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => this.expire(), timeoutMs);
+      this.current = { workstreamId, questions, resolve, timer, role };
+      emitPoQuestionEvent(workstreamId, questions, "pending", role);
+    });
+  },
+
+  settle(status, resolvedValue) {
+    if (!this.current) return;
+    const { workstreamId, questions, resolve, timer, role } = this.current;
+    clearTimeout(timer);
+    this.current = null;
+    emitPoQuestionEvent(workstreamId, questions, status, role);
+    resolve(resolvedValue);
+  },
+
+  answer(answers) {
+    this.settle("answered", answers);
+  },
+
+  expire() {
+    if (!this.current) return;
+    emitEvent({
+      type: "log",
+      level: "warn",
+      message: `${AGENT_LABELS[this.current.role] ?? "The role"}'s question went unanswered — applying the recommended option for each.`,
+    });
+    this.settle("timed_out", defaultPoAnswers(this.current.questions));
+  },
+
+  abandon(workstreamId) {
+    if (!this.current || this.current.workstreamId !== workstreamId) return;
+    this.settle("timed_out", defaultPoAnswers(this.current.questions));
+  },
+};
+
+function logPoBillingPathOnce() {
+  const billing = poBillingStatus();
+  if (billing.ok) {
+    console.log("[IRIS][po-auth] PO session will bill against the Claude subscription (CLAUDE_CODE_OAUTH_TOKEN set).");
+  } else {
+    console.warn(
+      "[IRIS][po-auth] No CLAUDE_CODE_OAUTH_TOKEN found. PO turns will fail until you run `claude setup-token` " +
+        "and set CLAUDE_CODE_OAUTH_TOKEN (see .env.example). DEV is unaffected.",
+    );
+  }
+}
 
 function emitToRenderer(channel, payload) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
@@ -79,115 +188,592 @@ function emitToRenderer(channel, payload) {
 }
 
 function emitEvent(event) {
+  // DIAGNOSTIC: surface all events to the dev terminal (the renderer's log
+  // list is not rendered, so fatal/connection errors were otherwise invisible).
+  if (event?.type === "fatal") {
+    console.error("[IRIS][fatal]", event.message || "", event.error || "");
+  } else if (event?.type === "gemini_status" || event?.type === "sidecar_status") {
+    console.log(`[IRIS][${event.type}]`, JSON.stringify(event.status ?? event));
+  }
   emitToRenderer("sidecar:event", { timestamp: Date.now() / 1000, ...event });
 }
 
-// Emit the user's line on its own. Called as soon as Iris starts responding so
-// "You: …" shows up immediately, instead of waiting for the whole turn to end.
-function flushUserTranscript() {
+function flushTranscripts() {
   if (userTranscriptBuffer.trim()) {
     emitEvent({ type: "transcript", speaker: "you", text: userTranscriptBuffer.trim() });
   }
-  userTranscriptBuffer = "";
-}
-
-function flushTranscripts() {
-  flushUserTranscript();
   if (modelTranscriptBuffer.trim()) {
     emitEvent({ type: "transcript", speaker: "gemini", text: modelTranscriptBuffer.trim() });
   }
+  userTranscriptBuffer = "";
   modelTranscriptBuffer = "";
 }
 
-function hermesBaseUrl() {
-  return process.env.HERMES_API_URL || "http://127.0.0.1:8642";
+// Background work is handled by Claude Code running headless (claude -p). Each task
+// spawns one non-interactive claude process streaming NDJSON progress events.
+// Sessions are USER-CONTROLLED: the user picks the active session from the UI
+// (or asks by voice for a new one); Gemini cannot choose or invent session ids.
+// Every task resumes the active session's Claude session (--resume), tasks run
+// strictly one at a time (queued), and sessions survive app restarts.
+const SESSION_STORE = path.join(os.homedir(), ".iris", "claude-sessions.json");
+let sessionStore = { active: null, sessions: [] };
+// One task at a time, globally — see electron/run-queue.mjs. startClaudeRun and
+// announceClaudeCompletion are function declarations defined later in this file;
+// referencing them here is safe because they're hoisted before this line ever runs.
+const runQueue = createRunQueue({
+  startRun: startClaudeRun,
+  emit: emitEvent,
+  onFinalized: (run) =>
+    announceClaudeCompletion({
+      runId: run.run_id,
+      task: run.task,
+      status: run.status,
+      output: String(run.output || "").slice(0, 2500),
+    }),
+});
+
+// Role pipeline: each role is a Claude Code agent installed at
+// ~/.claude/agents/iris-<role>.md and run headless via `claude --agent`.
+// Three roles: PO (BA/PM/PO thinking before code — analysis, PRD, issues) and
+// DEV (implements one issue at a time and verifies it itself) form the build
+// pipeline PO → DEV; STUDY is a standalone learning role (second-brain
+// librarian + fact-checker, stateful SDK like PO — see electron/study-session.mjs
+// and openspec/changes/study-note-role). Moving from PO to DEV is a "gate";
+// context crosses the gate through the OpenSpec change in the project, never a
+// shared Claude conversation. STUDY is not part of that pipeline. Interactive
+// product/learning thinking lives in Iris (voice), not here: the headless DEV
+// receives decided briefs; PO and STUDY may pause to ask by voice.
+const AGENT_ROSTER = ["po", "dev", "study"];
+const AGENT_PREFIX = "iris-";
+const AGENT_LABELS = { po: "PO", dev: "DEV", study: "Study" };
+// Roles removed when the pipeline was collapsed to PO → DEV; their installed
+// agent files are cleaned up on install.
+const RETIRED_AGENTS = ["ba", "test", "devops"];
+
+// Curated model choices for the PO/DEV/STUDY roles — plain Claude keeps the
+// CLI default and is not part of this list. PO defaults to the strongest model
+// for product thinking; DEV defaults to the cheaper/faster one for routine
+// implementation and can be raised to debug a hard issue; STUDY defaults to
+// Sonnet for synthesis and fact-checking.
+const MODEL_CHOICES = [
+  { id: "claude-fable-5", label: "Fable 5" },
+  { id: "claude-sonnet-5", label: "Sonnet 5" },
+  { id: "claude-opus-4-8", label: "Opus 4.8" },
+  { id: "claude-haiku-4-5-20251001", label: "Haiku 4.5" },
+];
+const MODEL_IDS = new Set(MODEL_CHOICES.map((choice) => choice.id));
+const MODEL_DEFAULTS = { po: "claude-fable-5", dev: "claude-sonnet-5", study: "claude-sonnet-5" };
+const MODEL_ENV_VARS = { po: "IRIS_PO_MODEL", dev: "IRIS_DEV_MODEL", study: "IRIS_STUDY_MODEL" };
+
+// Resolution order: the workstream's own choice, then the role's env override,
+// then the hardcoded default. Plain Claude (role === null) never gets a model
+// — it keeps whatever the CLI defaults to.
+function resolveAgentModel(workstream, role) {
+  if (!role) return null;
+  const stored = workstream?.agent_models?.[role];
+  if (stored) return stored;
+  const envVar = MODEL_ENV_VARS[role];
+  const envValue = envVar ? String(process.env[envVar] || "").trim() : "";
+  if (envValue) return envValue;
+  return MODEL_DEFAULTS[role] ?? null;
 }
 
-function hermesHeaders() {
-  return {
-    Authorization: `Bearer ${process.env.API_SERVER_KEY || "iris-local-dev"}`,
-    "Content-Type": "application/json",
+function agentKey(agent) {
+  return agent ?? "default";
+}
+
+// Bring a stored workstream up to the current shape. Older builds stored a
+// single claude_session_id; sessions are now kept per agent so each role owns
+// its own Claude conversation.
+function normalizeWorkstream(entry) {
+  const workstream = { ...entry, cwd: typeof entry.cwd === "string" ? entry.cwd : null };
+  if (!workstream.agent_sessions || typeof workstream.agent_sessions !== "object") {
+    workstream.agent_sessions = {};
+  }
+  if (!workstream.agent_models || typeof workstream.agent_models !== "object") {
+    workstream.agent_models = {};
+  }
+  if (typeof workstream.claude_session_id === "string" && workstream.claude_session_id) {
+    workstream.agent_sessions.default = workstream.claude_session_id;
+  }
+  delete workstream.claude_session_id;
+  if (!AGENT_ROSTER.includes(workstream.active_agent)) workstream.active_agent = null;
+  // null means the last run used plain Claude (the "default" conversation).
+  if (!AGENT_ROSTER.includes(workstream.last_agent_used)) workstream.last_agent_used = null;
+  return workstream;
+}
+
+function loadSessionStore() {
+  try {
+    const data = JSON.parse(fs.readFileSync(SESSION_STORE, "utf8"));
+    if (Array.isArray(data.sessions)) {
+      sessionStore = {
+        active: typeof data.active === "string" ? data.active : null,
+        sessions: data.sessions
+          .filter((entry) => entry && typeof entry.id === "string")
+          .map(normalizeWorkstream),
+      };
+      // One-time cleanup: sessions created before auto-naming carry a
+      // meaningless "Session N" label or an old-format auto label — possibly
+      // named after a folder the session has since moved away from. Rename
+      // them after their current project folder; blank the pending labels
+      // first so they number 01, 02, … in list order.
+      const knownBases = [
+        ...new Set(
+          sessionStore.sessions
+            .map((entry) => (entry.cwd ? path.basename(entry.cwd) : null))
+            .filter(Boolean),
+        ),
+      ];
+      const isLegacyAutoLabel = (label) =>
+        /^Session \d+$/.test(label) ||
+        knownBases.some(
+          (base) =>
+            label === base ||
+            (label.startsWith(`${base} · `) && /^\d+$/.test(label.slice(base.length + 3))),
+        );
+      const pending = sessionStore.sessions.filter(
+        (workstream) =>
+          workstream.cwd &&
+          isLegacyAutoLabel(workstream.label) &&
+          !(isAutoLabel(workstream.label, workstream.cwd) && / · \d{2}$/.test(workstream.label)),
+      );
+      for (const workstream of pending) workstream.label = "";
+      for (const workstream of pending) {
+        workstream.label = projectSessionLabel(workstream.cwd, workstream.id);
+      }
+      persistSessionStore();
+      return;
+    }
+    // Migrate the legacy flat map { irisSessionId: claudeSessionId }.
+    const now = Date.now() / 1000;
+    const sessions = Object.entries(data)
+      .filter(([, value]) => typeof value === "string" && value)
+      .map(([key, value], index) => ({
+        id: crypto.randomUUID(),
+        label: key === "iris-voice" ? `Session ${index + 1}` : key,
+        agent_sessions: { default: value },
+        agent_models: {},
+        active_agent: null,
+        last_agent_used: null,
+        cwd: null,
+        created_at: now,
+        last_used_at: now,
+        last_task: "",
+      }));
+    sessionStore = { active: sessions[0]?.id ?? null, sessions };
+    persistSessionStore();
+  } catch { /* first run or unreadable store */ }
+}
+
+function persistSessionStore() {
+  try {
+    fs.mkdirSync(path.dirname(SESSION_STORE), { recursive: true });
+    fs.writeFileSync(SESSION_STORE, JSON.stringify(sessionStore, null, 2));
+  } catch { /* non-fatal */ }
+}
+
+loadSessionStore();
+
+function findWorkstream(id) {
+  return sessionStore.sessions.find((entry) => entry.id === id) || null;
+}
+
+function sessionsSnapshot() {
+  return { active: sessionStore.active, sessions: sessionStore.sessions };
+}
+
+function emitSessions() {
+  emitEvent({ type: "claude_session", ...sessionsSnapshot() });
+}
+
+// Sessions are named after their project: "<folder> · 01", "· 02", … so the
+// list reads by project instead of by meaningless number. User-given labels
+// are never touched; isAutoLabel() tells the two apart.
+function projectSessionLabel(cwd, excludeId) {
+  if (!cwd) return null;
+  const base = path.basename(cwd);
+  // Next ordinal = highest existing one + 1, so renamed legacy labels
+  // ("base · 2") and fresh padded ones ("base · 02") can never collide.
+  let highest = 0;
+  for (const entry of sessionStore.sessions) {
+    if (entry.id === excludeId) continue;
+    if (entry.label === base) {
+      highest = Math.max(highest, 1);
+    } else if (entry.label.startsWith(`${base} · `)) {
+      const ordinal = Number.parseInt(entry.label.slice(base.length + 3), 10);
+      if (Number.isFinite(ordinal)) highest = Math.max(highest, ordinal);
+    }
+  }
+  return `${base} · ${String(highest + 1).padStart(2, "0")}`;
+}
+
+function isAutoLabel(label, cwd) {
+  if (/^Session \d+$/.test(label)) return true;
+  if (!cwd) return false;
+  const base = path.basename(cwd);
+  return label === base || label.startsWith(`${base} · `);
+}
+
+function createWorkstream(label) {
+  const now = Date.now() / 1000;
+  // A new session keeps working in the current project folder — switching
+  // projects is an explicit action, not a side effect of a fresh session.
+  const inheritedCwd = findWorkstream(sessionStore.active)?.cwd ?? null;
+  const workstream = {
+    id: crypto.randomUUID(),
+    label:
+      String(label || "").trim() ||
+      projectSessionLabel(inheritedCwd) ||
+      `Session ${sessionStore.sessions.length + 1}`,
+    agent_sessions: {},
+    agent_models: {},
+    active_agent: null,
+    last_agent_used: null,
+    cwd: inheritedCwd,
+    created_at: now,
+    last_used_at: now,
+    last_task: "",
   };
+  sessionStore.sessions.push(workstream);
+  const previousActiveId = sessionStore.active;
+  sessionStore.active = workstream.id;
+  persistSessionStore();
+  emitSessions();
+  announceWorkspaceUpdate();
+  // Switching away from a workstream with a resident PO session: nothing will
+  // deliver it another turn until the user switches back, so free the
+  // subprocess now rather than leaving it idle indefinitely.
+  if (previousActiveId && previousActiveId !== workstream.id) {
+    PendingQuestion.abandon(previousActiveId);
+    closePoSession(previousActiveId);
+    closeStudySession(previousActiveId);
+  }
+  return workstream;
+}
+
+function activeWorkstream() {
+  return findWorkstream(sessionStore.active) || createWorkstream();
+}
+
+function selectWorkstream(id) {
+  const workstream = findWorkstream(id);
+  if (!workstream) return { status: "error", error: `Unknown session: ${id}` };
+  const previousActiveId = sessionStore.active;
+  sessionStore.active = workstream.id;
+  persistSessionStore();
+  emitSessions();
+  announceWorkspaceUpdate();
+  if (previousActiveId && previousActiveId !== workstream.id) {
+    PendingQuestion.abandon(previousActiveId);
+    closePoSession(previousActiveId);
+    closeStudySession(previousActiveId);
+  }
+  return { status: "ok", ...sessionsSnapshot() };
+}
+
+function setWorkstreamCwd(id, dir) {
+  const workstream = findWorkstream(id);
+  if (!workstream) return { status: "error", error: `Unknown session: ${id}` };
+  const cwd = String(dir || "").trim() || null;
+  if (cwd && !fs.existsSync(cwd)) {
+    return { status: "error", error: `Folder not found: ${cwd}` };
+  }
+  if (workstream.cwd !== cwd) {
+    const wasAutoNamed = isAutoLabel(workstream.label, workstream.cwd);
+    // Claude Code stores conversations per project directory, so session ids
+    // recorded in the old folder cannot be resumed from the new one. A resident
+    // PO or STUDY session is bound to the OLD cwd, so both must end here too —
+    // otherwise their next turn would run in a directory they no longer match.
+    PendingQuestion.abandon(workstream.id);
+    closePoSession(workstream.id);
+    closeStudySession(workstream.id);
+    workstream.agent_sessions = {};
+    workstream.last_agent_used = null;
+    workstream.cwd = cwd;
+    if (cwd && wasAutoNamed) {
+      workstream.label = projectSessionLabel(cwd, workstream.id);
+    }
+    persistSessionStore();
+    emitSessions();
+    announceWorkspaceUpdate();
+    emitEvent({
+      type: "log",
+      level: "info",
+      message: `Claude session "${workstream.label}" now works in ${cwd || "the default workspace"} (fresh Claude context).`,
+    });
+  }
+  return { status: "ok", ...sessionsSnapshot() };
+}
+
+// Selecting a role never touches stored sessions — each role keeps its own
+// continuous conversation, so flipping the picker back and forth costs nothing.
+function setWorkstreamAgent(id, agent) {
+  const workstream = findWorkstream(id);
+  if (!workstream) return { status: "error", error: `Unknown session: ${id}` };
+  const clean = agent ? String(agent).trim().toLowerCase() : null;
+  if (clean !== null && !AGENT_ROSTER.includes(clean)) {
+    return { status: "error", error: `Unknown agent: ${agent}` };
+  }
+  if (workstream.active_agent !== clean) {
+    workstream.active_agent = clean;
+    persistSessionStore();
+    emitSessions();
+    announceWorkspaceUpdate();
+    announceAgentSelection(workstream);
+  }
+  return { status: "ok", ...sessionsSnapshot() };
+}
+
+// Shared by the UI (agents:set-model IPC) and the Gemini voice tool
+// (set_agent_model) — a single choke point so both paths can never diverge.
+// If PO's model changes while its live session is resident, the change is
+// applied via setModel() on the next run start (see startPoRun), never by
+// closing/resuming the session — that would needlessly drop context.
+function setAgentModel(workstreamId, role, model) {
+  const workstream = findWorkstream(workstreamId);
+  if (!workstream) return { status: "error", error: `Unknown session: ${workstreamId}` };
+  const cleanRole = String(role || "").trim().toLowerCase();
+  if (!AGENT_ROSTER.includes(cleanRole)) {
+    return { status: "error", error: `Model selection is only available for the ${AGENT_ROSTER.map((r) => AGENT_LABELS[r]).join("/")} roles, not "${role}".` };
+  }
+  const cleanModel = String(model || "").trim();
+  if (!MODEL_IDS.has(cleanModel)) {
+    return { status: "error", error: `Unknown model: ${model}` };
+  }
+  if (workstream.agent_models[cleanRole] !== cleanModel) {
+    workstream.agent_models[cleanRole] = cleanModel;
+    persistSessionStore();
+    emitEvent({ type: "agent_model_update", workstream_id: workstream.id, role: cleanRole, model: cleanModel });
+  }
+  return { status: "ok", ...sessionsSnapshot() };
+}
+
+// Single delivery mechanism for every SYSTEM_EVENT_* voice announcement: send
+// immediately if the live session is connected, otherwise buffer (unless the
+// caller opts out) so a state change that lands mid-reconnect is delivered on
+// reconnect instead of silently lost.
+function notifyIris(lines, { bufferIfOffline = true } = {}) {
+  const text = Array.isArray(lines) ? lines.join("\n") : lines;
+  if (liveSession) {
+    liveSession.sendRealtimeInput({ text });
+  } else if (bufferIfOffline) {
+    pendingClaudeAnnouncements.push(text);
+  }
+}
+
+// Switching to a pipeline role is the start of a conversation, not a silent
+// config change: Iris must open it — a fresh PO gets the pm-guide question
+// ("how did this project start?"), a returning role gets a where-were-we.
+function announceAgentSelection(workstream) {
+  const role = workstream.active_agent;
+  if (!role) return; // back to plain Iris — no ceremony needed
+  const existing = workstream.agent_sessions?.[agentKey(role)] || null;
+  const lines = [
+    "SYSTEM_EVENT_AGENT_SELECT",
+    `role: ${AGENT_LABELS[role] ?? role}`,
+    `project: ${workstream.cwd || "the default workspace"}`,
+    `existing_claude_conversation: ${existing ?? "none — the next task creates one"}`,
+    "instructions_to_iris:",
+  ];
+  if (role === "po") {
+    if (existing) {
+      lines.push(
+        "- Proactively speak: you are in Product Owner mode and the PO's ongoing Claude conversation is preserved — nothing needs re-explaining.",
+        "- Ask ONE short question: continue where you left off (pending decisions, the next feature), or start something new?",
+      );
+    } else {
+      lines.push(
+        "- Proactively speak: you are now in Product Owner mode for this project.",
+        "- Ask ONE short question: what do they want to build or change?",
+        "- After they answer, follow PRODUCT OWNER CONTROL from your instructions: send the PO a SHORT control intent that forwards the request and tells it to grill. Do NOT interview them yourself or write a PRD — the PO grills and asks you questions back by voice.",
+      );
+    }
+  } else if (role === "dev") {
+    lines.push(
+      existing
+        ? "- Proactively speak: you are in Developer mode; the DEV's ongoing Claude conversation is preserved."
+        : "- Proactively speak: you are in Developer mode; the next task implements the open OpenSpec change the PO proposed.",
+      "- Tell DEV to implement the remaining tasks of the open change (or name a specific change if the user did). If the PO has not proposed a change yet, say so — DEV needs one first.",
+    );
+  } else if (role === "study") {
+    if (existing) {
+      lines.push(
+        "- Proactively speak: you are in Study mode; the study librarian's ongoing session is preserved.",
+        "- Ask ONE short question: continue the current study sitting, or start on a new source?",
+      );
+    } else {
+      lines.push(
+        "- Proactively speak: you are now in Study mode — you are the note-taking assistant for their second brain.",
+        "- Invite them: open a source and read it, synthesize it out loud, then tell you to save a note or to verify it. You capture and dispatch; the study worker records and fact-checks.",
+      );
+    }
+  }
+  lines.push("- Speak in the user's language. Keep it short and conversational — one or two sentences plus the question.");
+  notifyIris(lines);
+}
+
+async function chooseWorkstreamCwd(id) {
+  const workstream = findWorkstream(id) || activeWorkstream();
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: "Choose the project folder Claude works in",
+    defaultPath: workstream.cwd || os.homedir(),
+    properties: ["openDirectory", "createDirectory"],
+  });
+  if (result.canceled || !result.filePaths[0]) {
+    return { status: "cancelled", ...sessionsSnapshot() };
+  }
+  return setWorkstreamCwd(workstream.id, result.filePaths[0]);
+}
+
+// What Iris (the voice model) is allowed to know about the current workspace:
+// the active session, its project folder, and the active pipeline role.
+function workspaceInfo() {
+  const workstream = findWorkstream(sessionStore.active);
+  const cwd = workstream?.cwd && fs.existsSync(workstream.cwd) ? workstream.cwd : null;
+  return {
+    session_label: workstream?.label ?? null,
+    project_folder: cwd,
+    project_name: cwd ? path.basename(cwd) : null,
+    active_role: workstream?.active_agent ? AGENT_LABELS[workstream.active_agent] : null,
+    note: cwd
+      ? `Claude's file/terminal work for this session happens inside ${cwd}.`
+      : "No project folder is selected for this session — Claude falls back to the default workspace (~/.iris/workspace). The user can pick a folder from the UI.",
+  };
+}
+
+function workspaceContextLine() {
+  const info = workspaceInfo();
+  const folder = info.project_folder
+    ? `project folder ${info.project_folder} (project "${info.project_name}")`
+    : "no project folder selected yet (Claude falls back to the default workspace)";
+  const role = info.active_role ? `, active role: ${info.active_role}` : "";
+  return `Current workspace: session "${info.session_label ?? "none"}", ${folder}${role}.`;
+}
+
+// Keep the live voice session in sync when the user changes workspace state
+// from the UI — otherwise Iris only ever knows what the system prompt said at
+// connect time and cannot answer "which project are we working in?".
+function announceWorkspaceUpdate() {
+  notifyIris([
+    "SYSTEM_EVENT_WORKSPACE_UPDATE",
+    workspaceContextLine(),
+    "instructions_to_iris: silently remember this as the current workspace state. Do NOT speak or respond to this message.",
+  ]);
 }
 
 function userDisplayName() {
   return (process.env.IRIS_USER_NAME || process.env.USER || process.env.USERNAME || "there").trim();
 }
 
-function resolveContextPath(value) {
-  if (!value) return null;
-  let resolved = value.trim();
-  if (!resolved) return null;
-  if (resolved.startsWith("~")) resolved = path.join(os.homedir(), resolved.slice(1));
-  if (!path.isAbsolute(resolved)) resolved = path.join(repoRoot, resolved);
-  return resolved;
-}
-
-// Load the user's personal context (the SOUL.md / USER.md / MEMORY.md pattern):
-// concise, authoritative facts about who the user is and what they want, so Gemini
-// can resolve vague requests and write complete Hermes briefs. Configure explicit
-// files with IRIS_CONTEXT_FILE (comma-separated); otherwise auto-discover the
-// conventional files in ~/.iris and the repo root. Best-effort and capped.
-function loadUserContext() {
-  const MAX_CHARS = 12000;
-  // Single source of truth: Hermes's own learned context (USER.md + MEMORY.md), so
-  // Iris and Hermes stay in sync — no copying, no override files. We do NOT load
-  // Hermes's SOUL.md (that's Hermes's persona and would fight Iris's identity).
-  // Override the location with HERMES_HOME if Hermes lives somewhere else.
-  const hermesHome = process.env.HERMES_HOME
-    ? resolveContextPath(process.env.HERMES_HOME)
-    : path.join(os.homedir(), ".hermes");
-  const candidates = [
-    path.join(hermesHome, "memories", "USER.md"),
-    path.join(hermesHome, "memories", "MEMORY.md"),
+function claudeBinary() {
+  if (process.env.IRIS_CLAUDE_BIN) return process.env.IRIS_CLAUDE_BIN;
+  // A packaged .app does not inherit the shell PATH, so probe common installs.
+  const known = [
+    path.join(os.homedir(), ".local", "bin", "claude"),
+    "/usr/local/bin/claude",
+    "/opt/homebrew/bin/claude",
   ];
-
-  const seen = new Set();
-  const blocks = [];
-  const files = [];
-  for (const file of candidates) {
-    if (!file) continue;
-    let realKey;
-    try {
-      if (!fs.existsSync(file)) continue;
-      realKey = fs.realpathSync(file);
-    } catch {
-      continue;
-    }
-    if (seen.has(realKey)) continue;
-    seen.add(realKey);
-    try {
-      const text = fs.readFileSync(file, "utf8").trim();
-      if (!text) continue;
-      const label = path.join(path.basename(path.dirname(file)), path.basename(file));
-      blocks.push(`# ${label}\n${text}`);
-      files.push(label);
-    } catch {
-      // Skip unreadable context files.
-    }
+  for (const candidate of known) {
+    if (fs.existsSync(candidate)) return candidate;
   }
-
-  let text = blocks.join("\n\n");
-  if (text.length > MAX_CHARS) text = `${text.slice(0, MAX_CHARS)}\n…(user context truncated)`;
-  return { text, files };
+  return "claude";
 }
 
+// Same PATH-probe rationale as claudeBinary(): a packaged .app does not inherit
+// the shell PATH, and the OpenSpec CLI (the SDD engine the pipeline runs on) is
+// typically installed under ~/.local/bin. Override with IRIS_OPENSPEC_BIN.
+function openspecBinary() {
+  if (process.env.IRIS_OPENSPEC_BIN) return process.env.IRIS_OPENSPEC_BIN;
+  const known = [
+    path.join(os.homedir(), ".local", "bin", "openspec"),
+    "/usr/local/bin/openspec",
+    "/opt/homebrew/bin/openspec",
+  ];
+  for (const candidate of known) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return "openspec";
+}
+
+// A `cwd` is OpenSpec-ready once it has an `openspec/` directory (created by
+// `openspec init`). The pipeline uses OpenSpec as its only SDD surface.
+function hasOpenSpec(cwd) {
+  try {
+    return fs.statSync(path.join(cwd, "openspec")).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+// Names of active (non-archived) OpenSpec changes in `cwd` whose tasks.md still
+// has at least one unchecked `- [ ]` task. DEV runs are gated on this being
+// non-empty (see startClaudeRun): no open change with work → no DEV run.
+function openChangesWithTasks(cwd) {
+  const out = [];
+  try {
+    const changesDir = path.join(cwd, "openspec", "changes");
+    for (const entry of fs.readdirSync(changesDir, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.name === "archive" || entry.name.startsWith(".")) continue;
+      const tasksMd = path.join(changesDir, entry.name, "tasks.md");
+      try {
+        if (/^\s*-\s*\[\s\]/m.test(fs.readFileSync(tasksMd, "utf8"))) out.push(entry.name);
+      } catch { /* no tasks.md yet — not an implementable change */ }
+    }
+  } catch { /* no openspec/changes — none */ }
+  return out;
+}
+
+function claudeWorkdir() {
+  const dir = process.env.IRIS_CLAUDE_CWD || path.join(os.homedir(), ".iris", "workspace");
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+async function checkClaudeStatus() {
+  return new Promise((resolve) => {
+    execFile(claudeBinary(), ["--version"], { timeout: 15000 }, (error, stdout) => {
+      if (error) {
+        emitEvent({ type: "claude_status", status: "error", error: error.message });
+        resolve({ reachable: false, error: error.message });
+      } else {
+        const health = { version: String(stdout).trim(), binary: claudeBinary() };
+        emitEvent({ type: "claude_status", status: "ready", detail: health });
+        resolve({ reachable: true, health });
+      }
+    });
+  });
+}
+
+// Combined status for the SetupPanel's Claude section (design.md D3b/D3c):
+// CLI reachability (same probe as checkClaudeStatus) plus the PO subscription
+// billing-path status, read-only — never editable from the UI.
+async function checkClaudeHealth() {
+  const status = await checkClaudeStatus();
+  const billing = poBillingStatus();
+  return {
+    reachable: status.reachable,
+    version: status.health?.version,
+    error: status.error,
+    billingOk: billing.ok,
+    billingError: billing.ok
+      ? undefined
+      : "No CLAUDE_CODE_OAUTH_TOKEN set — PO turns will fail until you run `claude setup-token`.",
+  };
+}
+
+// ===== Onboarding / Settings (design.md D3/D4) =====
 function envFlag(name, fallback = false) {
   const value = process.env[name];
   if (value == null || value === "") return fallback;
   return ["1", "true", "yes", "on"].includes(String(value).trim().toLowerCase());
 }
 
-function appConfig() {
-  return {
-    loadTestData: envFlag("IRIS_LOAD_TEST_DATA", false),
-    sounds: envFlag("IRIS_SOUNDS", true),
-    userName: userDisplayName(),
-    configured: Boolean((process.env.GEMINI_API_KEY || "").trim()),
-  };
+function sleepDelayMs() {
+  const parsed = Number(process.env.IRIS_SLEEP_DELAY_MS);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 3000;
 }
 
-// ===== Onboarding / Settings =====
 const GEMINI_VOICES = [
   "Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Aoede",
   "Leda", "Orus", "Callirrhoe", "Autonoe", "Enceladus", "Iapetus",
@@ -197,19 +783,15 @@ const ALLOWED_CONFIG_KEYS = new Set([
   "GEMINI_API_KEY",
   "GEMINI_LIVE_MODEL",
   "GEMINI_LIVE_VOICE",
-  "HERMES_API_URL",
-  "API_SERVER_KEY",
-  "HERMES_BIN",
-  "HERMES_HOME",
   "IRIS_USER_NAME",
   "IRIS_LOAD_TEST_DATA",
   "IRIS_WAKE_WORD",
-  "IRIS_HERMES_SESSION",
-  "IRIS_SOUNDS",
 ]);
 
+// Repo .env in dev, ~/.iris/.env in a packaged build — the same location
+// loadEnvFile() already reads from, so a save takes effect without restart.
 function userConfigPath() {
-  return path.join(os.homedir(), ".iris", ".env");
+  return app.isPackaged ? path.join(os.homedir(), ".iris", ".env") : path.join(repoRoot, ".env");
 }
 
 function ensureIncludes(list, value) {
@@ -217,29 +799,20 @@ function ensureIncludes(list, value) {
   return list;
 }
 
-// Full settings snapshot for the onboarding/settings UI. Values come from
-// process.env (populated from .env at boot and updated live on save).
+// Full settings snapshot for the SetupPanel. Values come from process.env
+// (populated from .env at boot and updated live on save).
 function getFullConfig() {
   return {
     geminiApiKey: process.env.GEMINI_API_KEY || "",
     geminiModel: process.env.GEMINI_LIVE_MODEL || "models/gemini-3.1-flash-live-preview",
     geminiVoice: process.env.GEMINI_LIVE_VOICE || "Zephyr",
-    hermesUrl: process.env.HERMES_API_URL || "http://127.0.0.1:8642",
-    hermesKey: process.env.API_SERVER_KEY || "iris-local-dev",
-    hermesBin: process.env.HERMES_BIN || "",
-    hermesHome: process.env.HERMES_HOME || "",
-    hermesSession: hermesSessionId(),
     userName: process.env.IRIS_USER_NAME || "",
     loadTestData: envFlag("IRIS_LOAD_TEST_DATA", false),
-    wakeWord: envFlag("IRIS_WAKE_WORD", false),
-    sounds: envFlag("IRIS_SOUNDS", true),
+    wakeWord: envFlag("IRIS_WAKE_WORD", true),
     configured: Boolean((process.env.GEMINI_API_KEY || "").trim()),
     voices: GEMINI_VOICES,
     models: ensureIncludes(GEMINI_LIVE_MODELS, process.env.GEMINI_LIVE_MODEL),
     configPath: userConfigPath(),
-    // Read-only defaults surfaced in the UI (not editable from settings).
-    voiceDuplexMode: process.env.VOICE_DUPLEX_MODE || "speaker",
-    speakerEchoGuard: process.env.SPEAKER_ECHO_GUARD_SECONDS || "0.9",
   };
 }
 
@@ -248,8 +821,9 @@ function serializeConfigValue(value) {
   return /[\s"#]/.test(str) ? `"${str.replace(/"/g, '\\"')}"` : str;
 }
 
-// Merge updates into ~/.iris/.env (preserving comments/other keys) and apply them
-// to process.env so they take effect on the next wake without a full restart.
+// Merge updates into the effective .env (preserving comments/other keys) and
+// apply them to process.env so they take effect on the next wake without a
+// full restart. Never logs secret values (design.md D4).
 function writeUserConfig(rawUpdates) {
   const updates = {};
   for (const [key, value] of Object.entries(rawUpdates || {})) {
@@ -294,21 +868,6 @@ async function testGeminiKey(candidateKey) {
     const pager = await testAi.models.list();
     for await (const _model of pager) break;
     return { ok: true };
-  } catch (error) {
-    return { ok: false, error: error?.message || String(error) };
-  }
-}
-
-async function testHermesConnection(payload = {}) {
-  const base = (payload.url || hermesBaseUrl()).replace(/\/$/, "");
-  const apiKey = payload.key || process.env.API_SERVER_KEY || "iris-local-dev";
-  try {
-    const res = await fetch(`${base}/health`, { headers: { Authorization: `Bearer ${apiKey}` } });
-    const text = await res.text();
-    if (!res.ok) return { ok: false, error: `HTTP ${res.status}: ${text.slice(0, 160)}` };
-    let health = {};
-    try { health = JSON.parse(text); } catch { /* non-JSON health */ }
-    return { ok: true, health };
   } catch (error) {
     return { ok: false, error: error?.message || String(error) };
   }
@@ -369,596 +928,956 @@ async function previewVoice(payload = {}) {
   }
 }
 
-async function hermesRequest(method, pathName, body = undefined) {
-  const response = await fetch(`${hermesBaseUrl()}${pathName}`, {
-    method,
-    headers: hermesHeaders(),
-    body: body === undefined ? undefined : JSON.stringify(body),
+function rememberClaudeSessionId(run, claudeSessionId) {
+  if (!claudeSessionId) return;
+  run.claude_session_id = claudeSessionId;
+  const workstream = findWorkstream(run.workstream_id);
+  if (!workstream) return;
+  const key = agentKey(run.agent);
+  const changed =
+    workstream.agent_sessions[key] !== claudeSessionId ||
+    workstream.last_agent_used !== (run.agent ?? null);
+  workstream.agent_sessions[key] = claudeSessionId;
+  workstream.last_agent_used = run.agent ?? null;
+  workstream.last_used_at = Date.now() / 1000;
+  workstream.last_task = run.task.slice(0, 100);
+  persistSessionStore();
+  if (changed) emitSessions();
+}
+
+function pushActivity(run, line) {
+  const clean = String(line || "").trim();
+  if (!clean) return;
+  run.activity.push(clean.length > 220 ? `${clean.slice(0, 220)}…` : clean);
+  if (run.activity.length > 80) run.activity.splice(0, run.activity.length - 80);
+  emitEvent(toUpdateEvent(run, RUN_STATUS.RUNNING, { output: run.activity.join("\n") }));
+}
+
+// Live per-task step timeline: additive fields on the SAME claude_task_update
+// projection (no new event type), keyed by Claude's own tool_use id so
+// start/end pairing survives duplicate tool names within one run. See
+// openspec/changes/two-hand-gestures-and-orb design.md D2.
+function pushToolStart(run, toolId, toolName, detail) {
+  if (!toolId) return;
+  if (!run.toolStartedAt) run.toolStartedAt = new Map();
+  run.toolStartedAt.set(toolId, Date.now());
+  emitEvent(
+    toUpdateEvent(run, RUN_STATUS.RUNNING, { phase: "tool_start", tool: toolName, tool_id: toolId, detail }),
+  );
+}
+
+function pushToolEnd(run, toolId, isError) {
+  if (!toolId) return;
+  const startedAt = run.toolStartedAt?.get(toolId);
+  const duration = startedAt ? (Date.now() - startedAt) / 1000 : undefined;
+  run.toolStartedAt?.delete(toolId);
+  emitEvent(
+    toUpdateEvent(run, RUN_STATUS.RUNNING, { phase: "tool_end", tool_id: toolId, error: isError, duration }),
+  );
+}
+
+function handleClaudeStreamEvent(run, line) {
+  let event;
+  try {
+    event = JSON.parse(line);
+  } catch {
+    return;
+  }
+  parseClaudeStreamMessage(event, {
+    onSessionId: (sessionId) => rememberClaudeSessionId(run, sessionId),
+    onActivity: (text) => pushActivity(run, text),
+    onToolStart: (toolId, toolName, detail) => pushToolStart(run, toolId, toolName, detail),
+    onToolEnd: (toolId, isError) => pushToolEnd(run, toolId, isError),
+    onResult: (result) => {
+      run.result = result;
+      rememberClaudeSessionId(run, result.session_id);
+    },
   });
-  const text = await response.text();
-  let json = {};
-  if (text) {
+}
+
+function runProjectDir(run) {
+  const projectDir = findWorkstream(run.workstream_id)?.cwd;
+  if (projectDir && fs.existsSync(projectDir)) return projectDir;
+  return claudeWorkdir();
+}
+
+function globalAgentsDir() {
+  return path.join(os.homedir(), ".claude", "agents");
+}
+
+// Roles install globally (~/.claude/agents) so they work in any project, but a
+// project-local .claude/agents copy wins if the user customized one there.
+function installedAgentFile(agent, cwd) {
+  const name = `${AGENT_PREFIX}${agent}.md`;
+  const candidates = [
+    cwd ? path.join(cwd, ".claude", "agents", name) : null,
+    path.join(globalAgentsDir(), name),
+  ];
+  return candidates.find((candidate) => candidate && fs.existsSync(candidate)) || null;
+}
+
+function personasSourceDir() {
+  const candidates = [
+    path.join(repoRoot, "resources", "personas"),
+    process.resourcesPath ? path.join(process.resourcesPath, "personas") : null,
+  ];
+  return candidates.find((candidate) => candidate && fs.existsSync(candidate)) || null;
+}
+
+function installIrisAgents() {
+  const sourceDir = personasSourceDir();
+  if (!sourceDir) {
+    return { status: "error", error: "Persona templates were not found in the app bundle.", installed: [], skipped: [], errors: [] };
+  }
+  const targetDir = globalAgentsDir();
+  const installed = [];
+  const skipped = [];
+  const removed = [];
+  const errors = [];
+  try {
+    fs.mkdirSync(targetDir, { recursive: true });
+  } catch (error) {
+    return { status: "error", error: `Could not create ${targetDir}: ${error.message}`, installed, skipped, errors };
+  }
+  for (const agent of AGENT_ROSTER) {
+    const name = `${AGENT_PREFIX}${agent}.md`;
     try {
-      json = JSON.parse(text);
-    } catch {
-      json = { text };
+      const source = path.join(sourceDir, name);
+      const target = path.join(targetDir, name);
+      if (!fs.existsSync(source)) {
+        errors.push(`${name}: template missing from the app bundle`);
+        continue;
+      }
+      // "Install agents" is an explicit user action: always sync the installed
+      // copy to the bundled template so prompt updates actually land.
+      const content = fs.readFileSync(source, "utf8");
+      if (fs.existsSync(target) && fs.readFileSync(target, "utf8") === content) {
+        skipped.push(name);
+        continue;
+      }
+      fs.writeFileSync(target, content);
+      installed.push(name);
+    } catch (error) {
+      errors.push(`${name}: ${error.message}`);
     }
   }
-  if (!response.ok) {
-    throw new Error(`Hermes ${response.status}: ${text || response.statusText}`);
+  for (const agent of RETIRED_AGENTS) {
+    const name = `${AGENT_PREFIX}${agent}.md`;
+    try {
+      const target = path.join(targetDir, name);
+      if (fs.existsSync(target)) {
+        fs.rmSync(target);
+        removed.push(name);
+      }
+    } catch (error) {
+      errors.push(`${name}: ${error.message}`);
+    }
   }
-  return json;
+  emitEvent({
+    type: "log",
+    level: errors.length ? "warn" : "info",
+    message: `Iris agents: ${installed.length} installed/updated, ${skipped.length} already current, ${removed.length} retired removed in ${targetDir}${errors.length ? ` — errors: ${errors.join("; ")}` : ""}.`,
+  });
+  return { status: errors.length ? "partial" : "ok", installed, skipped, removed, errors };
 }
 
-async function checkHermesStatus() {
+// OpenSpec is the pipeline's only SDD surface (see the po-voice-controller
+// change). A fresh project `cwd` is made OpenSpec-ready with `openspec init`
+// instead of the old hand-written `.scratch/` + CONTEXT.md + docs/agents seeding.
+// The PO agent then produces changes under `openspec/changes/`, and archiving
+// syncs deltas into `openspec/specs/`. No-op if `openspec/` already exists so an
+// existing OpenSpec setup is never disturbed.
+function ensureProjectScaffold(cwd) {
+  if (hasOpenSpec(cwd)) return { created: [] };
   try {
-    const health = await hermesRequest("GET", "/health");
-    emitEvent({ type: "hermes_status", status: "ready", detail: health });
-    return { reachable: true, health };
+    // `openspec init` is interactive by default; `--tools claude` runs it
+    // non-interactively and writes the Claude slash-commands (verified against
+    // openspec 1.6.0). Point it at `cwd` explicitly rather than relying on the
+    // child's own cwd.
+    execFileSync(openspecBinary(), ["init", cwd, "--tools", "claude"], {
+      stdio: "ignore",
+      timeout: 60000,
+    });
+    return { created: hasOpenSpec(cwd) ? ["openspec/"] : [] };
   } catch (error) {
-    emitEvent({ type: "hermes_status", status: "error", error: error.message });
-    return { reachable: false, error: error.message };
+    return { created: [], error: `openspec init failed: ${error.message}` };
   }
 }
 
-// All Iris work lands in ONE pinned Hermes session. Gemini used to be allowed to
-// pass its own session_id, which quietly fragmented history across multiple
-// Hermes chat threads — so the model no longer gets a say.
-function hermesSessionId() {
-  return (process.env.IRIS_HERMES_SESSION || "iris-voice").trim() || "iris-voice";
+function agentDescription(filePath) {
+  try {
+    const head = fs.readFileSync(filePath, "utf8").slice(0, 2000);
+    const match = /^description:\s*(.+)$/m.exec(head);
+    return match ? match[1].trim() : "";
+  } catch {
+    return "";
+  }
 }
 
-async function submitHermesTask({ task, urgency = "normal" }) {
+// The most recently modified active (non-archived) OpenSpec change in `cwd`, or
+// null. This is the "current feature" the pipeline UI reports gates for.
+function latestOpenChange(cwd) {
+  try {
+    const changesDir = path.join(cwd, "openspec", "changes");
+    let best = null;
+    let bestTime = -1;
+    for (const entry of fs.readdirSync(changesDir, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.name === "archive" || entry.name.startsWith(".")) continue;
+      const mtime = fs.statSync(path.join(changesDir, entry.name)).mtimeMs;
+      if (mtime > bestTime) {
+        bestTime = mtime;
+        best = entry.name;
+      }
+    }
+    return best;
+  } catch {
+    return null;
+  }
+}
+
+// Snapshot for the pipeline UI: which roles are installed, and — for the
+// workstream's project folder — which gates have been passed for the current
+// OpenSpec change. PO gate = a proposal exists (the change was proposed); DEV
+// gate = every task in tasks.md is checked (implementation complete).
+function agentsSnapshot(workstreamId) {
+  const workstream = findWorkstream(workstreamId) || findWorkstream(sessionStore.active);
+  const cwd = workstream?.cwd && fs.existsSync(workstream.cwd) ? workstream.cwd : null;
+  const roster = AGENT_ROSTER.map((agent) => {
+    const file = installedAgentFile(agent, cwd);
+    return {
+      key: agent,
+      label: AGENT_LABELS[agent],
+      installed: Boolean(file),
+      description: file ? agentDescription(file) : "",
+      model: resolveAgentModel(workstream, agent),
+    };
+  });
+  const gates = { slug: null, byRole: {} };
+  if (cwd) {
+    gates.slug = latestOpenChange(cwd);
+    if (gates.slug) {
+      const changeDir = path.join(cwd, "openspec", "changes", gates.slug);
+      gates.byRole.po = fs.existsSync(path.join(changeDir, "proposal.md"));
+      // DEV gate passes when tasks.md exists and has no unchecked `- [ ]` left.
+      let devDone = false;
+      try {
+        const tasks = fs.readFileSync(path.join(changeDir, "tasks.md"), "utf8");
+        devDone = !/^\s*-\s*\[\s\]/m.test(tasks);
+      } catch { devDone = false; }
+      gates.byRole.dev = devDone;
+    }
+  }
+  return {
+    roster,
+    installed: roster.every((entry) => entry.installed),
+    hasProject: Boolean(cwd),
+    gates,
+  };
+}
+
+// Shared preamble (cwd, install check, scaffold) then dispatches to the
+// stateful PO module or the stateless DEV module — see design.md D1. This is
+// the `startRun` injected into electron/run-queue.mjs's createRunQueue(), which
+// owns slot acquisition and finalization; both modules finalize through the
+// same runQueue.finalize() path, so they share the single "Claude does one
+// thing at a time" execution slot without either one needing to know the
+// other exists.
+function startClaudeRun(run) {
+  run.cwd = runProjectDir(run);
+
+  // A run submitted for a role must run AS that role — falling back to plain
+  // Claude would silently skip the gate the user thinks they are in.
+  if (run.agent && !installedAgentFile(run.agent, run.cwd)) {
+    runQueue.finalize(
+      run.run_id,
+      RUN_STATUS.FAILED,
+      `The ${AGENT_LABELS[run.agent] ?? run.agent} agent is not installed (missing ${AGENT_PREFIX}${run.agent}.md). Click "Install agents" in the Iris session bar, then retry.`,
+    );
+    return;
+  }
+
+  // STUDY is a standalone learning role, not part of the PO → DEV build
+  // pipeline: it skips OpenSpec scaffolding AND the DEV change-gate entirely,
+  // runs in the workstream cwd (to read the material being studied), and writes
+  // notes to the second-brain vault. Route it before either step ever runs.
+  if (run.agent === "study") {
+    startStudyRun(run);
+    return;
+  }
+
+  // First role run in a fresh project: make it OpenSpec-ready (`openspec init`)
+  // so the PO can propose changes and the DEV can implement their tasks.
+  if (run.agent) {
+    const scaffold = ensureProjectScaffold(run.cwd);
+    if (scaffold.created.length) {
+      emitEvent({
+        type: "log",
+        level: "info",
+        message: `Set up ${run.cwd} for the agent pipeline: ${scaffold.created.join(", ")}.`,
+      });
+    }
+    if (scaffold.error) {
+      emitEvent({ type: "log", level: "warn", message: `Project setup incomplete (${scaffold.error}) — the run continues anyway.` });
+    }
+  }
+
+  // DEV runs only against an open OpenSpec change with unchecked tasks (see the
+  // po-voice-controller change / openspec-native-pipeline spec). No open change
+  // with work means the PO has not proposed yet — fail loudly rather than let
+  // DEV free-code without a spec, and tell the user to have the PO propose first.
+  if (run.agent === "dev" && !openChangesWithTasks(run.cwd).length) {
+    runQueue.finalize(
+      run.run_id,
+      RUN_STATUS.FAILED,
+      "No open OpenSpec change with remaining tasks to implement. Ask the PO to grill and propose a change first (it creates openspec/changes/<name>/tasks.md), then run the DEV.",
+    );
+    return;
+  }
+
+  // Rollback switch for the stateful PO module (design.md Migration Plan):
+  // set IRIS_PO_LIVE_SESSION=0 to fall back to the pre-SDK behavior, where PO
+  // runs exactly like DEV (one-shot `claude -p --resume`, no live session, no
+  // mid-turn questions). No data migration needed — both paths read/write the
+  // same workstream.agent_sessions.po id.
+  if (run.agent === "po" && process.env.IRIS_PO_LIVE_SESSION !== "0") {
+    startPoRun(run);
+    return;
+  }
+  startDevRun(run);
+}
+
+// The stateless module: unchanged one-shot `claude -p` subprocess per run,
+// exactly as before this change — mechanism AND auth (process.env, `/login`).
+function startDevRun(run) {
+  // Model is resolved at run START (not at submit time), so a model change
+  // made while this task was queued still applies — see design.md D4. Only
+  // role runs are model-selectable; plain Claude gets no --model flag and no
+  // --fallback-model is ever set (an unavailable model must fail loudly, not
+  // silently downgrade — see design.md D6).
+  const workstream = findWorkstream(run.workstream_id);
+  run.model = run.agent ? resolveAgentModel(workstream, run.agent) : null;
+
+  // DEV (stateless module): never asks mid-run, always defaults. The PO
+  // (stateful module, see startPoRun) gets the opposite instruction — it is
+  // allowed to pause via AskUserQuestion — so the two must not share this string.
+  const args = [
+    "-p", run.task,
+    "--output-format", "stream-json",
+    "--verbose",
+    "--permission-mode", process.env.IRIS_CLAUDE_PERMISSION_MODE || "bypassPermissions",
+    "--append-system-prompt",
+    "You are invoked from Iris voice. Work autonomously. Do not ask for clarification unless absolutely impossible. Use sensible defaults and report concise final results.",
+  ];
+  if (run.agent) args.push("--agent", `${AGENT_PREFIX}${run.agent}`);
+  if (run.model) args.push("--model", run.model);
+
+  // CONTEXT IS USER-CONTROLLED. Every role (and plain Claude) keeps its OWN
+  // continuous conversation within this workstream: a task always --resumes the
+  // role's stored session, no matter what ran in between. Nothing here ever
+  // drops a session on its own — context resets only when the USER asks for it:
+  // the "New" session button, an explicit voice new-session request, or picking
+  // a different project folder (Claude stores conversations per directory).
+  // Cross-role context still crosses the PO → DEV gate via the handoff files in
+  // the project, never via a shared conversation.
+  const key = agentKey(run.agent);
+  const previousSession = workstream?.agent_sessions?.[key] ?? null;
+  if (previousSession) args.push("--resume", previousSession);
+
+  let child;
+  try {
+    child = spawn(claudeBinary(), args, {
+      cwd: run.cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: process.env,
+    });
+  } catch (error) {
+    runQueue.finalize(run.run_id, RUN_STATUS.ERROR, `Failed to launch claude: ${error.message}`);
+    return;
+  }
+
+  run.status = RUN_STATUS.RUNNING;
+  run.started_at = Date.now() / 1000;
+  run.child = child;
+  // The id the run will resume (if any) — replaced by the live id once
+  // Claude's init event confirms it.
+  run.claude_session_id = previousSession ?? null;
+  emitEvent(toUpdateEvent(run, EMIT_STATUS.STARTED, { urgency: run.urgency }));
+
+  let stdoutBuffer = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk) => {
+    stdoutBuffer += chunk;
+    let newlineIndex;
+    while ((newlineIndex = stdoutBuffer.indexOf("\n")) !== -1) {
+      const line = stdoutBuffer.slice(0, newlineIndex).trim();
+      stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
+      if (line) handleClaudeStreamEvent(run, line);
+    }
+  });
+  child.stderr.on("data", (chunk) => { stderr += chunk; });
+  child.on("error", (error) => {
+    runQueue.finalize(run.run_id, RUN_STATUS.ERROR, `Failed to launch claude: ${error.message}`);
+  });
+  child.on("close", (code) => {
+    if (run.status === RUN_STATUS.CANCELLED) {
+      runQueue.finalize(run.run_id, RUN_STATUS.CANCELLED, "Run was stopped before completion.");
+      return;
+    }
+    const result = run.result;
+    if (code === 0 && result && !result.is_error) {
+      runQueue.finalize(run.run_id, RUN_STATUS.COMPLETED, String(result.result ?? ""));
+    } else {
+      const detail = result?.result || stderr.trim() || `claude exited with code ${code}`;
+      // A dead --resume id (deleted history, moved project) would otherwise fail
+      // every subsequent task; dropping it lets the next run start fresh.
+      if (previousSession && /no conversation|session.*not.*found|unknown session/i.test(String(detail))) {
+        const ws = findWorkstream(run.workstream_id);
+        if (ws?.agent_sessions?.[key] === previousSession) {
+          delete ws.agent_sessions[key];
+          persistSessionStore();
+        }
+      }
+      runQueue.finalize(run.run_id, RUN_STATUS.FAILED, String(detail));
+    }
+  });
+}
+
+// The stateful module: delivers the turn into the workstream's resident Agent
+// SDK session (creating it on the first PO turn), instead of spawning a new
+// process. See electron/po-session.mjs and design.md D1/D2/D3.
+function startPoRun(run) {
+  const workstream = findWorkstream(run.workstream_id);
+  if (!workstream) {
+    runQueue.finalize(run.run_id, RUN_STATUS.ERROR, "Unknown workstream for PO run.");
+    return;
+  }
+  const billing = poBillingStatus();
+  if (!billing.ok) {
+    runQueue.finalize(
+      run.run_id,
+      RUN_STATUS.FAILED,
+      "PO needs a subscription token: run `claude setup-token`, set CLAUDE_CODE_OAUTH_TOKEN (see .env.example), then retry. DEV is unaffected.",
+    );
+    return;
+  }
+
+  // Resolved at run start (not submit time) so a model change made while this
+  // task was queued still applies — see design.md D5.
+  run.model = resolveAgentModel(workstream, "po");
+
+  run.status = RUN_STATUS.RUNNING;
+  run.started_at = Date.now() / 1000;
+  run.claude_session_id = workstream.agent_sessions?.po ?? null;
+  emitEvent(toUpdateEvent(run, EMIT_STATUS.STARTED, { urgency: run.urgency }));
+
+  let state;
+  try {
+    state = getOrCreatePoSession(workstream, {
+      agent: `${AGENT_PREFIX}po`,
+      cwd: run.cwd,
+      resumeSessionId: workstream.agent_sessions?.po ?? null,
+      claudeExecutable: claudeBinary(),
+      onAskUserQuestion: (workstreamId, questions) => askUserQuestionViaVoice(workstreamId, questions, "po"),
+      model: run.model,
+    });
+  } catch (error) {
+    runQueue.finalize(run.run_id, RUN_STATUS.ERROR, `Failed to start PO session: ${error.message}`);
+    return;
+  }
+
+  // The session may already be live on an older model (created before a
+  // queued model change) — switch it via setModel() so the turn about to run
+  // uses the current choice with the session's context fully preserved,
+  // instead of closing/resuming just to change models.
+  const modelReady =
+    state.currentModel === run.model ? Promise.resolve() : setPoSessionModel(state, run.model);
+
+  modelReady
+    .catch((error) => {
+      emitEvent({ type: "log", level: "warn", message: `Could not switch PO's live session model: ${error.message}` });
+    })
+    .then(() =>
+      deliverPoTurn(state, run.task, {
+        onActivity: (line) => pushActivity(run, line),
+        onSessionId: (sessionId) => rememberClaudeSessionId(run, sessionId),
+        onToolStart: (toolId, toolName, detail) => pushToolStart(run, toolId, toolName, detail),
+        onToolEnd: (toolId, isError) => pushToolEnd(run, toolId, isError),
+      }),
+    )
+    .then((result) => runQueue.finalize(run.run_id, result.status, result.output))
+    .catch((error) => runQueue.finalize(run.run_id, RUN_STATUS.ERROR, `PO session error: ${error.message}`));
+}
+
+// The stateful STUDY module: delivers the turn into the workstream's resident
+// STUDY Agent SDK session (creating it on the first STUDY turn), mirroring PO
+// but through the isolated electron/study-session.mjs. STUDY skips OpenSpec
+// entirely (handled in startClaudeRun) and writes to the second-brain vault.
+function startStudyRun(run) {
+  const workstream = findWorkstream(run.workstream_id);
+  if (!workstream) {
+    runQueue.finalize(run.run_id, RUN_STATUS.ERROR, "Unknown workstream for STUDY run.");
+    return;
+  }
+  const billing = studyBillingStatus();
+  if (!billing.ok) {
+    runQueue.finalize(
+      run.run_id,
+      RUN_STATUS.FAILED,
+      "STUDY needs a subscription token: run `claude setup-token`, set CLAUDE_CODE_OAUTH_TOKEN (see .env.example), then retry. DEV is unaffected.",
+    );
+    return;
+  }
+
+  // Resolved at run start (not submit time) so a model change made while this
+  // task was queued still applies — same rule as PO/DEV.
+  run.model = resolveAgentModel(workstream, "study");
+
+  run.status = RUN_STATUS.RUNNING;
+  run.started_at = Date.now() / 1000;
+  run.claude_session_id = workstream.agent_sessions?.study ?? null;
+  emitEvent(toUpdateEvent(run, EMIT_STATUS.STARTED, { urgency: run.urgency }));
+
+  let state;
+  try {
+    state = getOrCreateStudySession(workstream, {
+      agent: `${AGENT_PREFIX}study`,
+      cwd: run.cwd,
+      resumeSessionId: workstream.agent_sessions?.study ?? null,
+      claudeExecutable: claudeBinary(),
+      onAskUserQuestion: (workstreamId, questions) => askUserQuestionViaVoice(workstreamId, questions, "study"),
+      model: run.model,
+    });
+  } catch (error) {
+    runQueue.finalize(run.run_id, RUN_STATUS.ERROR, `Failed to start STUDY session: ${error.message}`);
+    return;
+  }
+
+  // Apply a queued model change to an already-live session without dropping its
+  // context — identical to PO's setModel() path.
+  const modelReady =
+    state.currentModel === run.model ? Promise.resolve() : setStudySessionModel(state, run.model);
+
+  modelReady
+    .catch((error) => {
+      emitEvent({ type: "log", level: "warn", message: `Could not switch STUDY's live session model: ${error.message}` });
+    })
+    .then(() =>
+      deliverStudyTurn(state, run.task, {
+        onActivity: (line) => pushActivity(run, line),
+        onSessionId: (sessionId) => rememberClaudeSessionId(run, sessionId),
+        onToolStart: (toolId, toolName, detail) => pushToolStart(run, toolId, toolName, detail),
+        onToolEnd: (toolId, isError) => pushToolEnd(run, toolId, isError),
+      }),
+    )
+    .then((result) => runQueue.finalize(run.run_id, result.status, result.output))
+    .catch((error) => runQueue.finalize(run.run_id, RUN_STATUS.ERROR, `STUDY session error: ${error.message}`));
+}
+
+async function submitClaudeTask({ task, urgency = "normal", agent } = {}) {
   if (!task || !String(task).trim()) {
     return { status: "error", error: "Task is required." };
   }
   const cleanTask = String(task).trim();
-  emitEvent({ type: "hermes_task_update", status: "starting", task: cleanTask });
-  const run = await hermesRequest("POST", "/v1/runs", {
-    input: cleanTask,
-    session_id: hermesSessionId(),
-    instructions:
-      "You are invoked from Iris voice. Work autonomously. Do not ask Iris for clarification unless absolutely impossible. Use sensible defaults and report concise final results. " +
-      "This session may contain your own earlier runs: when the task repeats or extends previous work in this conversation, REUSE those results, scripts, and resolved IDs instead of re-deriving everything — re-check only what could have changed since.",
-  });
-  const runId = run.run_id || run.id;
-  emitEvent({ type: "hermes_task_update", status: "started", task: cleanTask, run_id: runId, urgency });
-  if (runId) watchHermesRun(runId, cleanTask);
+  const workstream = activeWorkstream();
+  // The role is captured at enqueue time: a queued task keeps the agent it was
+  // submitted under even if the user flips the pipeline picker afterwards.
+  // Gemini may name a role explicitly; anything not in the roster is ignored.
+  const requestedAgent = agent ? String(agent).trim().toLowerCase() : null;
+  if (requestedAgent && !AGENT_ROSTER.includes(requestedAgent)) {
+    emitEvent({ type: "log", level: "warn", message: `Ignoring unknown agent "${agent}" — using the session's active agent.` });
+  }
+  const runAgent = AGENT_ROSTER.includes(requestedAgent) ? requestedAgent : workstream.active_agent ?? null;
+  const agentLabel = runAgent ? `${AGENT_LABELS[runAgent]} agent` : "Claude";
+  const projectFolder = workstream.cwd && fs.existsSync(workstream.cwd) ? workstream.cwd : null;
+  const whereNote = projectFolder
+    ? `Working in project folder ${projectFolder}.`
+    : "No project folder is selected — working in the default workspace.";
+  const runId = crypto.randomUUID();
+  const run = {
+    run_id: runId,
+    workstream_id: workstream.id,
+    session_label: workstream.label,
+    task: cleanTask,
+    urgency,
+    agent: runAgent,
+    status: RUN_STATUS.QUEUED,
+    output: "",
+    activity: [],
+    queued_at: Date.now() / 1000,
+    child: null,
+  };
+
+  const outcome = runQueue.submit(run);
+  if (outcome.status === "queued") {
+    return {
+      status: "queued",
+      run_id: runId,
+      position: outcome.position,
+      project_folder: projectFolder,
+      message: `Claude is still finishing the current task. This one is queued at position ${outcome.position} for the ${agentLabel} and will start automatically. ${whereNote}`,
+    };
+  }
   return {
     status: "started",
     run_id: runId,
-    message: "Hermes has started the task.",
-    instructions:
-      "Say ONE short acknowledgement (e.g. 'On it — Hermes is handling that now.'). The task has only STARTED: you have NO result yet. Do not describe, predict, or summarize any outcome until SYSTEM_EVENT_HERMES_COMPLETE arrives or get_hermes_task_status returns a terminal status.",
+    agent: runAgent,
+    project_folder: projectFolder,
+    message: `${runAgent ? `Claude's ${agentLabel} has started the task.` : "Claude has started the task."} ${whereNote}`,
   };
 }
 
-// Stage a Hermes task without sending it (STEP 1 of the enforced dispatch flow;
-// the state machine lives in hermesGate.mjs).
-function proposeHermesTask({ task, urgency = "normal" }) {
-  const staged = gatePropose(task, urgency);
-  if (!staged.ok) return { status: "error", error: "A complete task brief is required." };
+async function startNewClaudeSession({ label } = {}) {
+  const workstream = createWorkstream(label);
+  emitEvent({ type: "log", level: "info", message: `Claude: started a fresh session (${workstream.label}).` });
   return {
-    status: "proposed",
-    task: staged.task,
-    instructions: [
-      `Now read this brief back to ${userDisplayName()} in one or two short sentences, ask "Should I send this to Hermes?", and END YOUR TURN.`,
-      "Do NOT call submit_hermes_task yet — it will be rejected until they answer.",
-      `If ${userDisplayName()} declines, drop it. If they change any detail, call propose_hermes_task again with the updated brief.`,
-    ].join(" "),
+    status: "ok",
+    message: `Started a fresh Claude session named ${workstream.label}. New tasks begin with a clean slate; tasks already running are not affected.`,
+    session: { id: workstream.id, label: workstream.label },
   };
 }
 
-async function getHermesTaskStatus({ run_id }) {
-  const terminal = new Set(["completed", "failed", "cancelled", "canceled", "error"]);
-  try {
-    const run = await hermesRequest("GET", `/v1/runs/${run_id}`);
-    const status = String(run.status || "unknown");
-    if (terminal.has(status)) {
-      return {
-        status,
-        run_id,
-        output: String(run.output || run.final_response || "").slice(0, 2500),
-        instructions: "The run is finished. Report ONLY what is in `output` above — nothing else.",
-      };
-    }
-    return {
-      status,
-      run_id,
-      instructions:
-        "The run is STILL IN PROGRESS. There is NO result yet. Tell the user it is still working and stop there — do not guess, predict, or invent any findings. You will receive SYSTEM_EVENT_HERMES_COMPLETE when it finishes.",
-    };
-  } catch (error) {
-    return {
-      status: "error",
-      run_id,
-      error: error?.message || String(error),
-      instructions:
-        "You could not fetch the status. Say exactly that. Do not make up a status or a result.",
-    };
-  }
+async function getClaudeTaskStatus({ run_id }) {
+  const serialized = runQueue.serialize(run_id);
+  if (!serialized) return { status: "error", error: `Unknown run: ${run_id}` };
+  return serialized;
 }
 
-// ===== Hermes sessions & history restore =====
-// Hermes semantics: a session is created lazily the first time any client
-// references its id (POST /v1/runs with an unknown session_id creates it), and
-// the Hermes TUI/desktop creates its own `tui`-source sessions per chat. Hermes
-// never spawns extra sessions for API clients on its own — the old strays came
-// from Gemini choosing session ids, which is now pinned to hermesSessionId().
-//
-// The Work Stream mirrors ONE selected session (like picking a chat in Hermes
-// desktop): submissions go to it, and history is restored from it alone — no
-// mix and match. Hermes has no "list runs" endpoint, but it persists the full
-// transcript, so past completed work is rebuilt from user/assistant messages.
-const HERMES_HISTORY_LIMIT = 12;
-
-// Create a brand-new chat thread and let HERMES name it: native `api_…` id and
-// NO custom title — like every chat tool, the thread takes its name from the
-// first prompt sent into it (Hermes exposes that as the session preview).
-async function createHermesSession() {
-  try {
-    const json = await hermesRequest("POST", "/api/sessions", {});
-    const id = json?.session?.id || json?.id;
-    if (!id) throw new Error("Hermes did not return a session id.");
-    return { ok: true, id: String(id) };
-  } catch (error) {
-    return { ok: false, error: error?.message || String(error) };
-  }
+async function stopClaudeTask({ run_id }) {
+  const status = runQueue.stop(run_id);
+  if (status == null) return { status: "error", error: `Unknown run: ${run_id}` };
+  return { status, run_id };
 }
 
-// Iris-born sessions for the main-page session switcher: `api_server` source
-// only (Iris is the API client) — the user's own Hermes TUI/desktop chats are
-// intentionally excluded. Newest first.
-async function listHermesSessions() {
-  try {
-    const json = await hermesRequest("GET", "/api/sessions");
-    const sessions = (Array.isArray(json.data) ? json.data : [])
-      .filter((session) => session?.id && session.source === "api_server")
-      .sort((a, b) => (b.last_active || 0) - (a.last_active || 0))
-      .slice(0, 25)
-      .map((session) => ({
-        id: String(session.id),
-        source: String(session.source || ""),
-        title: typeof session.title === "string" ? session.title : "",
-        preview: typeof session.preview === "string" ? session.preview : "",
-        messageCount: typeof session.message_count === "number" ? session.message_count : 0,
-        lastActive: typeof session.last_active === "number" ? session.last_active * 1000 : 0,
-      }));
-    return { ok: true, sessions };
-  } catch (error) {
-    return { ok: false, error: error?.message || String(error), sessions: [] };
-  }
+// Voice path for switching a role's model — goes through the exact same
+// setAgentModel() choke point the UI popover uses, so the two can never
+// diverge. Always targets the active workstream (Gemini never invents ids).
+function setAgentModelTool({ role, model } = {}) {
+  const workstream = activeWorkstream();
+  const result = setAgentModel(workstream.id, role, model);
+  if (result.status === "error") return result;
+  const label = MODEL_CHOICES.find((choice) => choice.id === model)?.label ?? model;
+  return { status: "ok", message: `${AGENT_LABELS[role] ?? role}'s model is now ${label}.` };
 }
 
-function historyStepsFromToolCalls(message) {
-  const calls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
-  const ts = (typeof message.timestamp === "number" ? message.timestamp : 0) * 1000;
-  const steps = [];
-  calls.forEach((call, index) => {
-    const name = call?.function?.name;
-    if (!name) return;
-    let preview;
-    try {
-      const args = JSON.parse(call.function.arguments || "{}");
-      const firstString = Object.values(args).find(
-        (value) => typeof value === "string" && value.trim(),
-      );
-      if (firstString) preview = String(firstString).slice(0, 80);
-    } catch {
-      // Arguments are best-effort preview material only.
-    }
-    steps.push({ id: `hist-${message.id}-${index}`, tool: name, preview, status: "done", ts });
-  });
-  return steps;
-}
+// Voice-driven UI control (design.md D1/D2, spec voice-ui-control). Single
+// tool with an action enum — mirrors the {action, target_id?, query?} shape
+// forwarded verbatim to the renderer over iris:ui-action. Renamed from
+// upstream's Hermes vocabulary to Claude terms; no other change.
+const UI_ACTIONS = new Set([
+  "open_task",
+  "open_task_by_query",
+  "open_current_claude_result",
+  "open_latest_claude_result",
+  "open_claude_history",
+  "close_reader",
+  "close_history",
+  "close_all_overlays",
+  "show_task_steps",
+  "hide_task_steps",
+]);
 
-async function sessionRunsFromTranscript(sessionId) {
-  const json = await hermesRequest(
-    "GET",
-    `/api/sessions/${encodeURIComponent(sessionId)}/messages`,
-  );
-  const messages = Array.isArray(json.data) ? json.data : [];
-  const runs = [];
-  let current = null;
-
-  for (const message of messages) {
-    const ts = (typeof message.timestamp === "number" ? message.timestamp : 0) * 1000;
-    if (
-      message.role === "user" &&
-      typeof message.content === "string" &&
-      message.content.trim() &&
-      !message.content.startsWith("SYSTEM_EVENT")
-    ) {
-      // Runs that never produced a final response (stopped/interrupted) are
-      // skipped — there is no result to restore for them.
-      if (current?.output) runs.push(current);
-      current = {
-        id: `history:${sessionId}:${message.id}`,
-        task: message.content.trim(),
-        status: "completed",
-        output: "",
-        updatedAt: ts,
-        steps: [],
-      };
-      continue;
-    }
-    if (!current || message.role !== "assistant") continue;
-
-    current.steps = [...current.steps, ...historyStepsFromToolCalls(message)].slice(-40);
-    if (typeof message.content === "string" && message.content.trim()) {
-      current.output = message.content.trim().slice(0, 8000);
-      if (ts) current.updatedAt = ts;
-    }
-  }
-  if (current?.output) runs.push(current);
-  return runs;
-}
-
-async function fetchHermesHistory() {
-  try {
-    const sessionId = hermesSessionId();
-    const runs = await sessionRunsFromTranscript(sessionId).catch(() => []);
-    const tasks = runs.sort((a, b) => b.updatedAt - a.updatedAt).slice(0, HERMES_HISTORY_LIMIT);
-    return { ok: true, tasks, sessions: [sessionId] };
-  } catch (error) {
-    return { ok: false, error: error?.message || String(error) };
-  }
-}
-
-async function stopHermesTask({ run_id }) {
-  return hermesRequest("POST", `/v1/runs/${run_id}/stop`, {});
-}
-
-async function approveHermesAction({ run_id, choice }) {
-  return hermesRequest("POST", `/v1/runs/${run_id}/approval`, { choice });
-}
-
-function getIrisUiContext() {
+function getUiContext() {
   return irisUiContext;
 }
 
-function controlIrisUi({ action, target_id = undefined, query = undefined }) {
-  const allowed = new Set([
-    "open_latest_hermes_result",
-    "open_current_hermes_result",
-    "open_task",
-    "open_task_by_query",
-    "open_hermes_history",
-    "close_reader",
-    "close_history",
-    "close_all_overlays",
-    "show_task_steps",
-    "hide_task_steps",
-  ]);
-  if (!allowed.has(action)) {
+function controlUi({ action, target_id = undefined, query = undefined } = {}) {
+  if (!UI_ACTIONS.has(action)) {
     return { status: "error", error: `Unknown UI action: ${action}` };
   }
   emitToRenderer("iris:ui-action", { action, target_id, query });
   return { status: "sent", action, target_id, query };
 }
 
-async function executeTool(name, args = {}) {
+async function executeClaudeTool(name, args = {}) {
   switch (name) {
-    case "check_hermes_status":
-      return checkHermesStatus();
-    case "propose_hermes_task":
-      return proposeHermesTask(args);
-    case "submit_hermes_task": {
-      const claim = claimConfirmedProposal();
-      if (!claim.ok) {
-        return claim.reason === "no_proposal"
-          ? {
-              status: "blocked",
-              error:
-                "REJECTED: no proposed task. First call propose_hermes_task with the complete brief, read it back to the user, and wait for their explicit yes.",
-            }
-          : {
-              status: "blocked",
-              error: `REJECTED: ${userDisplayName()} has not confirmed yet. Read the proposed brief aloud, ask "Should I send this to Hermes?", END your turn, and submit only after they explicitly say yes.`,
-            };
-      }
-      // Submit the confirmed brief; a task arg is only honored as a refinement
-      // of the proposal (e.g. the user corrected a detail while confirming).
-      return submitHermesTask({
-        task: typeof args.task === "string" && args.task.trim() ? args.task : claim.proposal.task,
-        urgency: args.urgency || claim.proposal.urgency,
-      });
-    }
-    case "get_hermes_task_status":
-      return getHermesTaskStatus(args);
-    case "stop_hermes_task":
-      return stopHermesTask(args);
-    case "approve_hermes_action":
-      return approveHermesAction(args);
-    case "get_iris_ui_context":
-      return getIrisUiContext();
+    case "check_claude_status":
+      return checkClaudeStatus();
+    case "submit_claude_task":
+      return submitClaudeTask(args);
+    case "get_claude_task_status":
+      return getClaudeTaskStatus(args);
+    case "stop_claude_task":
+      return stopClaudeTask(args);
+    case "start_new_claude_session":
+      return startNewClaudeSession(args);
+    case "get_workspace_info":
+      return workspaceInfo();
+    case "answer_po_question":
+      return resolvePendingPoQuestion(args.answers);
+    case "set_agent_model":
+      return setAgentModelTool(args);
+    case "get_ui_context":
+      return getUiContext();
+    case "control_ui":
+      return controlUi(args);
     case "go_to_sleep":
       // Give the goodbye a moment to play before the renderer tears down
       // audio (its stop() flushes playback immediately).
-      setTimeout(() => emitToRenderer("iris:sleep", {}), 3000);
+      setTimeout(() => emitToRenderer("iris:sleep", {}), sleepDelayMs());
       return {
         status: "sleeping",
-        instructions:
-          "Say a one-line goodbye right now (nothing else, no new topics). Iris goes to sleep in about 3 seconds.",
+        instructions: `Say a one-line goodbye right now (nothing else, no new topics). Iris goes to sleep in about ${Math.round(sleepDelayMs() / 1000)} seconds.`,
       };
-    case "control_iris_ui":
-      return controlIrisUi(args);
     default:
       return { status: "error", error: `Unknown tool: ${name}` };
   }
 }
 
-// Forward only the granular events the Work Stream surfaces. The top-level API
-// error block has no `event` field, so checking for it also filters errors out.
-function forwardHermesEvent(runId, task, parsed) {
-  const kind = typeof parsed.event === "string" ? parsed.event : "";
-  if (!kind) return;
-  const relevant = new Set([
-    "tool.started",
-    "tool.completed",
-    "message.delta",
-    "reasoning.available",
-    "approval.requested",
-    "approval.required",
-    "approval.resolved",
-    "run.completed",
-    "run.failed",
-  ]);
-  if (!relevant.has(kind)) return;
-  emitEvent({
-    type: "hermes_task_event",
-    run_id: runId,
-    task,
-    event: kind,
-    ts: typeof parsed.timestamp === "number" ? parsed.timestamp : Date.now() / 1000,
-    tool: typeof parsed.tool === "string" ? parsed.tool : undefined,
-    preview: typeof parsed.preview === "string" ? parsed.preview : undefined,
-    duration: typeof parsed.duration === "number" ? parsed.duration : undefined,
-    is_error: parsed.error === true,
-    delta: typeof parsed.delta === "string" ? parsed.delta : undefined,
-    text: typeof parsed.text === "string" ? parsed.text : undefined,
-  });
-}
-
-// Connect once to the one-shot SSE event stream and stream granular activity
-// (tool use, browser/file actions, partial notes) to the renderer. This is
-// additive telemetry only; run status/output/completion stay driven by the
-// polling loop in watchHermesRun, so this can never regress the core flow.
-async function streamHermesEvents(runId, task) {
-  try {
-    const response = await fetch(`${hermesBaseUrl()}/v1/runs/${runId}/events`, {
-      method: "GET",
-      headers: hermesHeaders(),
-    });
-    if (!response.ok || !response.body) return;
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-
-    while (hermesRuns.has(runId)) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-
-      let sep;
-      while ((sep = buffer.indexOf("\n\n")) !== -1) {
-        const block = buffer.slice(0, sep);
-        buffer = buffer.slice(sep + 2);
-        const dataLine = block.split("\n").find((line) => line.startsWith("data:"));
-        if (!dataLine) continue;
-        const payload = dataLine.slice(5).trim();
-        if (!payload) continue;
-        try {
-          forwardHermesEvent(runId, task, JSON.parse(payload));
-        } catch {
-          // Skip malformed SSE chunks.
-        }
-      }
-    }
-    try {
-      await reader.cancel();
-    } catch {
-      // Best-effort cleanup.
-    }
-  } catch {
-    // Event stream is best-effort; the polling loop remains the source of truth.
+// The PO's recommended choice for each question, used both as the AskUserQuestion
+// convention (first option = recommended) and as the safe default on timeout/reset.
+function defaultPoAnswers(questions) {
+  const answers = {};
+  for (const q of questions) {
+    answers[q.question] = q.options?.[0]?.label ?? "";
   }
+  return answers;
 }
 
-async function watchHermesRun(runId, task) {
-  if (hermesRuns.has(runId)) return;
-  hermesRuns.set(runId, true);
-  // Fire-and-forget granular activity stream alongside the status poll below.
-  streamHermesEvents(runId, task);
-  const terminal = new Set(["completed", "failed", "cancelled", "canceled", "error"]);
-  let lastStatus = "";
-  try {
-    while (hermesRuns.has(runId)) {
-      const run = await hermesRequest("GET", `/v1/runs/${runId}`);
-      const status = String(run.status || "unknown");
-      if (status !== lastStatus) {
-        emitEvent({ type: "hermes_task_update", status, run_id: runId, task, run });
-        lastStatus = status;
-      }
-      if (terminal.has(status)) {
-        const output = run.output || run.final_response || "";
-        emitEvent({ type: "hermes_task_update", status, run_id: runId, task, output });
-        announceHermesCompletion({
-          runId,
-          task,
-          status,
-          output: String(output || "").slice(0, 2500),
-        });
-        break;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-    }
-  } catch (error) {
-    emitEvent({ type: "hermes_task_update", status: "error", run_id: runId, task, error: error.message });
-  } finally {
-    hermesRuns.delete(runId);
+// The `role` (po | study) rides along so the UI can attribute the question; the
+// event type stays `po_question` for renderer/IPC back-compat.
+function emitPoQuestionEvent(workstreamId, questions, status, role = "po") {
+  emitEvent({ type: "po_question", workstream_id: workstreamId, status, questions, role });
+}
+
+// canUseTool's onAskUserQuestion callback (electron/po-session.mjs and
+// study-session.mjs): pauses the asking role's live turn, relays the question(s)
+// to Gemini voice, and resolves once an answer arrives — via the Gemini tool,
+// the UI IPC channel, or PendingQuestion's own timeout fallback. Only one run
+// executes globally at a time, so at most one question is ever pending and PO
+// and STUDY safely share this single relay. See the voice-decision-relay spec.
+function askUserQuestionViaVoice(workstreamId, questions, role = "po") {
+  const promise = PendingQuestion.raise(workstreamId, questions, { timeoutMs: poQuestionTimeoutMs(), role });
+  const roleLabel = AGENT_LABELS[role] ?? "The active role";
+
+  const lines = [
+    "SYSTEM_EVENT_PO_QUESTION",
+    `asking_role: ${roleLabel}`,
+    "instructions_to_iris:",
+    `- The ${roleLabel} has paused to ask you something. Read each question aloud with its options, in order, and collect the user's answer for each.`,
+    "- Once you have every answer, call answer_po_question with one entry per question (question text verbatim, and the option label the user chose).",
+    "- If asked for your recommendation, suggest the first-listed option, but submit whatever the user actually picks.",
+    "questions:",
+    ...questions.map(
+      (q, i) =>
+        `${i + 1}. ${q.question}\n${(q.options || [])
+          .map((opt, j) => `   ${j + 1}) ${opt.label} — ${opt.description}`)
+          .join("\n")}`,
+    ),
+  ].join("\n");
+  notifyIris(lines);
+
+  return promise;
+}
+
+// Text the user typed/pasted instead of saying it aloud (a link, a note) —
+// voice can't reliably dictate this. Delivered as one more SYSTEM_EVENT_* so
+// Gemini reacts to it exactly like everything else in the live conversation.
+// Deliberately never buffered: the composer UI disables itself while asleep,
+// so there is nothing worth redelivering on reconnect (design.md decision 6).
+function sendContextSupplement(text) {
+  const clean = String(text || "").trim();
+  if (!clean) return { status: "error", error: "Empty supplement text." };
+  const lines = [
+    "SYSTEM_EVENT_CONTEXT_SUPPLEMENT",
+    `supplement: ${clean}`,
+    "instructions_to_iris:",
+    "- The user just typed/pasted this instead of saying it aloud (voice can't reliably convey links or precise text).",
+    "- CRITICAL: be decisive — do not ask for confirmation first.",
+    "- Immediately call submit_claude_task with a brief that combines the recent conversation with this supplement (e.g. research the linked repo for a feature relevant to what you were just discussing, and report whether/how it applies here).",
+    "- Do not set the agent field — let it route to whichever role is already active for this session.",
+  ].join("\n");
+  notifyIris(lines, { bufferIfOffline: false });
+  return { status: "ok" };
+}
+
+// Voice (Gemini tool) and the UI (IPC) both call this; whichever answers first
+// wins — the second call is a no-op since PendingQuestion is already settled.
+function resolvePendingPoQuestion(answers) {
+  if (!PendingQuestion.current) return { status: "error", error: "No PO question is pending." };
+  const map = {};
+  for (const entry of Array.isArray(answers) ? answers : []) {
+    if (entry?.question) map[entry.question] = entry.choice ?? "";
   }
+  PendingQuestion.answer(map);
+  return { status: "ok" };
 }
 
-function announceHermesCompletion({ runId, task, status, output }) {
+function announceClaudeCompletion({ runId, task, status, output }) {
   const eventText = [
-    "SYSTEM_EVENT_HERMES_COMPLETE",
+    "SYSTEM_EVENT_CLAUDE_COMPLETE",
     `run_id: ${runId}`,
     `status: ${status}`,
     `original_task: ${task}`,
     "instructions_to_iris:",
-    `- Proactively tell ${userDisplayName()} Hermes has returned.`,
-    "- If another conversation is in progress, politely pause it with a short bridge like: Quick update, Hermes is back with a result.",
+    `- Proactively tell ${userDisplayName()} Claude has returned.`,
+    "- If another conversation is in progress, politely pause it with a short bridge like: Quick update, Claude is back with a result.",
     "- Give a concise spoken summary in 1-3 sentences.",
+    "- If the result contains a 'Decisions needed' section, read each decision aloud with its numbered options and the recommendation, collect the user's choice, then submit a follow-up task to the SAME role stating the chosen options.",
     "- Ask whether he wants to go through the details before continuing the current conversation.",
-    "- If (and ONLY if) this update interrupted a discussion that was actively in progress, return to it afterwards by naming the topic yourself (e.g. \"Anyway, back to <topic> — you were saying...\"). If there was no ongoing discussion, or it had naturally finished, just end after the summary. NEVER ask \"what were we discussing\" — if you cannot name the interrupted topic yourself, there is nothing to resume.",
-    "- Do not say you personally did the work; Hermes did.",
-    "hermes_result:",
-    output || "(Hermes returned no text output.)",
+    "- Do not say you personally did the work; Claude did.",
+    "claude_result:",
+    output || "(Claude returned no text output.)",
   ].join("\n");
 
   emitEvent({
-    type: "hermes_completion",
+    type: "claude_completion",
     run_id: runId,
     task,
     status,
     output,
   });
 
-  if (liveSession) {
-    liveSession.sendRealtimeInput({ text: eventText });
-  } else {
-    pendingHermesAnnouncements.push(eventText);
-  }
+  notifyIris(eventText);
 }
 
-function buildHermesTools() {
+function buildClaudeTools() {
   return [
     {
       functionDeclarations: [
         {
-          name: "check_hermes_status",
-          description: "Check if Hermes local API is reachable. Use this for questions about Hermes status.",
+          name: "check_claude_status",
+          description: "Check if the Claude Code CLI is installed and ready. Use this for questions about Claude status.",
           parameters: { type: "object", properties: {} },
         },
         {
-          name: "propose_hermes_task",
+          name: "submit_claude_task",
           description:
-            "STEP 1 of dispatching work to Hermes (deals, shopping, research, coding, file work, terminal tasks, summaries, automations — anything requiring tools). Stages the task brief WITHOUT sending it. After calling this, read the brief back to the user, ask for confirmation, and end your turn. IMPORTANT: Hermes cannot see this voice conversation — the 'task' string is the ONLY context it gets, so write a complete, self-contained brief for NEW tasks. For re-runs/follow-ups of a task already dispatched this session, write a SHORT continuation brief instead that tells Hermes to reuse its earlier work (it shares the session transcript) — this runs much faster.",
+            "Immediately hand actionable work to Claude. Invoke for deals, shopping, research, coding, file work, terminal tasks, summaries, automations, or anything requiring tools. Do not ask the user clarifying questions first. Claude works in ONE continuous session: it remembers previous tasks in the session, and runs tasks one at a time — if it is busy, the new task is queued and starts automatically (the response will say 'queued'). IMPORTANT: Claude cannot hear this voice conversation — the 'task' string is the only new information it gets, so write a complete brief with every concrete detail.",
           parameters: {
             type: "object",
             properties: {
               task: {
                 type: "string",
                 description:
-                  "A clear, self-contained brief of WHAT the user wants: the goal, every concrete detail they actually said (names, numbers, dates, budgets, constraints), and the expected output/format. Do NOT include implementation details — no tools, file paths, Notion pages/databases, scripts, or workflow internals. Hermes's own skills and memory cover the how.",
+                  "The task for Claude in clear English, shaped to the role per the BRIEF WRITING rules in your instructions. For the PO role: a SHORT control intent (start-and-grill / propose the change / are there tasks left? / archive) plus the concrete details the user gave — never a PRD. For a plain task or the DEV role: a COMPLETE brief with the goal, every concrete detail the user gave (names, numbers, URLs, dates, budgets, constraints), sensible defaults, and the expected output; DEV is told to implement the open OpenSpec change. Claude remembers earlier tasks in this session, so follow-ups may reference previous work, but never omit new details.",
               },
               urgency: { type: "string", description: "low, normal, or high." },
+              agent: {
+                type: "string",
+                description:
+                  "Optional role to run the task as: 'po' (Product Owner — grills, then proposes an OpenSpec change), 'dev' (Developer — implements the open change's remaining tasks and verifies), or 'study' (Study librarian — records the user's synthesized note into their second brain, or fact-checks a note). ONLY set this when the user explicitly names a role (e.g. 'have the PO grill this…', 'cho dev làm…', 'save this to my brain…'). Otherwise OMIT it — the session's active agent from the UI is used.",
+              },
             },
             required: ["task"],
           },
         },
         {
-          name: "submit_hermes_task",
+          name: "get_workspace_info",
           description:
-            "STEP 2: actually send the proposed task to Hermes. Only call this AFTER propose_hermes_task AND after the user explicitly said yes in their own turn. Calls made without a confirmed proposal are automatically REJECTED by the system.",
+            "Return the current workspace state: the active Claude session, the project folder it works in, and the active pipeline role. ALWAYS call this (never guess) when the user asks which project/folder/directory Claude is working in, what session or role is active, or before describing where work will happen.",
+          parameters: { type: "object", properties: {} },
+        },
+        {
+          name: "get_claude_task_status",
+          description: "Fetch the latest status for a Claude run.",
+          parameters: {
+            type: "object",
+            properties: { run_id: { type: "string" } },
+            required: ["run_id"],
+          },
+        },
+        {
+          name: "stop_claude_task",
+          description: "Stop an active or queued Claude run.",
+          parameters: {
+            type: "object",
+            properties: { run_id: { type: "string" } },
+            required: ["run_id"],
+          },
+        },
+        {
+          name: "start_new_claude_session",
+          description:
+            "Start a fresh Claude session with a clean slate (previous task context is forgotten). Call this ONLY when the user explicitly asks for it — e.g. says 'new session', 'phien moi', 'start over', 'iris new session'. Never call it on your own initiative. The user can also switch sessions from the UI.",
           parameters: {
             type: "object",
             properties: {
-              task: {
-                type: "string",
-                description:
-                  "Optional: only pass this to refine the proposed brief with corrections the user gave while confirming. Omit it to send the proposal as staged.",
+              label: { type: "string", description: "Optional short name for the new session, if the user gave one." },
+            },
+          },
+        },
+        {
+          name: "answer_po_question",
+          description:
+            "Answer the pending question(s) from a live role (Product Owner or Study librarian — see asking_role) after SYSTEM_EVENT_PO_QUESTION. That role's live session is paused waiting for this — call it only once you have collected every answer by voice, never before.",
+          parameters: {
+            type: "object",
+            properties: {
+              answers: {
+                type: "array",
+                description: "One entry per question from the event, in any order.",
+                items: {
+                  type: "object",
+                  properties: {
+                    question: { type: "string", description: "The exact question text, copied verbatim from the event." },
+                    choice: { type: "string", description: "The option label the user chose for this question." },
+                  },
+                  required: ["question", "choice"],
+                },
               },
-              urgency: { type: "string", description: "low, normal, or high." },
             },
+            required: ["answers"],
           },
         },
         {
-          name: "get_hermes_task_status",
+          name: "set_agent_model",
           description:
-            "Fetch the REAL status of a Hermes run. You MUST call this before saying anything about how a run is going — never guess or answer from memory. If it returns a non-terminal status, the result does not exist yet.",
-          parameters: {
-            type: "object",
-            properties: { run_id: { type: "string" } },
-            required: ["run_id"],
-          },
-        },
-        {
-          name: "stop_hermes_task",
-          description: "Stop an active Hermes run.",
-          parameters: {
-            type: "object",
-            properties: { run_id: { type: "string" } },
-            required: ["run_id"],
-          },
-        },
-        {
-          name: "approve_hermes_action",
-          description: "Resolve a Hermes approval request.",
+            "Change which Claude model a role (PO, DEV, or STUDY) runs on for the active session — e.g. switch DEV to a stronger model to debug a hard problem, then switch it back afterwards. Only call this when the user EXPLICITLY asks to change or switch a role's model; never on your own initiative.",
           parameters: {
             type: "object",
             properties: {
-              run_id: { type: "string" },
-              choice: { type: "string", description: "once, session, always, or deny" },
+              role: { type: "string", description: "'po', 'dev', or 'study'." },
+              model: {
+                type: "string",
+                description: `One of: ${MODEL_CHOICES.map((choice) => `${choice.id} (${choice.label})`).join(", ")}.`,
+              },
             },
-            required: ["run_id", "choice"],
+            required: ["role", "model"],
           },
         },
-      ],
-    },
-  ];
-}
-
-function buildIrisUiTools() {
-  return [
-    {
-      functionDeclarations: [
         {
-          name: "get_iris_ui_context",
+          name: "get_ui_context",
           description:
-            "Get the current Iris UI context: visible Hermes tasks, latest result task, focused task, expanded task, and whether history is open. Use before UI-only voice commands like 'open that', 'show latest result', 'close it', or 'show history'.",
+            "Get the current Iris UI context: visible Claude tasks, latest result task, focused task, expanded task, whether history is open, any pending task-chooser candidates, and whether the Glass HUD overlay is active (uiMode). Use before UI-only voice commands like 'open that', 'show latest result', 'close it', or 'show history'.",
           parameters: { type: "object", properties: {} },
         },
         {
-          name: "go_to_sleep",
+          name: "control_ui",
           description:
-            "Put Iris to sleep (end this voice session). Call ONLY when the user explicitly asks — e.g. 'go to sleep', 'sleep now', 'goodnight Iris', 'that's all for today'. Say a very short goodbye BEFORE calling this; the session ends about 3 seconds later. The wake word keeps working, so they can wake Iris again by voice.",
-          parameters: { type: "object", properties: {} },
-        },
-        {
-          name: "control_iris_ui",
-          description:
-            "Control the Iris UI directly for UI-only requests. Use this instead of Hermes when the user asks to open/show/close the current result, latest Hermes result, task history, or overlays.",
+            "Control the Iris UI directly for UI-only requests — open/close/show a Claude task result, task history, or overlays. Use this instead of submit_claude_task when the request is purely about the interface, not new work.",
           parameters: {
             type: "object",
             properties: {
               action: {
                 type: "string",
                 description:
-                  "One of: open_latest_hermes_result, open_current_hermes_result, open_task, open_task_by_query, open_hermes_history, close_reader, close_history, close_all_overlays, show_task_steps, hide_task_steps. Use show_task_steps/hide_task_steps to expand or collapse the tool-step timeline for a Hermes task; when the user names a specific card, pass its words in `query` (or its exact id in `target_id`). With no target, steps default to the card the user is currently viewing (open reader / focused), then the running task.",
+                  "One of: open_task, open_task_by_query, open_current_claude_result, open_latest_claude_result, open_claude_history, close_reader, close_history, close_all_overlays, show_task_steps, hide_task_steps. Use show_task_steps/hide_task_steps to expand or collapse the tool-step timeline for a Claude task; when the user names a specific card, pass its words in `query` (or its exact id in `target_id`). With no target, steps default to the card the user is currently viewing (open reader / focused), then the running task.",
               },
               target_id: {
                 type: "string",
-                description:
-                  "Optional Hermes task id for open_task, show_task_steps, or hide_task_steps.",
+                description: "Optional exact Claude task id for open_task, show_task_steps, or hide_task_steps.",
               },
               query: {
                 type: "string",
                 description:
-                  "Loose words from the user identifying a card, usable with open_task_by_query, show_task_steps, and hide_task_steps — e.g. 'failed one', 'Hermes API', 'the deals card', 'second one'. The renderer fuzzy-matches this against visible task titles/status. For open_task_by_query, close matches show a chooser overlay instead of guessing.",
+                  "Loose words from the user identifying a card, usable with open_task_by_query, show_task_steps, and hide_task_steps — e.g. 'failed one', 'the deals card', 'second one'. The renderer fuzzy-matches this against visible task titles/status. For open_task_by_query, close matches show a chooser overlay instead of guessing.",
               },
             },
             required: ["action"],
           },
+        },
+        {
+          name: "go_to_sleep",
+          description:
+            "Put Iris to sleep (end this voice session). Call ONLY when the user explicitly asks — e.g. 'go to sleep', 'sleep now', 'goodnight Iris', 'that's all for today'. Say a very short goodbye BEFORE calling this; the session ends a few seconds later. The wake word (if enabled) keeps working, so they can wake Iris again by voice.",
+          parameters: { type: "object", properties: {} },
         },
       ],
     },
   ];
 }
 
-function buildLiveConfig() {
+function buildLiveConfig(resumeHandle) {
   return {
     responseModalities: ["AUDIO"],
     mediaResolution: "MEDIA_RESOLUTION_MEDIUM",
@@ -969,6 +1888,8 @@ function buildLiveConfig() {
         },
       },
     },
+    // Empty object still opts in to receiving resumption handles.
+    sessionResumption: resumeHandle ? { handle: resumeHandle } : {},
     contextWindowCompression: {
       triggerTokens: 104857,
       slidingWindow: { targetTokens: 52428 },
@@ -976,93 +1897,72 @@ function buildLiveConfig() {
     inputAudioTranscription: {},
     outputAudioTranscription: {},
     tools: [
-      { googleSearch: {} },
-      ...buildHermesTools(),
-      ...buildIrisUiTools(),
+      // Google Search grounding is a BILLED feature. On a free-tier Gemini key the
+      // Live API closes the session immediately with a 1011 "exceeded your current
+      // quota" error the moment this tool is present. Enable only with billing on:
+      //   IRIS_ENABLE_GOOGLE_SEARCH=true
+      ...(process.env.IRIS_ENABLE_GOOGLE_SEARCH === "true" ? [{ googleSearch: {} }] : []),
+      ...buildClaudeTools(),
     ],
     systemInstruction: {
       parts: [
         {
           text: [
             `You are Iris, the realtime voice front-end for ${userDisplayName()}.`,
-            "Hermes is your worker brain for tools, terminal, files, web, deals, coding, research, and automations.",
-            "You also have built-in Google Search. Use Google Search directly for quick current facts, simple web lookups, and lightweight questions that do not need Hermes to do work.",
-            `CRITICAL Hermes dispatch flow — two steps, enforced by the system: (1) call propose_hermes_task with the complete brief, then read it back to ${userDisplayName()} in one or two sentences, ask "Should I send this to Hermes?", and END your turn. (2) Only after ${userDisplayName()} explicitly answers yes ("yes", "go", "do it", "send it") in their OWN turn, call submit_hermes_task. Any submit without a confirmed proposal is automatically rejected. Never dispatch on your own initiative. If they decline or stay silent, drop it. If they change details, call propose_hermes_task again with the updated brief and re-confirm.`,
-            "CRITICAL truthfulness rule — you have NO knowledge of what Hermes is doing or has found. NEVER invent, guess, predict, or summarize a Hermes result from your own imagination. Facts about a run come ONLY from: a SYSTEM_EVENT_HERMES_COMPLETE message, or the exact `output` field of a get_hermes_task_status response with a terminal status. Until one of those exists, the ONLY honest answer is that Hermes is still working.",
-            "When asked how a task is going or what Hermes found: FIRST call get_hermes_task_status (or check_hermes_status for connectivity), THEN speak strictly from its response. If the status is not terminal, say it is still in progress and stop — do not speculate about partial findings, likely outcomes, or timing.",
-            "After submitting a task, your only statement is a short acknowledgement that Hermes has started. Never phrase it as if any result exists yet.",
-            "Routing rule: quick answer, fact lookup, or general chat -> answer directly or use Google Search; dispatch to Hermes ONLY when explicitly requested as described above.",
-            "UI control rule: If the user says things like 'open it', 'open that result', 'show latest Hermes result', 'show history', 'close it', 'go back', or 'open the current task', use get_iris_ui_context and control_iris_ui. Do not send those UI-only commands to Hermes.",
-            `Sleep rule: when ${userDisplayName()} asks you to sleep ('go to sleep', 'sleep now', 'goodnight', 'that's all for now'), say a short warm goodbye and call go_to_sleep. Never call it unless explicitly asked.`,
-            "Also handle these UI-only commands with control_iris_ui (never Hermes): 'show the steps' / 'what is it doing' / 'show what tools it used' -> show_task_steps; 'hide the steps' -> hide_task_steps. If they name a specific card ('steps for the deals one', 'steps for the second card'), pass those words in query. With no target named, steps apply to the card they are viewing (open reader first), else the running task.",
-            "If the user refers to a task by partial words from the task header, like 'open the failed one', 'open Hermes API', 'open package Iris', or 'open two hand design', call control_iris_ui with action open_task_by_query and put those words in query. Do not require an exact title match.",
-            "If Iris shows a task chooser because multiple cards matched, the user can click a choice or say first/second/third; use get_iris_ui_context to inspect pendingTaskMatches before opening a specific task.",
-            "When a UI command is ambiguous, prefer the expanded task first, then the focused task, then the latest Hermes result. Keep the spoken acknowledgement short.",
-            `When you call propose_hermes_task, write the 'task' as a clear brief about ${userDisplayName()}'s INTENT: the goal, the concrete details they actually said (names, numbers, dates, budgets, constraints), and the expected output/format. Hermes cannot hear this conversation, so the brief must stand alone — but NEVER tell Hermes HOW to do the work. Do not mention tools, skills, scripts, file paths, Notion pages, databases, planner pages, or any workflow mechanics, even if you know them from the user context: Hermes has its own skills and shares the same memory, and your guesses about mechanics can be stale and send it down the wrong path. Example: "Check this month's deals and summarize payment status" — NOT "Check the deals database linked from the active planner page".`,
-            `EXCEPTION — repeats and follow-ups: if ${userDisplayName()} asks to re-run, refresh, or slightly tweak a task you ALREADY dispatched in this session, do NOT re-specify the whole task. Write a short continuation brief that names the previous task and tells Hermes to reuse its earlier work, e.g. "Re-run the July 2026 Notion deals analysis from earlier in this session and report the updated numbers — reuse your previous approach and results, re-checking only what may have changed." Hermes shares this session's transcript, so short continuation briefs run dramatically faster.`,
-            `After submit_hermes_task returns "started", say one short acknowledgement like: On it, Hermes is handling that now. (Keep what you SAY to ${userDisplayName()} short, even though the task you SENT to Hermes is detailed.) If it returns "blocked", follow its instructions instead — do not claim the task was sent.`,
+            "Claude is your worker brain for tools, terminal, files, web, deals, coding, research, and automations.",
+            "You also have built-in Google Search. Use Google Search directly for quick current facts, simple web lookups, and lightweight questions that do not need Claude to do work.",
+            `CRITICAL: Be decisive. Do not ask clarifying questions for actionable tasks. If ${userDisplayName()} asks for a deal, research, coding, checking something, building something, or any work, immediately call submit_claude_task with the request. The ONLY exception is the Product Owner intake below, when a NEW project or feature is being started.`,
+            "Routing rule: quick answer or fact lookup -> Google Search; multi-step work, monitoring, files, email, deals, coding, automation, or anything that should continue in the background -> Claude.",
+            `When you call submit_claude_task for a plain task or the DEV role, write the 'task' as a COMPLETE brief. Claude cannot hear this conversation, so do not send a short paraphrase. Expand what ${userDisplayName()} said into a precise, detailed instruction that captures the goal, every concrete detail mentioned (names, numbers, URLs, dates, budgets, preferences, constraints), any reasonable defaults you are assuming, and the expected result/format. (The PO role is the exception — you steer it with a SHORT control intent, not a PRD; see PRODUCT OWNER CONTROL below.)`,
+            "Session model: context is USER-CONTROLLED. Within the session the user picked, each role (PO, DEV, and plain Claude) keeps its OWN continuous conversation that every new task automatically resumes — Claude remembers ALL its earlier tasks in that role, even when other roles ran in between. Context is never dropped automatically; it resets ONLY when the user explicitly starts a new session (UI 'New' button or a voice request) or picks a different project folder. So follow-up briefs may safely reference the role's previous work ('the PRD you wrote', 'the issue you implemented'). Each session is attached to a project folder the user picks from the UI, and Claude's file/terminal work happens inside that folder. Claude does ONE task at a time; if it is busy, a new task is queued and starts automatically. You never pick or invent session ids or project folders yourself; if the user wants to work on a different project, tell them to pick its folder from the UI.",
+            workspaceContextLine(),
+            "When the user asks which project/folder/session/role is active — or you need to state where work will happen — call get_workspace_info and answer from its result; never guess. When you receive SYSTEM_EVENT_WORKSPACE_UPDATE, silently update your knowledge of the workspace; do not speak in response to it. When you receive SYSTEM_EVENT_AGENT_SELECT, the user just switched the pipeline role from the UI: follow its instructions_to_iris and speak proactively — switching to PO with no ongoing conversation ALWAYS opens with the how-did-this-project-start question (own idea / boss-CTO mandate / customer request).",
+            "Agent pipeline (runs on OpenSpec): Claude runs as one of two roles — PO (Product Owner: grills the request, then proposes an OpenSpec change under openspec/changes/<name>/ with a tasks.md — decides WHAT gets built) and DEV (Developer: implements the remaining tasks of the open change test-first, verifies, then archives it to update the living spec). The user picks the active role from the UI; moving PO → DEV is a gate, and the roles hand work to each other through the OpenSpec change in the project, never a shared conversation. Only pass the 'agent' parameter when the user explicitly names a role; never choose or advance a role yourself. PO runs as a LIVE session (stays open across tasks and pauses mid-task to ask YOU questions by voice — see SYSTEM_EVENT_PO_QUESTION); DEV runs headless and never pauses. A DEV run only works when the PO has already proposed a change with tasks — if none exists, the DEV run fails and asks for the PO to propose first.",
+            "STUDY mode (separate from the PO → DEV build pipeline): a third selectable role for LEARNING, not building. Here YOU are the study assistant — the user opens a source, reads it, and synthesizes it aloud to you; you capture that and dispatch to the STUDY worker, which is the librarian + fact-checker for their second brain. You never teach via the worker (you answer study questions yourself); the worker only (a) RECORDS a note when the user explicitly asks to save (write a complete brief containing the user's synthesis and the source URL/reference), or (b) VERIFIES a note's facts (include the source URL/text so it can check against the source plus the web). STUDY is a LIVE session and may pause to ask YOU a filing/verification question by voice (SYSTEM_EVENT_PO_QUESTION, asking_role: Study). It does NOT touch OpenSpec. Only route to STUDY when it is the active role or the user explicitly says so.",
+            "PRODUCT OWNER CONTROL — you are the PO's VOICE, not its analyst. When the user starts a NEW project or feature (or switches to the PO role with no ongoing PO conversation), do NOT interview them yourself and do NOT write a PRD. Instead call submit_claude_task for the PO role with a SHORT control intent that forwards what the user wants and tells the PO to start grilling — e.g. 'Start a new feature: <what the user said, with the concrete details verbatim>. Grill me to pin down the requirements.' The Claude-side PO then runs its grilling pass and pauses to ask YOU questions by voice (SYSTEM_EVENT_PO_QUESTION) — read those aloud and answer with answer_po_question. When the user is satisfied, send the PO a follow-up: 'You have enough — propose the change.' To check progress, send the PO 'Are there tasks left?' and it reads the change's tasks.md and reports back. For ordinary tasks that are not a new project/feature, skip all of this and stay decisive.",
+            "DECISIONS RELAY — headless DEV, and the PO for lower-stakes calls, cannot ask yes/no questions mid-run, so they hand choices back to you at the END of a run. When a Claude result contains a 'Decisions needed' (or numbered 'Open Questions') section: read each decision aloud, one at a time, with its numbered options and the recommendation, and let the user pick (they may say 'option 2' or 'go with your recommendation'). Then call submit_claude_task for the SAME role with a follow-up task stating each decision and the chosen option. If the user postpones, note that the recommended defaults stay applied.",
+            `Model control: PO and DEV each run on a chosen Claude model, visible as a badge on the pipeline chip in the UI (defaults: PO on the strongest model, DEV on a faster one for routine work). Call set_agent_model(role, model) ONLY when ${userDisplayName()} explicitly asks to switch a role's model (e.g. "switch DEV to a stronger model to debug this", "put PO back on the fast one") — never change it on your own initiative. Available models: ${MODEL_CHOICES.map((choice) => `${choice.label} (${choice.id})`).join(", ")}.`,
+            "PO LIVE QUESTIONS — different from Decisions Relay above: when the PO reaches a real fork in the road MID-TASK, it pauses immediately and you receive SYSTEM_EVENT_PO_QUESTION with a list of questions and options. Read each one aloud right then — don't wait for the run to finish, it hasn't. Once you have every answer, call answer_po_question with the exact question text and the chosen option's label for each; the PO resumes the same task the instant you do. If the user asks what you'd pick, suggest the first-listed option, but always submit what they actually chose.",
+            "BRIEF WRITING — the 'task' string is the ONLY thing headless Claude receives; a detail you do not write down is lost forever. Shape every brief to the role:",
+            "- PO control intent (NOT a PRD — the PO does the analysis, you just steer it): a short line forwarding the user's request plus the intent — start-and-grill, 'propose the change', 'are there tasks left?', or 'archive the change'. Include the concrete details the user gave (names, numbers, URLs, constraints) so the PO has them, but never write the PRD, tasks, or acceptance criteria yourself — that is the PO's job via grilling and the OpenSpec propose flow.",
+            "- DEV brief: tell DEV to implement the open OpenSpec change — e.g. 'Implement the remaining tasks of the open change.' If the user named a specific change, include its name. Append any spoken instruction that overrides the spec ('the messages should be in English after all') — DEV cannot know it otherwise. DEV only runs when the PO has already proposed a change with tasks.",
+            "- STUDY brief: say plainly whether to RECORD or VERIFY. To record: 'Save a note: <the user's synthesis in full>. Source: <URL/reference>.' To verify: 'Verify this note against its source and the web: <the claims/note>. Source: <URL/text>.' The worker cannot hear the conversation, so include the synthesis and the source verbatim — a detail you omit is lost.",
+            "- Follow-up brief (answers to Decisions needed): send to the SAME role and repeat each decision with the chosen option verbatim, e.g. 'Decision 1: option 2 — <restate the option text>. Decision 3: keep the recommendation.' Never re-open decisions the user already settled, and never let a chosen option be paraphrased into something new.",
+            "- Self-check before every submit_claude_task call: could someone who never heard this conversation do the right work from this brief alone? If not, add the missing names, numbers, paths, and decisions before sending.",
+            "UI control rule: if the user says things like 'open it', 'open that result', 'show the latest result', 'show history', 'close it', 'go back', or 'open the current task', use get_ui_context and control_ui — these are UI-only and must NOT be sent to submit_claude_task. Also handle 'show the steps' / 'what is it doing' / 'show what tools it used' -> show_task_steps; 'hide the steps' -> hide_task_steps. If they name a specific card ('steps for the deals one', 'steps for the second card'), pass those words in query; with no target named, steps apply to the card they are viewing (open reader first), else the running task.",
+            "If the user refers to a task by partial words from its header, like 'open the failed one' or 'open the deals task', call control_ui with action open_task_by_query and put those words in query — do not require an exact title match. If Iris shows a task chooser because multiple cards matched, the user can click a choice or say first/second/third; use get_ui_context to inspect pendingTaskMatches before opening a specific task. When a UI command is ambiguous, prefer the expanded task first, then the focused task, then the latest result. Keep the spoken acknowledgement short.",
+            `Sleep rule: when ${userDisplayName()} asks you to sleep ('go to sleep', 'sleep now', 'goodnight', 'that's all for now'), say a short warm goodbye and call go_to_sleep. Never call it unless explicitly asked. Note: while a PO question is pending (see PO LIVE QUESTIONS below), UI actions like close_reader still work, but a new ambiguous open-task request is deferred — the PO question always answers first.`,
+            `After submit_claude_task returns: if status is 'started', say one short acknowledgement like: On it, Claude is handling that now. If status is 'queued', tell ${userDisplayName()} Claude is still finishing the current task and this one is queued next. (Keep what you SAY short, even though the task you SENT is detailed.)`,
+            `Only call start_new_claude_session when ${userDisplayName()} explicitly asks for a new session (says something like: new session, fresh session, start over). After it returns, confirm briefly that Claude has a clean slate.`,
             `When you receive SYSTEM_EVENT_SESSION_START, immediately speak a warm welcome-back greeting to ${userDisplayName()} as instructed, without waiting for the user to talk first.`,
-            `When you receive SYSTEM_EVENT_HERMES_COMPLETE, treat it as a high-priority background result from Hermes. Proactively announce it even if ${userDisplayName()} was chatting with you. Keep it polite and short: say Hermes is back, summarize the result, and ask whether they want to go through it before continuing. If — and only if — the update interrupted a discussion that was genuinely mid-flow, pick it back up afterwards by naming the topic yourself. If there was no active discussion, simply stop after handling the result. Never ask "what were we discussing" — if you can't name the topic yourself, there is nothing to resume.`,
+            `When you receive SYSTEM_EVENT_CLAUDE_COMPLETE, treat it as a high-priority background result from Claude. Proactively announce it even if ${userDisplayName()} was chatting with you. Keep it polite and short: say Claude is back, summarize the result, and ask whether they want to go through it before continuing.`,
             "Only answer directly for greetings, quick chat, or status questions.",
             "Keep voice responses natural and short.",
           ].join("\n"),
         },
-        ...userContextParts(),
       ],
     },
   };
 }
 
-// Personal context injected as its own system-instruction part. Kept separate so
-// it is easy to see and so the brief-writing rules above can lean on it.
-function userContextParts() {
-  const { text, files } = loadUserContext();
-  if (!text) return [];
-  emitEvent({
-    type: "log",
-    level: "info",
-    message: `Loaded user context (${text.length} chars) from ${files.join(", ")}.`,
-  });
-  return [
-    {
-      text: [
-        `USER CONTEXT — personal profile and memory provided by ${userDisplayName()}.`,
-        "Treat it as authoritative about who they are, their preferences, locations, budgets, tools, and recurring projects.",
-        "Use it to resolve vague or shorthand requests (for example, understand what 'deals' or 'the usual' means for this user) and to speak to them naturally.",
-        "Do NOT copy operational details from this context into Hermes briefs — no page names, database structure, script names, or workflow mechanics. Hermes shares this same memory and its skills own those mechanics; briefs carry the user's intent only.",
-        "Never read this context aloud verbatim; just use it to act correctly.",
-        "----- BEGIN USER CONTEXT -----",
-        text,
-        "----- END USER CONTEXT -----",
-      ].join("\n"),
-    },
-  ];
-}
-
 function sendWelcomeGreeting() {
-  if (welcomeGreeted || !liveSession) return;
-  welcomeGreeted = true;
-  if (welcomeFallbackTimer) {
-    clearTimeout(welcomeFallbackTimer);
-    welcomeFallbackTimer = null;
-  }
   (async () => {
     let reachable = false;
     try {
-      const status = await checkHermesStatus();
+      const status = await checkClaudeStatus();
       reachable = Boolean(status.reachable);
     } catch {
       reachable = false;
     }
     if (!liveSession) return;
 
-    const hermesLine = reachable
-      ? "Hermes is online and all channels are connected, so we're good to go."
-      : "I'm still bringing Hermes online, channels are connecting now.";
+    const claudeLine = reachable
+      ? "Claude is online and all channels are connected, so we're good to go."
+      : "I'm still bringing Claude online, channels are connecting now.";
 
     const greeting =
       `SYSTEM_EVENT_SESSION_START: The session just started. Proactively greet ${userDisplayName()} out loud right now in a warm, concise way (1-2 sentences). ` +
-      `Say something like: Hi ${userDisplayName()}, welcome back. ${hermesLine} Then ask what they have in mind. ` +
+      `Say something like: Hi ${userDisplayName()}, welcome back. ${claudeLine} Then ask what they have in mind. ` +
       "Speak this greeting immediately without waiting for the user to talk first.";
 
     liveSession.sendRealtimeInput({ text: greeting });
@@ -1071,6 +1971,18 @@ function sendWelcomeGreeting() {
 
 async function startLive() {
   if (liveSession) return liveStatus;
+  userStopped = false;
+  resumptionHandle = null;
+  reconnectAttempts = 0;
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  await connectLive({ isReconnect: false });
+  return { running: true, pid: process.pid };
+}
+
+async function connectLive({ isReconnect }) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     emitEvent({ type: "fatal", message: "GEMINI_API_KEY is not set." });
@@ -1078,21 +1990,27 @@ async function startLive() {
   }
 
   const model = process.env.GEMINI_LIVE_MODEL || "models/gemini-3.1-flash-live-preview";
-  resetHermesGate();
   ai = new GoogleGenAI({ apiKey });
   emitEvent({ type: "sidecar_status", status: { running: true, model, mode: "webrtc-aec" } });
   emitEvent({ type: "gemini_status", status: "connecting", model });
 
   liveSession = await ai.live.connect({
     model,
-    config: buildLiveConfig(),
+    config: buildLiveConfig(resumptionHandle),
     callbacks: {
       onopen() {
+        reconnectAttempts = 0;
         liveStatus = { running: true, pid: process.pid };
         emitEvent({ type: "sidecar_status", status: { running: true, pid: process.pid, model, mode: "webrtc-aec" } });
         emitEvent({ type: "gemini_status", status: "connected", model });
         emitEvent({ type: "audio_state", state: "listening" });
         updateTrayMenu();
+        while (pendingClaudeAnnouncements.length > 0 && liveSession) {
+          liveSession.sendRealtimeInput({ text: pendingClaudeAnnouncements.shift() });
+        }
+        // The resumed session keeps its context; greeting again mid-conversation
+        // every ~10 minutes would be jarring.
+        if (!isReconnect) GreetGate.arm();
       },
       onmessage(message) {
         handleLiveMessage(message);
@@ -1101,30 +2019,51 @@ async function startLive() {
         emitEvent({ type: "fatal", message: "Gemini Live error", error: error?.message || String(error) });
       },
       onclose(event) {
+        console.error("[IRIS][close] code=", event?.code, "reason=", event?.reason || "(none)");
         flushTranscripts();
         liveSession = null;
-        liveStatus = { running: false, pid: null };
-        emitEvent({ type: "gemini_status", status: "offline" });
-        emitEvent({ type: "audio_state", state: "idle" });
-        emitEvent({ type: "sidecar_status", status: liveStatus, reason: event?.reason || "closed" });
+        if (userStopped) {
+          liveStatus = { running: false, pid: null };
+          emitEvent({ type: "gemini_status", status: "offline" });
+          emitEvent({ type: "audio_state", state: "idle" });
+          emitEvent({ type: "sidecar_status", status: liveStatus, reason: event?.reason || "closed" });
+          updateTrayMenu();
+          return;
+        }
+        scheduleReconnect(event?.reason || "connection closed");
       },
     },
   });
+}
 
-  // Send AFTER connect resolves: onopen can fire before liveSession is assigned,
-  // which would otherwise skip the queued announcements.
-  while (pendingHermesAnnouncements.length > 0 && liveSession) {
-    liveSession.sendRealtimeInput({ text: pendingHermesAnnouncements.shift() });
+function scheduleReconnect(reason) {
+  if (reconnectTimer) return;
+  reconnectAttempts += 1;
+  if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
+    liveStatus = { running: false, pid: null };
+    emitEvent({
+      type: "fatal",
+      message: `Gemini Live reconnect failed after ${MAX_RECONNECT_ATTEMPTS} attempts.`,
+      error: reason,
+    });
+    emitEvent({ type: "gemini_status", status: "offline" });
+    emitEvent({ type: "audio_state", state: "idle" });
+    emitEvent({ type: "sidecar_status", status: liveStatus, reason });
+    return;
   }
-
-  // Defer the welcome greeting until the renderer's boot screen finishes
-  // (iris:boot-done) so Iris doesn't start talking over the loading animation.
-  // Safety net: greet anyway if that signal never arrives.
-  welcomeGreeted = false;
-  if (welcomeFallbackTimer) clearTimeout(welcomeFallbackTimer);
-  welcomeFallbackTimer = setTimeout(() => sendWelcomeGreeting(), 8000);
-
-  return { running: true, pid: process.pid };
+  // Repeated failures suggest a stale resumption handle — drop it and let the
+  // remaining attempts open a fresh session (context lost, but Iris stays up).
+  if (reconnectAttempts >= 3) resumptionHandle = null;
+  const delay = Math.min(500 * 2 ** (reconnectAttempts - 1), 8000);
+  console.log(`[IRIS][reconnect] attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS} in ${delay}ms (${reason})`);
+  emitEvent({ type: "gemini_status", status: "connecting" });
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    connectLive({ isReconnect: true }).catch((error) => {
+      liveSession = null;
+      scheduleReconnect(error?.message || String(error));
+    });
+  }, delay);
 }
 
 async function handleToolCall(toolCall) {
@@ -1132,7 +2071,7 @@ async function handleToolCall(toolCall) {
   for (const call of toolCall.functionCalls || []) {
     emitEvent({ type: "tool_call", name: call.name, args: call.args || {} });
     try {
-      const result = await executeTool(call.name, call.args || {});
+      const result = await executeClaudeTool(call.name, call.args || {});
       functionResponses.push({ id: call.id, name: call.name, response: { result } });
     } catch (error) {
       functionResponses.push({
@@ -1148,6 +2087,17 @@ async function handleToolCall(toolCall) {
 }
 
 function handleLiveMessage(message) {
+  if (message.sessionResumptionUpdate) {
+    const { resumable, newHandle } = message.sessionResumptionUpdate;
+    if (resumable && newHandle) resumptionHandle = newHandle;
+  }
+
+  if (message.goAway) {
+    // Server warns the connection is about to be dropped (connection lifetime
+    // limit). onclose fires shortly after and reconnects with the handle.
+    console.log("[IRIS][goAway] timeLeft=", message.goAway.timeLeft || "(unknown)");
+  }
+
   if (message.toolCall) {
     handleToolCall(message.toolCall).catch((error) => {
       emitEvent({ type: "fatal", message: "Tool call failed", error: error.message });
@@ -1159,25 +2109,12 @@ function handleLiveMessage(message) {
 
   if (content.interrupted) {
     flushTranscripts();
-    // Barge-in counts as the read-back turn ending: the user is reacting to it.
-    markModelTurnComplete();
     emitToRenderer("live:interrupt", {});
     emitEvent({ type: "audio_state", state: "listening" });
     return;
   }
 
-  if (content.inputTranscription?.text) {
-    userTranscriptBuffer += content.inputTranscription.text;
-    if (userTranscriptBuffer.trim()) markUserSpoke();
-  }
-
-  // The first sign of Iris responding means the user's turn is over, so push
-  // their transcript to Comms right away instead of waiting for turnComplete.
-  const hasModelOutput =
-    Boolean(content.outputTranscription?.text) ||
-    (content.modelTurn?.parts || []).some((part) => part.text || part.inlineData?.data);
-  if (hasModelOutput) flushUserTranscript();
-
+  if (content.inputTranscription?.text) userTranscriptBuffer += content.inputTranscription.text;
   if (content.outputTranscription?.text) modelTranscriptBuffer += content.outputTranscription.text;
 
   for (const part of content.modelTurn?.parts || []) {
@@ -1192,17 +2129,17 @@ function handleLiveMessage(message) {
 
   if (content.turnComplete) {
     flushTranscripts();
-    markModelTurnComplete();
     emitEvent({ type: "audio_state", state: "listening" });
   }
 }
 
 async function stopLive() {
-  welcomeGreeted = true;
-  resetHermesGate();
-  if (welcomeFallbackTimer) {
-    clearTimeout(welcomeFallbackTimer);
-    welcomeFallbackTimer = null;
+  userStopped = true;
+  resumptionHandle = null;
+  reconnectAttempts = 0;
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
   }
   if (liveSession) {
     try { liveSession.close(); } catch { /* ignore close races */ }
@@ -1231,23 +2168,23 @@ function sendCommand(command) {
     if (!liveSession) throw new Error("Gemini Live is not running");
     liveSession.sendRealtimeInput({ text: command.text });
   }
-  if (command?.type === "submit_hermes_task" && command.task) {
-    submitHermesTask({ task: command.task }).catch((error) => {
-      emitEvent({ type: "hermes_task_update", status: "error", task: command.task, error: error.message });
+  if (command?.type === "submit_claude_task" && command.task) {
+    submitClaudeTask({ task: command.task, agent: command.agent }).catch((error) => {
+      emitEvent({ type: "claude_task_update", status: "error", task: command.task, error: error.message });
     });
   }
 }
 
 function createWindow() {
   // Frameless + transparent from birth so the same window can morph into the
-  // Glass HUD overlay. The deck paints its own rounded background in CSS, and
-  // the top bar provides custom window controls (native traffic lights don't
-  // exist on transparent windows).
+  // Glass HUD overlay — Electron cannot toggle `frame`/`transparent` after
+  // creation. The deck paints its own rounded background in CSS; TopBar's
+  // custom win-controls replace the native traffic lights this gives up.
   mainWindow = new BrowserWindow({
     width: 1180,
     height: 860,
-    minWidth: 1120,
-    minHeight: 820,
+    minWidth: 980,
+    minHeight: 800,
     show: false,
     frame: false,
     transparent: true,
@@ -1314,7 +2251,7 @@ function exitHud() {
     mainWindow.setAlwaysOnTop(false);
     mainWindow.setVisibleOnAllWorkspaces(false);
     mainWindow.setHasShadow(true);
-    mainWindow.setMinimumSize(1120, 820);
+    mainWindow.setMinimumSize(980, 800);
     if (deckBounds) mainWindow.setBounds(deckBounds);
     mainWindow.show();
     mainWindow.focus();
@@ -1393,16 +2330,6 @@ function installAppMenu() {
       ],
     },
     { role: "editMenu" },
-    {
-      label: "View",
-      submenu: [
-        { role: "reload" },
-        { role: "forceReload" },
-        { role: "toggleDevTools" },
-        { type: "separator" },
-        { role: "togglefullscreen" },
-      ],
-    },
     { role: "windowMenu" },
   ]);
   Menu.setApplicationMenu(menu);
@@ -1421,15 +2348,26 @@ app.whenReady().then(() => {
   ipcMain.handle("sidecar:start", () => startLive());
   ipcMain.handle("sidecar:stop", () => stopLive());
   ipcMain.handle("sidecar:status", () => liveStatus);
-  ipcMain.handle("app:config", () => appConfig());
-  ipcMain.handle("config:get", () => getFullConfig());
-  ipcMain.handle("config:save", (_event, updates) => writeUserConfig(updates));
-  ipcMain.handle("config:test-gemini", (_event, payload) => testGeminiKey(payload?.key));
-  ipcMain.handle("config:test-hermes", (_event, payload) => testHermesConnection(payload || {}));
-  ipcMain.handle("config:preview-voice", (_event, payload) => previewVoice(payload || {}));
-  ipcMain.handle("hermes:history", () => fetchHermesHistory());
-  ipcMain.handle("hermes:sessions", () => listHermesSessions());
-  ipcMain.handle("hermes:create-session", () => createHermesSession());
+  ipcMain.handle("sidecar:command", (_event, command) => sendCommand(command));
+  ipcMain.handle("sessions:get", () => sessionsSnapshot());
+  ipcMain.handle("sessions:select", (_event, id) => selectWorkstream(String(id || "")));
+  ipcMain.handle("sessions:new", (_event, label) => {
+    const workstream = createWorkstream(label);
+    return { status: "ok", session: { id: workstream.id, label: workstream.label }, ...sessionsSnapshot() };
+  });
+  ipcMain.handle("sessions:choose-cwd", (_event, id) => chooseWorkstreamCwd(String(id || "")));
+  ipcMain.handle("agents:list", (_event, id) => agentsSnapshot(String(id || "")));
+  ipcMain.handle("agents:select", (_event, payload) =>
+    setWorkstreamAgent(String(payload?.workstreamId || ""), payload?.agent ?? null));
+  ipcMain.handle("agents:install", () => installIrisAgents());
+  ipcMain.handle("agents:set-model", (_event, payload) =>
+    setAgentModel(String(payload?.workstreamId || ""), payload?.role, payload?.model));
+  // Secondary answer path for the PO's pending AskUserQuestion — lets a
+  // sighted user click an option directly instead of answering by voice.
+  // Whichever path (this, or the Gemini answer_po_question tool) answers
+  // first wins; the other becomes a no-op since the question is already resolved.
+  ipcMain.handle("po:answer-question", (_event, answers) => resolvePendingPoQuestion(answers));
+  ipcMain.handle("context-supplement:send", (_event, text) => sendContextSupplement(text));
   ipcMain.handle("hud:toggle", () => {
     toggleHud();
     updateTrayMenu();
@@ -1445,14 +2383,18 @@ app.whenReady().then(() => {
     if (action === "close") mainWindow.close();
     else if (action === "minimize") mainWindow.minimize();
   });
-  ipcMain.handle("sidecar:command", (_event, command) => sendCommand(command));
-  ipcMain.on("live:audio", (_event, chunk) => sendAudioChunk(chunk));
-  ipcMain.on("iris:boot-done", () => sendWelcomeGreeting());
+  ipcMain.handle("config:get", () => getFullConfig());
+  ipcMain.handle("config:save", (_event, updates) => writeUserConfig(updates));
+  ipcMain.handle("config:test-gemini", (_event, payload) => testGeminiKey(payload?.key));
+  ipcMain.handle("config:test-claude", () => checkClaudeHealth());
+  ipcMain.handle("config:preview-voice", (_event, payload) => previewVoice(payload || {}));
+  ipcMain.on("iris:boot-done", () => GreetGate.fire());
   ipcMain.on("iris:ui-context", (_event, context) => {
     if (context && typeof context === "object") {
       irisUiContext = context;
     }
   });
+  ipcMain.on("live:audio", (_event, chunk) => sendAudioChunk(chunk));
   createWindow();
   createTray();
   const registered = globalShortcut.register(hudHotkey(), () => {
@@ -1468,7 +2410,17 @@ app.whenReady().then(() => {
 });
 
 app.on("will-quit", () => globalShortcut.unregisterAll());
-app.on("before-quit", () => stopLive());
+app.on("before-quit", () => {
+  stopLive();
+  // The app is exiting regardless, so this just signals live subprocesses to
+  // die with it — run-queue.mjs owns the runs map, so kill children directly
+  // via list() rather than mutating run.status from outside the module.
+  for (const run of runQueue.list()) {
+    if (run.child) run.child.kill("SIGTERM");
+  }
+  closeAllPoSessions();
+  closeAllStudySessions();
+});
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });

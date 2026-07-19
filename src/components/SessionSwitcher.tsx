@@ -1,66 +1,27 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, ChevronDown, Plus } from "lucide-react";
-
-function timeAgo(ts: number): string {
-  if (!ts) return "new";
-  const minutes = Math.floor((Date.now() - ts) / 60000);
-  if (minutes < 1) return "now";
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.floor(hours / 24)}d ago`;
-}
-
-// Human name for a session, matching how the Hermes app lists chats:
-// title first, then a snippet of the first prompt, and "New chat" until the
-// first task names the thread.
-function sessionLabel(
-  session: Pick<HermesSessionInfo, "id" | "title" | "preview" | "messageCount">,
-): string {
-  if (session.title?.trim()) return session.title.trim();
-  const preview = session.preview?.trim().replace(/\s+/g, " ") ?? "";
-  if (preview) return preview.length > 44 ? `${preview.slice(0, 44)}…` : preview;
-  return session.messageCount > 0 ? session.id : "New chat";
-}
+import { AGENT_LABELS } from "../lib/agents";
 
 /**
- * Main-page Hermes chat switcher (top of the Work Stream): shows the thread
- * Iris is talking in, opens a picker of past Iris sessions (api_server only),
- * and starts a fresh Hermes-named thread with the + button — like picking a
- * chat in Hermes desktop, without opening Settings.
+ * Work Stream chat switcher: shows the workstream Iris is talking in, opens a
+ * picker of past workstreams, and starts a fresh one with the + button.
+ * Rebound to our `sessions:get/select/new` IPC (design D3) — no Hermes
+ * session IPC. The active row also surfaces the active role's Claude Code
+ * session id (`who ▸ id`), matching the previous `.claude-session-line`.
  */
 export default function SessionSwitcher({
-  current,
-  refreshKey = 0,
+  session,
+  sessions,
   onSwitch,
   onNew,
 }: {
-  current: string;
-  /** Bump to re-resolve labels (e.g. after a task lands and names a new thread). */
-  refreshKey?: number;
+  session: ClaudeSession | null;
+  sessions: ClaudeSession[];
   onSwitch: (id: string) => void;
   onNew: () => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [sessions, setSessions] = useState<HermesSessionInfo[]>([]);
-  const [loading, setLoading] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
-
-  async function refresh() {
-    try {
-      const result = await window.iris.listHermesSessions();
-      setSessions(result.ok ? result.sessions : []);
-    } catch {
-      setSessions([]);
-    }
-  }
-
-  // Keep the chip label resolvable: refresh when the pinned session changes
-  // (right after + creates a thread) and when new work lands (the first task
-  // gives a fresh "New chat" its real name).
-  useEffect(() => {
-    refresh();
-  }, [current, refreshKey]);
 
   useEffect(() => {
     if (!open) return;
@@ -78,83 +39,66 @@ export default function SessionSwitcher({
     };
   }, [open]);
 
-  async function toggle() {
-    if (open) {
-      setOpen(false);
-      return;
-    }
-    setOpen(true);
-    setLoading(true);
-    await refresh();
-    setLoading(false);
-  }
-
-  const currentSession = sessions.find((session) => session.id === current);
-  const chipLabel = currentSession ? sessionLabel(currentSession) : current || "iris-voice";
-
-  // A thread can be missing from the list briefly (e.g. Hermes unreachable);
-  // pin the current id on top so the selection is always visible.
-  const items = !current || currentSession
-    ? sessions
-    : [
-        { id: current, source: "api_server", title: "", preview: "", messageCount: 0, lastActive: 0 },
-        ...sessions,
-      ];
+  const chipLabel = session?.label ?? "Session 1 (new)";
+  const activeAgent = session?.active_agent ?? null;
+  const claudeId = session?.agent_sessions?.[activeAgent ?? "default"];
+  const who = activeAgent ? AGENT_LABELS[activeAgent] : "Iris";
 
   return (
-    <div className="session-bar" ref={rootRef}>
-      <button
-        type="button"
-        className={`session-chip ${open ? "open" : ""}`}
-        onClick={toggle}
-        title={`Hermes chat: ${current || "iris-voice"} — click to switch`}
-      >
-        <span className="session-dot" />
-        <span className="session-id">{chipLabel}</span>
-        <ChevronDown size={12} className="chev" />
-      </button>
-      <button
-        type="button"
-        className="session-new"
-        onClick={onNew}
-        title="Start a new Hermes chat session"
-      >
-        <Plus size={13} />
-      </button>
+    <>
+      <div className="session-bar" ref={rootRef}>
+        <button
+          type="button"
+          className={`session-chip ${open ? "open" : ""}`}
+          onClick={() => setOpen((current) => !current)}
+          title="Claude workstreams — click to switch"
+        >
+          <span className="session-dot" />
+          <span className="session-id">{chipLabel}</span>
+          <ChevronDown size={12} className="chev" />
+        </button>
+        <button type="button" className="session-new" onClick={onNew} title="Start a new Claude session (clean slate)">
+          <Plus size={13} />
+        </button>
 
-      {open ? (
-        <div className="session-menu">
-          <div className="session-menu-head">Iris chat sessions</div>
-          {loading ? (
-            <div className="session-empty">Loading…</div>
-          ) : items.length === 0 ? (
-            <div className="session-empty">No Iris sessions yet — send Hermes a task to start one.</div>
-          ) : (
-            items.map((session) => (
-              <button
-                key={session.id}
-                type="button"
-                className={`session-item ${session.id === current ? "sel" : ""}`}
-                onClick={() => {
-                  setOpen(false);
-                  if (session.id !== current) onSwitch(session.id);
-                }}
-              >
-                <span className="session-item-main">
-                  <strong>{sessionLabel(session)}</strong>
-                  <em>
-                    {session.id}
-                    {session.messageCount > 0
-                      ? ` · ${session.messageCount} msgs · ${timeAgo(session.lastActive)}`
-                      : " · new thread"}
-                  </em>
-                </span>
-                {session.id === current ? <Check size={13} /> : null}
-              </button>
-            ))
-          )}
-        </div>
-      ) : null}
-    </div>
+        {open ? (
+          <div className="session-menu">
+            <div className="session-menu-head">Claude workstreams</div>
+            {sessions.length === 0 ? (
+              <div className="session-empty">A Claude session starts with the first task.</div>
+            ) : (
+              sessions.map((entry) => (
+                <button
+                  key={entry.id}
+                  type="button"
+                  className={`session-item ${entry.id === session?.id ? "sel" : ""}`}
+                  onClick={() => {
+                    setOpen(false);
+                    if (entry.id !== session?.id) onSwitch(entry.id);
+                  }}
+                >
+                  <span className="session-item-main">
+                    <strong>{entry.label}</strong>
+                    <em>{entry.cwd ? entry.cwd.split("/").filter(Boolean).pop() : "default workspace"}</em>
+                  </span>
+                  {entry.id === session?.id ? <Check size={13} /> : null}
+                </button>
+              ))
+            )}
+          </div>
+        ) : null}
+      </div>
+
+      <div
+        className={`claude-session-line ${claudeId ? "resumes" : "fresh"}`}
+        title={
+          claudeId
+            ? `Every ${who} task resumes exactly this Claude Code session id — press New to start over with a clean context`
+            : `No Claude conversation for ${who} yet — the first task creates the id and it sticks until you press New`
+        }
+      >
+        {claudeId ? `${who} ▸ ${claudeId}` : `${who} ▸ new — id is created by the first task`}
+      </div>
+    </>
   );
 }

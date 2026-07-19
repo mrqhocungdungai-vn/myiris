@@ -2,7 +2,7 @@ import { type CSSProperties } from "react";
 import type { Pulse } from "../types";
 
 // Purely decorative layer: comets that fly between the orb and the Work Stream
-// when Gemini delegates to Hermes and when a run completes.
+// when Gemini delegates to Claude and when a run completes.
 export default function HandoffLayer({
   pulses,
   onPulseEnd,
