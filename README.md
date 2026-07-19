@@ -1,368 +1,652 @@
+# Iris
 
+> **Experimental personal build.** This repository is the personal experimental version of Iris by **MRQ Học Ứng Dụng AI**. It is being used to actively test ideas, workflows, and product directions, and was published to GitHub in response to audience requests. The project still contains many bugs that MRQ has not had time to fix yet, so please treat it as an actively evolving experiment rather than a polished product. It is shared under the **MIT License** to help the community study it, modify it, and continue developing it further. This version has been tested by MRQ on a **Mac mini M4 with 16 GB RAM running macOS 26**. It is also a fork of the original [`ASHR12/iris`](https://github.com/ASHR12/iris) project — many thanks to **Ashutosh Shrivastava** for the original work.
 
+A desktop voice companion that uses **Gemini Live** for natural realtime conversation and **Claude Code (headless)** for long-running work.
 
+The app is designed as a voice-first front-end: you speak naturally, Gemini Live responds in realtime, and when the request needs tools or autonomous work, Gemini hands it to Claude in the background. The worker is one of three roles, run on deliberately different mechanisms: **PO** is a **stateful** module — a persistent Agent SDK session that stays open across turns and can pause mid-turn to ask you something — while **DEV** is a **stateless** module — a one-shot headless `claude -p` run per issue, unchanged from before. PO and DEV form the build pipeline **PO → DEV**. That pipeline uses [mattpocock/skills](https://github.com/mattpocock/skills), especially **Grill Me** on the PO side, and [Fission-AI/openspec](https://github.com/Fission-AI/openspec) for **SDD (spec-driven development)**. PO grills and shapes the request into a proper spec first; once the spec is complete, DEV implements it using **`opsx:apply`**. **STUDY** is a separate learning role (also a stateful Agent SDK session, in its own module): while you learn from a source and synthesize it aloud, it records your notes into your enabled [`open-second-brain`](https://github.com/itechmeat/open-second-brain) vault and fact-checks note claims against the source and the web. STUDY is not part of the build pipeline and never touches OpenSpec.
 
-# I.R.I.S
+## What This App Does
 
-**A JARVIS-style voice companion for your desktop.**
-Talk naturally. Delegate real work. Control it with your hands. Let it float over everything you do.
+- Captures your microphone through Electron/Chromium with WebRTC audio cleanup.
+- Streams cleaned audio to Gemini Live as 16 kHz PCM.
+- Plays Gemini Live audio responses through the app using browser `AudioContext`.
+- Lets Gemini use built-in Google Search for quick current facts.
+- Lets Gemini hand serious work to Claude, which spawns a headless Claude Code run (`claude -p`).
+- Shows conversation in the Comms panel and Claude jobs in the Claude Tasks panel.
+- Proactively announces Claude results when a background task finishes.
+- Supports interruption/barge-in: when you speak over Gemini, playback is flushed.
+- Uses a dark-only "Orbital Deck" UI with an animated voice orb, keyboard shortcuts, Comms, Camera/Gesture, and Work Stream columns.
+- Adds **camera hand-gesture control** (MediaPipe) after wake so you can drive the UI in the air: point to move a cursor, dwell to open a task, open-palm to scroll, and make a fist to dismiss.
+- Uses a simple polished reader open/close animation for expanded Claude results.
 
-[License: MIT](LICENSE)
-[Platform](#-quick-start)
-[Built with Electron](#-tech-stack)
-[PRs Welcome](#-contributing)
-[Follow on X](https://x.com/ai_for_success)
+## Current Architecture
 
-**Gemini Live** is the voice. **Hermes Agent** is the muscle. Iris is the bridge between you and both.
+```mermaid
+flowchart TD
+  User["User speaks"] --> ElectronRenderer["Electron Renderer UI"]
 
-[Demo](#-demo) · [Features](#-features) · [Glass HUD](#-glass-hud-mode) · [Quick Start](#-quick-start) · [How It Works](#-how-it-works)
+  ElectronRenderer -->|"getUserMedia with echoCancellation, noiseSuppression, autoGainControl"| WebRTCAudio["WebRTC Audio Capture"]
+  WebRTCAudio -->|"Downsample to 16k PCM chunks"| ElectronMain["Electron Main Process"]
 
+  ElectronMain -->|"sendRealtimeInput audio/text"| GeminiLive["Gemini Live API"]
 
+  GeminiLive -->|"Voice response: 24k PCM audio chunks"| ElectronMain
+  ElectronMain -->|"live:audio IPC"| ElectronRenderer
+  ElectronRenderer -->|"AudioContext playback"| Speaker["Laptop Speaker"]
 
+  GeminiLive -->|"Transcripts and state events"| ElectronMain
+  ElectronMain -->|"sidecar:event IPC"| ElectronRenderer
+  ElectronRenderer --> Comms["Comms Panel"]
 
+  GeminiLive -->|"Quick current fact or lightweight search"| GoogleSearch["Gemini Built-in Google Search"]
+  GoogleSearch --> GeminiLive
 
----
+  GeminiLive -->|"Function call: submit_claude_task"| ClaudeTool["Claude Tool Bridge in Electron Main"]
 
+  ClaudeTool -->|"spawn claude -p task --output-format stream-json --resume session"| ClaudeCLI["Claude Code CLI (headless)"]
+  ClaudeCLI --> ClaudeAgent["Claude Agent Run (one continuous session)"]
 
+  ClaudeAgent -->|"Uses terminal, files, web, MCP, skills"| ClaudeTools["Claude Code Tool Ecosystem"]
 
-## 🎬 Demo
+  ClaudeCLI -->|"NDJSON stream: tool calls, progress, final result"| ClaudeTool
 
-> 🔊 **Sound on — Iris is a voice tool.** A real session: waking Iris by voice, delegating a task to Hermes mid-conversation, live tool steps streaming in, opening the result hands-free with a finger point, and Glass HUD mode over the desktop.
+  ClaudeTool -->|"Task status updates"| ElectronRenderer
+  ElectronRenderer --> ClaudeTasks["Claude Tasks Panel"]
 
-[https://github.com/user-attachments/assets/735eb3eb-d98e-4e45-913c-66105ae076b1](https://github.com/user-attachments/assets/735eb3eb-d98e-4e45-913c-66105ae076b1)
+  ClaudeTool -->|"SYSTEM_EVENT_CLAUDE_COMPLETE"| GeminiLive
+  GeminiLive -->|"Proactive spoken summary"| ElectronMain
+  ElectronMain -->|"Audio chunks"| ElectronRenderer
+  ElectronRenderer --> Speaker
 
----
+  User -->|"Interrupts while Gemini speaks"| WebRTCAudio
+  WebRTCAudio -->|"Cleaned mic audio with browser AEC"| GeminiLive
+  GeminiLive -->|"serverContent.interrupted"| ElectronMain
+  ElectronMain -->|"Flush playback"| ElectronRenderer
 
+  User -->|"After wake: hand in front of webcam"| Camera["Webcam getUserMedia"]
+  Camera --> MediaPipe["MediaPipe GestureRecognizer (on-device)"]
+  MediaPipe -->|"Landmarks + gesture class"| HandHook["useHandControl hook"]
+  HandHook -->|"Smoothed pointer + gesture state"| ElectronRenderer
+```
 
+## How The Flow Works
 
-## ✨ What is Iris?
+1. **You speak to the app.**
 
-Iris is a **voice-first desktop companion** built on a two-brain architecture:
+   Electron captures your microphone using Chromium's WebRTC audio path:
 
-- 🎙️ **Gemini Live** handles realtime conversation — you speak, it answers instantly with natural voice, handles interruptions (talk over it, it stops), and uses built-in Google Search for quick facts.
-- 🛠️ **[Hermes Agent](https://github.com/NousResearch)** does the real work — research, coding, files, terminal, browser automation, email, Notion, anything tool-heavy. Iris hands tasks to Hermes **in the background** and keeps chatting with you while Hermes grinds.
-- 🖐️ **MediaPipe hand tracking** lets you drive the whole UI in the air — point-and-hold to click anything, open palm to scroll, fist to close. Fully on-device.
-- 🪟 **Glass HUD mode** turns Iris into a transparent, click-through overlay floating above your entire screen — keep coding, browsing, writing, while Iris hovers like a heads-up display.
+   ```ts
+   echoCancellation: true
+   noiseSuppression: true
+   autoGainControl: true
+   ```
 
-When Hermes finishes a background task, Iris **proactively speaks up**: *"Quick update — Hermes is back with the result."* That's the loop: you talk, Iris routes, Hermes works, Iris reports back.
+   This gives the app laptop-speaker echo cancellation similar to browser/mobile voice apps.
 
----
+2. **The renderer streams audio to Electron main.**
 
+   The renderer downsamples microphone audio to 16 kHz PCM chunks and sends them over Electron IPC.
 
+3. **Electron main streams to Gemini Live.**
 
-## 🚀 Features
+   Electron main owns the Gemini Live session using `@google/genai` and sends audio via `sendRealtimeInput`.
 
+4. **Gemini decides the route.**
 
+   Gemini has two tool paths:
 
-### Voice & conversation
+   - **Google Search** for quick current facts and simple web lookups.
+   - **Claude tools** for real work: deals, research, coding, files, terminal work, email checks, browser tasks, automation, and anything that should continue in the background.
 
-- **Realtime voice** via Gemini Live (16 kHz in / 24 kHz out, WebRTC echo cancellation — works fine on laptop speakers)
-- **"Hey Iris" wake word** — local, on-device ONNX inference; nothing leaves your machine while asleep
-- **Barge-in** — interrupt Iris mid-sentence and it yields immediately
-- **Voice-driven UI** — "open the latest result", "show the steps", "open the failed one", "close it" — fuzzy-matched against what's on screen
-- **Personal context** — reads Hermes's own memory (`USER.md`, `MEMORY.md`) so task briefs are written like it knows you (because it does)
+5. **Claude runs work in the background — one continuous session, one task at a time.**
 
+   When Gemini calls `submit_claude_task`, Electron main spawns a headless Claude Code run:
 
+   ```text
+   claude -p "<task>" --output-format stream-json --verbose --permission-mode bypassPermissions
+   ```
 
-### The Hermes work loop
+   The spawn returns a `run_id` immediately, so Gemini can keep talking while Claude works. Sessions are **user-controlled**: the Work Stream panel has a session picker and a **New** button, and the active session can also be reset by voice ("Iris, new session"). Every task resumes the active session (`--resume`), so Claude remembers earlier tasks and follow-ups build on previous work — Gemini cannot pick or invent session ids. Tasks run strictly **one at a time**: if Claude is busy, the new task is queued and starts automatically when the current one finishes. Sessions persist across app restarts (`~/.iris/claude-sessions.json`).
 
-- **Background delegation** — tasks return a `run_id` instantly; conversation never blocks
-- **Live activity feed** — every tool call Hermes makes (browser, code, files, search) streams into the task card in real time with durations
-- **Proactive completion announcements** — Iris tells you the moment work finishes and summarizes it out loud
-- **System-enforced confirmation gate** — Iris *cannot* dispatch to Hermes until it reads the brief back and you say yes, in your own turn. Enforced in code, not by prompt hopes. Unconfirmed submits are rejected by the app itself.
-- **Anti-hallucination guardrails** — status and results can only come from real Hermes API responses; "still working" is the only honest answer until then, and tool responses say so explicitly
+6. **The app streams Claude progress live.**
 
+   Electron parses the NDJSON stream as Claude works: every tool call (`[Bash] npm test …`) and intermediate note appears in the task card in realtime, so you can see what Claude is doing. When the process exits, the card shows the final result.
 
+7. **Claude completion is fed back to Gemini.**
 
-### Sessions & memory
+   When a run completes, Electron sends Gemini an internal message:
 
-- **One pinned Hermes chat thread** — like picking a chat in the Hermes app; no stray sessions
-- **Session switcher on the main page** — chip at the top of the Work Stream lists your Iris sessions; **+** starts a new thread (named by Hermes, titled by your first prompt, like every chat tool)
-- **History restore** — close Iris, reopen it, and your past completed runs are rebuilt from Hermes's own session transcript. Nothing is lost between launches.
+   ```text
+   SYSTEM_EVENT_CLAUDE_COMPLETE
+   ```
 
+   Gemini then proactively tells you Claude has returned, summarizes the result, and asks whether you want to go through the details before continuing.
 
+8. **You can interrupt Gemini.**
 
-### Hands-free control
+   If you speak while Gemini is talking, Gemini sends an interruption event. The app flushes queued playback so Gemini stops talking over you.
 
-- **Point-and-hold to click anything** (~0.3 s) — cards, buttons, toggles, chips; the reticle visibly "charges" while arming
-- **Open palm** — joystick scrolling over whatever region your hand hovers: work stream, comms, step timelines, the reader
-- **Two open palms** — resize the reader
-- **Closed fist** — close the reader
-- All tracking is **on-device** (MediaPipe GestureRecognizer); frames never leave your machine
+## Main Components
 
+### Electron Main
 
+File: `electron/main.mjs`
 
-### Design
+Responsibilities:
 
-- **Deep-space design system** — electric cyan + violet on near-black, glass panels, Inter / Space Grotesk / JetBrains Mono
-- **The orb** — a canvas-drawn arc reactor that breathes with the actual audio level, changes palette per state (listening / speaking / working), and flashes when work is handed off
-- **Orb micro-expressions** — a double-pulse on wake, a soft ripple when your words are locked in, and an orbiting "thinking" swirl in the gap before Iris speaks
-- **Two voice signatures** — your voice renders as sharp radial bars around the orb; Iris's voice as a smooth breathing wave. You can *see* who's talking.
-- **Sound design** — five subtle synthesized cues (wake, sleep, task sent, task done, approval needed). No audio files; pure tuned Web Audio tones. Toggle in Settings.
-- **Comet handoff** — a particle streaks from the orb to the task card when Gemini delegates, and back when Hermes returns
-- **Cinematic boot sequence**, animated transitions, and a custom app icon rendered from the orb itself
+- Loads `.env`.
+- Creates the Gemini Live session.
+- Defines Gemini tools.
+- Bridges Gemini tool calls to headless Claude Code runs (`claude -p`).
+- Sends/receives Gemini audio.
+- Tracks Claude runs and keeps per-session continuity via `--resume`.
+- Announces Claude completion back into Gemini.
 
----
+### Electron Preload
 
+File: `electron/preload.cjs`
 
+Responsibilities:
 
-## 🪟 Glass HUD mode
+- Exposes safe IPC APIs to the renderer.
+- Sends microphone PCM chunks to Electron main.
+- Receives Gemini audio chunks and interruption events.
+- Receives app state events.
 
-The signature feature. Press **⌥ Space** anywhere:
+### React Renderer
 
+Files:
 
+- `src/App.tsx`
+- `src/App.css`
+- `src/deck.css`
+- `src/ReactorCore.tsx`
+- `src/BootSequence.tsx`
+- `src/useHandControl.ts` (MediaPipe hand/gesture hook)
 
-- Iris becomes a **transparent, always-on-top overlay** across your whole screen
-- **Click-through everywhere** except Iris's own elements — your mouse works normally in the apps underneath
-- Collapsible **Tasks** and **Comms** chips, camera tile, caption pill by the orb
-- Open results in a glass reader **without blacking out your desktop**
-- Gestures get even better here: your hand reticle floats over your entire screen
-- Menu-bar tray icon keeps Iris alive in the background (wake/sleep/HUD from the tray)
+Responsibilities:
 
+- Renders the UI.
+- Captures microphone with WebRTC audio cleanup.
+- Downsamples mic audio to 16 kHz PCM.
+- Plays Gemini audio through `AudioContext`.
+- Shows Comms and Claude Tasks.
+- Renders the dark-only Orbital Deck layout.
+- Provides keyboard shortcuts.
+- Runs camera hand-gesture control after wake and simple reader open/close animation.
 
+## Hand & Gesture Control (MediaPipe)
 
----
+The app can be driven in the air with your webcam. The camera does **not** start
+on app boot; it is enabled automatically after wake, once Gemini Live and mic
+capture are initialized. Hand tracking and gesture
+classification run **fully on-device** using Google's
+[MediaPipe Tasks Vision](https://ai.google.dev/edge/mediapipe/solutions/vision/gesture_recognizer)
+`GestureRecognizer`. No camera frames ever leave your machine — only the derived
+pointer position and gesture label are used by the UI.
 
+File: `src/useHandControl.ts` (consumed by `src/App.tsx`).
 
+### What we use
 
-## ⚡ Quick Start
+- **Package:** `@mediapipe/tasks-vision` (the WebAssembly "Tasks Vision" runtime).
+- **Task:** `GestureRecognizer` — a pre-trained model that returns both hand
+  landmarks and a classified gesture in one pass.
+- **Model asset:** `gesture_recognizer.task` (Google's canned-gesture classifier).
+- **WASM runtime:** loaded via `FilesetResolver.forVisionTasks(...)` from the
+  MediaPipe CDN.
 
+### How we configure it
 
+```ts
+const fileset = await FilesetResolver.forVisionTasks(WASM_URL);
+recognizer = await GestureRecognizer.createFromOptions(fileset, {
+  baseOptions: { modelAssetPath: MODEL_URL, delegate: "GPU" },
+  runningMode: "VIDEO",
+  numHands: 1,
+  minHandDetectionConfidence: 0.6,
+  minHandPresenceConfidence: 0.6,
+  minTrackingConfidence: 0.6,
+  cannedGesturesClassifierOptions: { scoreThreshold: 0.55 },
+});
+```
+
+- **GPU delegate** for low-latency inference, **VIDEO** running mode for a live
+  webcam stream.
+- **One hand** is tracked to keep the interaction unambiguous.
+- Confidence floors (`0.6`) and a canned-gesture score threshold (`0.55`) reject
+  weak/uncertain frames.
+
+### The processing pipeline
+
+1. After wake, `navigator.mediaDevices.getUserMedia` opens the front camera at
+   640×480 into a hidden `<video>` element.
+2. A `requestAnimationFrame` loop calls
+   `recognizer.recognizeForVideo(video, performance.now())` each frame.
+3. From the result we read the first hand's **landmarks** and the **top gesture**.
+4. **Pointer:** we take the index-fingertip landmark (`hand[8]`), mirror X
+   (`1 - x`) for a natural selfie view, then remap a comfortable center region of
+   the frame to the full screen (so you don't have to reach the physical edges):
+
+   ```ts
+   const INPUT_RANGE = { xMin: 0.18, xMax: 0.82, yMin: 0.12, yMax: 0.82 };
+   ```
+
+   The mapped point is then **exponentially smoothed** (factor `0.5`) to remove jitter.
+5. **Gesture stabilization:** a raw gesture must persist for **3 frames** before it
+   becomes the "stable" gesture, which prevents flicker between classes.
+
+### Gesture → action mapping
+
+| Gesture (MediaPipe class) | Action in the app |
+| --- | --- |
+| `Pointing_Up` | Move the on-screen cursor; **dwell ~850 ms** over a task card to open it |
+| `Open_Palm` | **Hold-to-scroll** the open reader (joystick: hold high = scroll up, low = scroll down, middle = neutral; speed scales with distance) |
+| `Closed_Fist` | Close the expanded reader |
+| `None` / other | Idle — pointer hidden |
+
+### Gesture control flow
+
+```mermaid
+flowchart TD
+  Webcam["Webcam 640x480"] --> Video["Hidden video element"]
+  Video --> Loop["requestAnimationFrame loop"]
+  Loop --> Recognize["GestureRecognizer.recognizeForVideo"]
+  Recognize --> Landmarks["Hand landmarks - index fingertip"]
+  Recognize --> GestureClass["Top gesture + score"]
+
+  Landmarks --> Mirror["Mirror X + remap center region to screen"]
+  Mirror --> Smooth["Exponential smoothing (0.5)"]
+  Smooth --> Pointer["Smoothed screen pointer"]
+
+  GestureClass --> Stabilize["Stabilize: hold 3 frames"]
+  Stabilize --> StableGesture["Stable gesture"]
+
+  Pointer --> HandState["HandState"]
+  StableGesture --> HandState
+  HandState --> AppUI["App.tsx interactions"]
+
+  AppUI -->|"Pointing_Up + brief dwell"| OpenCard["Open task card"]
+  AppUI -->|"Open_Palm"| Scroll["Hold-to-scroll reader"]
+  AppUI -->|"Closed_Fist"| Close["Close reader"]
+```
+
+### Reader animation
+
+Expanded Claude task results open with a simple scale/fade pop and close with a
+short fade/scale animation. The intentionally simple animation keeps the UI
+clean and avoids expensive DOM rasterization.
+
+## Gemini Tools
+
+Gemini Live is configured with:
+
+```js
+tools: [
+  { googleSearch: {} },
+  {
+    functionDeclarations: [
+      check_claude_status,
+      submit_claude_task,
+      get_claude_task_status,
+      stop_claude_task,
+      start_new_claude_session,
+      get_workspace_info,
+      answer_po_question,
+    ]
+  }
+]
+```
+
+Routing behavior:
+
+- Quick answer or current fact: **Gemini Search**.
+- Multi-step work or background task: **Claude**.
+- Claude completion: **Gemini proactively announces result**.
+- PO pauses mid-task with a question (`SYSTEM_EVENT_PO_QUESTION`): **Gemini reads it aloud immediately and answers via `answer_po_question`** once the user responds — distinct from the end-of-run "Decisions needed" relay, which still applies to DEV and to PO's lower-stakes calls.
+
+## Claude Code Requirements
+
+The worker ("Claude") is [Claude Code](https://code.claude.com/docs/en/headless). Iris drives it two ways, matching the stateful/stateless module split:
+
+- **DEV (stateless)** shells out to the `claude` CLI directly. **PO (stateful)** drives the same binary through `@anthropic-ai/claude-agent-sdk` as one persistent session. Either way, install and authenticate it first:
+
+```bash
+claude --version
+```
+
+If that works in your terminal, DEV can use it immediately. **PO additionally needs a subscription token**, since the Agent SDK does not inherit your interactive `claude` login:
+
+```bash
+claude setup-token
+```
+
+Paste the result into `.env` as `CLAUDE_CODE_OAUTH_TOKEN` (see `.env.example`). Without it, PO **and STUDY** turns fail with an actionable error (both are Agent SDK sessions); DEV is unaffected. Set `IRIS_PO_LIVE_SESSION=0` to temporarily disable the PO live session and fall back to the old one-shot behavior instead. STUDY additionally needs the [`open-second-brain`](https://github.com/itechmeat/open-second-brain) Claude Code plugin enabled — its SDK session inherits the plugin's `brain_*` note tools from your `~/.claude` settings, so no extra Iris config is required. If people need a second brain for Hermes or Claude Code, that project is the recommended place to start. STUDY's model defaults to `claude-sonnet-5` (override `IRIS_STUDY_MODEL`).
+
+Each DEV (or plain Claude) task runs as:
+
+```text
+claude -p "<task>" --output-format stream-json --verbose --permission-mode bypassPermissions
+```
+
+Each PO task delivers into the workstream's resident Agent SDK session (created on the first PO turn), instead of spawning a new process.
+
+### Bundled Claude Code agents
+
+This repository also bundles the Iris agent definitions inside the project at `.claude/agents/`, so people opening the repo in Claude Code can use the same agents directly from the project:
+
+- `iris-po` — grills requests, drives OpenSpec, and prepares work for DEV.
+- `iris-dev` — implements the remaining tasks of an open change headlessly.
+- `iris-study` — records study notes into `open-second-brain` and verifies note claims.
+
+Example headless usage:
+
+```bash
+claude --agent iris-po -p "Grill this feature request and propose the next OpenSpec change"
+claude --agent iris-dev -p "Implement the remaining unchecked tasks for the current OpenSpec change"
+claude --agent iris-study -p "Verify this study note against the source and the web"
+```
+
+If you want to reuse these agents globally in Claude Code, copy them into **`~/.claude/agents/`** explicitly:
+
+```bash
+mkdir -p ~/.claude/agents
+cp .claude/agents/iris-*.md ~/.claude/agents/
+```
+
+After that, you can use them from anywhere with commands like:
+
+```bash
+claude --agent iris-po -p "Grill this feature request and propose the next OpenSpec change"
+```
+
+Notes:
+
+- Runs execute in `~/.iris/workspace` by default (override with `IRIS_CLAUDE_CWD`). Claude sessions are scoped to this directory, which is what makes DEV's `--resume` and PO's `resume` continuity work.
+- Sessions are user-controlled from the Work Stream panel (picker + New button) or by voice ("new session"). Every task resumes the active session, tasks run one at a time (PO turns and DEV runs share the same execution slot), and sessions are persisted in `~/.iris/claude-sessions.json` so context survives app restarts.
+- The default permission mode is `bypassPermissions` for both modules — fully autonomous: Claude runs any tool without asking, since headless mode has no interactive approval prompt anyway. Set `IRIS_CLAUDE_PERMISSION_MODE=acceptEdits` (or `plan`) to restrict DEV. PO's tool-use permission mode is not configurable the same way — it always stays `bypassPermissions`, with only `AskUserQuestion` pausing to relay a question to voice.
+- A packaged GUI app may not inherit your shell PATH; Iris probes `~/.local/bin/claude`, `/usr/local/bin/claude`, and `/opt/homebrew/bin/claude`, or you can set `IRIS_CLAUDE_BIN` explicitly — this also points the PO session at the same resolved binary.
+- **Never set `ANTHROPIC_API_KEY`** unless you intend to pay per token: it outranks `CLAUDE_CODE_OAUTH_TOKEN` in the SDK's auth precedence. Iris strips it from the PO session's own environment regardless, but leaving it unset avoids any ambiguity.
+
+## App Environment
+
+Iris reads environment values from:
+
+1. `.env` in this repo (development and `npm start`).
+2. `~/.iris/.env` (packaged app on macOS/Linux).
+3. `%USERPROFILE%\\.iris\\.env` (packaged app on Windows).
+4. `.env` bundled next to app resources (optional packaging flow).
+
+Copy the example file:
+
+```bash
+cp .env.example .env
+```
+
+On Windows PowerShell:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Minimum required:
+
+```bash
+GEMINI_API_KEY=your_google_ai_studio_key
+```
+
+Recommended example:
+
+```bash
+GEMINI_API_KEY=your_google_ai_studio_key
+IRIS_USER_NAME=there
+GEMINI_LIVE_MODEL=models/gemini-3.1-flash-live-preview
+GEMINI_LIVE_VOICE=Zephyr
+# IRIS_CLAUDE_CWD=/Users/you/.iris/workspace
+# IRIS_CLAUDE_PERMISSION_MODE=bypassPermissions
+# IRIS_CLAUDE_BIN=/Users/you/.local/bin/claude
+# CLAUDE_CODE_OAUTH_TOKEN=your_setup_token_value
+# IRIS_PO_QUESTION_TIMEOUT_MS=300000
+# IRIS_PO_LIVE_SESSION=1
+```
+
+The `IRIS_CLAUDE_*` values are optional. Set `IRIS_CLAUDE_BIN` only if the
+packaged GUI app cannot find the `claude` binary on PATH. `CLAUDE_CODE_OAUTH_TOKEN`
+is required for the **PO** module specifically (generate it with `claude setup-token`) —
+DEV keeps working without it via your interactive `claude` login.
+
+## Exact Google Models, SDKs & Assets (pinned reference)
+
+Use this table as the single source of truth for **which Google pieces we use**,
+so future changes don't reintroduce wrong/deprecated names or version drift.
+
+| Purpose | Exact identifier we use | Where it's set | Source |
+| --- | --- | --- | --- |
+| Gemini Live model | `models/gemini-3.1-flash-live-preview` | `electron/main.mjs` (`GEMINI_LIVE_MODEL` env override) | Google AI Studio / Gemini API |
+| Gemini voice | `Zephyr` | `electron/main.mjs` (`GEMINI_LIVE_VOICE` env override) | Gemini Live prebuilt voices |
+| Gemini SDK | `@google/genai` `^2.10.0` | `package.json` | npm |
+| Gemini built-in search tool | `{ googleSearch: {} }` | `electron/main.mjs` `tools` | Gemini Live tools |
+| Gesture/hand ML runtime | `@mediapipe/tasks-vision` `^0.10.35` | `package.json` | npm |
+| MediaPipe WASM fileset | `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm` | `src/useHandControl.ts` (`WASM_URL`) | jsDelivr CDN |
+| MediaPipe model asset | `https://storage.googleapis.com/mediapipe-tasks/gesture_recognizer/gesture_recognizer.task` | `src/useHandControl.ts` (`MODEL_URL`) | Google Cloud Storage |
+| Wake-word ONNX runtime | `onnxruntime-web` `^1.27.0` | `package.json` | npm |
+| Wake-word ONNX WASM fileset | `https://cdn.jsdelivr.net/npm/onnxruntime-web@1.27.0/dist/` | `src/hooks/useWakeWord.ts` (`ort.env.wasm.wasmPaths`) | jsDelivr CDN |
+| Wake-word model assets | `melspectrogram.onnx`, `embedding_model.onnx`, `hey_iris.onnx` | `public/wakeword/` (bundled, no runtime fetch) | vendored from the "Hey Iris" openWakeWord training run |
+| WebGL 3D engine | `three` `^0.181.2` | `package.json` | npm |
+| React renderer for Three.js | `@react-three/fiber` `^9.4.0` | `package.json` | npm |
+| Three.js helpers | `@react-three/drei` `^10.7.7` | `package.json` | npm |
+| Bloom/post-processing | `@react-three/postprocessing` `^3.0.4` | `package.json` | npm |
+
+### Known footguns / lessons (avoid repeating these)
+
+- **Use the exact Live model name `gemini-3.1-flash-live-preview`.** Live models
+  are a distinct family from regular `gemini-*` chat models; a normal chat model
+  name will fail to open a Live session. Keep the `models/` prefix.
+- **Keep the MediaPipe WASM URL version equal to the installed npm version.**
+  Both are pinned to `0.10.35` today. A mismatch between the JS API
+  (`@mediapipe/tasks-vision`) and the WASM fileset can cause subtle runtime/ABI
+  breakage, so update the `@x.y.z` in `WASM_URL` whenever you bump the package
+  (or self-host the WASM from the installed package instead of a CDN).
+- **Keep the onnxruntime-web WASM URL version equal to the installed npm version**, same reasoning as MediaPipe above — both are pinned to `1.27.0` today.
+- **MediaPipe WASM + model are fetched from Google/jsDelivr at first load**, so
+  gesture control needs network access on first run. Vendor both locally if you
+  need fully offline startup.
+- **Gemini Live audio formats are fixed:** send **16 kHz** PCM, receive **24 kHz**
+  PCM. Don't assume a single sample rate for both directions.
+- **Gemini 3.1 Live function calls are synchronous** — never block a tool call on
+  long Claude work; return a `run_id` immediately and track completion separately.
+- **Send realtime input with `sendRealtimeInput`** (not the deprecated
+  `media_chunks` path) for audio/text streaming.
+
+## Setup From Source
 
 ### Prerequisites
 
-- **Node.js 20+** and npm
-- **[Hermes Agent](https://github.com/NousResearch)** installed with the gateway running
-- A free **Gemini API key** from [Google AI Studio](https://aistudio.google.com/apikey)
-- macOS, Windows, or Linux (Glass HUD is built and tuned on macOS)
+- Node.js 20+ (LTS recommended).
+- npm.
+- Claude Code installed and authenticated (`claude --version` works).
+- A Gemini API key for the Live model (`GEMINI_API_KEY`).
+- macOS, Windows, or Linux with microphone permission available.
 
-
-
-### 1 — Install & run
+### 1. Install dependencies
 
 ```bash
-git clone https://github.com/ASHR12/iris.git
-cd iris
-npm install
+npm ci
+```
+
+Use `npm ci` for a clean, reproducible install from `package-lock.json`.
+
+### Quick start
+
+```bash
+npm ci
+cp .env.example .env
+# edit .env and set GEMINI_API_KEY
+npm start
+```
+
+If you just want the shortest path: **install with `npm ci`, then run with `npm start`**.
+
+### 2. Configure Gemini and Iris
+
+Create `.env` from `.env.example` and set at least `GEMINI_API_KEY`.
+
+### 3. Verify Claude Code
+
+Make sure the Claude Code CLI is installed and logged in:
+
+```bash
+claude --version
+claude -p "Reply with exactly: PONG" --output-format json
+```
+
+The second command should print a JSON object with `"result":"PONG"` and a `session_id`.
+
+### 4. Run in development mode
+
+```bash
 npm run dev
 ```
 
+This starts Vite and Electron with hot reload. In dev mode the macOS Dock may
+show the generic Electron app name, but the packaged app is named Iris.
 
-
-### 2 — Enable the Hermes API
-
-```bash
-echo 'API_SERVER_ENABLED=true' >> ~/.hermes/.env
-echo 'API_SERVER_KEY=iris-local-dev' >> ~/.hermes/.env
-hermes gateway restart
-```
-
-
-
-### 3 — Complete the setup wizard
-
-Iris opens an **onboarding wizard** on first launch — paste your Gemini key (with a live **Test** button), point it at Hermes (**Test** that too), pick a voice (with preview), grant mic permission. Everything saves to `~/.iris/.env`. **No manual file editing needed.**
-
-### 4 — Wake it up
-
-Press **W** (or say **"Hey Iris"** if you enabled the wake word). Ask it something. Then ask it to *do* something — "check my unread emails and summarize what needs attention" — confirm the brief, and watch Hermes go to work while you keep talking.
-
-> **Try it with zero keys:** toggle **demo mode** in Settings → Advanced. `D` loads a full fake workspace, `G` plays a simulated handoff. Great for screenshots and poking at the UI.
-
-**Production build & packaging**
+### 5. Run a production build without packaging
 
 ```bash
-npm start            # build + launch production bundle
-npm run package:mac  # macOS .app (unsigned by default)
-npm run dist:win     # Windows distributable
+npm start
 ```
 
-The packaged app reads config from `~/.iris/.env` (`%USERPROFILE%\.iris\.env` on Windows), written by the wizard.
+This builds `dist/` and launches Electron from the built files.
 
-
-
----
-
-
-
-## 🎮 Controls
-
-
-| Input             | Action                                                                             |
-| ----------------- | ---------------------------------------------------------------------------------- |
-| **W** / **S**     | Wake / sleep                                                                       |
-| **⌥ Space**       | Toggle Glass HUD (global — works from any app; configurable via `IRIS_HUD_HOTKEY`) |
-| **"Hey Iris"**    | Wake by voice (opt-in, on-device)                                                  |
-| Top-right buttons | HUD toggle · Settings · hand-tracking toggle · link status                         |
-| Menu-bar icon     | Wake/sleep, HUD, show deck, quit                                                   |
-| **D** / **G**     | Load demo data / simulate a handoff (demo mode only)                               |
-
-
-
-
-### Hand gestures
-
-
-| Gesture             | Action                                                                   |
-| ------------------- | ------------------------------------------------------------------------ |
-| ☝️ Point (index up) | Move the cursor — **hold ~0.3 s over anything clickable to click it**    |
-| ✋ Open palm         | Hold-to-scroll whatever region your hand is over (high = up, low = down) |
-| 🙌 Two open palms   | Resize the open reader                                                   |
-| ✊ Closed fist       | Close the reader                                                         |
-
-
-
-
-### Say things like
-
-- *"What's the latest on the OpenAI news?"* → answered directly with Google Search
-- *"Check my unread emails and tell me if anything needs attention"* → read-back → your "yes" → Hermes runs it in the background
-- *"How's that task going?"* → real status from the Hermes API, never invented
-- *"Open the latest result"* / *"show the steps"* / *"open the failed one"* → UI obeys
-
----
-
-
-
-## 🧠 How it works
-
-```mermaid
-flowchart LR
-  You(("🎙️ You")) <-->|"realtime voice"| Iris["IRIS<br/>(Electron + React)"]
-  Iris <-->|"16k/24k PCM audio,<br/>tools"| Gemini["Gemini Live"]
-  Gemini -->|"quick facts"| Search["Google Search"]
-  Gemini -->|"propose → you confirm →<br/>submit_hermes_task"| Hermes["Hermes Agent<br/>(local API)"]
-  Hermes -->|"SSE tool events +<br/>run status"| Iris
-  Hermes -->|"completion event"| Gemini
-  Gemini -->|"'Hermes is back —<br/>here's the result'"| You
-```
-
-
-
-1. **Electron main owns the Gemini Live session** — mic audio streams up, voice streams back, transcripts and state events flow to the UI.
-2. **Gemini routes**: quick things it answers itself (with Google Search when needed); real work goes through the **two-step dispatch gate** — `propose_hermes_task` stages a complete brief, Iris reads it back, and only your explicit yes (in your own turn — enforced by a state machine, not the prompt) unlocks `submit_hermes_task`.
-3. **Hermes runs in the background** via its local API (`POST /v1/runs`), returning a `run_id` immediately. Iris polls status and consumes the SSE event stream, painting every tool call onto the task card live.
-4. **On completion**, Iris injects a system event into Gemini so it proactively announces and summarizes the result — then you can open it by voice, mouse, or finger.
-5. **Sessions mirror Hermes**: all work lives in one pinned Hermes chat thread; the Work Stream rebuilds from that thread's transcript on every launch.
-
-**Pinned models, SDKs & known footguns (for contributors)**
-
-
-| Purpose           | Identifier                                                                     | Where                                     |
-| ----------------- | ------------------------------------------------------------------------------ | ----------------------------------------- |
-| Gemini Live model | `models/gemini-3.1-flash-live-preview`                                         | `electron/main.mjs` (`GEMINI_LIVE_MODEL`) |
-| Gemini SDK        | `@google/genai`                                                                | `package.json`                            |
-| Gesture runtime   | `@mediapipe/tasks-vision` (WASM pinned to same version in `useHandControl.ts`) | `package.json`                            |
-| Wake word         | openWakeWord-style ONNX via `onnxruntime-web`                                  | `public/wakeword/`                        |
-
-
-- Live models are a distinct family — a normal `gemini-*` chat model will not open a Live session. Keep the `models/` prefix.
-- Gemini Live audio is fixed-format: **send 16 kHz PCM, receive 24 kHz PCM**.
-- Live function calls are synchronous — never block a tool call on Hermes work; return the `run_id` immediately.
-- Keep the MediaPipe WASM CDN version identical to the installed npm package version.
-- MediaPipe WASM + model are fetched from CDN on first gesture use — first run needs network.
-
-
-
----
-
-
-
-## ⚙️ Configuration
-
-Everything is configurable through **Settings (gear icon)** — the file below is written for you. Power users can edit `~/.iris/.env` directly:
+If you already built once:
 
 ```bash
-GEMINI_API_KEY=...                                # required — aistudio.google.com/apikey
-IRIS_USER_NAME=Ashutosh                           # what Iris calls you
-GEMINI_LIVE_MODEL=models/gemini-3.1-flash-live-preview
-GEMINI_LIVE_VOICE=Zephyr                          # pick + preview in Settings
-HERMES_API_URL=http://127.0.0.1:8642
-API_SERVER_KEY=iris-local-dev                     # must match Hermes's ~/.hermes/.env
-HERMES_HOME=~/.hermes                             # optional, auto-detected
-IRIS_HERMES_SESSION=iris-voice                    # pinned Hermes chat (or use the UI switcher)
-IRIS_WAKE_WORD=true                               # "Hey Iris" on-device wake word
-IRIS_HUD_HOTKEY=Alt+Space                         # global Glass HUD hotkey
-IRIS_SOUNDS=true                                  # subtle interface sound cues
-IRIS_LOAD_TEST_DATA=false                         # demo mode
+npm run start:prod
 ```
 
-Config resolution order: repo `.env` (dev) → `~/.iris/.env` (wizard/packaged) → bundled `.env`.
-
----
-
-
-
-## 📁 Project structure
-
-```
-electron/          main process — Gemini Live session, Hermes bridge, dispatch
-                   gate, Glass HUD window control, tray, config
-src/
-  components/      TopBar, CommsPanel, WorkStream, WorkCard, CenterStage,
-                   HudShell, ReaderOverlay, SessionSwitcher, SetupPanel, …
-  hooks/           useAudioPipeline, useHandControl, useWakeWord, useHandoffFx
-  lib/             audio/PCM helpers, task utils + fuzzy matching, fixtures
-  styles/          deep-space design system (tokens → base → deck → overlays → fx → hud)
-public/wakeword/   on-device "Hey Iris" ONNX models
-build/             app icon (SVG source + renderer) and tray assets
-scripts/           dev launcher, icon renderer
-```
-
----
-
-
-
-## 🛠 Tech stack
-
-
-| Layer     | Tech                                                                       |
-| --------- | -------------------------------------------------------------------------- |
-| Shell     | Electron (transparent frameless window, global shortcuts, tray)            |
-| UI        | React 19 + TypeScript + Vite, custom CSS design system                     |
-| Voice     | Gemini Live API (`@google/genai`), Web Audio (capture, playback, metering) |
-| Agent     | Hermes Agent local API (runs, SSE events, sessions)                        |
-| Gestures  | MediaPipe Tasks Vision `GestureRecognizer` (GPU, on-device)                |
-| Wake word | onnxruntime-web, openWakeWord-style mel → embedding → classifier pipeline  |
-
-
----
-
----
-
-## 🤝 Contributing
-
-PRs and issues are very welcome. Good first areas: new orb themes, additional gesture mappings, Windows/Linux HUD polish, sound design, more voice UI commands.
+### 6. Build/check only
 
 ```bash
-npm run dev      # hot-reload dev loop
-npm run build    # typecheck + bundle
+npm run build
 ```
 
-Please keep the two golden rules: **voice must never regress because of gestures**, and **Iris never invents Hermes results** — status comes from the API or it doesn't exist.
+## Packaging
 
-## ⚠️ Privacy & security notes
+### macOS
 
-- Your Gemini key and Hermes key live in `~/.iris/.env` — never committed.
-- Camera frames and wake-word audio are processed **entirely on-device** and never uploaded.
-- Conversation audio goes to Gemini Live (Google) while Iris is awake; asleep, nothing streams anywhere.
-- The default `API_SERVER_KEY=iris-local-dev` is for local development — change it if you expose Hermes beyond localhost.
+```bash
+npm run package:mac
+open release/mac-arm64/Iris.app
+```
 
+The app is unsigned by default. If macOS blocks it, right-click the app and choose
+**Open** once.
 
+### Windows
 
-## 📄 License
+From Windows:
 
-[MIT](LICENSE) — build wild things with it.
+```powershell
+npm ci
+Copy-Item .env.example .env
+# edit .env and set GEMINI_API_KEY (and IRIS_CLAUDE_BIN if needed)
+npm start
+```
 
----
+To create an unpacked Windows app directory:
 
+```powershell
+npm run package:win
+```
 
+To create a distributable Windows build:
 
-Built by **[Ashutosh Shrivastava](http://ashutoshai.com/)** — AI consultant & tech storyteller, 1M+ weekly reach on X
+```powershell
+npm run dist:win
+```
 
-[🌐 Website](http://ashutoshai.com/) · [𝕏 / Twitter](https://x.com/ai_for_success) · [YouTube](https://www.youtube.com/@AIforSuccess) · [LinkedIn](https://www.linkedin.com/in/aiforsuccess/) · [Instagram](https://www.instagram.com/ashutosh.s.ai/) · [Threads](https://www.threads.com/@ashutosh.s.ai) · [GitHub](https://github.com/ASHR12)
+For the packaged Windows app, copy `.env.example` to:
 
-Crafted with **Gemini Live**, **Hermes Agent**, and an unreasonable love for arc reactors.
+```text
+%USERPROFILE%\\.iris\\.env
+```
 
-⭐ **If Iris made you grin, star the repo — it genuinely helps.**
+Then set `GEMINI_API_KEY` (and `IRIS_CLAUDE_BIN` if the packaged app cannot find `claude`) there.
 
+## Controls
+
+- **W**: Wake
+- **S**: Sleep
+- Top-right signal icon: live connection indicator
+- Top-right hand icon: manually enables/disables camera gesture tracking
+
+Camera/gesture behavior:
+
+- App boot: camera is off.
+- Wake (`W`): Gemini Live starts, mic capture starts, then camera/gesture control starts automatically.
+- Sleep (`S`): Gemini, mic, and camera/gesture control stop.
+
+### Hand gestures (when camera control is enabled)
+
+- **Point (index up)**: move the cursor; hold over a task card briefly to open it
+- **Open palm**: hold-to-scroll inside Comms, Work Stream, and the open reader (high = up, low = down)
+- **Closed fist**: close the reader
+
+> The first launch will prompt for camera permission. Frames are processed
+> on-device by MediaPipe and never uploaded.
+
+## Glass HUD Mode
+
+Iris can float over your whole desktop as a transparent, click-through
+overlay — the orb, tasks column, comms, and camera dock stay visible while
+you keep working in the app underneath. Everything on the glass is
+pointer-transparent except the "islands" (task cards, toggles, the orb
+controls) — the window only accepts clicks where you're actually hovering an
+island.
+
+**Three ways to toggle it**, all equivalent:
+
+- The picture-in-picture icon in the deck's top bar.
+- The global hotkey, `⌥Space` by default (`IRIS_HUD_HOTKEY` to change it) —
+  works even when a different app has focus.
+- The tray (menu-bar) icon, which also offers Wake/Sleep without switching to
+  the deck first.
+
+The app always boots into deck mode (booting straight into a click-through
+overlay with no visible affordance would be a lockout risk). Management
+surfaces — pipeline role, model choice, sessions, project folder, setup — are
+deck-only; the HUD's exit control (⌥Space, the HUD button, or the tray) takes
+you back. A pending PO question stays answerable while the HUD is up: it
+surfaces as a lit banner island, answerable by voice, click, or gesture
+dwell-click exactly as in the deck.
+
+**Known macOS quirks:** the HUD sits above other windows on the current
+Space (`visibleOnAllWorkspaces` with `visibleOnFullScreen: true`); switching
+Spaces while the HUD is up should keep it visible, but if you notice it get
+left behind on a specific Space, toggle it off and back on to re-attach it to
+the one you're on.
+
+## Notes
+
+- The app now uses Electron/Chromium microphone capture instead of Python `pyaudio` for the main Gemini Live path. This gives better echo cancellation on laptop speakers.
+- Gemini Live model: `gemini-3.1-flash-live-preview`.
+- Gemini 3.1 Live function calls are synchronous, so Claude tasks return a `run_id` immediately and finish in the background.
+- The background worker is Claude Code running headless (`claude -p`).
+- Hand tracking uses `@mediapipe/tasks-vision` (`GestureRecognizer`) entirely on-device and starts only after wake unless manually enabled.
+
+## Open-Source Notes
+
+- `.env` is ignored. Do not commit real Gemini keys.
+- The packaged app is unsigned unless you add your own Apple/Windows signing
+  certificates.
+- Licensed under the MIT License. See `LICENSE`.
+
+## Support / Contact
+
+If this project helps you and you want to support my work:
+
+- Visit my website: [www.mrqhocungdungai.io.vn](https://www.mrqhocungdungai.io.vn)
+- Buy me a coffee: [buymeacoffee.com/mrqhocungdungai](https://buymeacoffee.com/mrqhocungdungai)
+- DM me on TikTok: [@mr.q.hoc.ung.dung.ai](https://www.tiktok.com/@mr.q.hoc.ung.dung.ai)

@@ -1,13 +1,8 @@
 /* Iris "Deep Space" design system — single entry point */
-@import "@fontsource-variable/inter";
-@import "@fontsource-variable/space-grotesk";
-@import "@fontsource/jetbrains-mono/400.css";
-@import "@fontsource/jetbrains-mono/500.css";
-@import "@fontsource/jetbrains-mono/700.css";
-
 @import "./tokens.css";
 @import "./base.css";
 @import "./deck.css";
 @import "./overlays.css";
 @import "./fx.css";
 @import "./hud.css";
+@import "./claude.css";

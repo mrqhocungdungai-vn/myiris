@@ -2,16 +2,12 @@ import type { TaskCard, TaskStep } from "../types";
 
 export const TERMINAL = new Set(["completed", "failed", "cancelled", "canceled", "error"]);
 
-export function isActiveTask(task: TaskCard): boolean {
-  return !TERMINAL.has(task.status.toLowerCase());
-}
-
 export function taskKeyFor(task: string): string {
   return `starting:${task.toLowerCase().trim()}`;
 }
 
-// Stable key for the transient "mission accepted" stamp. Keyed by task text so it
-// survives Hermes swapping the placeholder card for the real run_id card.
+// Stable key for the transient "task submitted" stamp. Keyed by task text so
+// it survives Claude swapping the placeholder card for the real run_id card.
 export function acceptedKey(task: string): string {
   return task.toLowerCase().trim();
 }
@@ -19,7 +15,6 @@ export function acceptedKey(task: string): string {
 export function shortRunId(id: string): string {
   if (!id || id === "pending") return "pending";
   if (id.startsWith("starting:")) return "starting";
-  if (id.startsWith("history:")) return "restored";
   if (id.length <= 14) return id;
   return `${id.slice(0, 7)}…${id.slice(-5)}`;
 }
@@ -90,7 +85,7 @@ export function stepDetail(step: TaskStep): string {
   return oneLine.length > 64 ? `${oneLine.slice(0, 64)}…` : oneLine;
 }
 
-// One-line "what Hermes is doing right now" headline for an active step.
+// One-line "what Claude is doing right now" headline for an active step.
 export function stepHeadline(step: TaskStep): string {
   const category = toolCategory(step.tool);
   const detail = stepDetail(step);
@@ -137,8 +132,6 @@ const QUERY_STOP_WORDS = new Set([
 ]);
 
 const QUERY_SYNONYMS: Record<string, string> = {
-  herems: "hermes",
-  herme: "hermes",
   pakage: "package",
   pkg: "package",
   fialed: "failed",

@@ -11,7 +11,7 @@ function StatusDot({ tone, state, label }: { tone: string; state: string; label:
 
 export default function TopBar({
   geminiDot,
-  hermesDot,
+  claudeDot,
   audioDot,
   linked,
   pid,
@@ -20,7 +20,7 @@ export default function TopBar({
   onOpenSettings,
 }: {
   geminiDot: string;
-  hermesDot: string;
+  claudeDot: string;
   audioDot: string;
   linked: boolean;
   pid: number | null;
@@ -47,7 +47,7 @@ export default function TopBar({
         </div>
         <div className="deck-status">
           <StatusDot tone="gemini" state={geminiDot} label="Gemini" />
-          <StatusDot tone="hermes" state={hermesDot} label="Hermes" />
+          <StatusDot tone="claude" state={claudeDot} label="Claude" />
           <StatusDot tone="audio" state={audioDot} label="Audio" />
         </div>
       </div>
@@ -60,24 +60,24 @@ export default function TopBar({
           onClick={() => window.iris?.toggleHud()}
           title="Glass HUD — float Iris over your screen (⌥Space)"
         >
-          <PictureInPicture2 size={15} />
-        </button>
-        <button className="theme-toggle" onClick={onOpenSettings} title="Settings">
-          <Settings size={15} />
+          <PictureInPicture2 size={16} />
         </button>
         <button
           className={`theme-toggle ${handControl ? "active" : ""}`}
           onClick={onToggleHand}
           title={handControl ? "Disable hand control" : "Enable hand control (camera)"}
         >
-          <Hand size={15} />
+          <Hand size={16} />
         </button>
         <span
           className={`link-indicator ${linked ? "on" : "off"}`}
           title={linked ? `Linked${pid ? ` · ${pid}` : ""}` : "Offline"}
         >
-          <Radio size={15} />
+          <Radio size={16} />
         </span>
+        <button className="theme-toggle" onClick={onOpenSettings} title="Settings">
+          <Settings size={16} />
+        </button>
       </div>
     </header>
   );

@@ -4,7 +4,7 @@ import * as ort from "onnxruntime-web";
 // Local "Hey Iris" wake word. Ports the livekit-wakeword / openWakeWord inference
 // pipeline (mel-spectrogram -> speech embedding -> classifier) to the browser via
 // onnxruntime-web. Fully on-device: audio never leaves the machine, and nothing is
-// sent to Gemini/Hermes until a wake fires. Models live in public/wakeword/.
+// sent to Gemini/Claude until a wake fires. Models live in public/wakeword/.
 
 const SAMPLE_RATE = 16000;
 const WINDOW_SAMPLES = SAMPLE_RATE * 2; // ~2s -> exactly 16 embeddings
@@ -87,8 +87,6 @@ export function useWakeWord(
     let filled = 0;
     let busy = false;
     let lastWakeAt = 0;
-    let peakScore = 0;
-    let lastPeakLogAt = 0;
 
     async function predict() {
       if (busy || cancelled || !mel || !emb || !cls || filled < WINDOW_SAMPLES) return;
@@ -126,25 +124,11 @@ export function useWakeWord(
         const clsResult = await cls.run({ [cls.inputNames[0]]: clsInput });
         const score = (clsResult[cls.outputNames[0]].data as Float32Array)[0];
 
-        // Logging so you can see it working in the DevTools console:
-        // - a live peak score once per second, and
-        // - any "near miss" frame that gets reasonably close to the threshold.
-        const now = performance.now();
-        peakScore = Math.max(peakScore, score);
-        if (now - lastPeakLogAt >= 1000) {
-          console.log(`[wakeword] listening… peak score ${peakScore.toFixed(3)} (fires at ${DEFAULT_THRESHOLD})`);
-          peakScore = 0;
-          lastPeakLogAt = now;
-        }
-        if (score >= 0.05 && score < DEFAULT_THRESHOLD) {
-          console.log(`[wakeword] near miss: ${score.toFixed(3)}`);
-        }
-
         // Fire on the first frame that clears the threshold (cooldown prevents
         // rapid double-fires from the same utterance).
+        const now = performance.now();
         if (score >= DEFAULT_THRESHOLD && now - lastWakeAt > COOLDOWN_MS) {
           lastWakeAt = now;
-          console.log(`[wakeword] ✅ WAKE — "Hey Iris" detected (score ${score.toFixed(3)})`);
           onWakeRef.current();
         }
       } catch (error) {
@@ -157,13 +141,11 @@ export function useWakeWord(
 
     async function init() {
       try {
-        console.log("[wakeword] preparing models (cached after first load)…");
         const sessions = await getSessions();
         mel = sessions.mel;
         emb = sessions.emb;
         cls = sessions.cls;
         if (cancelled) return;
-        console.log("[wakeword] models ready, requesting microphone…");
 
         stream = await navigator.mediaDevices.getUserMedia({
           audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
@@ -196,9 +178,6 @@ export function useWakeWord(
         source.connect(processor);
         processor.connect(audioCtx.destination);
         timer = window.setInterval(predict, PREDICT_INTERVAL_MS);
-        console.log(
-          `[wakeword] 🎙️ listening for "Hey Iris" @ ${audioCtx.sampleRate}Hz — say it to test (watch scores below)`,
-        );
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         console.error("[wakeword] init failed", error);
@@ -210,7 +189,6 @@ export function useWakeWord(
 
     return () => {
       cancelled = true;
-      console.log("[wakeword] stopped listening");
       if (timer !== null) window.clearInterval(timer);
       try {
         processor?.disconnect();

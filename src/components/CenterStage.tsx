@@ -16,13 +16,13 @@ const ORB_ACCENT: Record<ReactorState, string> = {
 function Telemetry({
   awake,
   gemini,
-  hermes,
+  claude,
   runs,
   sessionStartRef,
 }: {
   awake: boolean;
   gemini: string;
-  hermes: string;
+  claude: string;
   runs: number;
   sessionStartRef: { current: number | null };
 }) {
@@ -44,8 +44,8 @@ function Telemetry({
       </span>
       <span className="sep">/</span>
       <span>
-        <i>HERMES</i>
-        {hermes === "ready" ? "READY" : awake ? "···" : "—"}
+        <i>CLAUDE</i>
+        {claude === "ready" ? "READY" : awake ? "···" : "—"}
       </span>
       <span className="sep">/</span>
       <span>
@@ -68,12 +68,15 @@ export default function CenterStage({
   thinking,
   wakeKey,
   rippleKey,
+  orbRunning,
+  orbRotationRef,
+  orbScaleRef,
   orbStageRef,
   orbFlash,
   onOrbFlashEnd,
   awake,
   geminiStatus,
-  hermesStatus,
+  claudeStatus,
   runs,
   sessionStartRef,
   caption,
@@ -81,7 +84,6 @@ export default function CenterStage({
   muted,
   onToggleMute,
   onSleep,
-  wakeWordEnabled,
 }: {
   reactorState: ReactorState;
   inputLevelRef: { current: number };
@@ -89,12 +91,18 @@ export default function CenterStage({
   thinking: boolean;
   wakeKey: number;
   rippleKey: number;
+  /** Pauses the orb's WebGL render loop (0 GPU) while false; resumes without state loss. */
+  orbRunning?: boolean;
+  /** Gesture-driven orb rotation (radians), read every frame — not React state. */
+  orbRotationRef?: { current: { x: number; y: number } };
+  /** Gesture-driven orb scale, read every frame — not React state. */
+  orbScaleRef?: { current: number };
   orbStageRef: RefObject<HTMLDivElement | null>;
   orbFlash: { id: string; tone: HandoffTone } | null;
   onOrbFlashEnd: () => void;
   awake: boolean;
   geminiStatus: string;
-  hermesStatus: string;
+  claudeStatus: string;
   runs: number;
   sessionStartRef: { current: number | null };
   caption: string;
@@ -102,7 +110,6 @@ export default function CenterStage({
   muted: boolean;
   onToggleMute: () => void;
   onSleep: () => void;
-  wakeWordEnabled: boolean;
 }) {
   return (
     <div className="deck-center">
@@ -120,53 +127,35 @@ export default function CenterStage({
           thinking={thinking}
           wakeKey={wakeKey}
           rippleKey={rippleKey}
+          running={orbRunning}
+          rotationRef={orbRotationRef}
+          scaleRef={orbScaleRef}
         />
         {orbFlash ? (
           <span key={orbFlash.id} className={`orb-flash ${orbFlash.tone}`} onAnimationEnd={onOrbFlashEnd} />
         ) : null}
       </div>
+      <Telemetry awake={awake} gemini={geminiStatus} claude={claudeStatus} runs={runs} sessionStartRef={sessionStartRef} />
+      <div className={`caption ${captionDim ? "dim" : ""}`}>
+        {caption}
+        {awake ? <span className="caption-caret" /> : null}
+      </div>
       {awake ? (
-        <>
-          <Telemetry
-            awake={awake}
-            gemini={geminiStatus}
-            hermes={hermesStatus}
-            runs={runs}
-            sessionStartRef={sessionStartRef}
-          />
-          <div className={`caption ${captionDim ? "dim" : ""}`}>
-            {caption}
-            <span className="caption-caret" />
-          </div>
-          <div className="transport">
-            <button
-              className={`t-btn small ${muted ? "muted" : ""}`}
-              onClick={onToggleMute}
-              title={muted ? "Unmute microphone" : "Mute microphone"}
-            >
-              {muted ? <MicOff size={18} /> : <Mic size={18} />}
-            </button>
-            <button className="t-btn small danger" onClick={onSleep} title="Sleep (S)">
-              <Power size={18} />
-            </button>
-          </div>
-        </>
+        <div className="transport">
+          <button
+            className={`t-btn small ${muted ? "muted" : ""}`}
+            onClick={onToggleMute}
+            title={muted ? "Unmute microphone" : "Mute microphone"}
+          >
+            {muted ? <MicOff size={18} /> : <Mic size={18} />}
+          </button>
+          <button className="t-btn small danger" onClick={onSleep} title="Sleep (S)">
+            <Power size={18} />
+          </button>
+        </div>
       ) : (
-        <div className="wake-prompt">
-          {wakeWordEnabled ? (
-            <div className="wake-say">
-              <Mic size={15} />
-              Say <b>“Hey Iris”</b>
-            </div>
-          ) : (
-            <div className="wake-say">Iris is asleep</div>
-          )}
-          <div className="wake-keys">
-            {wakeWordEnabled ? "or press " : "press "}
-            <span className="key">W</span> wake
-            <span className="wake-sep">·</span>
-            <span className="key">S</span> sleep
-          </div>
+        <div className="transport-hint">
+          <span className="key">W</span> wake · <span className="key">S</span> sleep
         </div>
       )}
     </div>

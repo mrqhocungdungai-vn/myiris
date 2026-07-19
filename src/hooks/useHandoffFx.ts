@@ -31,7 +31,7 @@ export function useHandoffFx(
     return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
   }
 
-  // Where a Hermes card lives in the Work Stream: prefer the actual card, fall
+  // Where a Claude card lives in the Work Stream: prefer the actual card, fall
   // back to the top of the work column for brand-new (not yet expandable) runs.
   function workStreamPoint(taskId: string): { x: number; y: number } | null {
     const card = document.querySelector<HTMLElement>(`[data-task-id="${CSS.escape(taskId)}"]`);
@@ -70,7 +70,7 @@ export function useHandoffFx(
     flashOrb("amber");
     callbacks?.onDelegate?.();
     spawnPulse(centerOf(orbStageRef.current), workStreamPoint(task.id), "out", "amber");
-    // Key the stamp by task TEXT, not id: Hermes swaps the placeholder
+    // Key the stamp by task TEXT, not id: Claude swaps the placeholder
     // ("starting:…") card for the real run_id card right after submit, so an
     // id-keyed flag would land on a card that no longer exists.
     const key = acceptedKey(task.task);
@@ -86,7 +86,7 @@ export function useHandoffFx(
     }, 560);
   }
 
-  // Hermes finishes -> a comet flies from the card back to the orb, then the orb
+  // Claude finishes -> a comet flies from the card back to the orb, then the orb
   // flashes (teal for success, coral for failure) as it arrives.
   function handoffIn(task: TaskCard) {
     const tone: HandoffTone = TERMINAL.has(task.status.toLowerCase())
@@ -101,7 +101,7 @@ export function useHandoffFx(
 
   // Handoff detector: diff the tasks array to know when Gemini delegated a new
   // run (one card appears) and when a run completes (active -> terminal). A bulk
-  // load (e.g. demo/history fixture) adds many cards at once, so we only animate
+  // load (e.g. a history restore) adds many cards at once, so we only animate
   // single-card deltas.
   useEffect(() => {
     const prev = taskStatusRef.current;

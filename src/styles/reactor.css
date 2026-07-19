@@ -1,0 +1,10 @@
+/* Additive: deck.css's `.orb-stage canvas { width/height: 100% !important; }`
+   sizes the R3F canvas to a hard square box. Whatever falls near that box's
+   edge (the wireframe sphere, especially at larger gesture-driven scale)
+   would otherwise show a visible hard-edged square cutting into the orb's
+   circular silhouette. A soft radial fade hides that edge regardless of
+   scale, without touching deck.css itself. */
+.orb-stage .reactor-canvas {
+  -webkit-mask-image: radial-gradient(circle, #000 62%, transparent 92%);
+  mask-image: radial-gradient(circle, #000 62%, transparent 92%);
+}

@@ -1,34 +1,28 @@
 import { type RefObject } from "react";
 import { MessageSquare } from "lucide-react";
 import type { TranscriptLine } from "../types";
+import ContextSupplementInput from "./ContextSupplementInput";
 
 export default function CommsPanel({
   transcript,
   scrollRef,
-  testDataEnabled,
-  onLoadDemo,
+  awake,
+  onSendSupplement,
 }: {
   transcript: TranscriptLine[];
   scrollRef: RefObject<HTMLDivElement | null>;
-  testDataEnabled: boolean;
-  onLoadDemo: () => void;
+  awake: boolean;
+  onSendSupplement: (text: string) => void;
 }) {
   return (
     <section className="deck-panel comms">
       <div className="col-head">
-        <MessageSquare size={13} />
-        <span>Comms</span>
+        <MessageSquare size={14} />
+        <span>Iris Conversation</span>
       </div>
       <div className="comms-scroll" ref={scrollRef}>
         {transcript.length === 0 ? (
-          <div className="empty">
-            <p>No conversation yet. Wake Iris and start talking.</p>
-            {testDataEnabled ? (
-              <button className="demo-load" onClick={onLoadDemo}>
-                Load demo comms
-              </button>
-            ) : null}
-          </div>
+          <p className="empty">No conversation yet. Wake Iris and start talking.</p>
         ) : (
           transcript.map((line) => {
             const self = /you|user/i.test(line.speaker);
@@ -41,6 +35,7 @@ export default function CommsPanel({
           })
         )}
       </div>
+      <ContextSupplementInput disabled={!awake} onSubmit={onSendSupplement} />
     </section>
   );
 }

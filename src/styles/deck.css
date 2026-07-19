@@ -256,6 +256,42 @@
   padding: 2px 14px 14px;
 }
 
+.supplement-input {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 14px 12px;
+  padding: 9px 12px;
+  border-radius: var(--r-sm);
+  color: var(--text-soft);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--hairline);
+}
+
+.supplement-input input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+}
+
+.supplement-input input::placeholder {
+  color: var(--muted);
+}
+
+.supplement-input input:disabled {
+  cursor: not-allowed;
+}
+
+.supplement-input:has(input:disabled) {
+  opacity: 0.5;
+}
+
 .bubble {
   flex: 0 0 auto;
   max-width: 88%;

@@ -1,16 +1,50 @@
 import { useEffect, useRef, useState } from "react";
-import { base64ToBytes, downsampleTo16k, parsePcmRate } from "../lib/audio";
+
+function downsampleTo16k(input: Float32Array, inputRate: number): Int16Array {
+  const outputRate = 16000;
+  if (inputRate === outputRate) {
+    const output = new Int16Array(input.length);
+    for (let i = 0; i < input.length; i++) {
+      const sample = Math.max(-1, Math.min(1, input[i]));
+      output[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
+    }
+    return output;
+  }
+
+  const ratio = inputRate / outputRate;
+  const outputLength = Math.floor(input.length / ratio);
+  const output = new Int16Array(outputLength);
+  for (let i = 0; i < outputLength; i++) {
+    const start = Math.floor(i * ratio);
+    const end = Math.min(Math.floor((i + 1) * ratio), input.length);
+    let sum = 0;
+    for (let j = start; j < end; j++) sum += input[j];
+    const sample = Math.max(-1, Math.min(1, sum / Math.max(1, end - start)));
+    output[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
+  }
+  return output;
+}
+
+function parsePcmRate(mimeType?: string): number {
+  const match = /rate=(\d+)/i.exec(mimeType ?? "");
+  return match ? Number(match[1]) : 24000;
+}
+
+function base64ToBytes(base64: string): Uint8Array {
+  const binary = window.atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
 
 /**
- * Owns the whole browser audio path:
- * - WebRTC mic capture (echo-cancelled) downsampled to 16 kHz PCM -> Electron main
- * - Gemini 24 kHz PCM playback through AudioContext (with barge-in flush)
- * - passive RMS meters (mic in vs Gemini out, separately) for the orb's
- *   voice signatures and the "thinking" detector
+ * Owns the mic-capture/Gemini-playback Web Audio graph, its lifecycle refs,
+ * and the passive level meters — mirrors the extraction pattern already used
+ * for gesture control in useHandControl.ts. Mic and playback levels are
+ * tracked separately so the orb can tell WHO is talking: your mic drives the
+ * radial-bar signature, Gemini's playback drives the smooth wave.
  */
-export function useAudioPipeline(hasBridge: boolean, onLog: (level: string, message: string) => void) {
-  const [muted, setMuted] = useState(false);
-
+export function useAudioPipeline({ onLog }: { onLog?: (level: string, message: string) => void } = {}) {
   const inputContextRef = useRef<AudioContext | null>(null);
   const inputStreamRef = useRef<MediaStream | null>(null);
   const inputSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
@@ -20,22 +54,12 @@ export function useAudioPipeline(hasBridge: boolean, onLog: (level: string, mess
   const playbackSourcesRef = useRef<AudioBufferSourceNode[]>([]);
   const inputAnalyserRef = useRef<AnalyserNode | null>(null);
   const outputAnalyserRef = useRef<AnalyserNode | null>(null);
-  // Separate meters so the orb can tell WHO is talking: your mic drives the
-  // radial-bar signature, Iris's playback drives the smooth wave.
   const inputLevelRef = useRef(0);
   const outputLevelRef = useRef(0);
+  const sessionStartRef = useRef<number | null>(null);
+  const [muted, setMuted] = useState(false);
 
-  useEffect(() => {
-    if (!hasBridge) return;
-    const offAudio = window.iris.onAudioChunk((chunk) => playChunk(chunk));
-    const offInterrupt = window.iris.onAudioInterrupt(() => flushPlayback());
-    return () => {
-      offAudio();
-      offInterrupt();
-    };
-  }, [hasBridge]);
-
-  // Passive audio level meter (mic in / Gemini out) for the reactive HUD.
+  // Passive audio level meters (mic in / Gemini out) for the reactive HUD.
   useEffect(() => {
     let raf = 0;
     const buf = new Uint8Array(256);
@@ -61,7 +85,7 @@ export function useAudioPipeline(hasBridge: boolean, onLog: (level: string, mess
   }, []);
 
   async function startCapture() {
-    if (!hasBridge || inputContextRef.current) return;
+    if (typeof window.iris === "undefined" || inputContextRef.current) return;
 
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: {
@@ -103,7 +127,7 @@ export function useAudioPipeline(hasBridge: boolean, onLog: (level: string, mess
     inputStreamRef.current = stream;
     inputSourceRef.current = source;
     inputProcessorRef.current = processor;
-    onLog("info", "WebRTC echo cancellation enabled for microphone.");
+    onLog?.("info", "WebRTC echo cancellation enabled for microphone.");
   }
 
   async function stopCapture() {
@@ -117,7 +141,6 @@ export function useAudioPipeline(hasBridge: boolean, onLog: (level: string, mess
     inputStreamRef.current = null;
     inputContextRef.current = null;
     inputAnalyserRef.current = null;
-    setMuted(false);
   }
 
   function flushPlayback() {
@@ -134,7 +157,7 @@ export function useAudioPipeline(hasBridge: boolean, onLog: (level: string, mess
     }
   }
 
-  async function playChunk(chunk: LiveAudioChunk) {
+  async function playGeminiAudio(chunk: LiveAudioChunk) {
     const rate = parsePcmRate(chunk.mimeType);
     const bytes = base64ToBytes(chunk.data);
     const sampleCount = Math.floor(bytes.byteLength / 2);
@@ -174,12 +197,32 @@ export function useAudioPipeline(hasBridge: boolean, onLog: (level: string, mess
 
   function toggleMute() {
     const stream = inputStreamRef.current;
-    setMuted((current) => {
-      const next = !current;
-      stream?.getAudioTracks().forEach((track) => (track.enabled = !next));
-      return next;
-    });
+    const next = !muted;
+    stream?.getAudioTracks().forEach((track) => (track.enabled = !next));
+    setMuted(next);
   }
 
-  return { muted, toggleMute, inputLevelRef, outputLevelRef, startCapture, stopCapture, flushPlayback };
+  async function start() {
+    sessionStartRef.current = Date.now();
+    await startCapture();
+  }
+
+  async function stop() {
+    await stopCapture();
+    flushPlayback();
+    setMuted(false);
+    sessionStartRef.current = null;
+  }
+
+  return {
+    inputLevelRef,
+    outputLevelRef,
+    sessionStartRef,
+    muted,
+    start,
+    stop,
+    flushPlayback,
+    playGeminiAudio,
+    toggleMute,
+  };
 }

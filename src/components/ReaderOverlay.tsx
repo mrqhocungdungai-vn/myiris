@@ -1,23 +1,19 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { ChevronDown, Wrench, X } from "lucide-react";
+import { X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { TaskCard } from "../types";
 import { normalizeMarkdown, shortRunId } from "../lib/tasks";
 import type { HandState } from "../hooks/useHandControl";
-import { StepTimeline } from "./WorkCard";
+import { AgentBadge } from "./WorkCard";
 
 export default function ReaderOverlay({
   task,
   hand,
-  stepsOpen = false,
-  onToggleSteps,
   onClose,
 }: {
   task: TaskCard;
   hand: HandState | null;
-  stepsOpen?: boolean;
-  onToggleSteps?: () => void;
   onClose: () => void;
 }) {
   const [offset, setOffset] = useState({ x: 0, y: 0 });
@@ -26,7 +22,6 @@ export default function ReaderOverlay({
   const [closing, setClosing] = useState(false);
   const startRef = useRef<{ x: number; y: number } | null>(null);
   const bodyRef = useRef<HTMLDivElement | null>(null);
-  const stepsListRef = useRef<HTMLDivElement | null>(null);
   const handRef = useRef<HandState | null>(hand);
   const readerScaleRef = useRef(1);
   const zoomRef = useRef<{ distance: number; scale: number } | null>(null);
@@ -79,25 +74,14 @@ export default function ReaderOverlay({
       }
 
       if (openHands.length < 2 && h?.openPalm && h.point && body) {
-        // Scroll whichever region the palm hovers: the steps list if the hand
-        // is over it, otherwise the main body.
-        const steps = stepsListRef.current;
-        const overSteps = (() => {
-          if (!steps) return false;
-          const r = steps.getBoundingClientRect();
-          return (
-            h.point.x >= r.left && h.point.x <= r.right && h.point.y >= r.top && h.point.y <= r.bottom
-          );
-        })();
-        const target = overSteps && steps ? steps : body;
-        const rect = target.getBoundingClientRect();
+        const rect = body.getBoundingClientRect();
         const center = rect.top + rect.height / 2;
         const deadZone = Math.max(24, rect.height * 0.12);
         const delta = h.point.y - center;
         if (Math.abs(delta) > deadZone) {
           const reach = rect.height / 2 - deadZone;
           const norm = Math.max(-1, Math.min(1, (delta - Math.sign(delta) * deadZone) / reach));
-          target.scrollTop += norm * 26;
+          body.scrollTop += norm * 26;
         }
       }
       raf = requestAnimationFrame(loop);
@@ -151,49 +135,31 @@ export default function ReaderOverlay({
       >
         <header
           className="reader-grab"
-          onPointerDown={(event) =>
-            beginDrag(event.clientX, event.clientY, event.currentTarget, event.pointerId)
-          }
+          onPointerDown={(event) => beginDrag(event.clientX, event.clientY, event.currentTarget, event.pointerId)}
           onPointerMove={(event) => dragging && moveDrag(event.clientX, event.clientY)}
           onPointerUp={endDrag}
           onPointerCancel={endDrag}
         >
           <div className="reader-grip" />
           <span className={`badge ${task.status.toLowerCase()}`}>{task.status}</span>
-          <code title={task.id}>{shortRunId(task.id)}</code>
-          <button
-            className="reader-close"
-            onPointerDown={(event) => event.stopPropagation()}
-            onClick={closeWithSnap}
-            title="Close"
+          <AgentBadge agent={task.agent} model={task.model} />
+          <code
+            title={
+              task.claudeSessionId
+                ? `Claude session ${task.claudeSessionId} (run ${task.id})`
+                : `run ${task.id} — the Claude session id appears once the run starts`
+            }
           >
+            {task.claudeSessionId ? `⛓ ${shortRunId(task.claudeSessionId)}` : shortRunId(task.id)}
+          </code>
+          <button className="reader-close" onPointerDown={(event) => event.stopPropagation()} onClick={closeWithSnap} title="Close">
             <X size={16} />
           </button>
         </header>
         <h2 className="reader-title">{task.task}</h2>
-        {task.steps?.length ? (
-          <div className="reader-steps">
-            <button
-              type="button"
-              className={`activity-toggle ${stepsOpen ? "open" : ""}`}
-              onClick={() => onToggleSteps?.()}
-            >
-              <Wrench size={11} />
-              {task.steps.length} step{task.steps.length === 1 ? "" : "s"} Hermes took
-              <ChevronDown size={12} className="chev" />
-            </button>
-            {stepsOpen ? (
-              <div className="reader-steps-list" ref={stepsListRef}>
-                <StepTimeline steps={task.steps} />
-              </div>
-            ) : null}
-          </div>
-        ) : null}
         <div className="reader-body" ref={bodyRef}>
           <div className={`markdown-body ${task.error ? "error" : ""}`}>
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-              {normalizeMarkdown(task.error || task.output)}
-            </ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{normalizeMarkdown(task.error || task.output)}</ReactMarkdown>
           </div>
         </div>
         <div className="reader-hint">
