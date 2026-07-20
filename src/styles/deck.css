@@ -230,6 +230,12 @@
   gap: 12px;
 }
 
+/* Chat-only mode (no Claude pipeline detected): the Work Stream column is
+   not rendered — drop its track instead of leaving a reserved empty gap. */
+.deck-body.chat-only {
+  grid-template-columns: minmax(280px, 336px) minmax(0, 1fr);
+}
+
 /* ===== Left column: You ===== */
 .deck-left {
   display: flex;

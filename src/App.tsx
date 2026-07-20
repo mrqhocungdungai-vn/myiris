@@ -63,6 +63,13 @@ export default function App() {
   const [taskChooser, setTaskChooser] = useState<{ query: string; matches: TaskCard[] } | null>(null);
   const [showHistory, setShowHistory] = useState(false);
   const [handControl, setHandControl] = useState(false);
+  // Master switch for the PO → DEV pipeline surface (Work Stream, PipelineBar,
+  // workstream switcher, task chooser, HUD tasks column, PO question banner) —
+  // determined by main from whether the `claude` binary resolves. Defaults to
+  // false (chat-only) until the boot-time fetch or a pipeline_availability
+  // sidecar event says otherwise, so first paint never flashes pipeline UI
+  // that immediately disappears.
+  const [pipelineAvailable, setPipelineAvailable] = useState(false);
   const [fullConfig, setFullConfig] = useState<IrisConfig | null>(null);
   const [setup, setSetup] = useState<{ mode: "onboarding" | "settings" } | null>(null);
   const [wakeWordEnabled, setWakeWordEnabled] = useState(false);
@@ -231,6 +238,10 @@ export default function App() {
       setSidecarPid(status.pid);
     });
     window.iris.getSessions().then(applySessions).catch(() => {});
+    window.iris
+      .getPipelineStatus()
+      .then((status) => setPipelineAvailable(Boolean(status.available)))
+      .catch(() => {});
     return window.iris.onSidecarEvent((event) => handleSidecarEvent(event));
   }, [hasBridge]);
 
@@ -562,6 +573,11 @@ export default function App() {
   }
 
   function handleSidecarEvent(event: SidecarEvent) {
+    if (event.type === "pipeline_availability") {
+      setPipelineAvailable(Boolean(event.available));
+      return;
+    }
+
     if (event.type === "claude_session") {
       applySessions({
         active: typeof event.active === "string" ? event.active : null,
@@ -674,8 +690,6 @@ export default function App() {
       const status = readString(event.status, "pending");
       const workstreamId = readString(event.workstream_id);
       const questions = Array.isArray(event.questions) ? (event.questions as PoQuestion[]) : [];
-      // A live role (PO or STUDY) is asking — the relay is role-agnostic.
-      const askingRole = isAgentRole(event.role) ? AGENT_LABELS[event.role] : "The role";
       if (status === "pending") {
         setPendingPoQuestion({ workstreamId, questions });
         setPoAnswers({});
@@ -683,7 +697,7 @@ export default function App() {
         setPendingPoQuestion(null);
         setPoAnswers({});
         if (status === "timed_out") {
-          pushLog("warn", `${askingRole}'s question went unanswered — applied its recommended option.`, eventTime(event));
+          pushLog("warn", "The PO's question went unanswered — applied its recommended option.", eventTime(event));
         }
       }
       return;
@@ -1105,6 +1119,7 @@ export default function App() {
           handStream={handStream}
           handActionLabel={handAction.label}
           handActionTone={handAction.tone}
+          pipelineAvailable={pipelineAvailable}
           poQuestion={
             pendingPoQuestion
               ? { questions: pendingPoQuestion.questions, answers: poAnswers, onPick: pickPoAnswer }
@@ -1133,7 +1148,7 @@ export default function App() {
           onOpenSettings={openSettings}
         />
 
-        <div className="deck-body">
+        <div className={`deck-body ${pipelineAvailable ? "" : "chat-only"}`}>
           {/* LEFT — You */}
           <div className="deck-left">
             <CommsPanel
@@ -1177,36 +1192,38 @@ export default function App() {
             onSleep={stop}
           />
 
-          {/* RIGHT — Work */}
-          <WorkStream
-            tasks={tasks}
-            sortedTasks={sortedTasks}
-            scrollRef={workScrollRef}
-            acceptedIds={acceptedIds}
-            session={activeSession}
-            sessions={sessions}
-            onSwitchSession={chooseSession}
-            onNewSession={createSession}
-            onShowHistory={() => setShowHistory(true)}
-            onOpenTask={openTask}
-            stepsOpenIds={stepsOpenIds}
-            onToggleTaskSteps={toggleTaskSteps}
-          >
-            <PipelineBar
-              agents={agents}
-              activeAgent={activeAgent}
-              installingAgents={installingAgents}
-              modelPopoverRole={modelPopoverRole}
-              onChooseAgent={chooseAgent}
-              onInstallAgents={installAgents}
-              onToggleModelPopover={(role) => setModelPopoverRole((current) => (current === role ? null : role))}
-              onSetRoleModel={setRoleModel}
-            />
-            <ProjectBar project={activeProject} onChoose={chooseProjectFolder} />
-            {pendingPoQuestion ? (
-              <PoQuestionBanner questions={pendingPoQuestion.questions} answers={poAnswers} onPick={pickPoAnswer} />
-            ) : null}
-          </WorkStream>
+          {/* RIGHT — Work (pipeline-only, see pipeline-availability spec) */}
+          {pipelineAvailable ? (
+            <WorkStream
+              tasks={tasks}
+              sortedTasks={sortedTasks}
+              scrollRef={workScrollRef}
+              acceptedIds={acceptedIds}
+              session={activeSession}
+              sessions={sessions}
+              onSwitchSession={chooseSession}
+              onNewSession={createSession}
+              onShowHistory={() => setShowHistory(true)}
+              onOpenTask={openTask}
+              stepsOpenIds={stepsOpenIds}
+              onToggleTaskSteps={toggleTaskSteps}
+            >
+              <PipelineBar
+                agents={agents}
+                activeAgent={activeAgent}
+                installingAgents={installingAgents}
+                modelPopoverRole={modelPopoverRole}
+                onChooseAgent={chooseAgent}
+                onInstallAgents={installAgents}
+                onToggleModelPopover={(role) => setModelPopoverRole((current) => (current === role ? null : role))}
+                onSetRoleModel={setRoleModel}
+              />
+              <ProjectBar project={activeProject} onChoose={chooseProjectFolder} />
+              {pendingPoQuestion ? (
+                <PoQuestionBanner questions={pendingPoQuestion.questions} answers={poAnswers} onPick={pickPoAnswer} />
+              ) : null}
+            </WorkStream>
+          ) : null}
         </div>
 
         <footer className="deck-foot">
@@ -1238,7 +1255,7 @@ export default function App() {
         />
       ) : null}
 
-      {taskChooser ? (
+      {taskChooser && pipelineAvailable ? (
         <TaskChooser
           query={taskChooser.query}
           matches={taskChooser.matches}

@@ -33,6 +33,7 @@ contextBridge.exposeInMainWorld("iris", {
   saveConfig: (updates) => ipcRenderer.invoke("config:save", updates),
   testGemini: (key) => ipcRenderer.invoke("config:test-gemini", { key }),
   testClaude: () => ipcRenderer.invoke("config:test-claude"),
+  getPipelineStatus: () => ipcRenderer.invoke("pipeline:status"),
   previewVoice: (payload) => ipcRenderer.invoke("config:preview-voice", payload),
   sendUiContext: (context) => ipcRenderer.send("iris:ui-context", context),
   notifyBootDone: () => ipcRenderer.send("iris:boot-done"),

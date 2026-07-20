@@ -1,6 +1,6 @@
 import type { CSSProperties } from "react";
 import { Users } from "lucide-react";
-import { AGENT_COLORS, AGENT_LABELS, ALL_ROLES, MODEL_CHOICES, PIPELINE, modelLabel } from "../lib/agents";
+import { AGENT_COLORS, AGENT_LABELS, ALL_ROLES, MODEL_CHOICES, modelLabel } from "../lib/agents";
 
 /**
  * PO/DEV agent chips + gate ✓ marks + per-role model popover. Switching roles
@@ -53,10 +53,7 @@ export default function PipelineBar({
       </button>
       {ALL_ROLES.map((role) => {
         const info = agents?.roster.find((entry) => entry.key === role);
-        // STUDY (and any standalone role) is not part of the PO → DEV gate, so
-        // it never shows a gate ✓ — only pipeline roles read gates.byRole.
-        const inPipeline = PIPELINE.includes(role);
-        const passed = inPipeline && Boolean(agents?.gates.byRole?.[role]);
+        const passed = Boolean(agents?.gates.byRole?.[role]);
         const currentModel = info?.model ?? null;
         return (
           <div
@@ -68,13 +65,9 @@ export default function PipelineBar({
               type="button"
               className="agent-chip-label"
               onClick={() => onChooseAgent(role)}
-              title={
-                inPipeline
-                  ? `${info?.description || AGENT_LABELS[role]}${
-                      agents?.gates.slug ? ` · feature: ${agents.gates.slug}` : ""
-                    } — each role keeps its own Claude conversation (context crosses roles via handoff files; reset with New)`
-                  : `${info?.description || AGENT_LABELS[role]} — a standalone role with its own Claude conversation (not part of the PO → DEV pipeline; reset with New)`
-              }
+              title={`${info?.description || AGENT_LABELS[role]}${
+                agents?.gates.slug ? ` · feature: ${agents.gates.slug}` : ""
+              } — each role keeps its own Claude conversation (context crosses roles via handoff files; reset with New)`}
             >
               {AGENT_LABELS[role]}
               {passed ? <span className="gate-check">✓</span> : null}

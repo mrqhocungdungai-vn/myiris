@@ -13,7 +13,7 @@ type LiveAudioChunk = {
   mimeType?: string;
 };
 
-type AgentRole = "po" | "dev" | "study";
+type AgentRole = "po" | "dev";
 
 type ClaudeSession = {
   id: string;
@@ -91,10 +91,21 @@ type IrisConfig = {
 
 type ClaudeHealth = {
   reachable: boolean;
+  pipelineAvailable: boolean;
   version?: string;
   error?: string;
   billingOk: boolean;
   billingError?: string;
+  openspecOk: boolean;
+  openspecVersion?: string;
+  openspecInstallHint: string;
+  skillsOk: boolean;
+  missingSkills: string[];
+  skillsInstallHint: string;
+};
+
+type PipelineStatus = {
+  available: boolean;
 };
 
 type UiActionPayload = {
@@ -156,6 +167,7 @@ type IrisApi = {
   saveConfig: (updates: Partial<Record<string, string>>) => Promise<IrisConfig>;
   testGemini: (key: string) => Promise<{ ok: boolean; error?: string }>;
   testClaude: () => Promise<ClaudeHealth>;
+  getPipelineStatus: () => Promise<PipelineStatus>;
   previewVoice: (payload: { voice: string; key: string }) => Promise<{ ok: boolean; error?: string }>;
   sendUiContext: (context: UiContextSnapshot) => void;
   notifyBootDone: () => void;

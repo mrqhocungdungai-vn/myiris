@@ -1,8 +1,5 @@
-# global-agent-runtime Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - globally-installed PO and DEV agent/runtime capabilities so any workstream can use them without per-project capability setup.
-## Requirements
 ### Requirement: Agents and capabilities are installed globally
 
 The PO and DEV agents SHALL be installed under `~/.claude/agents/`, and the capabilities they depend on (the OpenSpec workflow skills/commands and the mattpocock skills) SHALL be available globally under `~/.claude`, so that every role is available on any workstream `cwd` without per-project plugin configuration. The install step SHALL additionally remove a stale `~/.claude/agents/iris-study.md` left behind by earlier versions, so the user's agent list stays truthful after the STUDY role's removal.
@@ -21,12 +18,3 @@ The PO and DEV agents SHALL be installed under `~/.claude/agents/`, and the capa
 
 - **WHEN** the agent install step runs on a machine where an earlier Iris version installed `~/.claude/agents/iris-study.md`
 - **THEN** that file is deleted, and only `iris-po.md` and `iris-dev.md` remain installed by Iris
-
-### Requirement: cwd holds only project code and its OpenSpec
-
-A workstream `cwd` SHALL be used only for the project's own code and its `openspec/` directory; capability configuration (agents, skills, commands) SHALL NOT be required in the `cwd`.
-
-#### Scenario: Arbitrary project directory works as cwd
-
-- **WHEN** the user points a workstream at an arbitrary project directory
-- **THEN** the roles operate there using globally-installed capabilities, and only that project's `openspec/` is created or read locally

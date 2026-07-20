@@ -15,14 +15,6 @@ import {
   closeAllPoSessions,
   setPoSessionModel,
 } from "./po-session.mjs";
-import {
-  studyBillingStatus,
-  getOrCreateStudySession,
-  deliverStudyTurn,
-  closeStudySession,
-  closeAllStudySessions,
-  setStudySessionModel,
-} from "./study-session.mjs";
 import { parseClaudeStreamMessage } from "./claude-stream.mjs";
 import { createRunQueue, RUN_STATUS, EMIT_STATUS, toUpdateEvent } from "./run-queue.mjs";
 
@@ -133,20 +125,20 @@ const GreetGate = {
 const PendingQuestion = {
   current: null, // { workstreamId, questions, resolve, timer }
 
-  raise(workstreamId, questions, { timeoutMs, role = "po" }) {
+  raise(workstreamId, questions, { timeoutMs }) {
     return new Promise((resolve) => {
       const timer = setTimeout(() => this.expire(), timeoutMs);
-      this.current = { workstreamId, questions, resolve, timer, role };
-      emitPoQuestionEvent(workstreamId, questions, "pending", role);
+      this.current = { workstreamId, questions, resolve, timer };
+      emitPoQuestionEvent(workstreamId, questions, "pending");
     });
   },
 
   settle(status, resolvedValue) {
     if (!this.current) return;
-    const { workstreamId, questions, resolve, timer, role } = this.current;
+    const { workstreamId, questions, resolve, timer } = this.current;
     clearTimeout(timer);
     this.current = null;
-    emitPoQuestionEvent(workstreamId, questions, status, role);
+    emitPoQuestionEvent(workstreamId, questions, status);
     resolve(resolvedValue);
   },
 
@@ -159,7 +151,7 @@ const PendingQuestion = {
     emitEvent({
       type: "log",
       level: "warn",
-      message: `${AGENT_LABELS[this.current.role] ?? "The role"}'s question went unanswered — applying the recommended option for each.`,
+      message: "The PO's question went unanswered — applying the recommended option for each.",
     });
     this.settle("timed_out", defaultPoAnswers(this.current.questions));
   },
@@ -233,28 +225,27 @@ const runQueue = createRunQueue({
 });
 
 // Role pipeline: each role is a Claude Code agent installed at
-// ~/.claude/agents/iris-<role>.md and run headless via `claude --agent`.
-// Three roles: PO (BA/PM/PO thinking before code — analysis, PRD, issues) and
-// DEV (implements one issue at a time and verifies it itself) form the build
-// pipeline PO → DEV; STUDY is a standalone learning role (second-brain
-// librarian + fact-checker, stateful SDK like PO — see electron/study-session.mjs
-// and openspec/changes/study-note-role). Moving from PO to DEV is a "gate";
-// context crosses the gate through the OpenSpec change in the project, never a
-// shared Claude conversation. STUDY is not part of that pipeline. Interactive
-// product/learning thinking lives in Iris (voice), not here: the headless DEV
-// receives decided briefs; PO and STUDY may pause to ask by voice.
-const AGENT_ROSTER = ["po", "dev", "study"];
+// ~/.claude/agents/iris-<role>.md and run headless via `claude --agent`. Two
+// roles: PO (BA/PM/PO thinking before code — analysis, PRD, issues) and DEV
+// (implements one issue at a time and verifies it itself) form the build
+// pipeline PO → DEV. Moving from PO to DEV is a "gate"; context crosses the
+// gate through the OpenSpec change in the project, never a shared Claude
+// conversation. Interactive product thinking lives in Iris (voice), not here:
+// the headless DEV receives decided briefs; PO may pause to ask by voice.
+// The pipeline is available only when the `claude` binary is detected — see
+// pipelineAvailable/probePipelineAvailability below (chat-only otherwise).
+const AGENT_ROSTER = ["po", "dev"];
 const AGENT_PREFIX = "iris-";
-const AGENT_LABELS = { po: "PO", dev: "DEV", study: "Study" };
-// Roles removed when the pipeline was collapsed to PO → DEV; their installed
-// agent files are cleaned up on install.
-const RETIRED_AGENTS = ["ba", "test", "devops"];
+const AGENT_LABELS = { po: "PO", dev: "DEV" };
+// Roles removed when the pipeline was collapsed to PO → DEV (and later when
+// STUDY was removed for the community release); their installed agent files
+// are cleaned up on install.
+const RETIRED_AGENTS = ["ba", "test", "devops", "study"];
 
-// Curated model choices for the PO/DEV/STUDY roles — plain Claude keeps the
-// CLI default and is not part of this list. PO defaults to the strongest model
+// Curated model choices for the PO/DEV roles — plain Claude keeps the CLI
+// default and is not part of this list. PO defaults to the strongest model
 // for product thinking; DEV defaults to the cheaper/faster one for routine
-// implementation and can be raised to debug a hard issue; STUDY defaults to
-// Sonnet for synthesis and fact-checking.
+// implementation and can be raised to debug a hard issue.
 const MODEL_CHOICES = [
   { id: "claude-fable-5", label: "Fable 5" },
   { id: "claude-sonnet-5", label: "Sonnet 5" },
@@ -262,8 +253,8 @@ const MODEL_CHOICES = [
   { id: "claude-haiku-4-5-20251001", label: "Haiku 4.5" },
 ];
 const MODEL_IDS = new Set(MODEL_CHOICES.map((choice) => choice.id));
-const MODEL_DEFAULTS = { po: "claude-fable-5", dev: "claude-sonnet-5", study: "claude-sonnet-5" };
-const MODEL_ENV_VARS = { po: "IRIS_PO_MODEL", dev: "IRIS_DEV_MODEL", study: "IRIS_STUDY_MODEL" };
+const MODEL_DEFAULTS = { po: "claude-fable-5", dev: "claude-sonnet-5" };
+const MODEL_ENV_VARS = { po: "IRIS_PO_MODEL", dev: "IRIS_DEV_MODEL" };
 
 // Resolution order: the workstream's own choice, then the role's env override,
 // then the hardcoded default. Plain Claude (role === null) never gets a model
@@ -447,7 +438,6 @@ function createWorkstream(label) {
   if (previousActiveId && previousActiveId !== workstream.id) {
     PendingQuestion.abandon(previousActiveId);
     closePoSession(previousActiveId);
-    closeStudySession(previousActiveId);
   }
   return workstream;
 }
@@ -467,7 +457,6 @@ function selectWorkstream(id) {
   if (previousActiveId && previousActiveId !== workstream.id) {
     PendingQuestion.abandon(previousActiveId);
     closePoSession(previousActiveId);
-    closeStudySession(previousActiveId);
   }
   return { status: "ok", ...sessionsSnapshot() };
 }
@@ -483,11 +472,10 @@ function setWorkstreamCwd(id, dir) {
     const wasAutoNamed = isAutoLabel(workstream.label, workstream.cwd);
     // Claude Code stores conversations per project directory, so session ids
     // recorded in the old folder cannot be resumed from the new one. A resident
-    // PO or STUDY session is bound to the OLD cwd, so both must end here too —
-    // otherwise their next turn would run in a directory they no longer match.
+    // PO session is bound to the OLD cwd, so it must end here too — otherwise
+    // its next turn would run in a directory it no longer matches.
     PendingQuestion.abandon(workstream.id);
     closePoSession(workstream.id);
-    closeStudySession(workstream.id);
     workstream.agent_sessions = {};
     workstream.last_agent_used = null;
     workstream.cwd = cwd;
@@ -596,18 +584,6 @@ function announceAgentSelection(workstream) {
         : "- Proactively speak: you are in Developer mode; the next task implements the open OpenSpec change the PO proposed.",
       "- Tell DEV to implement the remaining tasks of the open change (or name a specific change if the user did). If the PO has not proposed a change yet, say so — DEV needs one first.",
     );
-  } else if (role === "study") {
-    if (existing) {
-      lines.push(
-        "- Proactively speak: you are in Study mode; the study librarian's ongoing session is preserved.",
-        "- Ask ONE short question: continue the current study sitting, or start on a new source?",
-      );
-    } else {
-      lines.push(
-        "- Proactively speak: you are now in Study mode — you are the note-taking assistant for their second brain.",
-        "- Invite them: open a source and read it, synthesize it out loud, then tell you to save a note or to verify it. You capture and dispatch; the study worker records and fact-checks.",
-      );
-    }
   }
   lines.push("- Speak in the user's language. Keep it short and conversational — one or two sentences plus the question.");
   notifyIris(lines);
@@ -745,20 +721,81 @@ async function checkClaudeStatus() {
   });
 }
 
-// Combined status for the SetupPanel's Claude section (design.md D3b/D3c):
-// CLI reachability (same probe as checkClaudeStatus) plus the PO subscription
-// billing-path status, read-only — never editable from the UI.
-async function checkClaudeHealth() {
+// Single source of truth for whether the PO → DEV pipeline is available —
+// determined solely by the `claude` binary resolving (see design.md decision
+// 1). Chat-only mode (no Claude tools declared to Gemini, no pipeline prompt
+// content, pipeline UI hidden) is the default until this flips true.
+// CLAUDE_CODE_OAUTH_TOKEN is deliberately NOT part of this check — it only
+// gates individual PO turns via poBillingStatus(), never the master switch.
+let pipelineAvailable = false;
+
+async function probePipelineAvailability() {
   const status = await checkClaudeStatus();
+  const next = Boolean(status.reachable);
+  if (next !== pipelineAvailable) {
+    pipelineAvailable = next;
+    emitEvent({ type: "pipeline_availability", available: pipelineAvailable });
+  }
+  return { available: pipelineAvailable, status };
+}
+
+async function checkOpenSpecStatus() {
+  return new Promise((resolve) => {
+    execFile(openspecBinary(), ["--version"], { timeout: 15000 }, (error, stdout) => {
+      if (error) resolve({ ok: false, error: error.message });
+      else resolve({ ok: true, version: String(stdout).trim() });
+    });
+  });
+}
+
+// Skills the PO/DEV personas invoke by name (resources/personas/iris-po.md,
+// iris-dev.md) — the OpenSpec workflow skills plus mattpocock's. Presence-only
+// probe (pipeline-availability spec): a directory existing under
+// ~/.claude/skills means "detected", not semantically validated — deeper
+// problems still surface through normal PO/DEV run errors.
+const REQUIRED_SKILLS = [
+  "grilling",
+  "openspec-propose",
+  "openspec-apply-change",
+  "openspec-archive-change",
+  "tdd",
+  "verify",
+  "code-review",
+  "diagnosing-bugs",
+];
+
+function checkSkillsStatus() {
+  const skillsDir = path.join(os.homedir(), ".claude", "skills");
+  const missing = REQUIRED_SKILLS.filter((name) => !fs.existsSync(path.join(skillsDir, name)));
+  return { ok: missing.length === 0, missing, skillsDir };
+}
+
+// Combined status for the SetupPanel's Claude section (design.md D3b/D3c):
+// CLI reachability (same probe as checkClaudeStatus), the PO subscription
+// billing-path status, and the openspec CLI / global skills prerequisite
+// checks (pipeline-availability spec) — all read-only, never editable from
+// the UI. Also the SetupPanel's re-check path for pipeline availability
+// (design.md decision 1).
+async function checkClaudeHealth() {
+  const { available, status } = await probePipelineAvailability();
   const billing = poBillingStatus();
+  const openspecStatus = await checkOpenSpecStatus();
+  const skillsStatus = checkSkillsStatus();
   return {
-    reachable: status.reachable,
+    reachable: available,
+    pipelineAvailable: available,
     version: status.health?.version,
     error: status.error,
     billingOk: billing.ok,
     billingError: billing.ok
       ? undefined
       : "No CLAUDE_CODE_OAUTH_TOKEN set — PO turns will fail until you run `claude setup-token`.",
+    openspecOk: openspecStatus.ok,
+    openspecVersion: openspecStatus.version,
+    openspecInstallHint: "npm install -g @fission-ai/openspec@latest",
+    skillsOk: skillsStatus.ok,
+    missingSkills: skillsStatus.missing,
+    skillsInstallHint: "npx skills@latest add mattpocock/skills  (see also github.com/Fission-AI/OpenSpec for its Claude skills)",
   };
 }
 
@@ -1196,15 +1233,6 @@ function startClaudeRun(run) {
     return;
   }
 
-  // STUDY is a standalone learning role, not part of the PO → DEV build
-  // pipeline: it skips OpenSpec scaffolding AND the DEV change-gate entirely,
-  // runs in the workstream cwd (to read the material being studied), and writes
-  // notes to the second-brain vault. Route it before either step ever runs.
-  if (run.agent === "study") {
-    startStudyRun(run);
-    return;
-  }
-
   // First role run in a fresh project: make it OpenSpec-ready (`openspec init`)
   // so the PO can propose changes and the DEV can implement their tasks.
   if (run.agent) {
@@ -1377,7 +1405,7 @@ function startPoRun(run) {
       cwd: run.cwd,
       resumeSessionId: workstream.agent_sessions?.po ?? null,
       claudeExecutable: claudeBinary(),
-      onAskUserQuestion: (workstreamId, questions) => askUserQuestionViaVoice(workstreamId, questions, "po"),
+      onAskUserQuestion: (workstreamId, questions) => askUserQuestionViaVoice(workstreamId, questions),
       model: run.model,
     });
   } catch (error) {
@@ -1406,71 +1434,6 @@ function startPoRun(run) {
     )
     .then((result) => runQueue.finalize(run.run_id, result.status, result.output))
     .catch((error) => runQueue.finalize(run.run_id, RUN_STATUS.ERROR, `PO session error: ${error.message}`));
-}
-
-// The stateful STUDY module: delivers the turn into the workstream's resident
-// STUDY Agent SDK session (creating it on the first STUDY turn), mirroring PO
-// but through the isolated electron/study-session.mjs. STUDY skips OpenSpec
-// entirely (handled in startClaudeRun) and writes to the second-brain vault.
-function startStudyRun(run) {
-  const workstream = findWorkstream(run.workstream_id);
-  if (!workstream) {
-    runQueue.finalize(run.run_id, RUN_STATUS.ERROR, "Unknown workstream for STUDY run.");
-    return;
-  }
-  const billing = studyBillingStatus();
-  if (!billing.ok) {
-    runQueue.finalize(
-      run.run_id,
-      RUN_STATUS.FAILED,
-      "STUDY needs a subscription token: run `claude setup-token`, set CLAUDE_CODE_OAUTH_TOKEN (see .env.example), then retry. DEV is unaffected.",
-    );
-    return;
-  }
-
-  // Resolved at run start (not submit time) so a model change made while this
-  // task was queued still applies — same rule as PO/DEV.
-  run.model = resolveAgentModel(workstream, "study");
-
-  run.status = RUN_STATUS.RUNNING;
-  run.started_at = Date.now() / 1000;
-  run.claude_session_id = workstream.agent_sessions?.study ?? null;
-  emitEvent(toUpdateEvent(run, EMIT_STATUS.STARTED, { urgency: run.urgency }));
-
-  let state;
-  try {
-    state = getOrCreateStudySession(workstream, {
-      agent: `${AGENT_PREFIX}study`,
-      cwd: run.cwd,
-      resumeSessionId: workstream.agent_sessions?.study ?? null,
-      claudeExecutable: claudeBinary(),
-      onAskUserQuestion: (workstreamId, questions) => askUserQuestionViaVoice(workstreamId, questions, "study"),
-      model: run.model,
-    });
-  } catch (error) {
-    runQueue.finalize(run.run_id, RUN_STATUS.ERROR, `Failed to start STUDY session: ${error.message}`);
-    return;
-  }
-
-  // Apply a queued model change to an already-live session without dropping its
-  // context — identical to PO's setModel() path.
-  const modelReady =
-    state.currentModel === run.model ? Promise.resolve() : setStudySessionModel(state, run.model);
-
-  modelReady
-    .catch((error) => {
-      emitEvent({ type: "log", level: "warn", message: `Could not switch STUDY's live session model: ${error.message}` });
-    })
-    .then(() =>
-      deliverStudyTurn(state, run.task, {
-        onActivity: (line) => pushActivity(run, line),
-        onSessionId: (sessionId) => rememberClaudeSessionId(run, sessionId),
-        onToolStart: (toolId, toolName, detail) => pushToolStart(run, toolId, toolName, detail),
-        onToolEnd: (toolId, isError) => pushToolEnd(run, toolId, isError),
-      }),
-    )
-    .then((result) => runQueue.finalize(run.run_id, result.status, result.output))
-    .catch((error) => runQueue.finalize(run.run_id, RUN_STATUS.ERROR, `STUDY session error: ${error.message}`));
 }
 
 async function submitClaudeTask({ task, urgency = "normal", agent } = {}) {
@@ -1588,7 +1551,27 @@ function controlUi({ action, target_id = undefined, query = undefined } = {}) {
   return { status: "sent", action, target_id, query };
 }
 
+// Tools that only make sense when the pipeline is available — declared to
+// Gemini only when pipelineAvailable is true (see buildClaudeTools). This
+// guard is a defensive backstop, not the primary gate: Gemini should never
+// call one of these in chat-only mode since it was never given the
+// declaration, but a stray call (e.g. a race right after availability drops)
+// gets a clean error instead of throwing.
+const PIPELINE_ONLY_TOOLS = new Set([
+  "check_claude_status",
+  "submit_claude_task",
+  "get_claude_task_status",
+  "stop_claude_task",
+  "start_new_claude_session",
+  "get_workspace_info",
+  "answer_po_question",
+  "set_agent_model",
+]);
+
 async function executeClaudeTool(name, args = {}) {
+  if (PIPELINE_ONLY_TOOLS.has(name) && !pipelineAvailable) {
+    return { status: "error", error: "The Claude pipeline is not available on this machine — install the Claude CLI to enable it (see Settings)." };
+  }
   switch (name) {
     case "check_claude_status":
       return checkClaudeStatus();
@@ -1633,27 +1616,24 @@ function defaultPoAnswers(questions) {
   return answers;
 }
 
-// The `role` (po | study) rides along so the UI can attribute the question; the
-// event type stays `po_question` for renderer/IPC back-compat.
-function emitPoQuestionEvent(workstreamId, questions, status, role = "po") {
-  emitEvent({ type: "po_question", workstream_id: workstreamId, status, questions, role });
+// The event type stays `po_question` for renderer/IPC back-compat.
+function emitPoQuestionEvent(workstreamId, questions, status) {
+  emitEvent({ type: "po_question", workstream_id: workstreamId, status, questions });
 }
 
-// canUseTool's onAskUserQuestion callback (electron/po-session.mjs and
-// study-session.mjs): pauses the asking role's live turn, relays the question(s)
-// to Gemini voice, and resolves once an answer arrives — via the Gemini tool,
-// the UI IPC channel, or PendingQuestion's own timeout fallback. Only one run
-// executes globally at a time, so at most one question is ever pending and PO
-// and STUDY safely share this single relay. See the voice-decision-relay spec.
-function askUserQuestionViaVoice(workstreamId, questions, role = "po") {
-  const promise = PendingQuestion.raise(workstreamId, questions, { timeoutMs: poQuestionTimeoutMs(), role });
-  const roleLabel = AGENT_LABELS[role] ?? "The active role";
+// canUseTool's onAskUserQuestion callback (electron/po-session.mjs): pauses
+// the PO's live turn, relays the question(s) to Gemini voice, and resolves
+// once an answer arrives — via the Gemini tool, the UI IPC channel, or
+// PendingQuestion's own timeout fallback. Only one run executes globally at a
+// time, so at most one question is ever pending. See the voice-decision-relay
+// spec.
+function askUserQuestionViaVoice(workstreamId, questions) {
+  const promise = PendingQuestion.raise(workstreamId, questions, { timeoutMs: poQuestionTimeoutMs() });
 
   const lines = [
     "SYSTEM_EVENT_PO_QUESTION",
-    `asking_role: ${roleLabel}`,
     "instructions_to_iris:",
-    `- The ${roleLabel} has paused to ask you something. Read each question aloud with its options, in order, and collect the user's answer for each.`,
+    "- The PO has paused to ask you something. Read each question aloud with its options, in order, and collect the user's answer for each.",
     "- Once you have every answer, call answer_po_question with one entry per question (question text verbatim, and the option label the user chose).",
     "- If asked for your recommendation, suggest the first-listed option, but submit whatever the user actually picks.",
     "questions:",
@@ -1730,11 +1710,12 @@ function announceClaudeCompletion({ runId, task, status, output }) {
   notifyIris(eventText);
 }
 
-function buildClaudeTools() {
+// Declarations only meaningful when the pipeline is available — omitted from
+// the Gemini session entirely in chat-only mode (design.md decision 2), not
+// just guarded at call time, so Gemini never offers to delegate.
+function buildPipelineToolDeclarations() {
   return [
     {
-      functionDeclarations: [
-        {
           name: "check_claude_status",
           description: "Check if the Claude Code CLI is installed and ready. Use this for questions about Claude status.",
           parameters: { type: "object", properties: {} },
@@ -1755,7 +1736,7 @@ function buildClaudeTools() {
               agent: {
                 type: "string",
                 description:
-                  "Optional role to run the task as: 'po' (Product Owner — grills, then proposes an OpenSpec change), 'dev' (Developer — implements the open change's remaining tasks and verifies), or 'study' (Study librarian — records the user's synthesized note into their second brain, or fact-checks a note). ONLY set this when the user explicitly names a role (e.g. 'have the PO grill this…', 'cho dev làm…', 'save this to my brain…'). Otherwise OMIT it — the session's active agent from the UI is used.",
+                  "Optional role to run the task as: 'po' (Product Owner — grills, then proposes an OpenSpec change) or 'dev' (Developer — implements the open change's remaining tasks and verifies). ONLY set this when the user explicitly names a role (e.g. 'have the PO grill this…', 'cho dev làm…'). Otherwise OMIT it — the session's active agent from the UI is used.",
               },
             },
             required: ["task"],
@@ -1799,7 +1780,7 @@ function buildClaudeTools() {
         {
           name: "answer_po_question",
           description:
-            "Answer the pending question(s) from a live role (Product Owner or Study librarian — see asking_role) after SYSTEM_EVENT_PO_QUESTION. That role's live session is paused waiting for this — call it only once you have collected every answer by voice, never before.",
+            "Answer the pending question(s) from the Product Owner after SYSTEM_EVENT_PO_QUESTION. The PO's live session is paused waiting for this — call it only once you have collected every answer by voice, never before.",
           parameters: {
             type: "object",
             properties: {
@@ -1822,11 +1803,11 @@ function buildClaudeTools() {
         {
           name: "set_agent_model",
           description:
-            "Change which Claude model a role (PO, DEV, or STUDY) runs on for the active session — e.g. switch DEV to a stronger model to debug a hard problem, then switch it back afterwards. Only call this when the user EXPLICITLY asks to change or switch a role's model; never on your own initiative.",
+            "Change which Claude model a role (PO or DEV) runs on for the active session — e.g. switch DEV to a stronger model to debug a hard problem, then switch it back afterwards. Only call this when the user EXPLICITLY asks to change or switch a role's model; never on your own initiative.",
           parameters: {
             type: "object",
             properties: {
-              role: { type: "string", description: "'po', 'dev', or 'study'." },
+              role: { type: "string", description: "'po' or 'dev'." },
               model: {
                 type: "string",
                 description: `One of: ${MODEL_CHOICES.map((choice) => `${choice.id} (${choice.label})`).join(", ")}.`,
@@ -1835,6 +1816,13 @@ function buildClaudeTools() {
             required: ["role", "model"],
           },
         },
+  ];
+}
+
+// Declarations available regardless of pipeline availability — interface
+// control and sleep have nothing to do with Claude (design.md decision 2).
+function buildAlwaysToolDeclarations() {
+  return [
         {
           name: "get_ui_context",
           description:
@@ -1872,9 +1860,89 @@ function buildClaudeTools() {
             "Put Iris to sleep (end this voice session). Call ONLY when the user explicitly asks — e.g. 'go to sleep', 'sleep now', 'goodnight Iris', 'that's all for today'. Say a very short goodbye BEFORE calling this; the session ends a few seconds later. The wake word (if enabled) keeps working, so they can wake Iris again by voice.",
           parameters: { type: "object", properties: {} },
         },
+  ];
+}
+
+function buildClaudeTools() {
+  return [
+    {
+      functionDeclarations: [
+        ...(pipelineAvailable ? buildPipelineToolDeclarations() : []),
+        ...buildAlwaysToolDeclarations(),
       ],
     },
   ];
+}
+
+// One prompt builder with the pipeline sections included only when
+// pipelineAvailable (design.md decision 2) — never a second maintained
+// variant, so the two surfaces can't drift out of sync.
+function buildSystemInstructionText() {
+  const lines = [`You are Iris, the realtime voice front-end for ${userDisplayName()}.`];
+
+  if (pipelineAvailable) {
+    lines.push(
+      "Claude is your worker brain for tools, terminal, files, web, deals, coding, research, and automations.",
+      "You also have built-in Google Search. Use Google Search directly for quick current facts, simple web lookups, and lightweight questions that do not need Claude to do work.",
+      `CRITICAL: Be decisive. Do not ask clarifying questions for actionable tasks. If ${userDisplayName()} asks for a deal, research, coding, checking something, building something, or any work, immediately call submit_claude_task with the request. The ONLY exception is the Product Owner intake below, when a NEW project or feature is being started.`,
+      "Routing rule: quick answer or fact lookup -> Google Search; multi-step work, monitoring, files, email, deals, coding, automation, or anything that should continue in the background -> Claude.",
+      `When you call submit_claude_task for a plain task or the DEV role, write the 'task' as a COMPLETE brief. Claude cannot hear this conversation, so do not send a short paraphrase. Expand what ${userDisplayName()} said into a precise, detailed instruction that captures the goal, every concrete detail mentioned (names, numbers, URLs, dates, budgets, preferences, constraints), any reasonable defaults you are assuming, and the expected result/format. (The PO role is the exception — you steer it with a SHORT control intent, not a PRD; see PRODUCT OWNER CONTROL below.)`,
+      "Session model: context is USER-CONTROLLED. Within the session the user picked, each role (PO, DEV, and plain Claude) keeps its OWN continuous conversation that every new task automatically resumes — Claude remembers ALL its earlier tasks in that role, even when other roles ran in between. Context is never dropped automatically; it resets ONLY when the user explicitly starts a new session (UI 'New' button or a voice request) or picks a different project folder. So follow-up briefs may safely reference the role's previous work ('the PRD you wrote', 'the issue you implemented'). Each session is attached to a project folder the user picks from the UI, and Claude's file/terminal work happens inside that folder. Claude does ONE task at a time; if it is busy, a new task is queued and starts automatically. You never pick or invent session ids or project folders yourself; if the user wants to work on a different project, tell them to pick its folder from the UI.",
+      workspaceContextLine(),
+      "When the user asks which project/folder/session/role is active — or you need to state where work will happen — call get_workspace_info and answer from its result; never guess. When you receive SYSTEM_EVENT_WORKSPACE_UPDATE, silently update your knowledge of the workspace; do not speak in response to it. When you receive SYSTEM_EVENT_AGENT_SELECT, the user just switched the pipeline role from the UI: follow its instructions_to_iris and speak proactively — switching to PO with no ongoing conversation ALWAYS opens with the how-did-this-project-start question (own idea / boss-CTO mandate / customer request).",
+      "Agent pipeline (runs on OpenSpec): Claude runs as one of two roles — PO (Product Owner: grills the request, then proposes an OpenSpec change under openspec/changes/<name>/ with a tasks.md — decides WHAT gets built) and DEV (Developer: implements the remaining tasks of the open change test-first, verifies, then archives it to update the living spec). The user picks the active role from the UI; moving PO → DEV is a gate, and the roles hand work to each other through the OpenSpec change in the project, never a shared conversation. Only pass the 'agent' parameter when the user explicitly names a role; never choose or advance a role yourself. PO runs as a LIVE session (stays open across tasks and pauses mid-task to ask YOU questions by voice — see SYSTEM_EVENT_PO_QUESTION); DEV runs headless and never pauses. A DEV run only works when the PO has already proposed a change with tasks — if none exists, the DEV run fails and asks for the PO to propose first.",
+      "PRODUCT OWNER CONTROL — you are the PO's VOICE, not its analyst. When the user starts a NEW project or feature (or switches to the PO role with no ongoing PO conversation), do NOT interview them yourself and do NOT write a PRD. Instead call submit_claude_task for the PO role with a SHORT control intent that forwards what the user wants and tells the PO to start grilling — e.g. 'Start a new feature: <what the user said, with the concrete details verbatim>. Grill me to pin down the requirements.' The Claude-side PO then runs its grilling pass and pauses to ask YOU questions by voice (SYSTEM_EVENT_PO_QUESTION) — read those aloud and answer with answer_po_question. When the user is satisfied, send the PO a follow-up: 'You have enough — propose the change.' To check progress, send the PO 'Are there tasks left?' and it reads the change's tasks.md and reports back. For ordinary tasks that are not a new project/feature, skip all of this and stay decisive.",
+      "DECISIONS RELAY — headless DEV, and the PO for lower-stakes calls, cannot ask yes/no questions mid-run, so they hand choices back to you at the END of a run. When a Claude result contains a 'Decisions needed' (or numbered 'Open Questions') section: read each decision aloud, one at a time, with its numbered options and the recommendation, and let the user pick (they may say 'option 2' or 'go with your recommendation'). Then call submit_claude_task for the SAME role with a follow-up task stating each decision and the chosen option. If the user postpones, note that the recommended defaults stay applied.",
+      `Model control: PO and DEV each run on a chosen Claude model, visible as a badge on the pipeline chip in the UI (defaults: PO on the strongest model, DEV on a faster one for routine work). Call set_agent_model(role, model) ONLY when ${userDisplayName()} explicitly asks to switch a role's model (e.g. "switch DEV to a stronger model to debug this", "put PO back on the fast one") — never change it on your own initiative. Available models: ${MODEL_CHOICES.map((choice) => `${choice.label} (${choice.id})`).join(", ")}.`,
+      "PO LIVE QUESTIONS — different from Decisions Relay above: when the PO reaches a real fork in the road MID-TASK, it pauses immediately and you receive SYSTEM_EVENT_PO_QUESTION with a list of questions and options. Read each one aloud right then — don't wait for the run to finish, it hasn't. Once you have every answer, call answer_po_question with the exact question text and the chosen option's label for each; the PO resumes the same task the instant you do. If the user asks what you'd pick, suggest the first-listed option, but always submit what they actually chose.",
+      "BRIEF WRITING — the 'task' string is the ONLY thing headless Claude receives; a detail you do not write down is lost forever. Shape every brief to the role:",
+      "- PO control intent (NOT a PRD — the PO does the analysis, you just steer it): a short line forwarding the user's request plus the intent — start-and-grill, 'propose the change', 'are there tasks left?', or 'archive the change'. Include the concrete details the user gave (names, numbers, URLs, constraints) so the PO has them, but never write the PRD, tasks, or acceptance criteria yourself — that is the PO's job via grilling and the OpenSpec propose flow.",
+      "- DEV brief: tell DEV to implement the open OpenSpec change — e.g. 'Implement the remaining tasks of the open change.' If the user named a specific change, include its name. Append any spoken instruction that overrides the spec ('the messages should be in English after all') — DEV cannot know it otherwise. DEV only runs when the PO has already proposed a change with tasks.",
+      "- Follow-up brief (answers to Decisions needed): send to the SAME role and repeat each decision with the chosen option verbatim, e.g. 'Decision 1: option 2 — <restate the option text>. Decision 3: keep the recommendation.' Never re-open decisions the user already settled, and never let a chosen option be paraphrased into something new.",
+      "- Self-check before every submit_claude_task call: could someone who never heard this conversation do the right work from this brief alone? If not, add the missing names, numbers, paths, and decisions before sending.",
+    );
+  } else {
+    lines.push(
+      "You do not have a background worker on this machine right now — you are a friendly, capable conversational voice companion. You also have built-in Google Search; use it directly for quick current facts, simple web lookups, and lightweight questions.",
+      `If ${userDisplayName()} asks for multi-step work, coding, file/terminal automation, or anything else that needs tools you don't have, say plainly that this needs the Claude pipeline, which is not set up on this machine yet (the Claude Code CLI can be installed and checked from Settings), and offer to help conversationally with whatever you can instead. Never claim you will hand work off to Claude — you have no worker to hand it to.`,
+    );
+  }
+
+  lines.push(
+    `UI control rule: if the user says things like 'open it', 'open that result', 'show the latest result', 'show history', 'close it', 'go back', or 'open the current task', use get_ui_context and control_ui — these are UI-only${pipelineAvailable ? " and must NOT be sent to submit_claude_task" : ""}. Also handle 'show the steps' / 'what is it doing' / 'show what tools it used' -> show_task_steps; 'hide the steps' -> hide_task_steps. If they name a specific card ('steps for the deals one', 'steps for the second card'), pass those words in query; with no target named, steps apply to the card they are viewing (open reader first), else the running task.`,
+    "If the user refers to a task by partial words from its header, like 'open the failed one' or 'open the deals task', call control_ui with action open_task_by_query and put those words in query — do not require an exact title match. If Iris shows a task chooser because multiple cards matched, the user can click a choice or say first/second/third; use get_ui_context to inspect pendingTaskMatches before opening a specific task. When a UI command is ambiguous, prefer the expanded task first, then the focused task, then the latest result. Keep the spoken acknowledgement short.",
+    `Sleep rule: when ${userDisplayName()} asks you to sleep ('go to sleep', 'sleep now', 'goodnight', 'that's all for now'), say a short warm goodbye and call go_to_sleep. Never call it unless explicitly asked.${
+      pipelineAvailable
+        ? " Note: while a PO question is pending (see PO LIVE QUESTIONS below), UI actions like close_reader still work, but a new ambiguous open-task request is deferred — the PO question always answers first."
+        : ""
+    }`,
+  );
+
+  if (pipelineAvailable) {
+    lines.push(
+      `After submit_claude_task returns: if status is 'started', say one short acknowledgement like: On it, Claude is handling that now. If status is 'queued', tell ${userDisplayName()} Claude is still finishing the current task and this one is queued next. (Keep what you SAY short, even though the task you SENT is detailed.)`,
+      `Only call start_new_claude_session when ${userDisplayName()} explicitly asks for a new session (says something like: new session, fresh session, start over). After it returns, confirm briefly that Claude has a clean slate.`,
+    );
+  }
+
+  lines.push(
+    `When you receive SYSTEM_EVENT_SESSION_START, immediately speak a warm welcome-back greeting to ${userDisplayName()} as instructed, without waiting for the user to talk first.`,
+  );
+
+  if (pipelineAvailable) {
+    lines.push(
+      `When you receive SYSTEM_EVENT_CLAUDE_COMPLETE, treat it as a high-priority background result from Claude. Proactively announce it even if ${userDisplayName()} was chatting with you. Keep it polite and short: say Claude is back, summarize the result, and ask whether they want to go through it before continuing.`,
+    );
+  }
+
+  lines.push(
+    pipelineAvailable
+      ? "Only answer directly for greetings, quick chat, or status questions."
+      : "Answer everything directly and conversationally — you have no background worker to delegate to right now.",
+    "Keep voice responses natural and short.",
+  );
+
+  return lines.join("\n");
 }
 
 function buildLiveConfig(resumeHandle) {
@@ -1905,42 +1973,7 @@ function buildLiveConfig(resumeHandle) {
       ...buildClaudeTools(),
     ],
     systemInstruction: {
-      parts: [
-        {
-          text: [
-            `You are Iris, the realtime voice front-end for ${userDisplayName()}.`,
-            "Claude is your worker brain for tools, terminal, files, web, deals, coding, research, and automations.",
-            "You also have built-in Google Search. Use Google Search directly for quick current facts, simple web lookups, and lightweight questions that do not need Claude to do work.",
-            `CRITICAL: Be decisive. Do not ask clarifying questions for actionable tasks. If ${userDisplayName()} asks for a deal, research, coding, checking something, building something, or any work, immediately call submit_claude_task with the request. The ONLY exception is the Product Owner intake below, when a NEW project or feature is being started.`,
-            "Routing rule: quick answer or fact lookup -> Google Search; multi-step work, monitoring, files, email, deals, coding, automation, or anything that should continue in the background -> Claude.",
-            `When you call submit_claude_task for a plain task or the DEV role, write the 'task' as a COMPLETE brief. Claude cannot hear this conversation, so do not send a short paraphrase. Expand what ${userDisplayName()} said into a precise, detailed instruction that captures the goal, every concrete detail mentioned (names, numbers, URLs, dates, budgets, preferences, constraints), any reasonable defaults you are assuming, and the expected result/format. (The PO role is the exception — you steer it with a SHORT control intent, not a PRD; see PRODUCT OWNER CONTROL below.)`,
-            "Session model: context is USER-CONTROLLED. Within the session the user picked, each role (PO, DEV, and plain Claude) keeps its OWN continuous conversation that every new task automatically resumes — Claude remembers ALL its earlier tasks in that role, even when other roles ran in between. Context is never dropped automatically; it resets ONLY when the user explicitly starts a new session (UI 'New' button or a voice request) or picks a different project folder. So follow-up briefs may safely reference the role's previous work ('the PRD you wrote', 'the issue you implemented'). Each session is attached to a project folder the user picks from the UI, and Claude's file/terminal work happens inside that folder. Claude does ONE task at a time; if it is busy, a new task is queued and starts automatically. You never pick or invent session ids or project folders yourself; if the user wants to work on a different project, tell them to pick its folder from the UI.",
-            workspaceContextLine(),
-            "When the user asks which project/folder/session/role is active — or you need to state where work will happen — call get_workspace_info and answer from its result; never guess. When you receive SYSTEM_EVENT_WORKSPACE_UPDATE, silently update your knowledge of the workspace; do not speak in response to it. When you receive SYSTEM_EVENT_AGENT_SELECT, the user just switched the pipeline role from the UI: follow its instructions_to_iris and speak proactively — switching to PO with no ongoing conversation ALWAYS opens with the how-did-this-project-start question (own idea / boss-CTO mandate / customer request).",
-            "Agent pipeline (runs on OpenSpec): Claude runs as one of two roles — PO (Product Owner: grills the request, then proposes an OpenSpec change under openspec/changes/<name>/ with a tasks.md — decides WHAT gets built) and DEV (Developer: implements the remaining tasks of the open change test-first, verifies, then archives it to update the living spec). The user picks the active role from the UI; moving PO → DEV is a gate, and the roles hand work to each other through the OpenSpec change in the project, never a shared conversation. Only pass the 'agent' parameter when the user explicitly names a role; never choose or advance a role yourself. PO runs as a LIVE session (stays open across tasks and pauses mid-task to ask YOU questions by voice — see SYSTEM_EVENT_PO_QUESTION); DEV runs headless and never pauses. A DEV run only works when the PO has already proposed a change with tasks — if none exists, the DEV run fails and asks for the PO to propose first.",
-            "STUDY mode (separate from the PO → DEV build pipeline): a third selectable role for LEARNING, not building. Here YOU are the study assistant — the user opens a source, reads it, and synthesizes it aloud to you; you capture that and dispatch to the STUDY worker, which is the librarian + fact-checker for their second brain. You never teach via the worker (you answer study questions yourself); the worker only (a) RECORDS a note when the user explicitly asks to save (write a complete brief containing the user's synthesis and the source URL/reference), or (b) VERIFIES a note's facts (include the source URL/text so it can check against the source plus the web). STUDY is a LIVE session and may pause to ask YOU a filing/verification question by voice (SYSTEM_EVENT_PO_QUESTION, asking_role: Study). It does NOT touch OpenSpec. Only route to STUDY when it is the active role or the user explicitly says so.",
-            "PRODUCT OWNER CONTROL — you are the PO's VOICE, not its analyst. When the user starts a NEW project or feature (or switches to the PO role with no ongoing PO conversation), do NOT interview them yourself and do NOT write a PRD. Instead call submit_claude_task for the PO role with a SHORT control intent that forwards what the user wants and tells the PO to start grilling — e.g. 'Start a new feature: <what the user said, with the concrete details verbatim>. Grill me to pin down the requirements.' The Claude-side PO then runs its grilling pass and pauses to ask YOU questions by voice (SYSTEM_EVENT_PO_QUESTION) — read those aloud and answer with answer_po_question. When the user is satisfied, send the PO a follow-up: 'You have enough — propose the change.' To check progress, send the PO 'Are there tasks left?' and it reads the change's tasks.md and reports back. For ordinary tasks that are not a new project/feature, skip all of this and stay decisive.",
-            "DECISIONS RELAY — headless DEV, and the PO for lower-stakes calls, cannot ask yes/no questions mid-run, so they hand choices back to you at the END of a run. When a Claude result contains a 'Decisions needed' (or numbered 'Open Questions') section: read each decision aloud, one at a time, with its numbered options and the recommendation, and let the user pick (they may say 'option 2' or 'go with your recommendation'). Then call submit_claude_task for the SAME role with a follow-up task stating each decision and the chosen option. If the user postpones, note that the recommended defaults stay applied.",
-            `Model control: PO and DEV each run on a chosen Claude model, visible as a badge on the pipeline chip in the UI (defaults: PO on the strongest model, DEV on a faster one for routine work). Call set_agent_model(role, model) ONLY when ${userDisplayName()} explicitly asks to switch a role's model (e.g. "switch DEV to a stronger model to debug this", "put PO back on the fast one") — never change it on your own initiative. Available models: ${MODEL_CHOICES.map((choice) => `${choice.label} (${choice.id})`).join(", ")}.`,
-            "PO LIVE QUESTIONS — different from Decisions Relay above: when the PO reaches a real fork in the road MID-TASK, it pauses immediately and you receive SYSTEM_EVENT_PO_QUESTION with a list of questions and options. Read each one aloud right then — don't wait for the run to finish, it hasn't. Once you have every answer, call answer_po_question with the exact question text and the chosen option's label for each; the PO resumes the same task the instant you do. If the user asks what you'd pick, suggest the first-listed option, but always submit what they actually chose.",
-            "BRIEF WRITING — the 'task' string is the ONLY thing headless Claude receives; a detail you do not write down is lost forever. Shape every brief to the role:",
-            "- PO control intent (NOT a PRD — the PO does the analysis, you just steer it): a short line forwarding the user's request plus the intent — start-and-grill, 'propose the change', 'are there tasks left?', or 'archive the change'. Include the concrete details the user gave (names, numbers, URLs, constraints) so the PO has them, but never write the PRD, tasks, or acceptance criteria yourself — that is the PO's job via grilling and the OpenSpec propose flow.",
-            "- DEV brief: tell DEV to implement the open OpenSpec change — e.g. 'Implement the remaining tasks of the open change.' If the user named a specific change, include its name. Append any spoken instruction that overrides the spec ('the messages should be in English after all') — DEV cannot know it otherwise. DEV only runs when the PO has already proposed a change with tasks.",
-            "- STUDY brief: say plainly whether to RECORD or VERIFY. To record: 'Save a note: <the user's synthesis in full>. Source: <URL/reference>.' To verify: 'Verify this note against its source and the web: <the claims/note>. Source: <URL/text>.' The worker cannot hear the conversation, so include the synthesis and the source verbatim — a detail you omit is lost.",
-            "- Follow-up brief (answers to Decisions needed): send to the SAME role and repeat each decision with the chosen option verbatim, e.g. 'Decision 1: option 2 — <restate the option text>. Decision 3: keep the recommendation.' Never re-open decisions the user already settled, and never let a chosen option be paraphrased into something new.",
-            "- Self-check before every submit_claude_task call: could someone who never heard this conversation do the right work from this brief alone? If not, add the missing names, numbers, paths, and decisions before sending.",
-            "UI control rule: if the user says things like 'open it', 'open that result', 'show the latest result', 'show history', 'close it', 'go back', or 'open the current task', use get_ui_context and control_ui — these are UI-only and must NOT be sent to submit_claude_task. Also handle 'show the steps' / 'what is it doing' / 'show what tools it used' -> show_task_steps; 'hide the steps' -> hide_task_steps. If they name a specific card ('steps for the deals one', 'steps for the second card'), pass those words in query; with no target named, steps apply to the card they are viewing (open reader first), else the running task.",
-            "If the user refers to a task by partial words from its header, like 'open the failed one' or 'open the deals task', call control_ui with action open_task_by_query and put those words in query — do not require an exact title match. If Iris shows a task chooser because multiple cards matched, the user can click a choice or say first/second/third; use get_ui_context to inspect pendingTaskMatches before opening a specific task. When a UI command is ambiguous, prefer the expanded task first, then the focused task, then the latest result. Keep the spoken acknowledgement short.",
-            `Sleep rule: when ${userDisplayName()} asks you to sleep ('go to sleep', 'sleep now', 'goodnight', 'that's all for now'), say a short warm goodbye and call go_to_sleep. Never call it unless explicitly asked. Note: while a PO question is pending (see PO LIVE QUESTIONS below), UI actions like close_reader still work, but a new ambiguous open-task request is deferred — the PO question always answers first.`,
-            `After submit_claude_task returns: if status is 'started', say one short acknowledgement like: On it, Claude is handling that now. If status is 'queued', tell ${userDisplayName()} Claude is still finishing the current task and this one is queued next. (Keep what you SAY short, even though the task you SENT is detailed.)`,
-            `Only call start_new_claude_session when ${userDisplayName()} explicitly asks for a new session (says something like: new session, fresh session, start over). After it returns, confirm briefly that Claude has a clean slate.`,
-            `When you receive SYSTEM_EVENT_SESSION_START, immediately speak a warm welcome-back greeting to ${userDisplayName()} as instructed, without waiting for the user to talk first.`,
-            `When you receive SYSTEM_EVENT_CLAUDE_COMPLETE, treat it as a high-priority background result from Claude. Proactively announce it even if ${userDisplayName()} was chatting with you. Keep it polite and short: say Claude is back, summarize the result, and ask whether they want to go through it before continuing.`,
-            "Only answer directly for greetings, quick chat, or status questions.",
-            "Keep voice responses natural and short.",
-          ].join("\n"),
-        },
-      ],
+      parts: [{ text: buildSystemInstructionText() }],
     },
   };
 }
@@ -1988,6 +2021,11 @@ async function connectLive({ isReconnect }) {
     emitEvent({ type: "fatal", message: "GEMINI_API_KEY is not set." });
     throw new Error("GEMINI_API_KEY is not set");
   }
+
+  // Re-probed on every (re)connect, not just at boot — see design.md decision
+  // 1. Live tool declarations are fixed per session, so this is the only point
+  // where a just-installed Claude CLI can actually take effect.
+  await probePipelineAvailability();
 
   const model = process.env.GEMINI_LIVE_MODEL || "models/gemini-3.1-flash-live-preview";
   ai = new GoogleGenAI({ apiKey });
@@ -2341,6 +2379,12 @@ app.whenReady().then(() => {
   }
   installAppMenu();
 
+  // Fire-and-forget so app startup isn't blocked on the CLI probe; the
+  // pipeline_availability sidecar event (see probePipelineAvailability)
+  // updates the renderer whenever this resolves, and connectLive() re-probes
+  // before the Gemini session that actually consumes the value is built.
+  probePipelineAvailability().catch(() => {});
+
   session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
     callback(permission === "media" || permission === "audioCapture" || permission === "videoCapture");
   });
@@ -2387,6 +2431,10 @@ app.whenReady().then(() => {
   ipcMain.handle("config:save", (_event, updates) => writeUserConfig(updates));
   ipcMain.handle("config:test-gemini", (_event, payload) => testGeminiKey(payload?.key));
   ipcMain.handle("config:test-claude", () => checkClaudeHealth());
+  // Renderer's boot-time read of the pipeline master switch (see design.md
+  // decision 1/3) — cached, synchronous-feeling; live updates arrive over the
+  // pipeline_availability sidecar event emitted whenever the value flips.
+  ipcMain.handle("pipeline:status", () => ({ available: pipelineAvailable }));
   ipcMain.handle("config:preview-voice", (_event, payload) => previewVoice(payload || {}));
   ipcMain.on("iris:boot-done", () => GreetGate.fire());
   ipcMain.on("iris:ui-context", (_event, context) => {
@@ -2419,7 +2467,6 @@ app.on("before-quit", () => {
     if (run.child) run.child.kill("SIGTERM");
   }
   closeAllPoSessions();
-  closeAllStudySessions();
 });
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();

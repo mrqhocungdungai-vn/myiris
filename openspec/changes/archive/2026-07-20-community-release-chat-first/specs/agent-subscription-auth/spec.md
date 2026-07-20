@@ -1,8 +1,4 @@
-## Purpose
-
-Subscription-based authentication for the live PO SDK session via `CLAUDE_CODE_OAUTH_TOKEN`, with `ANTHROPIC_API_KEY` deliberately excluded from that session's environment to guarantee subscription (not API) billing. DEV's existing `/login` auth is out of scope.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: SDK-role sessions authenticate via subscription token
 
@@ -36,12 +32,3 @@ The app SHALL ensure `ANTHROPIC_API_KEY` is not present in the environment of th
 
 - **WHEN** both `CLAUDE_CODE_OAUTH_TOKEN` and (host) `ANTHROPIC_API_KEY` are available at launch
 - **THEN** the PO session authenticates via the subscription token, because the API key was excluded from its session environment
-
-### Requirement: Auth requirements are documented
-
-The setup token requirement SHALL be documented in the app's configuration surface so an operator can enable subscription billing without reading the code.
-
-#### Scenario: Configuration docs describe the token
-
-- **WHEN** an operator consults `.env.example` / README to configure the app
-- **THEN** they find the `claude setup-token` step, the `CLAUDE_CODE_OAUTH_TOKEN` variable, and the warning that `ANTHROPIC_API_KEY` forces API billing and is excluded from the PO session

@@ -2,9 +2,22 @@
 
 > **Experimental personal build.** This repository is the personal experimental version of Iris by **MRQ Học Ứng Dụng AI**. It is being used to actively test ideas, workflows, and product directions, and was published to GitHub in response to audience requests. The project still contains many bugs that MRQ has not had time to fix yet, so please treat it as an actively evolving experiment rather than a polished product. It is shared under the **MIT License** to help the community study it, modify it, and continue developing it further. This version has been tested by MRQ on a **Mac mini M4 with 16 GB RAM running macOS 26**. It is also a fork of the original [`ASHR12/iris`](https://github.com/ASHR12/iris) project — many thanks to **Ashutosh Shrivastava** for the original work.
 
-A desktop voice companion that uses **Gemini Live** for natural realtime conversation and **Claude Code (headless)** for long-running work.
+A desktop voice companion built on **Gemini Live** for natural realtime conversation, with an optional **Claude Code** build pipeline for real work.
 
-The app is designed as a voice-first front-end: you speak naturally, Gemini Live responds in realtime, and when the request needs tools or autonomous work, Gemini hands it to Claude in the background. The worker is one of three roles, run on deliberately different mechanisms: **PO** is a **stateful** module — a persistent Agent SDK session that stays open across turns and can pause mid-turn to ask you something — while **DEV** is a **stateless** module — a one-shot headless `claude -p` run per issue, unchanged from before. PO and DEV form the build pipeline **PO → DEV**. That pipeline uses [mattpocock/skills](https://github.com/mattpocock/skills), especially **Grill Me** on the PO side, and [Fission-AI/openspec](https://github.com/Fission-AI/openspec) for **SDD (spec-driven development)**. PO grills and shapes the request into a proper spec first; once the spec is complete, DEV implements it using **`opsx:apply`**. **STUDY** is a separate learning role (also a stateful Agent SDK session, in its own module): while you learn from a source and synthesize it aloud, it records your notes into your enabled [`open-second-brain`](https://github.com/itechmeat/open-second-brain) vault and fact-checks note claims against the source and the web. STUDY is not part of the build pipeline and never touches OpenSpec.
+**Out of the box, Iris just talks to you** — add a Gemini API key and start speaking; no other setup required. If you also have the [Claude Code](https://code.claude.com/docs/en/headless) CLI installed, Iris automatically unlocks a second layer: a **PO → DEV** build pipeline that lets you delegate real work (coding, research, files, terminal, automation) by voice. The two roles run on deliberately different mechanisms: **PO** is a **stateful** module — a persistent Agent SDK session that stays open across turns and can pause mid-turn to ask you something — while **DEV** is a **stateless** module — a one-shot headless `claude -p` run per issue. The pipeline uses [mattpocock/skills](https://github.com/mattpocock/skills), especially **Grill Me** on the PO side, and [Fission-AI/openspec](https://github.com/Fission-AI/openspec) for **SDD (spec-driven development)**. PO grills and shapes the request into a proper spec first; once the spec is complete, DEV implements it using **`opsx:apply`**. See "Claude pipeline (PO → DEV)" below for how it's detected and enabled.
+
+## Quickstart (chat only)
+
+```bash
+npm ci
+cp .env.example .env
+# edit .env and set GEMINI_API_KEY (free key: https://aistudio.google.com/apikey)
+npm start
+```
+
+That's it — Iris wakes up and talks to you. The Claude pipeline is a separate,
+optional layer described under "Claude pipeline (PO → DEV)" below; skip it
+entirely if you only want a voice companion.
 
 ## What This App Does
 
@@ -12,7 +25,7 @@ The app is designed as a voice-first front-end: you speak naturally, Gemini Live
 - Streams cleaned audio to Gemini Live as 16 kHz PCM.
 - Plays Gemini Live audio responses through the app using browser `AudioContext`.
 - Lets Gemini use built-in Google Search for quick current facts.
-- Lets Gemini hand serious work to Claude, which spawns a headless Claude Code run (`claude -p`).
+- When the Claude Code CLI is installed, lets Gemini hand serious work to Claude, which spawns a headless Claude Code run (`claude -p`) — optional, auto-detected, off by default.
 - Shows conversation in the Comms panel and Claude jobs in the Claude Tasks panel.
 - Proactively announces Claude results when a background task finishes.
 - Supports interruption/barge-in: when you speak over Gemini, playback is flushed.
@@ -280,24 +293,7 @@ clean and avoids expensive DOM rasterization.
 
 ## Gemini Tools
 
-Gemini Live is configured with:
-
-```js
-tools: [
-  { googleSearch: {} },
-  {
-    functionDeclarations: [
-      check_claude_status,
-      submit_claude_task,
-      get_claude_task_status,
-      stop_claude_task,
-      start_new_claude_session,
-      get_workspace_info,
-      answer_po_question,
-    ]
-  }
-]
-```
+Gemini Live is configured with `{ googleSearch: {} }` (if billing is enabled) plus a `functionDeclarations` set that includes interface-control tools (`get_ui_context`, `control_ui`, `go_to_sleep`) always, and the Claude pipeline tools (`check_claude_status`, `submit_claude_task`, `get_claude_task_status`, `stop_claude_task`, `start_new_claude_session`, `get_workspace_info`, `answer_po_question`, `set_agent_model`) **only when the Claude pipeline is available** (see "Claude pipeline (PO → DEV)" below) — so in chat-only mode Gemini is never given a tool it can't use, and never offers to delegate.
 
 Routing behavior:
 
@@ -306,59 +302,75 @@ Routing behavior:
 - Claude completion: **Gemini proactively announces result**.
 - PO pauses mid-task with a question (`SYSTEM_EVENT_PO_QUESTION`): **Gemini reads it aloud immediately and answers via `answer_po_question`** once the user responds — distinct from the end-of-run "Decisions needed" relay, which still applies to DEV and to PO's lower-stakes calls.
 
-## Claude Code Requirements
+## Claude pipeline (PO → DEV) — optional, advanced
 
-The worker ("Claude") is [Claude Code](https://code.claude.com/docs/en/headless). Iris drives it two ways, matching the stateful/stateless module split:
+This entire section is optional. Skip it if you only want to talk to Iris. It
+covers the second layer: delegating real work to [Claude Code](https://code.claude.com/docs/en/headless)
+through a Product Owner → Developer pipeline.
 
-- **DEV (stateless)** shells out to the `claude` CLI directly. **PO (stateful)** drives the same binary through `@anthropic-ai/claude-agent-sdk` as one persistent session. Either way, install and authenticate it first:
+### How it turns on
+
+Iris probes for the `claude` binary at startup and before every Gemini
+(re)connection — **the binary's presence is the only switch**. No config flag,
+no toggle: install the Claude CLI and Iris detects it automatically. When
+detected, the pipeline's Gemini tools are declared, the Work Stream / PipelineBar
+/ session-switcher UI appears, and PO/DEV become selectable. When not detected,
+Iris stays in chat-only mode — Gemini is never given a tool it can't use, and
+the UI stays clean of pipeline panels. Settings → "Claude pipeline" reports the
+current state and lets you re-check after installing.
 
 ```bash
 claude --version
 ```
 
-If that works in your terminal, DEV can use it immediately. **PO additionally needs a subscription token**, since the Agent SDK does not inherit your interactive `claude` login:
+If that works in your terminal, **DEV works immediately** — no further setup.
+
+### DEV vs PO
+
+Iris drives Claude two ways, matching a stateless/stateful module split:
+
+- **DEV (stateless)** shells out to the `claude` CLI directly, one task at a time:
+
+  ```text
+  claude -p "<task>" --output-format stream-json --verbose --permission-mode bypassPermissions
+  ```
+
+- **PO (stateful)** drives the same binary through `@anthropic-ai/claude-agent-sdk` as one persistent session, delivering each task into the workstream's resident session instead of spawning a new process. **PO additionally needs a subscription token**, since the Agent SDK does not inherit your interactive `claude` login:
+
+  ```bash
+  claude setup-token
+  ```
+
+  Paste the result into `.env` as `CLAUDE_CODE_OAUTH_TOKEN` (see `.env.example`). Without it, PO turns fail with an actionable error; DEV is unaffected. Set `IRIS_PO_LIVE_SESSION=0` to temporarily disable the PO live session and fall back to the old one-shot behavior instead.
+
+### Global skills prerequisite
+
+The PO/DEV agents run with globally-installed Claude Code skills in
+`~/.claude/skills`: the OpenSpec workflow skills (`openspec-propose`,
+`openspec-apply-change`, `openspec-archive-change`, …) and the
+[mattpocock/skills](https://github.com/mattpocock/skills) set (`grilling`,
+`tdd`, `verify`, `code-review`). Install them once:
 
 ```bash
-claude setup-token
+npm install -g @fission-ai/openspec@latest
+npx skills@latest add mattpocock/skills
 ```
 
-Paste the result into `.env` as `CLAUDE_CODE_OAUTH_TOKEN` (see `.env.example`). Without it, PO **and STUDY** turns fail with an actionable error (both are Agent SDK sessions); DEV is unaffected. Set `IRIS_PO_LIVE_SESSION=0` to temporarily disable the PO live session and fall back to the old one-shot behavior instead. STUDY additionally needs the [`open-second-brain`](https://github.com/itechmeat/open-second-brain) Claude Code plugin enabled — its SDK session inherits the plugin's `brain_*` note tools from your `~/.claude` settings, so no extra Iris config is required. If people need a second brain for Hermes or Claude Code, that project is the recommended place to start. STUDY's model defaults to `claude-sonnet-5` (override `IRIS_STUDY_MODEL`).
+Settings → "Claude pipeline" reports whether the `openspec` CLI and these
+skills are detected, with a copyable install command for whichever is missing.
+Iris never installs them for you.
 
-Each DEV (or plain Claude) task runs as:
+### Bundled agent personas
 
-```text
-claude -p "<task>" --output-format stream-json --verbose --permission-mode bypassPermissions
-```
-
-Each PO task delivers into the workstream's resident Agent SDK session (created on the first PO turn), instead of spawning a new process.
-
-### Bundled Claude Code agents
-
-This repository also bundles the Iris agent definitions inside the project at `.claude/agents/`, so people opening the repo in Claude Code can use the same agents directly from the project:
-
-- `iris-po` — grills requests, drives OpenSpec, and prepares work for DEV.
-- `iris-dev` — implements the remaining tasks of an open change headlessly.
-- `iris-study` — records study notes into `open-second-brain` and verifies note claims.
-
-Example headless usage:
+The PO/DEV persona files live in `resources/personas/` (`iris-po.md`,
+`iris-dev.md`) and are installed to `~/.claude/agents/` by the app's "Install
+agents" button (or automatically on first pipeline use) — so they're available
+globally, on any project `cwd`, not just this repo. Example headless usage
+once installed:
 
 ```bash
 claude --agent iris-po -p "Grill this feature request and propose the next OpenSpec change"
 claude --agent iris-dev -p "Implement the remaining unchecked tasks for the current OpenSpec change"
-claude --agent iris-study -p "Verify this study note against the source and the web"
-```
-
-If you want to reuse these agents globally in Claude Code, copy them into **`~/.claude/agents/`** explicitly:
-
-```bash
-mkdir -p ~/.claude/agents
-cp .claude/agents/iris-*.md ~/.claude/agents/
-```
-
-After that, you can use them from anywhere with commands like:
-
-```bash
-claude --agent iris-po -p "Grill this feature request and propose the next OpenSpec change"
 ```
 
 Notes:
@@ -390,13 +402,13 @@ On Windows PowerShell:
 Copy-Item .env.example .env
 ```
 
-Minimum required:
+Minimum required (chat only — this alone is enough to talk to Iris):
 
 ```bash
 GEMINI_API_KEY=your_google_ai_studio_key
 ```
 
-Recommended example:
+Recommended example (adds the optional Claude pipeline settings):
 
 ```bash
 GEMINI_API_KEY=your_google_ai_studio_key
@@ -465,9 +477,9 @@ so future changes don't reintroduce wrong/deprecated names or version drift.
 
 - Node.js 20+ (LTS recommended).
 - npm.
-- Claude Code installed and authenticated (`claude --version` works).
 - A Gemini API key for the Live model (`GEMINI_API_KEY`).
 - macOS, Windows, or Linux with microphone permission available.
+- *Optional, for the Claude pipeline:* Claude Code installed and authenticated (`claude --version` works) — see "Claude pipeline (PO → DEV)" above.
 
 ### 1. Install dependencies
 
@@ -475,33 +487,22 @@ so future changes don't reintroduce wrong/deprecated names or version drift.
 npm ci
 ```
 
-Use `npm ci` for a clean, reproducible install from `package-lock.json`.
-
-### Quick start
-
-```bash
-npm ci
-cp .env.example .env
-# edit .env and set GEMINI_API_KEY
-npm start
-```
-
-If you just want the shortest path: **install with `npm ci`, then run with `npm start`**.
+Use `npm ci` for a clean, reproducible install from `package-lock.json`. See "Quickstart (chat only)" above for the shortest path to a running app.
 
 ### 2. Configure Gemini and Iris
 
 Create `.env` from `.env.example` and set at least `GEMINI_API_KEY`.
 
-### 3. Verify Claude Code
+### 3. (Optional) Verify Claude Code for the pipeline
 
-Make sure the Claude Code CLI is installed and logged in:
+Skip this if you only want chat. To use the PO/DEV pipeline, make sure the Claude Code CLI is installed and logged in:
 
 ```bash
 claude --version
 claude -p "Reply with exactly: PONG" --output-format json
 ```
 
-The second command should print a JSON object with `"result":"PONG"` and a `session_id`.
+The second command should print a JSON object with `"result":"PONG"` and a `session_id`. Iris detects the CLI automatically on next launch/reconnect — no separate enable step.
 
 ### 4. Run in development mode
 

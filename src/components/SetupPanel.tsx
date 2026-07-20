@@ -63,6 +63,7 @@ export default function SetupPanel({
   const [step, setStep] = useState(0);
   const [gemini, setGemini] = useState<TestState>({ status: "idle" });
   const [claude, setClaude] = useState<TestState & { billing?: string }>({ status: "idle" });
+  const [pipelinePrereqs, setPipelinePrereqs] = useState<ClaudeHealth | null>(null);
   const [preview, setPreview] = useState<TestState>({ status: "idle" });
   const [mic, setMic] = useState<PermState>("idle");
   const [cam, setCam] = useState<PermState>("idle");
@@ -147,6 +148,7 @@ export default function SetupPanel({
     } else {
       setClaude({ status: "error", message: health.error || "Claude CLI not found.", billing });
     }
+    setPipelinePrereqs(health);
   }
 
   async function doPreview() {
@@ -229,7 +231,10 @@ export default function SetupPanel({
   );
 
   const claudeSection = (
-    <Section title="Claude" hint="Claude is Iris's worker brain — the PO/DEV pipeline runs on the Claude Code CLI.">
+    <Section
+      title="Claude pipeline (optional)"
+      hint="Iris talks to you with just a Gemini key. Installing the Claude Code CLI additionally unlocks the PO/DEV build pipeline — recheck any time from here."
+    >
       <div className="setup-actions">
         <button className="setup-btn" onClick={checkClaude} disabled={claude.status === "testing"}>
           {claude.status === "testing" ? <Loader2 size={14} className="spin" /> : null}
@@ -237,7 +242,30 @@ export default function SetupPanel({
         </button>
         <TestBadge state={claude} okLabel="Ready" />
       </div>
+      {pipelinePrereqs ? (
+        <p className="setup-note">
+          {pipelinePrereqs.pipelineAvailable
+            ? "Pipeline enabled — PO/DEV tools and the Work Stream panel are active."
+            : "Pipeline off — chat-only mode. Install the Claude Code CLI, then recheck, to unlock PO/DEV."}
+        </p>
+      ) : null}
       {claude.billing ? <p className="setup-note">{claude.billing}</p> : null}
+      {pipelinePrereqs?.reachable ? (
+        <div className="setup-perms">
+          <PrereqRow
+            label="openspec CLI"
+            ok={pipelinePrereqs.openspecOk}
+            okDetail={pipelinePrereqs.openspecVersion}
+            installHint={pipelinePrereqs.openspecInstallHint}
+          />
+          <PrereqRow
+            label="Global skills (OpenSpec + Grill Me/TDD/code-review)"
+            ok={pipelinePrereqs.skillsOk}
+            okDetail={pipelinePrereqs.skillsOk ? undefined : `missing: ${pipelinePrereqs.missingSkills.join(", ")}`}
+            installHint={pipelinePrereqs.skillsInstallHint}
+          />
+        </div>
+      ) : null}
     </Section>
   );
 
@@ -434,8 +462,9 @@ export default function SetupPanel({
       <div className="setup-welcome">
         <h2>Welcome to Iris</h2>
         <p>
-          Iris is a hands-free voice command layer. Gemini Live handles the conversation and delegates real
-          work to Claude's PO/DEV pipeline. Let's get you set up in under a minute.
+          Iris is a hands-free voice companion — add a Gemini key and start talking. If you also have the Claude
+          Code CLI installed, Iris unlocks an optional PO/DEV build pipeline for real work. Let's get you set up
+          in under a minute.
         </p>
       </div>
     );
@@ -648,6 +677,53 @@ function TestBadge({ state, okLabel }: { state: TestState; okLabel: string }) {
     );
   }
   return null;
+}
+
+// Read-only prerequisite check row (openspec CLI, global skills) — Iris never
+// installs these itself; it only reports presence and a copyable command.
+function PrereqRow({
+  label,
+  ok,
+  okDetail,
+  installHint,
+}: {
+  label: string;
+  ok: boolean;
+  okDetail?: string;
+  installHint: string;
+}) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className={`setup-perm ${ok ? "granted" : "idle"}`}>
+      <span className="perm-label">
+        {label}
+        {okDetail ? <em>{okDetail}</em> : null}
+      </span>
+      {ok ? (
+        <span className="setup-result ok">
+          <Check size={13} />
+          Detected
+        </span>
+      ) : (
+        <button
+          className="setup-btn ghost"
+          title={installHint}
+          onClick={async () => {
+            try {
+              await navigator.clipboard.writeText(installHint);
+              setCopied(true);
+              setTimeout(() => setCopied(false), 2000);
+            } catch {
+              // Clipboard access can fail silently on some platforms; the
+              // command is still visible in the title tooltip.
+            }
+          }}
+        >
+          {copied ? "Copied" : "Copy install command"}
+        </button>
+      )}
+    </div>
+  );
 }
 
 function PermRow({

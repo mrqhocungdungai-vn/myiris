@@ -2,18 +2,12 @@
 // next role is a gate, passed when the previous role wrote its handoff file.
 export const PIPELINE: AgentRole[] = ["po", "dev"];
 
-// Standalone roles that are NOT part of the gated PO → DEV pipeline. STUDY is a
-// learning role (second-brain librarian + fact-checker) — selectable and
-// model-configurable like the pipeline roles, but with no gate to a next role.
-export const STANDALONE_ROLES: AgentRole[] = ["study"];
-
-// Every selectable role, pipeline + standalone.
-export const ALL_ROLES: AgentRole[] = [...PIPELINE, ...STANDALONE_ROLES];
+// Every selectable role.
+export const ALL_ROLES: AgentRole[] = [...PIPELINE];
 
 export const AGENT_LABELS: Record<AgentRole, string> = {
   po: "PO",
   dev: "DEV",
-  study: "Study",
 };
 
 // Per-role identity colors, expressed as references to Deep Space's rgb
@@ -21,7 +15,6 @@ export const AGENT_LABELS: Record<AgentRole, string> = {
 export const AGENT_COLORS: Record<AgentRole, string> = {
   po: "var(--violet-rgb)",
   dev: "var(--mint-rgb)",
-  study: "var(--amber-rgb)",
 };
 
 // Curated model choices for PO/DEV — mirrors electron/main.mjs MODEL_CHOICES.

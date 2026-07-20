@@ -93,6 +93,7 @@ export default function HudShell({
   handStream,
   handActionLabel,
   handActionTone,
+  pipelineAvailable,
   poQuestion,
 }: {
   reactorState: ReactorState;
@@ -128,6 +129,9 @@ export default function HudShell({
   handStream: MediaStream | null;
   handActionLabel: string;
   handActionTone: string;
+  // Pipeline master switch (pipeline-availability spec) — hides the tasks
+  // column and PO question banner in chat-only mode.
+  pipelineAvailable: boolean;
   // Claude-specific delta vs upstream (design.md D2): a pending PO question
   // must stay answerable (voice, click, or dwell-click) while floating.
   poQuestion: {
@@ -150,7 +154,7 @@ export default function HudShell({
     <div className={`hud-shell ${awake ? "awake" : "asleep"}`}>
       {/* A pending PO question outranks everything else in the HUD — it stays
           a lit, always-visible island rather than tucked behind a toggle. */}
-      {poQuestion ? (
+      {pipelineAvailable && poQuestion ? (
         <div className="hud-po-question hud-hit">
           <PoQuestionBanner
             questions={poQuestion.questions}
@@ -160,8 +164,8 @@ export default function HudShell({
         </div>
       ) : null}
 
-      {/* Slim work stream, top-right — collapsible like Comms */}
-      {visibleTasks.length > 0 ? (
+      {/* Slim work stream, top-right — collapsible like Comms (pipeline-only) */}
+      {pipelineAvailable && visibleTasks.length > 0 ? (
         <div className="hud-right">
           <button
             type="button"
