@@ -146,7 +146,7 @@ async function pump(state) {
 // or from the pre-live-session `-p --resume` era — is not lost).
 export function getOrCreatePoSession(
   workstream,
-  { agent, cwd, resumeSessionId, onAskUserQuestion, claudeExecutable, model } = {},
+  { agent, cwd, resumeSessionId, onAskUserQuestion, claudeExecutable, model, query: queryFn = query } = {},
 ) {
   const existing = sessions.get(workstream.id);
   if (existing && !existing.ended) return existing;
@@ -187,7 +187,7 @@ export function getOrCreatePoSession(
   if (claudeExecutable) options.pathToClaudeCodeExecutable = claudeExecutable;
   if (resumeSessionId) options.resume = resumeSessionId;
 
-  state.query = query({ prompt: channel.iterable, options });
+  state.query = queryFn({ prompt: channel.iterable, options });
   sessions.set(workstream.id, state);
   pump(state);
   return state;
