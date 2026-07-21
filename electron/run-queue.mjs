@@ -54,6 +54,30 @@ export const TERMINAL_STATUSES = Object.freeze([
   RUN_STATUS.CANCELLED,
 ]);
 
+// The binding constraint is a sub-agent `Task` call: from the parent stream
+// it appears as one `tool_use` -> total silence -> one `tool_result`, and it
+// sits on DEV's standard path (the persona invokes the `code-review` skill,
+// which runs two parallel sub-agents). Measured sub-agent durations on a
+// mid-size codebase: 263s / 365s / 380s. 30 minutes is ~4.7x the longest
+// observed and 3x the Bash tool's own 600s self-timeout. Erring long is
+// cheap — the failure this bounds is currently unbounded — and the rollback
+// is this env var, not a code change. See design.md D6.
+export const DEFAULT_RUN_IDLE_TIMEOUT_MS = 1_800_000; // 30 minutes
+
+// Read the same way every other IRIS_* budget is read (see po-session.mjs's
+// poQuestionTimeoutMs). A very large value is not special-cased — it is
+// passed straight through to setTimeout, which is what makes "set it high
+// enough to never fire" a valid rollback (keep it under ~24.8 days, Node's
+// setTimeout ceiling).
+export function runIdleTimeoutMs(env = process.env) {
+  const raw = Number(env.IRIS_RUN_IDLE_TIMEOUT_MS);
+  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_RUN_IDLE_TIMEOUT_MS;
+}
+
+// Grace period between SIGTERM and SIGKILL — seconds, not minutes (design
+// D5/D6). Shared by the idle watchdog's expiry path and stop()'s escalation.
+const STOP_GRACE_MS = 5000;
+
 // The single claude_task_update projection: every emission carries the same
 // core fields drawn from the run record, plus status-specific extras
 // (`position` for queued, `urgency` for starting/started, `output` for
@@ -78,11 +102,65 @@ export function toUpdateEvent(run, status, extra = {}) {
  * @param {(run: Run) => void} deps.startRun - launches the transport (DEV subprocess or PO turn); must not touch the slot itself
  * @param {(event: Object) => void} deps.emit - the sidecar event sink
  * @param {(run: Run) => void} [deps.onFinalized] - fires once per run, after a terminal claude_task_update (e.g. the voice completion announcement); NOT called for a queued run cancelled before it ever started
+ * @param {number} [deps.idleTimeoutMs] - overrides runIdleTimeoutMs() for testing; production callers should omit this and let it read IRIS_RUN_IDLE_TIMEOUT_MS
  */
-export function createRunQueue({ startRun, emit, onFinalized }) {
+export function createRunQueue({ startRun, emit, onFinalized, idleTimeoutMs = runIdleTimeoutMs() }) {
   const runs = new Map();
   const queue = [];
   let active = null;
+  // Single timer owned by the slot, not a Map keyed by run id — see design
+  // D2. A per-run timer would arm even for a run cancelled while still
+  // queued (it never reaches beginRun), later firing finalize() against
+  // whatever run holds the slot by then and breaking the single-slot
+  // invariant. A queued run is simply never timed.
+  let idleTimer = null;
+  let idleSuspended = false;
+
+  function armIdleTimer() {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = null;
+    if (idleSuspended) return;
+    idleTimer = setTimeout(onIdleExpiry, idleTimeoutMs);
+    // Don't hold the Node event loop open on account of a watchdog timer —
+    // see design.md Risks.
+    idleTimer.unref?.();
+  }
+
+  function clearIdleTimer() {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = null;
+  }
+
+  // Kills the run's transport (if it has one) and always finalizes — used by
+  // both the idle watchdog's expiry (D4) and stop()'s escalation (D5). The
+  // once-guard inside finalize() (not a check here) is what makes this safe
+  // if the transport's own termination callback also reaches finalize() —
+  // whichever gets there first wins, and the loser is a no-op.
+  function killWithEscalation(run, terminalStatus, output) {
+    if (!run.child) {
+      finalize(run.run_id, terminalStatus, output);
+      return;
+    }
+    run.child.kill("SIGTERM");
+    const graceTimer = setTimeout(() => {
+      run.child?.kill("SIGKILL");
+      finalize(run.run_id, terminalStatus, output);
+    }, STOP_GRACE_MS);
+    graceTimer.unref?.();
+  }
+
+  function onIdleExpiry() {
+    idleTimer = null;
+    if (!active) return;
+    const run = runs.get(active);
+    if (!run) return;
+    const minutes = Math.round(idleTimeoutMs / 60000);
+    killWithEscalation(
+      run,
+      RUN_STATUS.ERROR,
+      `No progress for ${minutes} minutes (IRIS_RUN_IDLE_TIMEOUT_MS) — the run was terminated automatically and the slot released.`,
+    );
+  }
 
   function beginRun(run) {
     // Slot acquisition lives here and nowhere else — see design D2. A run
@@ -90,6 +168,8 @@ export function createRunQueue({ startRun, emit, onFinalized }) {
     // billing failure) is safe because finalize() is already re-entrant via
     // the finalize-once guard below.
     active = run.run_id;
+    idleSuspended = false;
+    armIdleTimer();
     startRun(run);
   }
 
@@ -131,6 +211,11 @@ export function createRunQueue({ startRun, emit, onFinalized }) {
     run.output = output;
     run.finished_at = Date.now() / 1000;
     run.child = null;
+    // Clear on every path — a run finalized by its transport must leave no
+    // stale timer behind to fire later against whichever run holds the slot
+    // by then (design D2/D5).
+    clearIdleTimer();
+    idleSuspended = false;
     emit(toUpdateEvent(run, status, { output }));
     onFinalized?.(run);
     dequeueNext();
@@ -152,10 +237,12 @@ export function createRunQueue({ startRun, emit, onFinalized }) {
     }
     if (run.child) {
       run.status = RUN_STATUS.CANCELLED;
-      run.child.kill("SIGTERM");
-      // The slot is released only by finalize(), invoked by the transport's
-      // own termination callback once the process actually closes — see
-      // design D5. Doing it here would risk a double-start.
+      // Normally the slot is released by finalize(), invoked by the
+      // transport's own termination callback once the process actually
+      // closes. killWithEscalation only forces things (SIGKILL + finalize
+      // itself) if that callback hasn't fired within the grace period — see
+      // design D5. Doing it unconditionally here would risk a double-start.
+      killWithEscalation(run, RUN_STATUS.CANCELLED, "Run was stopped before completion.");
       return run.status;
     }
     // Active run with no child (a PO turn has no subprocess to signal): the
@@ -185,5 +272,27 @@ export function createRunQueue({ startRun, emit, onFinalized }) {
     return [...runs.values()];
   }
 
-  return { submit, finalize, stop, status, get, serialize, list };
+  // Resets the idle bound for the active run's progress signal (design D1).
+  // A no-op if no run is active, so a stray/late signal can't arm a timer
+  // that outlives its run.
+  function heartbeat() {
+    if (!active) return;
+    armIdleTimer();
+  }
+
+  // Suspends the idle bound while the active run is legitimately blocked
+  // awaiting a human (design D3) — e.g. a PO turn paused on
+  // AskUserQuestion. Must be paired with resume(); see the interface docs
+  // on PendingQuestion in main.mjs for why that pairing is safe.
+  function suspend() {
+    idleSuspended = true;
+    clearIdleTimer();
+  }
+
+  function resume() {
+    idleSuspended = false;
+    if (active) armIdleTimer();
+  }
+
+  return { submit, finalize, stop, status, get, serialize, list, heartbeat, suspend, resume };
 }

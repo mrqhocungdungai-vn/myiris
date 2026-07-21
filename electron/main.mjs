@@ -126,6 +126,11 @@ const PendingQuestion = {
   current: null, // { workstreamId, questions, resolve, timer }
 
   raise(workstreamId, questions, { timeoutMs }) {
+    // The active run is legitimately blocked on a human now, not idle — the
+    // idle watchdog (run-queue.mjs) must not count this wait against its
+    // bound, or it would kill precisely the turns behaving correctly. See
+    // openspec/changes/add-run-idle-watchdog/design.md D3.
+    runQueue.suspend();
     return new Promise((resolve) => {
       const timer = setTimeout(() => this.expire(), timeoutMs);
       this.current = { workstreamId, questions, resolve, timer };
@@ -138,6 +143,10 @@ const PendingQuestion = {
     const { workstreamId, questions, resolve, timer } = this.current;
     clearTimeout(timer);
     this.current = null;
+    // Resume here, in the one funnel every settlement path (answer, expire,
+    // abandon) goes through — not at the individual call sites — so no
+    // future settlement path can miss it (design D3).
+    runQueue.resume();
     emitPoQuestionEvent(workstreamId, questions, status);
     resolve(resolvedValue);
   },
@@ -1052,6 +1061,7 @@ function pushActivity(run, line) {
   run.activity.push(clean.length > 220 ? `${clean.slice(0, 220)}…` : clean);
   if (run.activity.length > 80) run.activity.splice(0, run.activity.length - 80);
   emitEvent(toUpdateEvent(run, RUN_STATUS.RUNNING, { output: run.activity.join("\n") }));
+  runQueue.heartbeat();
 }
 
 // Live per-task step timeline: additive fields on the SAME claude_task_update
@@ -1065,6 +1075,7 @@ function pushToolStart(run, toolId, toolName, detail) {
   emitEvent(
     toUpdateEvent(run, RUN_STATUS.RUNNING, { phase: "tool_start", tool: toolName, tool_id: toolId, detail }),
   );
+  runQueue.heartbeat();
 }
 
 function pushToolEnd(run, toolId, isError) {
@@ -1075,6 +1086,11 @@ function pushToolEnd(run, toolId, isError) {
   emitEvent(
     toUpdateEvent(run, RUN_STATUS.RUNNING, { phase: "tool_end", tool_id: toolId, error: isError, duration }),
   );
+  // A tool_result (per claude-stream.mjs) fires only this callback, never
+  // onActivity — resetting on activity alone would stretch the measured idle
+  // window to tool duration *plus* the model's next-message thinking time,
+  // instead of the actual silence (design.md D6 / tasks.md 4.1).
+  runQueue.heartbeat();
 }
 
 function handleClaudeStreamEvent(run, line) {

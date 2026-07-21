@@ -2,8 +2,8 @@
 // states, driven purely through createRunQueue's public interface with
 // injected fakes — no refactor needed, see design.md D1/D2 of
 // add-test-harness-and-po-seam.
-import { describe, it, expect, beforeEach } from "vitest";
-import { createRunQueue, RUN_STATUS } from "./run-queue.mjs";
+import { describe, it, expect, vi } from "vitest";
+import { createRunQueue, RUN_STATUS, runIdleTimeoutMs, DEFAULT_RUN_IDLE_TIMEOUT_MS } from "./run-queue.mjs";
 
 let nextId = 0;
 function makeRun(overrides = {}) {
@@ -35,7 +35,7 @@ function makeStartRunFake() {
   };
 }
 
-function makeQueue() {
+function makeQueue(overrides = {}) {
   const events = [];
   const finalized = [];
   const { startRun, invoked } = makeStartRunFake();
@@ -43,8 +43,17 @@ function makeQueue() {
     startRun,
     emit: (event) => events.push(event),
     onFinalized: (run) => finalized.push(run.run_id),
+    ...overrides,
   });
   return { queue, events, finalized, invoked };
+}
+
+// A run.child fake that records what it was signalled, without ever actually
+// "closing" — simulating a subprocess that ignores SIGTERM, so the escalation
+// path (SIGKILL) is what a test can observe.
+function makeChildFake() {
+  const killCalls = [];
+  return { child: { kill: (signal) => killCalls.push(signal) }, killCalls };
 }
 
 describe("run-queue", () => {
@@ -146,5 +155,208 @@ describe("run-queue", () => {
     expect(queue.status(queuedRun.run_id)).toBe(RUN_STATUS.CANCELLED);
     expect(queue.get(queuedRun.run_id).finalized).not.toBe(true);
     expect(finalized).not.toContain(queuedRun.run_id);
+  });
+});
+
+describe("runIdleTimeoutMs", () => {
+  it("defaults to 30 minutes when unset or unparseable", () => {
+    expect(runIdleTimeoutMs({})).toBe(DEFAULT_RUN_IDLE_TIMEOUT_MS);
+    expect(runIdleTimeoutMs({ IRIS_RUN_IDLE_TIMEOUT_MS: "not-a-number" })).toBe(DEFAULT_RUN_IDLE_TIMEOUT_MS);
+  });
+
+  it("honors an explicit override, including a very large value used as the documented rollback", () => {
+    expect(runIdleTimeoutMs({ IRIS_RUN_IDLE_TIMEOUT_MS: "5000" })).toBe(5000);
+    // Not special-cased — passed straight through, which is what makes "set
+    // it high enough to never fire" work without a code change (design
+    // Migration Plan).
+    expect(runIdleTimeoutMs({ IRIS_RUN_IDLE_TIMEOUT_MS: "2147483647" })).toBe(2147483647);
+  });
+});
+
+// openspec/changes/add-run-idle-watchdog/specs/run-execution-queue/spec.md.
+// Fake timers throughout — the bound is exercised at millisecond scale, not
+// real 30-minute waits.
+describe("run-queue idle watchdog", () => {
+  it("never terminates a healthy run producing progress faster than the bound (spec: 'A healthy long run is not terminated')", () => {
+    vi.useFakeTimers();
+    try {
+      const idleTimeoutMs = 1000;
+      const { queue, finalized } = makeQueue({ idleTimeoutMs });
+      const run = makeRun();
+      queue.submit(run);
+
+      // Ten heartbeats, each just under the bound: total elapsed time is far
+      // beyond the bound, but the run is never silent for longer than it.
+      for (let i = 0; i < 10; i++) {
+        vi.advanceTimersByTime(idleTimeoutMs - 1);
+        queue.heartbeat();
+      }
+
+      expect(queue.get(run.run_id).finalized).not.toBe(true);
+      expect(finalized).not.toContain(run.run_id);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("finalizes a silent run once the bound elapses and releases the slot (spec: 'A silent run loses the slot')", () => {
+    vi.useFakeTimers();
+    try {
+      const idleTimeoutMs = 1000;
+      const { queue, events, finalized, invoked } = makeQueue({ idleTimeoutMs });
+      const active = makeRun();
+      const queuedRun = makeRun();
+      queue.submit(active);
+      queue.submit(queuedRun);
+
+      vi.advanceTimersByTime(idleTimeoutMs + 1);
+
+      const terminalEvents = events.filter((e) => e.run_id === active.run_id && e.status === RUN_STATUS.ERROR);
+      expect(terminalEvents.length).toBe(1);
+      expect(finalized).toEqual([active.run_id]);
+      expect(invoked).toEqual([active.run_id, queuedRun.run_id]); // the next queued run started
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not time a run sitting in the queue (spec: 'A queued run is not timed')", () => {
+    vi.useFakeTimers();
+    try {
+      const idleTimeoutMs = 1000;
+      const { queue, invoked } = makeQueue({ idleTimeoutMs });
+      const active = makeRun();
+      const queuedRun = makeRun();
+      queue.submit(active);
+      queue.submit(queuedRun);
+
+      // Keep the active run healthy so only the queued run's fate is under
+      // test — the queued run sits well past the bound the whole time.
+      for (let i = 0; i < 5; i++) {
+        vi.advanceTimersByTime(idleTimeoutMs - 1);
+        queue.heartbeat();
+      }
+      expect(queue.get(queuedRun.run_id).finalized).not.toBe(true);
+      expect(invoked).toEqual([active.run_id]);
+
+      queue.finalize(active.run_id, RUN_STATUS.COMPLETED, "done");
+
+      expect(invoked).toEqual([active.run_id, queuedRun.run_id]); // starts normally once the slot frees
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves no timer armed after normal termination (spec: 'The bound is disarmed by normal termination')", () => {
+    vi.useFakeTimers();
+    try {
+      const idleTimeoutMs = 1000;
+      const { queue, finalized } = makeQueue({ idleTimeoutMs });
+      const run = makeRun();
+      queue.submit(run);
+
+      queue.finalize(run.run_id, RUN_STATUS.COMPLETED, "done");
+      vi.advanceTimersByTime(idleTimeoutMs * 10);
+
+      expect(finalized).toEqual([run.run_id]); // exactly once — no stale timer fired afterwards
+      expect(queue.get(run.run_id).status).toBe(RUN_STATUS.COMPLETED);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not terminate a suspended run even far past the bound (spec: 'Turn paused on a question outlives the idle bound')", () => {
+    vi.useFakeTimers();
+    try {
+      const idleTimeoutMs = 1000;
+      const { queue, finalized } = makeQueue({ idleTimeoutMs });
+      const run = makeRun();
+      queue.submit(run);
+
+      queue.suspend();
+      vi.advanceTimersByTime(idleTimeoutMs * 100);
+
+      expect(queue.get(run.run_id).finalized).not.toBe(true);
+      expect(finalized).not.toContain(run.run_id);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("resumes the bound after resume(), and finalizes a run that stays silent afterward (spec: 'Suspension ends however the question settles' / 'A run that stays silent after being unblocked still loses the slot')", () => {
+    // run-queue.mjs exposes one generic suspend()/resume() pair; main.mjs's
+    // PendingQuestion.settle() (the single funnel every settlement path goes
+    // through — answered, expired, abandoned) is what guarantees resume() is
+    // reached no matter how the question settles. That funnel property isn't
+    // re-testable from this file without a main.mjs harness, so this test
+    // covers what the queue itself owns: the bound genuinely restarts from
+    // resume() and still terminates a run that goes silent afterward.
+    vi.useFakeTimers();
+    try {
+      const idleTimeoutMs = 1000;
+      const { queue, finalized } = makeQueue({ idleTimeoutMs });
+      const run = makeRun();
+      queue.submit(run);
+
+      queue.suspend();
+      vi.advanceTimersByTime(idleTimeoutMs * 100); // would have expired long ago if still armed
+      queue.resume();
+
+      expect(queue.get(run.run_id).finalized).not.toBe(true); // the bound restarts fresh from resume()
+      vi.advanceTimersByTime(idleTimeoutMs + 1);
+
+      expect(finalized).toEqual([run.run_id]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("escalates to SIGKILL and finalizes exactly once when a signalled process ignores SIGTERM (spec: 'A signalled process ignores the signal')", () => {
+    vi.useFakeTimers();
+    try {
+      const { queue, events, finalized } = makeQueue();
+      const { child, killCalls } = makeChildFake();
+      const run = makeRun({ child, status: RUN_STATUS.RUNNING });
+      queue.submit(run);
+
+      queue.stop(run.run_id);
+      expect(killCalls).toEqual(["SIGTERM"]);
+      expect(queue.get(run.run_id).finalized).not.toBe(true); // grace period still pending
+
+      vi.advanceTimersByTime(5001); // past the SIGTERM->SIGKILL grace period
+      expect(killCalls).toEqual(["SIGTERM", "SIGKILL"]);
+      expect(finalized).toEqual([run.run_id]);
+      const terminalEvents = events.filter((e) => e.run_id === run.run_id && e.status === RUN_STATUS.CANCELLED);
+      expect(terminalEvents.length).toBe(1);
+
+      // A stale escalation timer (or a duplicate call) firing again later
+      // must stay a no-op — finalize-once still holds.
+      vi.advanceTimersByTime(60000);
+      expect(finalized).toEqual([run.run_id]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("holds the single-slot invariant across an expiry racing a transport callback for the same run", () => {
+    vi.useFakeTimers();
+    try {
+      const idleTimeoutMs = 1000;
+      const { queue, invoked } = makeQueue({ idleTimeoutMs });
+      const active = makeRun();
+      const queuedRun = makeRun();
+      queue.submit(active);
+      queue.submit(queuedRun);
+
+      vi.advanceTimersByTime(idleTimeoutMs + 1); // watchdog finalizes `active` first
+      // A transport callback for the SAME run arriving after the watchdog
+      // already released the slot must be a no-op, not a second start.
+      queue.finalize(active.run_id, RUN_STATUS.COMPLETED, "raced result");
+
+      expect(invoked).toEqual([active.run_id, queuedRun.run_id]); // queuedRun started exactly once
+      expect(queue.get(active.run_id).status).toBe(RUN_STATUS.ERROR); // the watchdog's finalize won the race
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
