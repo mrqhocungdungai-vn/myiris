@@ -5,7 +5,7 @@ TBD - globally-installed PO and DEV agent/runtime capabilities so any workstream
 ## Requirements
 ### Requirement: Agents and capabilities are installed globally
 
-The PO and DEV agents SHALL be installed under `~/.claude/agents/`, and the capabilities they depend on (the OpenSpec workflow skills/commands and the mattpocock skills) SHALL be available globally under `~/.claude`, so that every role is available on any workstream `cwd` without per-project plugin configuration. The install step SHALL additionally remove a stale `~/.claude/agents/iris-study.md` left behind by earlier versions, so the user's agent list stays truthful after the STUDY role's removal.
+The PO and DEV agents SHALL be installed under `~/.claude/agents/`, and the capabilities they depend on (the OpenSpec workflow skills/commands and the mattpocock skills) SHALL be available globally under `~/.claude`, so that every role is available on any workstream `cwd` without per-project plugin configuration. The app SHALL provide these through its bundled prerequisite installer (see `pipeline-setup-install`): personas are sync-installed (Iris-owned), third-party skills and `/opsx` commands are copied only where missing, and existing tool-managed installs (e.g. skills.sh symlinks) are never overwritten. The install step SHALL additionally remove a stale `~/.claude/agents/iris-study.md` left behind by earlier versions, so the user's agent list stays truthful after the STUDY role's removal.
 
 #### Scenario: Global install makes capabilities cwd-independent
 
@@ -16,6 +16,11 @@ The PO and DEV agents SHALL be installed under `~/.claude/agents/`, and the capa
 
 - **WHEN** the global install step runs and the agents/skills are already present
 - **THEN** it does not duplicate or clobber them, and it does not run silently on every launch
+
+#### Scenario: Fresh machine is fully provisioned by the bundled installer
+
+- **WHEN** a user on a machine with an empty `~/.claude` runs the one-click install action
+- **THEN** the personas, required skills, and `/opsx` commands are all present under `~/.claude` afterwards, with no manual third-party install commands required
 
 #### Scenario: Stale study agent file is cleaned up
 
