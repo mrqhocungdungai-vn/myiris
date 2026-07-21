@@ -59,6 +59,16 @@ type AgentsInstallResult = {
   errors: string[];
 };
 
+type PipelinePrereqsInstallResult = {
+  status: "ok" | "partial";
+  agents: AgentsInstallResult;
+  installedSkills: string[];
+  skippedSkills: string[];
+  installedCommands: string[];
+  skippedCommands: string[];
+  errors: string[];
+};
+
 type PoQuestionOption = {
   label: string;
   description: string;
@@ -102,6 +112,8 @@ type ClaudeHealth = {
   skillsOk: boolean;
   missingSkills: string[];
   skillsInstallHint: string;
+  agentsOk: boolean;
+  missingAgents: string[];
 };
 
 type PipelineStatus = {
@@ -151,6 +163,7 @@ type IrisApi = {
     agent: AgentRole | null,
   ) => Promise<SessionsSnapshot & { status?: string; error?: string }>;
   installAgents: () => Promise<AgentsInstallResult>;
+  installPipelinePrereqs: () => Promise<PipelinePrereqsInstallResult>;
   setAgentModel: (
     workstreamId: string,
     role: AgentRole,

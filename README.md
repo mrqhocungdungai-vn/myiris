@@ -308,78 +308,31 @@ This entire section is optional. Skip it if you only want to talk to Iris. It
 covers the second layer: delegating real work to [Claude Code](https://code.claude.com/docs/en/headless)
 through a Product Owner → Developer pipeline.
 
-### How it turns on
+**Full setup steps and a voice-first walkthrough of using it live in the
+[Pipeline Guide](docs/PIPELINE_GUIDE.md) ([Tiếng Việt](docs/PIPELINE_GUIDE.vi.md))** —
+this section just summarizes how it turns on.
 
 Iris probes for the `claude` binary at startup and before every Gemini
 (re)connection — **the binary's presence is the only switch**. No config flag,
 no toggle: install the Claude CLI and Iris detects it automatically. When
 detected, the pipeline's Gemini tools are declared, the Work Stream / PipelineBar
 / session-switcher UI appears, and PO/DEV become selectable. When not detected,
-Iris stays in chat-only mode — Gemini is never given a tool it can't use, and
-the UI stays clean of pipeline panels. Settings → "Claude pipeline" reports the
-current state and lets you re-check after installing.
+Iris stays in chat-only mode.
 
 ```bash
 claude --version
 ```
 
-If that works in your terminal, **DEV works immediately** — no further setup.
-
-### DEV vs PO
-
-Iris drives Claude two ways, matching a stateless/stateful module split:
-
-- **DEV (stateless)** shells out to the `claude` CLI directly, one task at a time:
-
-  ```text
-  claude -p "<task>" --output-format stream-json --verbose --permission-mode bypassPermissions
-  ```
-
-- **PO (stateful)** drives the same binary through `@anthropic-ai/claude-agent-sdk` as one persistent session, delivering each task into the workstream's resident session instead of spawning a new process. **PO additionally needs a subscription token**, since the Agent SDK does not inherit your interactive `claude` login:
-
-  ```bash
-  claude setup-token
-  ```
-
-  Paste the result into `.env` as `CLAUDE_CODE_OAUTH_TOKEN` (see `.env.example`). Without it, PO turns fail with an actionable error; DEV is unaffected. Set `IRIS_PO_LIVE_SESSION=0` to temporarily disable the PO live session and fall back to the old one-shot behavior instead.
-
-### Global skills prerequisite
-
-The PO/DEV agents run with globally-installed Claude Code skills in
-`~/.claude/skills`: the OpenSpec workflow skills (`openspec-propose`,
-`openspec-apply-change`, `openspec-archive-change`, …) and the
-[mattpocock/skills](https://github.com/mattpocock/skills) set (`grilling`,
-`tdd`, `verify`, `code-review`). Install them once:
-
-```bash
-npm install -g @fission-ai/openspec@latest
-npx skills@latest add mattpocock/skills
-```
-
-Settings → "Claude pipeline" reports whether the `openspec` CLI and these
-skills are detected, with a copyable install command for whichever is missing.
-Iris never installs them for you.
-
-### Bundled agent personas
-
-The PO/DEV persona files live in `resources/personas/` (`iris-po.md`,
-`iris-dev.md`) and are installed to `~/.claude/agents/` by the app's "Install
-agents" button (or automatically on first pipeline use) — so they're available
-globally, on any project `cwd`, not just this repo. Example headless usage
-once installed:
-
-```bash
-claude --agent iris-po -p "Grill this feature request and propose the next OpenSpec change"
-claude --agent iris-dev -p "Implement the remaining unchecked tasks for the current OpenSpec change"
-```
-
-Notes:
-
-- Runs execute in `~/.iris/workspace` by default (override with `IRIS_CLAUDE_CWD`). Claude sessions are scoped to this directory, which is what makes DEV's `--resume` and PO's `resume` continuity work.
-- Sessions are user-controlled from the Work Stream panel (picker + New button) or by voice ("new session"). Every task resumes the active session, tasks run one at a time (PO turns and DEV runs share the same execution slot), and sessions are persisted in `~/.iris/claude-sessions.json` so context survives app restarts.
-- The default permission mode is `bypassPermissions` for both modules — fully autonomous: Claude runs any tool without asking, since headless mode has no interactive approval prompt anyway. Set `IRIS_CLAUDE_PERMISSION_MODE=acceptEdits` (or `plan`) to restrict DEV. PO's tool-use permission mode is not configurable the same way — it always stays `bypassPermissions`, with only `AskUserQuestion` pausing to relay a question to voice.
-- A packaged GUI app may not inherit your shell PATH; Iris probes `~/.local/bin/claude`, `/usr/local/bin/claude`, and `/opt/homebrew/bin/claude`, or you can set `IRIS_CLAUDE_BIN` explicitly — this also points the PO session at the same resolved binary.
-- **Never set `ANTHROPIC_API_KEY`** unless you intend to pay per token: it outranks `CLAUDE_CODE_OAUTH_TOKEN` in the SDK's auth precedence. Iris strips it from the PO session's own environment regardless, but leaving it unset avoids any ambiguity.
+If that works, **DEV works immediately**. **PO** additionally needs a
+subscription token (`claude setup-token` → `CLAUDE_CODE_OAUTH_TOKEN` in
+`.env`), since it's a stateful Agent SDK session that doesn't inherit your
+interactive `claude` login. Beyond that, the pipeline needs the `openspec`
+CLI and a set of global Claude Code skills + the `iris-po`/`iris-dev` agent
+personas — Settings → **"Claude pipeline"** checks all of these and offers a
+one-click **"Install missing"** action that provisions whatever's absent
+(never overwriting anything you've already installed yourself). See the
+guide for the full walkthrough, troubleshooting, and using the agents
+directly from Claude Code.
 
 ## App Environment
 

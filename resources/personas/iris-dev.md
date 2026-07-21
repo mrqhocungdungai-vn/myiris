@@ -19,7 +19,7 @@ You implement the tasks of an **open OpenSpec change** — a change under `opens
 ## Test-first and verify — you are also the tester
 
 - Work test-first via the **`tdd`** skill: for each acceptance criterion, write a failing test that exercises external behavior (red), implement the minimal change (green), refactor.
-- Then switch hats and verify with the **`verify`** and **`code-review`** skills: exercise every acceptance-criterion scenario for real (run the app/command/endpoint, don't just trust unit tests), probe edge cases, run the typecheck, the full test suite, and the project's build script (`npm run build` or equivalent). If a defect appears, fix it in this run (still test-first) and re-verify. Reach for **`diagnosing-bugs`** when something is broken or slow.
+- Then switch hats and verify it yourself: exercise every acceptance-criterion scenario for real (run the app/command/endpoint, don't just trust unit tests), probe edge cases, run the typecheck, the full test suite, and the project's build script (`npm run build` or equivalent). Use the **`code-review`** skill for the review pass. If a defect appears, fix it in this run (still test-first) and re-verify. Reach for **`diagnosing-bugs`** when something is broken or slow.
 
 **Environment rule (you are also DevOps):** never deploy to or mutate any external environment — no pushes to remotes, no publishing, no cloud resources — unless the task explicitly asks for it.
 

@@ -64,6 +64,8 @@ export default function SetupPanel({
   const [gemini, setGemini] = useState<TestState>({ status: "idle" });
   const [claude, setClaude] = useState<TestState & { billing?: string }>({ status: "idle" });
   const [pipelinePrereqs, setPipelinePrereqs] = useState<ClaudeHealth | null>(null);
+  const [installingPrereqs, setInstallingPrereqs] = useState(false);
+  const [installReport, setInstallReport] = useState<string | null>(null);
   const [preview, setPreview] = useState<TestState>({ status: "idle" });
   const [mic, setMic] = useState<PermState>("idle");
   const [cam, setCam] = useState<PermState>("idle");
@@ -149,6 +151,24 @@ export default function SetupPanel({
       setClaude({ status: "error", message: health.error || "Claude CLI not found.", billing });
     }
     setPipelinePrereqs(health);
+  }
+
+  async function installMissingPrereqs() {
+    setInstallingPrereqs(true);
+    setInstallReport(null);
+    try {
+      const report = await window.iris.installPipelinePrereqs();
+      const parts = [
+        `${report.agents.installed.length} agent${report.agents.installed.length === 1 ? "" : "s"} installed`,
+        `${report.installedSkills.length} skill${report.installedSkills.length === 1 ? "" : "s"} installed`,
+        `${report.installedCommands.length} command${report.installedCommands.length === 1 ? "" : "s"} installed`,
+      ];
+      if (report.errors.length) parts.push(`${report.errors.length} error(s): ${report.errors.join("; ")}`);
+      setInstallReport(parts.join(", ") + ".");
+    } finally {
+      setInstallingPrereqs(false);
+      await checkClaude();
+    }
   }
 
   async function doPreview() {
@@ -251,20 +271,37 @@ export default function SetupPanel({
       ) : null}
       {claude.billing ? <p className="setup-note">{claude.billing}</p> : null}
       {pipelinePrereqs?.reachable ? (
-        <div className="setup-perms">
-          <PrereqRow
-            label="openspec CLI"
-            ok={pipelinePrereqs.openspecOk}
-            okDetail={pipelinePrereqs.openspecVersion}
-            installHint={pipelinePrereqs.openspecInstallHint}
-          />
-          <PrereqRow
-            label="Global skills (OpenSpec + Grill Me/TDD/code-review)"
-            ok={pipelinePrereqs.skillsOk}
-            okDetail={pipelinePrereqs.skillsOk ? undefined : `missing: ${pipelinePrereqs.missingSkills.join(", ")}`}
-            installHint={pipelinePrereqs.skillsInstallHint}
-          />
-        </div>
+        <>
+          <div className="setup-perms">
+            <PrereqRow
+              label="openspec CLI"
+              ok={pipelinePrereqs.openspecOk}
+              okDetail={pipelinePrereqs.openspecVersion}
+              installHint={pipelinePrereqs.openspecInstallHint}
+            />
+            <PrereqRow
+              label="Global skills (OpenSpec + Grill Me/TDD/code-review)"
+              ok={pipelinePrereqs.skillsOk}
+              okDetail={pipelinePrereqs.skillsOk ? undefined : `missing: ${pipelinePrereqs.missingSkills.join(", ")}`}
+              installHint={pipelinePrereqs.skillsInstallHint}
+            />
+            <PrereqRow
+              label="Iris agents (PO/DEV personas)"
+              ok={pipelinePrereqs.agentsOk}
+              okDetail={pipelinePrereqs.agentsOk ? undefined : `missing: ${pipelinePrereqs.missingAgents.join(", ")}`}
+              installHint='Use "Install missing" below, or the Install agents button on the pipeline bar.'
+            />
+          </div>
+          {!pipelinePrereqs.openspecOk || !pipelinePrereqs.skillsOk || !pipelinePrereqs.agentsOk ? (
+            <div className="setup-actions">
+              <button className="setup-btn" onClick={installMissingPrereqs} disabled={installingPrereqs}>
+                {installingPrereqs ? <Loader2 size={14} className="spin" /> : null}
+                Install missing
+              </button>
+            </div>
+          ) : null}
+          {installReport ? <p className="setup-note">{installReport}</p> : null}
+        </>
       ) : null}
     </Section>
   );

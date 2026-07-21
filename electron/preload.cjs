@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld("iris", {
   listAgents: (workstreamId) => ipcRenderer.invoke("agents:list", workstreamId),
   selectAgent: (workstreamId, agent) => ipcRenderer.invoke("agents:select", { workstreamId, agent }),
   installAgents: () => ipcRenderer.invoke("agents:install"),
+  installPipelinePrereqs: () => ipcRenderer.invoke("pipeline:install-prereqs"),
   setAgentModel: (workstreamId, role, model) =>
     ipcRenderer.invoke("agents:set-model", { workstreamId, role, model }),
   answerPoQuestion: (answers) => ipcRenderer.invoke("po:answer-question", answers),

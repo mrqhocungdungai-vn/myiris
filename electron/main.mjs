@@ -748,20 +748,22 @@ async function checkOpenSpecStatus() {
   });
 }
 
-// Skills the PO/DEV personas invoke by name (resources/personas/iris-po.md,
-// iris-dev.md) — the OpenSpec workflow skills plus mattpocock's. Presence-only
-// probe (pipeline-availability spec): a directory existing under
-// ~/.claude/skills means "detected", not semantically validated — deeper
-// problems still surface through normal PO/DEV run errors.
+// Skills the PO/DEV personas actually invoke by name (resources/personas/
+// iris-po.md, iris-dev.md) — the three core OpenSpec workflow skills plus
+// mattpocock's. (No "verify" — that was never a real skill; DEV's own
+// verification step is now worded as an action it performs itself. See
+// resources/skills/ for the bundled snapshots the "Install missing" action
+// installs.) Presence-only probe (pipeline-availability spec): a directory
+// existing under ~/.claude/skills means "detected", not semantically
+// validated — deeper problems still surface through normal PO/DEV run errors.
 const REQUIRED_SKILLS = [
   "grilling",
+  "tdd",
+  "code-review",
+  "diagnosing-bugs",
   "openspec-propose",
   "openspec-apply-change",
   "openspec-archive-change",
-  "tdd",
-  "verify",
-  "code-review",
-  "diagnosing-bugs",
 ];
 
 function checkSkillsStatus() {
@@ -770,17 +772,28 @@ function checkSkillsStatus() {
   return { ok: missing.length === 0, missing, skillsDir };
 }
 
+// Same presence-only shape as checkSkillsStatus(), for the two Iris persona
+// files installIrisAgents() is responsible for.
+function checkAgentsStatus() {
+  const agentsDir = globalAgentsDir();
+  const missing = AGENT_ROSTER.map((role) => `${AGENT_PREFIX}${role}.md`).filter(
+    (name) => !fs.existsSync(path.join(agentsDir, name)),
+  );
+  return { ok: missing.length === 0, missing, agentsDir };
+}
+
 // Combined status for the SetupPanel's Claude section (design.md D3b/D3c):
 // CLI reachability (same probe as checkClaudeStatus), the PO subscription
-// billing-path status, and the openspec CLI / global skills prerequisite
-// checks (pipeline-availability spec) — all read-only, never editable from
-// the UI. Also the SetupPanel's re-check path for pipeline availability
-// (design.md decision 1).
+// billing-path status, and the openspec CLI / global skills / agents
+// prerequisite checks (pipeline-availability spec) — all read-only, never
+// editable from the UI. Also the SetupPanel's re-check path for pipeline
+// availability (design.md decision 1).
 async function checkClaudeHealth() {
   const { available, status } = await probePipelineAvailability();
   const billing = poBillingStatus();
   const openspecStatus = await checkOpenSpecStatus();
   const skillsStatus = checkSkillsStatus();
+  const agentsStatus = checkAgentsStatus();
   return {
     reachable: available,
     pipelineAvailable: available,
@@ -795,7 +808,9 @@ async function checkClaudeHealth() {
     openspecInstallHint: "npm install -g @fission-ai/openspec@latest",
     skillsOk: skillsStatus.ok,
     missingSkills: skillsStatus.missing,
-    skillsInstallHint: "npx skills@latest add mattpocock/skills  (see also github.com/Fission-AI/OpenSpec for its Claude skills)",
+    skillsInstallHint: "Use \"Install missing\" below, or run: npx skills@latest add mattpocock/skills (and `openspec init` for its Claude skills)",
+    agentsOk: agentsStatus.ok,
+    missingAgents: agentsStatus.missing,
   };
 }
 
@@ -1053,12 +1068,25 @@ function installedAgentFile(agent, cwd) {
   return candidates.find((candidate) => candidate && fs.existsSync(candidate)) || null;
 }
 
-function personasSourceDir() {
+// Shared resolver for anything bundled under resources/<name> in dev vs a
+// packaged app's resourcesPath — personas and skill snapshots both use this.
+function bundledResourceDir(name) {
   const candidates = [
-    path.join(repoRoot, "resources", "personas"),
-    process.resourcesPath ? path.join(process.resourcesPath, "personas") : null,
+    path.join(repoRoot, "resources", name),
+    process.resourcesPath ? path.join(process.resourcesPath, name) : null,
   ];
   return candidates.find((candidate) => candidate && fs.existsSync(candidate)) || null;
+}
+
+function personasSourceDir() {
+  return bundledResourceDir("personas");
+}
+
+// Vendored snapshots of the third-party skills/commands the personas invoke
+// (see resources/skills/ATTRIBUTION.md) — installed only on explicit user
+// action via installPipelinePrereqs(), never at startup.
+function skillsSourceDir() {
+  return bundledResourceDir("skills");
 }
 
 function installIrisAgents() {
@@ -1116,6 +1144,105 @@ function installIrisAgents() {
     message: `Iris agents: ${installed.length} installed/updated, ${skipped.length} already current, ${removed.length} retired removed in ${targetDir}${errors.length ? ` — errors: ${errors.join("; ")}` : ""}.`,
   });
   return { status: errors.length ? "partial" : "ok", installed, skipped, removed, errors };
+}
+
+// Does a filesystem entry exist at this path, whether a real file/dir or a
+// symlink (even a symlink whose target is missing)? Used so a skills.sh- or
+// openspec-managed symlink is treated as "already present" and never
+// clobbered — existsSync() alone would follow (and skip) broken symlinks,
+// which is not the same guarantee.
+function pathExists(candidate) {
+  try {
+    fs.lstatSync(candidate);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// One-click provisioning for a fresh machine (pipeline-setup-install spec):
+// (1) sync-installs the Iris personas via the existing installIrisAgents()
+// path unchanged, then (2) copies each bundled third-party skill directory
+// and /opsx command file into ~/.claude only where nothing already exists —
+// an existing entry (including a symlink managed by skills.sh or a manual
+// openspec init) is left completely untouched. Runs only on explicit user
+// action (SetupPanel's "Install missing"), never at app startup.
+function installPipelinePrereqs() {
+  const agents = installIrisAgents();
+
+  const sourceDir = skillsSourceDir();
+  const installedSkills = [];
+  const skippedSkills = [];
+  const installedCommands = [];
+  const skippedCommands = [];
+  const errors = [];
+
+  if (!sourceDir) {
+    errors.push("Bundled skill/command snapshots were not found in the app bundle.");
+    return { agents, installedSkills, skippedSkills, installedCommands, skippedCommands, errors };
+  }
+
+  const skillsSrcDir = path.join(sourceDir, "claude-skills");
+  const skillsTargetDir = path.join(os.homedir(), ".claude", "skills");
+  try {
+    fs.mkdirSync(skillsTargetDir, { recursive: true });
+    for (const entry of fs.readdirSync(skillsSrcDir, { withFileTypes: true })) {
+      // LICENSE-* files sit beside the skill directories for attribution —
+      // not skills themselves, so they never get copied into ~/.claude.
+      if (!entry.isDirectory()) continue;
+      const name = entry.name;
+      const target = path.join(skillsTargetDir, name);
+      if (pathExists(target)) {
+        skippedSkills.push(name);
+        continue;
+      }
+      try {
+        fs.cpSync(path.join(skillsSrcDir, name), target, { recursive: true });
+        installedSkills.push(name);
+      } catch (error) {
+        errors.push(`${name}: ${error.message}`);
+      }
+    }
+  } catch (error) {
+    errors.push(`Could not read/create skills directories: ${error.message}`);
+  }
+
+  const commandsSrcDir = path.join(sourceDir, "claude-commands", "opsx");
+  const commandsTargetDir = path.join(os.homedir(), ".claude", "commands", "opsx");
+  try {
+    fs.mkdirSync(commandsTargetDir, { recursive: true });
+    for (const file of fs.readdirSync(commandsSrcDir)) {
+      const target = path.join(commandsTargetDir, file);
+      if (pathExists(target)) {
+        skippedCommands.push(file);
+        continue;
+      }
+      try {
+        fs.copyFileSync(path.join(commandsSrcDir, file), target);
+        installedCommands.push(file);
+      } catch (error) {
+        errors.push(`${file}: ${error.message}`);
+      }
+    }
+  } catch (error) {
+    errors.push(`Could not read/create commands directory: ${error.message}`);
+  }
+
+  emitEvent({
+    type: "log",
+    level: errors.length ? "warn" : "info",
+    message: `Pipeline prerequisites: ${installedSkills.length} skills + ${installedCommands.length} commands installed, ${skippedSkills.length + skippedCommands.length} already present${errors.length ? ` — errors: ${errors.join("; ")}` : ""}.`,
+  });
+
+  return {
+    status: errors.length ? "partial" : "ok",
+    agents,
+    installedSkills,
+    skippedSkills,
+    installedCommands,
+    skippedCommands,
+    errors,
+  };
 }
 
 // OpenSpec is the pipeline's only SDD surface (see the po-voice-controller
@@ -2404,6 +2531,7 @@ app.whenReady().then(() => {
   ipcMain.handle("agents:select", (_event, payload) =>
     setWorkstreamAgent(String(payload?.workstreamId || ""), payload?.agent ?? null));
   ipcMain.handle("agents:install", () => installIrisAgents());
+  ipcMain.handle("pipeline:install-prereqs", () => installPipelinePrereqs());
   ipcMain.handle("agents:set-model", (_event, payload) =>
     setAgentModel(String(payload?.workstreamId || ""), payload?.role, payload?.model));
   // Secondary answer path for the PO's pending AskUserQuestion — lets a
