@@ -838,7 +838,14 @@ const ALLOWED_CONFIG_KEYS = new Set([
   "IRIS_USER_NAME",
   "IRIS_LOAD_TEST_DATA",
   "IRIS_WAKE_WORD",
+  "CLAUDE_CODE_OAUTH_TOKEN",
 ]);
+
+// The SetupPanel's token input always renders empty (the stored value never
+// reaches the renderer), so a plain Save would otherwise blank the token on
+// every visit. Empty means "keep" for this key only; clearing goes through the
+// explicit remove path. See design D3.
+const KEEP_ON_EMPTY_CONFIG_KEYS = new Set(["CLAUDE_CODE_OAUTH_TOKEN"]);
 
 // Repo .env in dev, ~/.iris/.env in a packaged build — the same location
 // loadEnvFile() already reads from, so a save takes effect without restart.
@@ -861,6 +868,8 @@ function getFullConfig() {
     userName: process.env.IRIS_USER_NAME || "",
     loadTestData: envFlag("IRIS_LOAD_TEST_DATA", false),
     wakeWord: envFlag("IRIS_WAKE_WORD", true),
+    // Presence only — the token itself never crosses the IPC boundary (design D2).
+    poTokenSet: poBillingStatus().ok,
     configured: Boolean((process.env.GEMINI_API_KEY || "").trim()),
     voices: GEMINI_VOICES,
     models: ensureIncludes(GEMINI_LIVE_MODELS, process.env.GEMINI_LIVE_MODEL),
@@ -876,12 +885,18 @@ function serializeConfigValue(value) {
 // Merge updates into the effective .env (preserving comments/other keys) and
 // apply them to process.env so they take effect on the next wake without a
 // full restart. Never logs secret values (design.md D4).
-function writeUserConfig(rawUpdates) {
+// `deleteKeys` drops a key's line from the file entirely rather than writing an
+// empty value, so a removed credential leaves nothing behind for the next boot
+// to load as an empty-but-present variable.
+function writeUserConfig(rawUpdates, { deleteKeys = [] } = {}) {
+  const deletions = new Set(deleteKeys.filter((key) => ALLOWED_CONFIG_KEYS.has(key)));
   const updates = {};
   for (const [key, value] of Object.entries(rawUpdates || {})) {
-    if (ALLOWED_CONFIG_KEYS.has(key)) updates[key] = value;
+    if (!ALLOWED_CONFIG_KEYS.has(key) || deletions.has(key)) continue;
+    if (KEEP_ON_EMPTY_CONFIG_KEYS.has(key) && !String(value ?? "").trim()) continue;
+    updates[key] = value;
   }
-  if (!Object.keys(updates).length) return getFullConfig();
+  if (!Object.keys(updates).length && !deletions.size) return getFullConfig();
 
   const file = userConfigPath();
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -897,6 +912,7 @@ function writeUserConfig(rawUpdates) {
     }
     const eq = trimmed.indexOf("=");
     const key = eq === -1 ? trimmed : trimmed.slice(0, eq).trim();
+    if (deletions.has(key)) continue;
     if (remaining.has(key)) {
       out.push(`${key}=${serializeConfigValue(updates[key])}`);
       remaining.delete(key);
@@ -908,7 +924,40 @@ function writeUserConfig(rawUpdates) {
 
   fs.writeFileSync(file, `${out.join("\n").replace(/\n+$/, "")}\n`, "utf8");
   for (const [key, value] of Object.entries(updates)) process.env[key] = String(value ?? "").trim();
+  for (const key of deletions) delete process.env[key];
   return getFullConfig();
+}
+
+// The live PO session captures its environment once, at creation
+// (computePoSessionEnv), so a token written to process.env is invisible to a
+// session that is already alive — every resident session has to go. The stored
+// session ids in claude-sessions.json are untouched, so the next PO turn
+// resumes the same conversation with the new credential (design D5).
+function poTurnRunning() {
+  return runQueue.list().some((run) => run.agent === "po" && run.status === RUN_STATUS.RUNNING);
+}
+
+// Set or clear CLAUDE_CODE_OAUTH_TOKEN from the SetupPanel. Returns the same
+// config snapshot shape as config:save so the renderer can refresh in place;
+// the token value is never echoed back and never logged (design D2/D6).
+function savePoToken(rawToken, { remove = false } = {}) {
+  const token = String(rawToken ?? "").trim();
+  if (!remove && !token) {
+    return { ok: false, error: "No token provided.", config: getFullConfig() };
+  }
+  if (poTurnRunning()) {
+    return {
+      ok: false,
+      error: "A PO turn is running right now. Wait for it to finish, then change the token.",
+      config: getFullConfig(),
+    };
+  }
+  const config = remove
+    ? writeUserConfig({}, { deleteKeys: ["CLAUDE_CODE_OAUTH_TOKEN"] })
+    : writeUserConfig({ CLAUDE_CODE_OAUTH_TOKEN: token });
+  closeAllPoSessions();
+  console.log(`[IRIS][po-auth] Subscription token ${remove ? "removed" : "updated"} from Settings.`);
+  return { ok: true, config };
 }
 
 // Validate a Gemini key by forcing one authenticated round-trip (ListModels).
@@ -2557,6 +2606,8 @@ app.whenReady().then(() => {
   });
   ipcMain.handle("config:get", () => getFullConfig());
   ipcMain.handle("config:save", (_event, updates) => writeUserConfig(updates));
+  ipcMain.handle("config:save-po-token", (_event, payload) => savePoToken(payload?.token));
+  ipcMain.handle("config:remove-po-token", () => savePoToken("", { remove: true }));
   ipcMain.handle("config:test-gemini", (_event, payload) => testGeminiKey(payload?.key));
   ipcMain.handle("config:test-claude", () => checkClaudeHealth());
   // Renderer's boot-time read of the pipeline master switch (see design.md

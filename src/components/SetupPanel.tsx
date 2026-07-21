@@ -66,6 +66,12 @@ export default function SetupPanel({
   const [pipelinePrereqs, setPipelinePrereqs] = useState<ClaudeHealth | null>(null);
   const [installingPrereqs, setInstallingPrereqs] = useState(false);
   const [installReport, setInstallReport] = useState<string | null>(null);
+  // The stored token never reaches the renderer, so the input is always empty
+  // and `poTokenSet` is the only thing we know about it.
+  const [poToken, setPoToken] = useState("");
+  const [poTokenSet, setPoTokenSet] = useState(config.poTokenSet);
+  const [poTokenBusy, setPoTokenBusy] = useState(false);
+  const [poTokenError, setPoTokenError] = useState<string | null>(null);
   const [preview, setPreview] = useState<TestState>({ status: "idle" });
   const [mic, setMic] = useState<PermState>("idle");
   const [cam, setCam] = useState<PermState>("idle");
@@ -151,6 +157,28 @@ export default function SetupPanel({
       setClaude({ status: "error", message: health.error || "Claude CLI not found.", billing });
     }
     setPipelinePrereqs(health);
+  }
+
+  // Save/remove share one path: on success clear the input, refresh the
+  // presence flag, and re-run the Claude check so the billing line updates in
+  // place. On refusal (a PO turn is running) keep what the user typed.
+  async function applyPoToken(action: "save" | "remove") {
+    setPoTokenBusy(true);
+    setPoTokenError(null);
+    try {
+      const result =
+        action === "save" ? await window.iris.savePoToken(poToken.trim()) : await window.iris.removePoToken();
+      if (!result.ok) {
+        setPoTokenError(result.error || "Could not update the token.");
+        return;
+      }
+      setPoToken("");
+      setPoTokenSet(result.config.poTokenSet);
+      onSaved(result.config);
+      await checkClaude();
+    } finally {
+      setPoTokenBusy(false);
+    }
   }
 
   async function installMissingPrereqs() {
@@ -272,6 +300,42 @@ export default function SetupPanel({
       {claude.billing ? <p className="setup-note">{claude.billing}</p> : null}
       {pipelinePrereqs?.reachable ? (
         <>
+          <label className="setup-field">
+            <span>Subscription token</span>
+            <input
+              type="password"
+              value={poToken}
+              placeholder={
+                poTokenSet ? "Token saved — paste a new one to replace it" : "Paste the output of `claude setup-token`"
+              }
+              onChange={(event) => {
+                setPoToken(event.target.value);
+                setPoTokenError(null);
+              }}
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <small className="setup-note">
+              Run <code>claude setup-token</code> in a terminal and paste the token here so PO bills against your
+              Claude subscription. Stored locally only, never shown again.
+            </small>
+          </label>
+          <div className="setup-actions">
+            <button
+              className="setup-btn"
+              onClick={() => applyPoToken("save")}
+              disabled={poTokenBusy || !poToken.trim()}
+            >
+              {poTokenBusy ? <Loader2 size={14} className="spin" /> : null}
+              Save token
+            </button>
+            {poTokenSet ? (
+              <button className="setup-btn ghost" onClick={() => applyPoToken("remove")} disabled={poTokenBusy}>
+                Remove
+              </button>
+            ) : null}
+          </div>
+          {poTokenError ? <p className="setup-note">{poTokenError}</p> : null}
           <div className="setup-perms">
             <PrereqRow
               label="openspec CLI"

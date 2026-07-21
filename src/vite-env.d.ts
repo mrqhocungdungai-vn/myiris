@@ -93,10 +93,18 @@ type IrisConfig = {
   userName: string;
   loadTestData: boolean;
   wakeWord: boolean;
+  /** Presence only — the PO subscription token itself never reaches the renderer. */
+  poTokenSet: boolean;
   configured: boolean;
   voices: string[];
   models: string[];
   configPath: string;
+};
+
+type PoTokenResult = {
+  ok: boolean;
+  error?: string;
+  config: IrisConfig;
 };
 
 type ClaudeHealth = {
@@ -178,6 +186,8 @@ type IrisApi = {
   onWakeRequest: (callback: () => void) => () => void;
   getConfig: () => Promise<IrisConfig>;
   saveConfig: (updates: Partial<Record<string, string>>) => Promise<IrisConfig>;
+  savePoToken: (token: string) => Promise<PoTokenResult>;
+  removePoToken: () => Promise<PoTokenResult>;
   testGemini: (key: string) => Promise<{ ok: boolean; error?: string }>;
   testClaude: () => Promise<ClaudeHealth>;
   getPipelineStatus: () => Promise<PipelineStatus>;

@@ -35,7 +35,7 @@ The pipeline turns on automatically once Iris detects the `claude` binary — th
    ```bash
    claude setup-token
    ```
-   Paste the result into `.env` as `CLAUDE_CODE_OAUTH_TOKEN` (see `.env.example`).
+   Paste the result into Settings → Claude pipeline → Subscription token (recommended — it's the only route in a packaged build, and it applies without a restart), or into `.env` as `CLAUDE_CODE_OAUTH_TOKEN` (see `.env.example`).
 3. **The `openspec` CLI** — needed to scaffold and manage the spec-driven workflow:
    ```bash
    npm install -g @fission-ai/openspec@latest
@@ -82,7 +82,7 @@ Or interactively inside a Claude Code session in a project that has `openspec/`:
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | Settings shows "Claude CLI not found" | `claude` isn't on PATH | Install Claude Code, or set `IRIS_CLAUDE_BIN` if it's in a non-standard location |
-| PO turns fail with a token error | No `CLAUDE_CODE_OAUTH_TOKEN` | Run `claude setup-token`, paste the result into `.env`, restart Iris |
+| PO turns fail with a token error | No `CLAUDE_CODE_OAUTH_TOKEN` | Run `claude setup-token`, paste the result into Settings → Claude pipeline → Subscription token (no restart needed) |
 | "openspec CLI" row stays red after install | Shell PATH not picked up yet | Restart Iris (or set `IRIS_OPENSPEC_BIN` explicitly) |
 | "Global skills" row stays red | Skills not installed at user level yet | Click "Install missing", or run the copyable command shown next to the row |
 | "Iris agents" row stays red | Personas not installed | Click "Install missing" (or the "Install agents…" button on the pipeline bar) |

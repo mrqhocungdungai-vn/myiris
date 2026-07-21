@@ -68,9 +68,10 @@ claude --version
 ```
 
 If that works, **DEV works immediately**. **PO** additionally needs a
-subscription token (`claude setup-token` → `CLAUDE_CODE_OAUTH_TOKEN` in
-`.env`), since it's a stateful Agent SDK session that doesn't inherit your
-interactive `claude` login. Beyond that, the pipeline needs the `openspec`
+subscription token (`claude setup-token`, then paste it into Settings →
+Claude pipeline → Subscription token, or set `CLAUDE_CODE_OAUTH_TOKEN` in
+`.env` yourself), since it's a stateful Agent SDK session that doesn't inherit
+your interactive `claude` login. Beyond that, the pipeline needs the `openspec`
 CLI and a set of global Claude Code skills + the `iris-po`/`iris-dev` agent
 personas — Settings → **"Claude pipeline"** checks all of these and offers a
 one-click **"Install missing"** action that provisions whatever's absent
@@ -123,7 +124,9 @@ GEMINI_LIVE_VOICE=Zephyr
 The `IRIS_CLAUDE_*` values are optional. Set `IRIS_CLAUDE_BIN` only if the
 packaged GUI app cannot find the `claude` binary on PATH. `CLAUDE_CODE_OAUTH_TOKEN`
 is required for the **PO** module specifically (generate it with `claude setup-token`) —
-DEV keeps working without it via your interactive `claude` login.
+DEV keeps working without it via your interactive `claude` login. You can set or
+clear it from Settings → Claude pipeline instead of editing this file; that path
+also works in a packaged build, where the file lives at `~/.iris/.env`.
 
 ## Reference
 

@@ -32,6 +32,8 @@ contextBridge.exposeInMainWorld("iris", {
   },
   getConfig: () => ipcRenderer.invoke("config:get"),
   saveConfig: (updates) => ipcRenderer.invoke("config:save", updates),
+  savePoToken: (token) => ipcRenderer.invoke("config:save-po-token", { token }),
+  removePoToken: () => ipcRenderer.invoke("config:remove-po-token"),
   testGemini: (key) => ipcRenderer.invoke("config:test-gemini", { key }),
   testClaude: () => ipcRenderer.invoke("config:test-claude"),
   getPipelineStatus: () => ipcRenderer.invoke("pipeline:status"),
