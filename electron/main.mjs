@@ -236,11 +236,39 @@ const SESSION_STORE = path.join(os.homedir(), ".iris", "claude-sessions.json");
 // quarantined rather than parsed-and-overwritten (design.md D3).
 const SESSION_STORE_SCHEMA_VERSION = 1;
 let sessionStore = { active: null, sessions: [] };
+// Group-aware kill for a DEV subprocess (spawned `detached: true`, so it is
+// its own process-group leader on POSIX) — reaches descendant tool
+// subprocesses (bash, MCP servers under bypassPermissions) that a plain
+// child.kill() would orphan. Injected into createRunQueue below so
+// run-queue.mjs stays free of process-group/platform knowledge (design.md D1
+// of bound-shutdown-teardown).
+function killChild(child, signal) {
+  if (!child?.pid) {
+    child?.kill?.(signal);
+    return;
+  }
+  if (process.platform === "win32") {
+    // detached process groups don't take POSIX signals on Windows — kill the
+    // whole tree instead; `signal` is advisory here.
+    spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"]);
+    return;
+  }
+  try {
+    process.kill(-child.pid, signal);
+  } catch {
+    // Group already gone (or was never formed) — fall back to the direct
+    // child, mirroring the escalation path's existing tolerance of a dead
+    // process.
+    child.kill(signal);
+  }
+}
+
 // One task at a time, globally — see electron/run-queue.mjs. startClaudeRun and
 // announceClaudeCompletion are function declarations defined later in this file;
 // referencing them here is safe because they're hoisted before this line ever runs.
 const runQueue = createRunQueue({
   startRun: startClaudeRun,
+  killChild,
   // Routes stop() on an active PO turn (no child process to signal) by
   // workstream — a no-op if no live session exists for it. Never touches the
   // slot itself; the slot releases when startPoRun's settle handler finalizes
@@ -1589,6 +1617,11 @@ function startDevRun(run) {
       cwd: run.cwd,
       stdio: ["ignore", "pipe", "pipe"],
       env: process.env,
+      // Process-group leader (POSIX) so killChild's group kill also reaches
+      // this run's own tool subprocesses (bash, MCP servers under
+      // bypassPermissions) — not unref()'d, the parent keeps managing the
+      // child. See design.md D2 of bound-shutdown-teardown.
+      detached: true,
     });
   } catch (error) {
     runQueue.finalize(run.run_id, RUN_STATUS.ERROR, `Failed to launch claude: ${error.message}`);

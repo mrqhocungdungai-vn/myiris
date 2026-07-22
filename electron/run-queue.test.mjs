@@ -56,6 +56,15 @@ function makeChildFake() {
   return { child: { kill: (signal) => killCalls.push(signal) }, killCalls };
 }
 
+// The injected killChild hook (bound-shutdown-teardown design D1) — records
+// (child, signal) pairs, distinct from a call directly on run.child.kill, so
+// a test can assert the queue delegates through the hook rather than calling
+// the transport itself.
+function makeKillChildFake() {
+  const calls = [];
+  return { killChild: (child, signal) => calls.push(signal), calls };
+}
+
 describe("run-queue", () => {
   it("starts a run immediately when the slot is free", () => {
     const { queue, invoked } = makeQueue();
@@ -492,20 +501,21 @@ describe("run-queue idle watchdog", () => {
     }
   });
 
-  it("escalates to SIGKILL and finalizes exactly once when a signalled process ignores SIGTERM (spec: 'A signalled process ignores the signal')", () => {
+  it("escalates to SIGKILL through the injected killChild and finalizes exactly once when a signalled process ignores SIGTERM (spec: 'A signalled process ignores the signal', bound-shutdown-teardown design D1)", () => {
     vi.useFakeTimers();
     try {
-      const { queue, events, finalized } = makeQueue();
-      const { child, killCalls } = makeChildFake();
+      const { killChild, calls } = makeKillChildFake();
+      const { queue, events, finalized } = makeQueue({ killChild });
+      const { child } = makeChildFake();
       const run = makeRun({ child, status: RUN_STATUS.RUNNING });
       queue.submit(run);
 
       queue.stop(run.run_id);
-      expect(killCalls).toEqual(["SIGTERM"]);
+      expect(calls).toEqual(["SIGTERM"]);
       expect(queue.get(run.run_id).finalized).not.toBe(true); // grace period still pending
 
       vi.advanceTimersByTime(5001); // past the SIGTERM->SIGKILL grace period
-      expect(killCalls).toEqual(["SIGTERM", "SIGKILL"]);
+      expect(calls).toEqual(["SIGTERM", "SIGKILL"]);
       expect(finalized).toEqual([run.run_id]);
       const terminalEvents = events.filter((e) => e.run_id === run.run_id && e.status === RUN_STATUS.CANCELLED);
       expect(terminalEvents.length).toBe(1);
@@ -514,6 +524,24 @@ describe("run-queue idle watchdog", () => {
       // must stay a no-op — finalize-once still holds.
       vi.advanceTimersByTime(60000);
       expect(finalized).toEqual([run.run_id]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("defaults killChild to child.kill when the dep is omitted, so a queue built without the hook still terminates the child (back-compat, bound-shutdown-teardown design D1)", () => {
+    vi.useFakeTimers();
+    try {
+      const { queue } = makeQueue(); // no killChild override
+      const { child, killCalls } = makeChildFake();
+      const run = makeRun({ child, status: RUN_STATUS.RUNNING });
+      queue.submit(run);
+
+      queue.stop(run.run_id);
+      expect(killCalls).toEqual(["SIGTERM"]);
+
+      vi.advanceTimersByTime(5001);
+      expect(killCalls).toEqual(["SIGTERM", "SIGKILL"]);
     } finally {
       vi.useRealTimers();
     }
