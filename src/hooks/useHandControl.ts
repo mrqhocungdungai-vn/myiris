@@ -99,6 +99,7 @@ export function useHandControl(enabled: boolean, deviceId: string = SYSTEM_DEFAU
       stateRef.current = EMPTY_STATE;
       setState(EMPTY_STATE);
       setStream(null);
+      setError(null);
       return;
     }
 
@@ -150,6 +151,7 @@ export function useHandControl(enabled: boolean, deviceId: string = SYSTEM_DEFAU
 
         if (cancelled) return;
         setStream(stream);
+        setError(null);
         publish({ ...EMPTY_STATE, active: true });
         loop();
       } catch (err) {
