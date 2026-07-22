@@ -208,6 +208,10 @@ export function useAudioPipeline({ onLog }: { onLog?: (level: string, message: s
   async function stop() {
     await stopCapture();
     flushPlayback();
+    await outputContextRef.current?.close().catch(() => undefined);
+    outputContextRef.current = null;
+    outputAnalyserRef.current = null;
+    playbackTimeRef.current = 0;
     setMuted(false);
     sessionStartRef.current = null;
   }
