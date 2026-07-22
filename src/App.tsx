@@ -13,7 +13,7 @@ import { AGENT_LABELS, PIPELINE, isAgentRole, modelLabel } from "./lib/agents";
 import { uiSounds } from "./lib/sounds";
 import { useAudioPipeline } from "./hooks/useAudioPipeline";
 import { useHandoffFx } from "./hooks/useHandoffFx";
-import { useHandControl, SYSTEM_DEFAULT_CAMERA, type HandPoint, type HandState } from "./hooks/useHandControl";
+import { useHandControl, SYSTEM_DEFAULT_CAMERA, type HandPoint } from "./hooks/useHandControl";
 import { useWakeWord } from "./hooks/useWakeWord";
 import TopBar from "./components/TopBar";
 import HudShell from "./components/HudShell";
@@ -773,11 +773,16 @@ export default function App() {
   }
 
   const expandedTask = useMemo(() => tasks.find((task) => task.id === expandedTaskId) ?? null, [tasks, expandedTaskId]);
+  // Bookkeeping (which element, when it started, whether it already fired)
+  // stays in a ref — only the render-visible facts below become state.
   const dwellRef = useRef<{ el: HTMLElement; startedAt: number; fired: boolean } | null>(null);
+  const [dwellActive, setDwellActive] = useState(false);
+  const [dwellFired, setDwellFired] = useState(false);
 
-  const { state: hand, error: handError, stream: handStream } = useHandControl(handControl, cameraDeviceId);
-  const liveHandRef = useRef<HandState | null>(hand);
-  liveHandRef.current = hand;
+  const { state: hand, stateRef: liveHandRef, error: handError, stream: handStream } = useHandControl(
+    handControl,
+    cameraDeviceId,
+  );
 
   useEffect(() => {
     if (handError) pushLog("error", `Hand control: ${handError}`);
@@ -786,36 +791,54 @@ export default function App() {
   // Universal point-and-hold: the finger pointer can activate ANY clickable
   // element — task cards, close buttons, PO answer options, chips. Holding
   // over a target for 300ms fires a real click; the target must be left and
-  // re-entered before it can fire again.
+  // re-entered before it can fire again. Reads live per-frame hand data from
+  // a ref (not React state) so charging the dwell timer never forces a
+  // re-render — only entering/leaving a target or firing does (BUG F).
   useEffect(() => {
-    if (!handControl || !hand.present || !hand.point || !hand.pointing || expandedTaskId) {
-      dwellRef.current = null;
-      return;
-    }
+    let raf = 0;
+    const syncDwell = (active: boolean, fired: boolean) => {
+      setDwellActive((prev) => (prev === active ? prev : active));
+      setDwellFired((prev) => (prev === fired ? prev : fired));
+    };
+    const loop = () => {
+      const h = liveHandRef.current;
+      if (!handControl || !h.present || !h.point || !h.pointing || expandedTaskId) {
+        dwellRef.current = null;
+        syncDwell(false, false);
+        raf = requestAnimationFrame(loop);
+        return;
+      }
 
-    const el = document.elementFromPoint(hand.point.x, hand.point.y);
-    const actionable = el?.closest<HTMLElement>('button, a, [data-task-id], [role="button"]') ?? null;
-    if (!actionable) {
-      dwellRef.current = null;
-      return;
-    }
+      const el = document.elementFromPoint(h.point.x, h.point.y);
+      const actionable = el?.closest<HTMLElement>('button, a, [data-task-id], [role="button"]') ?? null;
+      if (!actionable) {
+        dwellRef.current = null;
+        syncDwell(false, false);
+        raf = requestAnimationFrame(loop);
+        return;
+      }
 
-    // Track which card the hand is hovering so voice references like "this
-    // one" / "show its steps" can resolve to it (design.md D1 focusedTaskId).
-    const taskId = actionable.closest<HTMLElement>("[data-task-id]")?.dataset.taskId;
-    if (taskId) setFocusedTaskId(taskId);
+      // Track which card the hand is hovering so voice references like "this
+      // one" / "show its steps" can resolve to it (design.md D1 focusedTaskId).
+      const taskId = actionable.closest<HTMLElement>("[data-task-id]")?.dataset.taskId;
+      if (taskId) setFocusedTaskId((current) => (current === taskId ? current : taskId));
 
-    const now = performance.now();
-    if (dwellRef.current?.el !== actionable) {
-      dwellRef.current = { el: actionable, startedAt: now, fired: false };
-      return;
-    }
-
-    if (!dwellRef.current.fired && now - dwellRef.current.startedAt > 300) {
-      dwellRef.current.fired = true;
-      actionable.click();
-    }
-  }, [handControl, hand.present, hand.point?.x, hand.point?.y, hand.pointing, expandedTaskId]);
+      const now = performance.now();
+      if (dwellRef.current?.el !== actionable) {
+        dwellRef.current = { el: actionable, startedAt: now, fired: false };
+        syncDwell(true, false);
+      } else if (!dwellRef.current.fired && now - dwellRef.current.startedAt > 300) {
+        dwellRef.current.fired = true;
+        syncDwell(true, true);
+        actionable.click();
+      } else {
+        syncDwell(true, dwellRef.current.fired);
+      }
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, [handControl, expandedTaskId]);
 
   // Open-palm hold-to-scroll: scrolls whichever scrollable region (Comms or
   // Work Stream column) is under the hand.
@@ -898,7 +921,7 @@ export default function App() {
     }
     if (hand.openPalm) return { label: "Open_Palm · scroll", tone: "open" };
     if (!hand.pointing) return { label: `${hand.gesture} · idle`, tone: "idle" };
-    if (dwellRef.current) return { label: "Hold · opening", tone: "move" };
+    if (dwellActive) return { label: "Hold · opening", tone: "move" };
     return { label: "Pointing_Up · hover", tone: "move" };
   }, [
     hand.present,
@@ -907,8 +930,7 @@ export default function App() {
     hand.openPalm,
     hand.pointing,
     hand.gesture,
-    hand.point?.x,
-    hand.point?.y,
+    dwellActive,
     expandedTaskId,
   ]);
 
@@ -1122,6 +1144,7 @@ export default function App() {
           handControl={handControl}
           onToggleHand={() => setHandControl((current) => !current)}
           hand={hand}
+          handRef={liveHandRef}
           handStream={handStream}
           handActionLabel={handAction.label}
           handActionTone={handAction.tone}
@@ -1166,6 +1189,7 @@ export default function App() {
             <CameraDock
               handControl={handControl}
               hand={hand}
+              handRef={liveHandRef}
               stream={handStream}
               actionLabel={handAction.label}
               actionTone={handAction.tone}
@@ -1249,7 +1273,9 @@ export default function App() {
       </div>
       )}
 
-      {expandedTask ? <ReaderOverlay task={expandedTask} hand={handControl ? hand : null} onClose={closeReader} /> : null}
+      {expandedTask ? (
+        <ReaderOverlay task={expandedTask} hand={handControl ? hand : null} handRef={liveHandRef} onClose={closeReader} />
+      ) : null}
 
       {showHistory ? (
         <HistoryDrawer
@@ -1290,7 +1316,7 @@ export default function App() {
       <HandoffLayer pulses={pulses} onPulseEnd={removePulse} />
 
       {handControl && hand.present ? (
-        <HandReticles hand={hand} dwelling={Boolean(dwellRef.current && !dwellRef.current.fired)} />
+        <HandReticles hand={hand} handRef={liveHandRef} dwelling={dwellActive && !dwellFired} />
       ) : null}
     </>
   );

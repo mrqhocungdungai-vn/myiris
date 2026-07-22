@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { FilesetResolver, GestureRecognizer } from "@mediapipe/tasks-vision";
+import { semanticEquals } from "../lib/hand";
 
 export type HandPoint = { x: number; y: number };
 export type HandLandmark = { x: number; y: number };
@@ -87,9 +88,15 @@ export function useHandControl(enabled: boolean, deviceId: string = SYSTEM_DEFAU
   const [state, setState] = useState<HandState>(EMPTY_STATE);
   const [error, setError] = useState<string | null>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
+  // Every-frame hand data (point, landmarks, pinchDistance) lives here for
+  // imperative readers (rAF loops, direct DOM writes); `state` above is
+  // published only when a semantic field changes, so it never drives a
+  // 60fps React re-render (BUG F).
+  const stateRef = useRef<HandState>(EMPTY_STATE);
 
   useEffect(() => {
     if (!enabled) {
+      stateRef.current = EMPTY_STATE;
       setState(EMPTY_STATE);
       setStream(null);
       return;
@@ -109,6 +116,16 @@ export function useHandControl(enabled: boolean, deviceId: string = SYSTEM_DEFAU
     const stableGestureById = new Map<string, string>();
     const candidateGestureById = new Map<string, string>();
     const candidateFramesById = new Map<string, number>();
+    let published = EMPTY_STATE;
+    let hadHand = false;
+
+    function publish(next: HandState) {
+      stateRef.current = next;
+      if (!semanticEquals(next, published)) {
+        published = next;
+        setState(next);
+      }
+    }
 
     async function setup() {
       try {
@@ -133,7 +150,7 @@ export function useHandControl(enabled: boolean, deviceId: string = SYSTEM_DEFAU
 
         if (cancelled) return;
         setStream(stream);
-        setState({ ...EMPTY_STATE, active: true });
+        publish({ ...EMPTY_STATE, active: true });
         loop();
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err));
@@ -241,8 +258,9 @@ export function useHandControl(enabled: boolean, deviceId: string = SYSTEM_DEFAU
               }
             : primary.point;
           primaryPoint = smooth;
+          hadHand = true;
 
-          setState({
+          publish({
             active: true,
             present: true,
             point: smooth,
@@ -254,14 +272,17 @@ export function useHandControl(enabled: boolean, deviceId: string = SYSTEM_DEFAU
             pinchDistance: primary.pinchDistance,
             hands: hands.map((item) => (item === primary ? { ...item, point: smooth! } : item)),
           });
-        } else {
+        } else if (hadHand) {
+          // Only re-publish the empty state on the transition into "no
+          // hand" — an empty frame after another empty frame does zero work.
           smooth = null;
           primaryId = "";
           primaryPoint = null;
           stableGestureById.clear();
           candidateGestureById.clear();
           candidateFramesById.clear();
-          setState({ ...EMPTY_STATE, active: true });
+          hadHand = false;
+          publish({ ...EMPTY_STATE, active: true });
         }
       }
       raf = requestAnimationFrame(loop);
@@ -279,5 +300,5 @@ export function useHandControl(enabled: boolean, deviceId: string = SYSTEM_DEFAU
     };
   }, [enabled, deviceId]);
 
-  return { state, error, stream };
+  return { state, stateRef, error, stream };
 }

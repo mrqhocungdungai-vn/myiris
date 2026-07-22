@@ -20,11 +20,13 @@ const ORB_ACCENT: Record<ReactorState, string> = {
 function HudCamera({
   stream,
   hand,
+  handRef,
   actionLabel,
   actionTone,
 }: {
   stream: MediaStream | null;
   hand: HandState;
+  handRef: { current: HandState };
   actionLabel: string;
   actionTone: string;
 }) {
@@ -39,7 +41,7 @@ function HudCamera({
       <div className="camera-frame">
         <video ref={videoRef} autoPlay playsInline muted />
         <div className="cam-scan" />
-        <HandSkeleton hands={hand.hands} />
+        <HandSkeleton hands={hand.hands} handsRef={handRef} />
         <span className="cam-status">
           <i />
           {hand.present ? "tracking" : "no hand"}
@@ -90,6 +92,7 @@ export default function HudShell({
   handControl,
   onToggleHand,
   hand,
+  handRef,
   handStream,
   handActionLabel,
   handActionTone,
@@ -126,6 +129,8 @@ export default function HudShell({
   handControl: boolean;
   onToggleHand: () => void;
   hand: HandState;
+  /** Per-frame hand data (useHandControl's stateRef) — feeds the HUD camera skeleton. */
+  handRef: { current: HandState };
   handStream: MediaStream | null;
   handActionLabel: string;
   handActionTone: string;
@@ -234,6 +239,7 @@ export default function HudShell({
           <HudCamera
             stream={handStream}
             hand={hand}
+            handRef={handRef}
             actionLabel={handActionLabel}
             actionTone={handActionTone}
           />

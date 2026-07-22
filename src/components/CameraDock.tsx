@@ -11,19 +11,67 @@ const HAND_CONNECTIONS = [
   [0, 17],
 ] as const;
 
-export function HandSkeleton({ hands }: { hands: HandState["hands"] }) {
+// Renders the skeleton for up to 2 tracked hands (numHands: 2). `hands`
+// (React state, semantically gated) decides how many hands/landmarks mount;
+// `handsRef` (per-frame ref) drives every line/circle's position each rAF via
+// direct attribute writes, so a moving hand never re-renders the app.
+export function HandSkeleton({
+  hands,
+  handsRef,
+}: {
+  hands: HandState["hands"];
+  handsRef: { current: HandState };
+}) {
+  const lineRefs = useRef<Array<Array<SVGLineElement | null>>>([[], []]);
+  const circleRefs = useRef<Array<Array<SVGCircleElement | null>>>([[], []]);
+
+  useEffect(() => {
+    let raf = 0;
+    const loop = () => {
+      const liveHands = handsRef.current.hands;
+      liveHands.forEach((hand, handIndex) => {
+        const lines = lineRefs.current[handIndex];
+        const circles = circleRefs.current[handIndex];
+        HAND_CONNECTIONS.forEach(([from, to], i) => {
+          const line = lines?.[i];
+          const a = hand.landmarks[from];
+          const b = hand.landmarks[to];
+          if (line && a && b) {
+            line.setAttribute("x1", String(a.x * 100));
+            line.setAttribute("y1", String(a.y * 100));
+            line.setAttribute("x2", String(b.x * 100));
+            line.setAttribute("y2", String(b.y * 100));
+          }
+        });
+        hand.landmarks.forEach((landmark, i) => {
+          const circle = circles?.[i];
+          if (circle) {
+            circle.setAttribute("cx", String(landmark.x * 100));
+            circle.setAttribute("cy", String(landmark.y * 100));
+          }
+        });
+      });
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, [handsRef]);
+
   if (!hands.length) return null;
   return (
     <svg className="hand-skeleton" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
       {hands.map((hand, handIndex) => (
         <g key={hand.id} className={handIndex > 0 ? "secondary" : ""}>
-          {HAND_CONNECTIONS.map(([from, to]) => {
+          {HAND_CONNECTIONS.map(([from, to], i) => {
             const a = hand.landmarks[from];
             const b = hand.landmarks[to];
             if (!a || !b) return null;
             return (
               <line
                 key={`${from}-${to}`}
+                ref={(el) => {
+                  lineRefs.current[handIndex][i] = el;
+                }}
                 x1={a.x * 100}
                 y1={a.y * 100}
                 x2={b.x * 100}
@@ -32,7 +80,15 @@ export function HandSkeleton({ hands }: { hands: HandState["hands"] }) {
             );
           })}
           {hand.landmarks.map((landmark, index) => (
-            <circle key={index} cx={landmark.x * 100} cy={landmark.y * 100} r={index === 8 ? 1.45 : 1.05} />
+            <circle
+              key={index}
+              ref={(el) => {
+                circleRefs.current[handIndex][index] = el;
+              }}
+              cx={landmark.x * 100}
+              cy={landmark.y * 100}
+              r={index === 8 ? 1.45 : 1.05}
+            />
           ))}
         </g>
       ))}
@@ -43,12 +99,15 @@ export function HandSkeleton({ hands }: { hands: HandState["hands"] }) {
 export default function CameraDock({
   handControl,
   hand,
+  handRef,
   stream,
   actionLabel,
   actionTone,
 }: {
   handControl: boolean;
   hand: HandState;
+  /** Per-frame hand data (useHandControl's stateRef) — feeds the skeleton overlay. */
+  handRef: { current: HandState };
   stream: MediaStream | null;
   actionLabel: string;
   actionTone: string;
@@ -70,7 +129,7 @@ export default function CameraDock({
         <div className="camera-frame">
           <video ref={videoRef} autoPlay playsInline muted />
           <div className="cam-scan" />
-          <HandSkeleton hands={hand.hands} />
+          <HandSkeleton hands={hand.hands} handsRef={handRef} />
           <span className="cam-status">
             <i />
             {hand.present ? "tracking" : "no hand"}

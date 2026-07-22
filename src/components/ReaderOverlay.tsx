@@ -10,10 +10,13 @@ import { AgentBadge } from "./WorkCard";
 export default function ReaderOverlay({
   task,
   hand,
+  handRef,
   onClose,
 }: {
   task: TaskCard;
   hand: HandState | null;
+  /** Per-frame hand data (useHandControl's stateRef) — read every rAF, not React state. */
+  handRef: { current: HandState };
   onClose: () => void;
 }) {
   const [offset, setOffset] = useState({ x: 0, y: 0 });
@@ -22,10 +25,8 @@ export default function ReaderOverlay({
   const [closing, setClosing] = useState(false);
   const startRef = useRef<{ x: number; y: number } | null>(null);
   const bodyRef = useRef<HTMLDivElement | null>(null);
-  const handRef = useRef<HandState | null>(hand);
   const readerScaleRef = useRef(1);
   const zoomRef = useRef<{ distance: number; scale: number } | null>(null);
-  handRef.current = hand;
 
   const CLOSE_DISTANCE = 160;
 
