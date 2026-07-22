@@ -28,14 +28,14 @@
 ## 6. Verification (manual — `main.mjs` wiring is out of the Vitest harness)
 
 - [x] 6.1 `npm run build` passes; `npm test` passes (incl. the new `coalesce.test.mjs`)
-- [ ] 6.2 Run a chatty DEV task; with a temporary render counter / React DevTools Profiler, confirm App re-renders at ~emit rate (≤~7/s), not per activity line — and that `sendUiContext` IPC and `onUiAction` re-registration no longer fire per line
-- [ ] 6.3 The activity log still scrolls live in the reader (deck AND HUD); the per-step timeline still ticks in realtime (tool calls appear immediately, not batched at 150 ms)
-- [ ] 6.4 On completion, the card shows the run's REAL result, never the activity log — including a fast run that finishes right after a burst of activity (the D3 regression case)
-- [ ] 6.5 A long, steadily-chatty DEV run is NOT killed by the idle watchdog (heartbeat still per-line)
+- [x] 6.2 Run a chatty DEV task; with a temporary render counter / React DevTools Profiler, confirm App re-renders at ~emit rate (≤~7/s), not per activity line — and that `sendUiContext` IPC and `onUiAction` re-registration no longer fire per line
+- [x] 6.3 The activity log still scrolls live in the reader (deck AND HUD); the per-step timeline still ticks in realtime (tool calls appear immediately, not batched at 150 ms)
+- [x] 6.4 On completion, the card shows the run's REAL result, never the activity log — including a fast run that finishes right after a burst of activity (the D3 regression case)
+- [x] 6.5 A long, steadily-chatty DEV run is NOT killed by the idle watchdog (heartbeat still per-line)
 
 ## 7. Spec and record
 
 - [x] 7.1 `openspec validate coalesce-activity-updates` passes
 - [x] 7.2 Re-read the `task-step-timeline` ADDED requirement against the landed code: activity coalesces, step timeline stays realtime, no post-terminal activity emit, idle progress unaffected — all true
-- [ ] 7.3 One commit on `develop` (BUG H is a single bug: source-side emit coalescing). Co-Authored-By trailer
+- [x] 7.3 One commit on `develop` (BUG H is a single bug: source-side emit coalescing). Co-Authored-By trailer
 - [x] 7.4 Update the log table in `docs/BUGFIX_PLAN.md`: mark BUG H done; note it is a source-side trailing-throttle of `pushActivity`'s emit only (heartbeat + buffer stay per-line; step timeline untouched; pending emit cancelled at terminal), with a new pure `electron/coalesce.mjs` + Vitest coverage, and one ADDED `task-step-timeline` requirement pinning the timing contract. Note this closes the Wave 1 render-path items; the "other renderer items" table (ReactorCore allocations, AudioWorklet, window.confirm) remains
