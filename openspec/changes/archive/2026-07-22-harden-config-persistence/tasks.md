@@ -27,9 +27,9 @@
 
 - [x] 5.1 `npm test` passes with no `.env`, no `claude` on `PATH`, no network
 - [x] 5.2 `npm run build` passes with no new type errors
-- [ ] 5.3 Manual (the plan's BUG C ritual): create a few workstreams, set cwds, pick models; hand-corrupt `~/.iris/claude-sessions.json` (truncate to half); relaunch → the app logs the corruption, a `claude-sessions.json.corrupt-*` appears, and the original data is NOT overwritten (the corrupt file is preserved)
-- [ ] 5.4 Manual: after a normal run, confirm `~/.iris/` has no leftover `*.tmp` files
-- [ ] 5.5 Manual: save a setting (e.g. a PO token) and confirm `.env` still round-trips correctly through the atomic write (existing keys preserved)
+- [x] 5.3 Manual (the plan's BUG C ritual): create a few workstreams, set cwds, pick models; hand-corrupt `~/.iris/claude-sessions.json` (truncate to half); relaunch → the app logs the corruption, a `claude-sessions.json.corrupt-*` appears, and the original data is NOT overwritten (the corrupt file is preserved)
+- [x] 5.4 Manual: after a normal run, confirm `~/.iris/` has no leftover `*.tmp` files
+- [x] 5.5 Manual: save a setting (e.g. a PO token) and confirm `.env` still round-trips correctly through the atomic write (existing keys preserved)
 
 ## 6. Spec and record
 
