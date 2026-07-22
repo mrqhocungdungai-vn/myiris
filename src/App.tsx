@@ -26,6 +26,7 @@ import PoQuestionBanner from "./components/PoQuestionBanner";
 import ProjectBar from "./components/ProjectBar";
 import ReaderOverlay from "./components/ReaderOverlay";
 import HistoryDrawer from "./components/HistoryDrawer";
+import ConfirmModal from "./components/ConfirmModal";
 import TaskChooser from "./components/TaskChooser";
 import SetupPanel from "./components/SetupPanel";
 import HandReticles from "./components/HandReticles";
@@ -71,6 +72,13 @@ export default function App() {
   const [taskChooser, setTaskChooser] = useState<{ query: string; matches: TaskCard[] } | null>(null);
   const [showHistory, setShowHistory] = useState(false);
   const [handControl, setHandControl] = useState(false);
+  // Non-blocking replacement for window.confirm (BUG item 3): resolving/rejecting
+  // this promise never suspends the event loop, so the orb/audio/gestures keep
+  // running while the user decides.
+  const [confirm, setConfirm] = useState<{ message: string; resolve: (ok: boolean) => void } | null>(null);
+  function askConfirm(message: string) {
+    return new Promise<boolean>((resolve) => setConfirm({ message, resolve }));
+  }
   // Master switch for the PO → DEV pipeline surface (Work Stream, PipelineBar,
   // workstream switcher, task chooser, HUD tasks column, PO question banner) —
   // determined by main from whether the `claude` binary resolves. Defaults to
@@ -500,7 +508,7 @@ export default function App() {
       if (prevRole && !prevHandoff) {
         const slug = agents?.gates.slug;
         const where = slug ? `.scratch/${slug}/handoff/${prevRole}.md` : `the ${AGENT_LABELS[prevRole]} handoff file`;
-        const ok = window.confirm(
+        const ok = await askConfirm(
           `Gate check: ${where} does not exist yet, so ${AGENT_LABELS[role]} has no handoff from ${AGENT_LABELS[prevRole]} to work from.\n\nSwitch to ${AGENT_LABELS[role]} anyway?`,
         );
         if (!ok) return;
@@ -1313,6 +1321,16 @@ export default function App() {
             if (!sidecarRunning) start();
           }}
           onRunWizard={() => setSetup({ mode: "onboarding" })}
+        />
+      ) : null}
+
+      {confirm ? (
+        <ConfirmModal
+          message={confirm.message}
+          onResolve={(ok) => {
+            confirm.resolve(ok);
+            setConfirm(null);
+          }}
         />
       ) : null}
 

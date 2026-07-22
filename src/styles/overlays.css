@@ -4,7 +4,8 @@
 .reader-backdrop,
 .history-backdrop,
 .match-backdrop,
-.setup-backdrop {
+.setup-backdrop,
+.confirm-backdrop {
   position: fixed;
   inset: 0;
   display: grid;
@@ -19,6 +20,7 @@
 .history-backdrop { z-index: 36; }
 .match-backdrop { z-index: 38; }
 .setup-backdrop { z-index: 50; }
+.confirm-backdrop { z-index: 60; }
 
 @keyframes overlay-fade {
   from { opacity: 0; }
@@ -999,6 +1001,31 @@
 @keyframes boot-fade-out {
   from { opacity: 1; }
   to { opacity: 0; }
+}
+
+/* ===== Confirm modal (non-blocking replacement for window.confirm) ===== */
+.confirm-card {
+  width: min(420px, 92vw);
+  padding: 20px;
+  border-radius: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  animation: overlay-pop 0.24s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.confirm-message {
+  margin: 0;
+  white-space: pre-line;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
 }
 
 @media (prefers-reduced-motion: reduce) {
