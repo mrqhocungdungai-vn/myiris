@@ -26,6 +26,7 @@ export function useAudioPipeline({ onLog }: { onLog?: (level: string, message: s
   const inputProcessorRef = useRef<AudioWorkletNode | null>(null);
   const outputContextRef = useRef<AudioContext | null>(null);
   const playbackTimeRef = useRef(0);
+  const flushEpochRef = useRef(0);
   const playbackSourcesRef = useRef<AudioBufferSourceNode[]>([]);
   const inputAnalyserRef = useRef<AnalyserNode | null>(null);
   const outputAnalyserRef = useRef<AnalyserNode | null>(null);
@@ -129,6 +130,7 @@ export function useAudioPipeline({ onLog }: { onLog?: (level: string, message: s
   }
 
   function flushPlayback() {
+    flushEpochRef.current++;
     for (const source of playbackSourcesRef.current) {
       try {
         source.stop();
@@ -143,6 +145,7 @@ export function useAudioPipeline({ onLog }: { onLog?: (level: string, message: s
   }
 
   async function playGeminiAudio(chunk: LiveAudioChunk) {
+    const epoch = flushEpochRef.current;
     const rate = parsePcmRate(chunk.mimeType);
     const bytes = base64ToBytes(chunk.data);
     const sampleCount = Math.floor(bytes.byteLength / 2);
@@ -174,8 +177,18 @@ export function useAudioPipeline({ onLog }: { onLog?: (level: string, message: s
       playbackSourcesRef.current = playbackSourcesRef.current.filter((item) => item !== source);
     };
 
+    if (epoch !== flushEpochRef.current) {
+      source.disconnect();
+      return;
+    }
+
     const startAt = Math.max(context.currentTime + 0.03, playbackTimeRef.current || 0);
-    source.start(startAt);
+    try {
+      source.start(startAt);
+    } catch {
+      // Context closing/closed underneath us — epoch guard already covers the normal case.
+      return;
+    }
     playbackTimeRef.current = startAt + buffer.duration;
     playbackSourcesRef.current.push(source);
   }
