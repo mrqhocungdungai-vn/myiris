@@ -819,7 +819,7 @@ export default function App() {
 
       const el = document.elementFromPoint(h.point.x, h.point.y);
       const actionable = el?.closest<HTMLElement>('button, a, [data-task-id], [role="button"]') ?? null;
-      if (!actionable) {
+      if (!actionable || actionable.closest("[data-no-dwell]")) {
         dwellRef.current = null;
         syncDwell(false, false);
         raf = requestAnimationFrame(loop);

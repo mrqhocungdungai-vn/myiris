@@ -57,7 +57,13 @@ export default function SessionSwitcher({
           <span className="session-id">{chipLabel}</span>
           <ChevronDown size={12} className="chev" />
         </button>
-        <button type="button" className="session-new" onClick={onNew} title="Start a new Claude session (clean slate)">
+        <button
+          type="button"
+          className="session-new"
+          data-no-dwell
+          onClick={onNew}
+          title="Start a new Claude session (clean slate)"
+        >
           <Plus size={13} />
         </button>
 

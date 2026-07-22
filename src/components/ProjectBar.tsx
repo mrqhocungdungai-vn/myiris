@@ -4,6 +4,7 @@ export default function ProjectBar({ project, onChoose }: { project: string | nu
   return (
     <button
       className={`project-bar ${project ? "" : "unset"}`}
+      data-no-dwell
       onClick={onChoose}
       title={
         project

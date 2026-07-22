@@ -330,7 +330,12 @@ export default function SetupPanel({
               Save token
             </button>
             {poTokenSet ? (
-              <button className="setup-btn ghost" onClick={() => applyPoToken("remove")} disabled={poTokenBusy}>
+              <button
+                className="setup-btn ghost"
+                data-no-dwell
+                onClick={() => applyPoToken("remove")}
+                disabled={poTokenBusy}
+              >
                 Remove
               </button>
             ) : null}
