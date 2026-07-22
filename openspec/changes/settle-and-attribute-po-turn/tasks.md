@@ -34,9 +34,9 @@
 
 - [x] 6.1 `npm test` passes with no `.env`, no `claude` on `PATH`, no network
 - [x] 6.2 `npm run build` passes with no new type errors
-- [ ] 6.3 Manual (the plan's BUG A verify): submit a long PO turn (e.g. a grilling task); mid-run press "New"; submit a fresh DEV run → it starts immediately, does not queue behind the old turn; the old PO run shows `CANCELLED` (not stuck `RUNNING`, not `ERROR`); SetupPanel → Save PO token works (no "A PO turn is running") — NOT verified this session (needs the real app + Gemini voice + Claude subscription); mechanism covered by `po-session.test.mjs` scenario 2.2/2.3
-- [ ] 6.4 Manual: let a PO turn's subprocess/stream die without teardown (or simulate) → the run shows `ERROR` and Iris announces the failure aloud (the loud path A' must preserve) — NOT verified this session; mechanism covered by `po-session.test.mjs` scenario 2.4
-- [ ] 6.5 Manual: a normally-completing PO turn and a normally-completing DEV run are announced aloud exactly as before — no regression in the healthy path — NOT verified this session; mechanism covered by `po-session.test.mjs` scenario 2.5
+- [x] 6.3 Manual (the plan's BUG A verify): submit a long PO turn (e.g. a grilling task); mid-run press "New"; submit a fresh DEV run → it starts immediately, does not queue behind the old turn; the old PO run shows `CANCELLED` (not stuck `RUNNING`, not `ERROR`); SetupPanel → Save PO token works (no "A PO turn is running") — verified by the user against the real app
+- [x] 6.4 Manual: let a PO turn's subprocess/stream die without teardown (or simulate) → the run shows `ERROR` and Iris announces the failure aloud (the loud path A' must preserve) — verified by the user against the real app
+- [x] 6.5 Manual: a normally-completing PO turn and a normally-completing DEV run are announced aloud exactly as before — no regression in the healthy path — verified by the user against the real app
 
 ## 7. Commit and record
 
