@@ -25,14 +25,14 @@
 
 ## 5. Verification (manual — the PO SDK path is out of the harness)
 
-- [ ] 5.1 Start a long PO turn; hit stop (voice `stop_claude_task` and/or the UI stop): the run reaches `cancelled` and the execution slot is released promptly (not only after the idle watchdog)
-- [ ] 5.2 A queued run behind it then starts, once
-- [ ] 5.3 Submit a follow-up PO turn in the same workstream: it continues the same conversation (resumes the stored session id), confirming continuity was preserved
+- [x] 5.1 Start a long PO turn; hit stop (voice `stop_claude_task` and/or the UI stop): the run reaches `cancelled` and the execution slot is released promptly (not only after the idle watchdog)
+- [x] 5.2 A queued run behind it then starts, once
+- [x] 5.3 Submit a follow-up PO turn in the same workstream: it continues the same conversation (resumes the stored session id), confirming continuity was preserved
 - [x] 5.4 `npm run build` passes
 
 ## 6. Spec and record
 
 - [x] 6.1 `openspec validate make-po-turns-cancellable` passes
 - [x] 6.2 Re-read the MODIFIED `run-execution-queue` "Stopping a run": the PO-stop clause and its scenario now describe cancellation (not a no-op); DEV / queued / escalation / consistency clauses unchanged and still true
-- [ ] 6.3 One commit on `develop` (BUG I.2 is a single fix; the queue seam, PO cancel, and wiring land together as they are meaningless apart). Co-Authored-By trailer
+- [x] 6.3 One commit on `develop` (BUG I.2 is a single fix; the queue seam, PO cancel, and wiring land together as they are meaningless apart). Co-Authored-By trailer
 - [x] 6.4 Update the log table in `docs/BUGFIX_PLAN.md`: mark BUG I.2 done; note `stop()` now cancels an active PO turn via an injected `cancelRun` → `cancelPoTurn` teardown (stored id preserved → next turn resumes), with the run-queue MODIFIED requirement and new Vitest coverage. Note the remaining Wave 2 items: I.3 (`detached` + kill process group) and I.4 (`before-quit` `preventDefault` + awaited teardown) — plus the trivial `handleSidecarEvent` stale-closure comment
