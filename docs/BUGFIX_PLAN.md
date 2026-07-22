@@ -61,7 +61,7 @@ Bất biến này sống **tại từng ô**, không phải ở một lifecycle 
 | A | PO turn không settle → kẹt slot vĩnh viễn | 🔴 Critical | `po-session.mjs` | ~5 dòng | [x] |
 | A' | `announceClaudeCompletion` không phân biệt status → đọc to lỗi cho run người dùng tự hủy | 🟠 Medium | `main.mjs`, `run-queue.mjs` | ~6 dòng | [x] |
 | B | Buffer thông báo không bao giờ được drain | 🔴 High | `main.mjs` | ~6 dòng | [x] |
-| C | Ghi file không atomic → mất sạch dữ liệu | 🟠 Medium | `main.mjs` | ~15 dòng | [ ] |
+| C | Ghi file không atomic → mất sạch dữ liệu | 🟠 Medium | `main.mjs` | ~15 dòng | [x] |
 | D | Card hiển thị activity log như thể là kết quả | 🟡 Low | `App.tsx` | 1 dòng | [ ] |
 | E | Gemini được báo "started" cho run đã fail | 🟡 Low | `run-queue.mjs` **+ `main.mjs:1649`** | ~6 dòng | [x] |
 | J | `abandon` trả lời hộ người dùng rồi phá session ngay câu lệnh sau → SDK có thể ghi file vào cwd cũ | 🟠 Medium | `main.mjs:159-162, 477-486` | ~4 dòng | [ ] |
@@ -373,6 +373,8 @@ Khác biệt: "người dùng mất sạch trong im lặng" → "người dùng 
 2. Làm hỏng `~/.iris/claude-sessions.json` thủ công (cắt còn nửa file).
 3. Khởi động lại → app phải log lỗi, đổi tên file thành `.corrupt-*`, và **không** ghi đè.
 4. Kiểm tra `~/.iris/` không còn file `.tmp` sót lại sau khi ghi bình thường.
+
+**Đã xong** (`openspec/changes/harden-config-persistence`, archived): `writeFileAtomicSync` + `quarantineFile` (`electron/atomic-file.mjs`, unit-tested) landed cùng lúc với `schemaVersion` (v1) trên session store, trong đúng 1 commit. Có thêm một capability spec mới `config-persistence` (`openspec/specs/config-persistence/`) — lệch so với bảng drift-vs-gap ban đầu (không dự tính spec mới cho bug này), nhưng chủ ý: quarantine và schemaVersion là hành vi quan sát được từ bên ngoài, đáng được đặc tả.
 
 ---
 

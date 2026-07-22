@@ -17,6 +17,7 @@ import {
 } from "./po-session.mjs";
 import { parseClaudeStreamMessage } from "./claude-stream.mjs";
 import { createRunQueue, RUN_STATUS, EMIT_STATUS, TERMINAL_STATUSES, toUpdateEvent } from "./run-queue.mjs";
+import { writeFileAtomicSync, quarantineFile } from "./atomic-file.mjs";
 
 const { app, BrowserWindow, ipcMain, session, nativeImage, Menu, dialog, Tray, screen, globalShortcut } = electron;
 
@@ -220,6 +221,9 @@ function flushTranscripts() {
 // Every task resumes the active session's Claude session (--resume), tasks run
 // strictly one at a time (queued), and sessions survive app restarts.
 const SESSION_STORE = path.join(os.homedir(), ".iris", "claude-sessions.json");
+// Bumped when the on-disk shape changes; a store written by a newer build is
+// quarantined rather than parsed-and-overwritten (design.md D3).
+const SESSION_STORE_SCHEMA_VERSION = 1;
 let sessionStore = { active: null, sessions: [] };
 // One task at a time, globally — see electron/run-queue.mjs. startClaudeRun and
 // announceClaudeCompletion are function declarations defined later in this file;
@@ -315,6 +319,11 @@ function normalizeWorkstream(entry) {
 function loadSessionStore() {
   try {
     const data = JSON.parse(fs.readFileSync(SESSION_STORE, "utf8"));
+    if (typeof data.schemaVersion === "number" && data.schemaVersion > SESSION_STORE_SCHEMA_VERSION) {
+      throw new Error(
+        `session store schemaVersion ${data.schemaVersion} is newer than this build understands (${SESSION_STORE_SCHEMA_VERSION})`,
+      );
+    }
     if (Array.isArray(data.sessions)) {
       sessionStore = {
         active: typeof data.active === "string" ? data.active : null,
@@ -372,13 +381,24 @@ function loadSessionStore() {
       }));
     sessionStore = { active: sessions[0]?.id ?? null, sessions };
     persistSessionStore();
-  } catch { /* first run or unreadable store */ }
+  } catch (err) {
+    if (err && err.code === "ENOENT") return; // first run, nothing to load
+    try {
+      const quarantined = quarantineFile(SESSION_STORE);
+      console.warn(`[session-store] corrupt store quarantined to ${quarantined}:`, err);
+    } catch (quarantineErr) {
+      console.warn("[session-store] failed to quarantine corrupt store:", quarantineErr);
+    }
+  }
 }
 
 function persistSessionStore() {
   try {
     fs.mkdirSync(path.dirname(SESSION_STORE), { recursive: true });
-    fs.writeFileSync(SESSION_STORE, JSON.stringify(sessionStore, null, 2));
+    writeFileAtomicSync(
+      SESSION_STORE,
+      JSON.stringify({ schemaVersion: SESSION_STORE_SCHEMA_VERSION, ...sessionStore }, null, 2),
+    );
   } catch { /* non-fatal */ }
 }
 
@@ -952,7 +972,7 @@ function writeUserConfig(rawUpdates, { deleteKeys = [] } = {}) {
   }
   for (const key of remaining) out.push(`${key}=${serializeConfigValue(updates[key])}`);
 
-  fs.writeFileSync(file, `${out.join("\n").replace(/\n+$/, "")}\n`, "utf8");
+  writeFileAtomicSync(file, `${out.join("\n").replace(/\n+$/, "")}\n`, "utf8");
   for (const [key, value] of Object.entries(updates)) process.env[key] = String(value ?? "").trim();
   for (const key of deletions) delete process.env[key];
   return getFullConfig();
