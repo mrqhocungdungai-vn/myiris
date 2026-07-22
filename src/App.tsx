@@ -1120,6 +1120,9 @@ export default function App() {
           thinking={orbThinking}
           wakeKey={wakeKey}
           rippleKey={rippleKey}
+          running={sidecarRunning}
+          orbRotationRef={orbRotationRef}
+          orbScaleRef={orbScaleRef}
           orbStageRef={orbStageRef}
           orbFlash={orbFlash}
           onOrbFlashEnd={clearOrbFlash}

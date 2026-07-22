@@ -68,6 +68,9 @@ export default function HudShell({
   thinking,
   wakeKey,
   rippleKey,
+  running,
+  orbRotationRef,
+  orbScaleRef,
   orbStageRef,
   orbFlash,
   onOrbFlashEnd,
@@ -105,6 +108,12 @@ export default function HudShell({
   thinking: boolean;
   wakeKey: number;
   rippleKey: number;
+  /** Pauses the HUD orb's WebGL render loop (0 GPU) while false; resumes without state loss — awake, not focus, per orb-expressions. */
+  running: boolean;
+  /** Gesture-driven orb rotation (radians), read every frame — not React state. */
+  orbRotationRef: { current: { x: number; y: number } };
+  /** Gesture-driven orb scale, read every frame — not React state. */
+  orbScaleRef: { current: number };
   orbStageRef: RefObject<HTMLDivElement | null>;
   orbFlash: { id: string; tone: HandoffTone } | null;
   onOrbFlashEnd: () => void;
@@ -265,6 +274,9 @@ export default function HudShell({
             thinking={thinking}
             wakeKey={wakeKey}
             rippleKey={rippleKey}
+            running={running}
+            rotationRef={orbRotationRef}
+            scaleRef={orbScaleRef}
           />
           {orbFlash ? (
             <span key={orbFlash.id} className={`orb-flash ${orbFlash.tone}`} onAnimationEnd={onOrbFlashEnd} />

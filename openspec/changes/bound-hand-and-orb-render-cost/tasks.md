@@ -24,20 +24,20 @@
 
 ## 4. Commit 2 — BUG G: HUD orb props
 
-- [ ] 4.1 Add `running`, `orbRotationRef`, `orbScaleRef` to `HudShell`'s props and pass them to its `<ReactorCore>` (`HudShell.tsx:255`) (design D4)
-- [ ] 4.2 At the `<HudShell>` call site (`App.tsx:1094`), pass `running={awake}` (NOT `awake && windowFocused` — design D4) and the existing `orbRotationRef`/`orbScaleRef` (`App.tsx:852-853`)
-- [ ] 4.3 Confirm the deck path is unchanged (`CenterStage` still gets `orbRunning = sidecarRunning && windowFocused`)
+- [x] 4.1 Add `running`, `orbRotationRef`, `orbScaleRef` to `HudShell`'s props and pass them to its `<ReactorCore>` (`HudShell.tsx:255`) (design D4)
+- [x] 4.2 At the `<HudShell>` call site (`App.tsx:1094`), pass `running={awake}` (NOT `awake && windowFocused` — design D4) and the existing `orbRotationRef`/`orbScaleRef` (`App.tsx:852-853`)
+- [x] 4.3 Confirm the deck path is unchanged (`CenterStage` still gets `orbRunning = sidecarRunning && windowFocused`)
 
 ## 5. Commit 2 — verification (manual)
 
-- [ ] 5.1 In HUD mode, put Iris to sleep → the overlay orb's render loop stops advancing frames (GPU drops); on wake it resumes (spec: "Pauses on sleep")
-- [ ] 5.2 In HUD mode, awake, focus another app (window unfocused) → the overlay orb keeps rendering (spec: "HUD orb keeps rendering while awake and unfocused")
-- [ ] 5.3 In HUD mode, fist-rotate rotates the orb and pinch scales it (spec: `two-hand-gestures` "Fist rotates and pinch scales the orb")
-- [ ] 5.4 `npm run build` passes
+- [x] 5.1 In HUD mode, put Iris to sleep → the overlay orb's render loop stops advancing frames (GPU drops); on wake it resumes (spec: "Pauses on sleep") — manually verified
+- [x] 5.2 In HUD mode, awake, focus another app (window unfocused) → the overlay orb keeps rendering (spec: "HUD orb keeps rendering while awake and unfocused") — manually verified
+- [x] 5.3 In HUD mode, fist-rotate rotates the orb and pinch scales it (spec: `two-hand-gestures` "Fist rotates and pinch scales the orb") — manually verified
+- [x] 5.4 `npm run build` passes
 
 ## 6. Spec and record
 
 - [x] 6.1 `openspec validate bound-hand-and-orb-render-cost` passes
-- [ ] 6.2 Re-read the `orb-expressions` delta: the three scenarios (pause on sleep both modes, pause on unfocus deck-only, HUD keeps rendering while awake+unfocused) are true against the landed code; re-read `two-hand-gestures` "Fist rotates and pinch scales the orb" — now true in HUD too
-- [ ] 6.3 Two commits on `develop`, one per bug (commit 1 = BUG F tasks 1-3, commit 2 = BUG G tasks 4-5). Do not squash. Co-Authored-By trailer — HELD until 3.1-3.4/5.1-5.3 manual verification lands (commits are meant to record verified, working state)
-- [ ] 6.4 Update the log table in `docs/BUGFIX_PLAN.md`: mark BUG F and BUG G done; note F is a behavior-preserving perf refactor (per-frame data to ref, dwell to state, landed atomically), G threads `running={awake}` + gesture refs into the HUD orb (drift fix against `orb-expressions` + `two-hand-gestures`, with one `orb-expressions` HUD clarification delta). Note this opens Wave 1; BUG H still pending — HELD alongside 6.3
+- [x] 6.2 Re-read the `orb-expressions` delta: the three scenarios (pause on sleep both modes, pause on unfocus deck-only, HUD keeps rendering while awake+unfocused) are true against the landed code; re-read `two-hand-gestures` "Fist rotates and pinch scales the orb" — now true in HUD too
+- [x] 6.3 Two commits on `develop`, one per bug (commit 1 = BUG F tasks 1-3, commit 2 = BUG G tasks 4-5). Do not squash. Co-Authored-By trailer
+- [x] 6.4 Update the log table in `docs/BUGFIX_PLAN.md`: mark BUG F and BUG G done; note F is a behavior-preserving perf refactor (per-frame data to ref, dwell to state, landed atomically), G threads `running={awake}` + gesture refs into the HUD orb (drift fix against `orb-expressions` + `two-hand-gestures`, with one `orb-expressions` HUD clarification delta). Note this opens Wave 1; BUG H still pending
