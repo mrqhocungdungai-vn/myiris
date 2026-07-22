@@ -228,14 +228,17 @@ export function createRunQueue({
     run.output = output;
     run.finished_at = Date.now() / 1000;
     run.child = null;
-    // Clear on every path — a run finalized by its transport must leave no
-    // stale timer behind to fire later against whichever run holds the slot
-    // by then (design D2/D5).
-    clearIdleTimer();
-    idleSuspended = false;
     emit(toUpdateEvent(run, status, { output }));
     onFinalized?.(run);
-    dequeueNext();
+    // Slot side-effects belong to the run that holds the slot. Guarding them
+    // means a finalize targeting any other run can never disarm the active
+    // run's watchdog or steal its slot (double-start). No caller finalizes a
+    // non-slot run today; this makes the invariant structural, not conventional.
+    if (active === runId) {
+      clearIdleTimer();
+      idleSuspended = false;
+      dequeueNext();
+    }
   }
 
   function stop(runId) {

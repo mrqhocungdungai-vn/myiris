@@ -568,4 +568,46 @@ describe("run-queue idle watchdog", () => {
       vi.useRealTimers();
     }
   });
+
+  it("finalizing a run that does not hold the slot leaves the active run's slot and idle timer untouched (design D1, harden-slot-release-and-event-subscription)", () => {
+    vi.useFakeTimers();
+    try {
+      const idleTimeoutMs = 1000;
+      const { queue, events, invoked } = makeQueue({ idleTimeoutMs });
+      const active = makeRun();
+      const queuedRun = makeRun();
+      queue.submit(active);
+      queue.submit(queuedRun);
+
+      // Advance partway through the active run's idle bound, then target the
+      // still-queued (never-slot-holding, unfinalized) run with finalize()
+      // directly — bypassing stop(), which is how a stray/misrouted finalize
+      // would look.
+      vi.advanceTimersByTime(idleTimeoutMs - 1);
+      queue.finalize(queuedRun.run_id, RUN_STATUS.CANCELLED, "targeted while queued");
+
+      // The targeted run reaches its terminal status and emits exactly once.
+      expect(queue.get(queuedRun.run_id).finalized).toBe(true);
+      expect(
+        events.filter((e) => e.run_id === queuedRun.run_id && e.status === RUN_STATUS.CANCELLED).length,
+      ).toBe(1);
+
+      // The active run's slot is untouched — a further submit still queues
+      // rather than starting immediately, and nothing new was started.
+      // (queuedRun is still sitting in the FIFO position array — finalize()
+      // brings a run to terminal but only dequeueNext()'s skip-loop removes
+      // cancelled entries from it — so `another` lands at position 2.)
+      const another = makeRun();
+      expect(queue.submit(another)).toEqual({ status: "queued", position: 2 });
+      expect(invoked).toEqual([active.run_id]);
+
+      // The active run's idle timer was NOT cleared by the stray finalize —
+      // advancing past the remainder of its bound still expires it normally.
+      vi.advanceTimersByTime(2);
+      expect(queue.get(active.run_id).finalized).toBe(true);
+      expect(queue.get(active.run_id).status).toBe(RUN_STATUS.ERROR);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
