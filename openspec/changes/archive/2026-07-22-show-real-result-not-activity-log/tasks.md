@@ -32,5 +32,5 @@
 
 - [x] 6.1 `openspec validate show-real-result-not-activity-log` passes
 - [x] 6.2 Re-read the `task-step-timeline` delta: the three scenarios (empty→no activity log, non-empty shown, no-result-field leaves text intact) are true against the landed code
-- [ ] 6.3 One commit on `develop` (single bug), Co-Authored-By trailer
+- [x] 6.3 One commit on `develop` (single bug), Co-Authored-By trailer
 - [x] 6.4 Update the log table in `docs/BUGFIX_PLAN.md`: mark BUG D done; note the pure `resolveMergedString` helper, that `error` was fixed with it too, that the Vitest harness now covers pure `src/lib` helpers, and that a `task-step-timeline` scenario was added (deviation from the drift-vs-gap "no spec" for D, justified by the Wave 3 reducer refactor putting the fix at future risk)
