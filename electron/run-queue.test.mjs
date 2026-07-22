@@ -263,6 +263,53 @@ describe("run-queue", () => {
     expect(outcome).toEqual({ status: "queued", position: 1 });
   });
 
+  it("stops an active run with no child (a PO turn) by calling the injected cancelRun, marking it cancelled without releasing the slot itself (make-po-turns-cancellable design D1)", () => {
+    const cancelCalls = [];
+    const { queue, invoked } = makeQueue({ cancelRun: (run) => cancelCalls.push(run.run_id) });
+    const active = makeRun({ status: RUN_STATUS.RUNNING });
+    queue.submit(active);
+
+    const status = queue.stop(active.run_id);
+
+    expect(status).toBe(RUN_STATUS.CANCELLED);
+    expect(queue.status(active.run_id)).toBe(RUN_STATUS.CANCELLED);
+    expect(cancelCalls).toEqual([active.run_id]);
+    // Not finalized yet — stop() itself never releases the slot for a
+    // no-child run, exactly as it doesn't for the DEV (killWithEscalation)
+    // branch until the transport actually terminates.
+    expect(queue.get(active.run_id).finalized).not.toBe(true);
+
+    // A further submit still queues — the slot is still held.
+    const queuedRun = makeRun();
+    const outcome = queue.submit(queuedRun);
+    expect(outcome).toEqual({ status: "queued", position: 1 });
+    expect(invoked).toEqual([active.run_id]);
+  });
+
+  it("releases the slot and starts the next queued run, exactly once, once the (fake) transport finalizes the cancelled PO run (make-po-turns-cancellable design D1)", () => {
+    const { queue, invoked, finalized } = makeQueue({ cancelRun: () => {} });
+    const active = makeRun({ status: RUN_STATUS.RUNNING });
+    const queuedRun = makeRun();
+    queue.submit(active);
+    queue.submit(queuedRun);
+
+    queue.stop(active.run_id);
+    expect(invoked).toEqual([active.run_id]); // not started yet — slot still held
+
+    // Simulates startPoRun's settle handler finalizing the run once the
+    // turn's teardown-driven promise rejects — the same finalize() call path
+    // a real cancelPoTurn round-trip ends in.
+    queue.finalize(active.run_id, RUN_STATUS.CANCELLED, "Run was stopped before completion.");
+
+    expect(queue.get(active.run_id).status).toBe(RUN_STATUS.CANCELLED);
+    expect(finalized).toEqual([active.run_id]);
+    expect(invoked).toEqual([active.run_id, queuedRun.run_id]); // started exactly once
+
+    // A stray second finalize (e.g. a late settle) must not double-start.
+    queue.finalize(active.run_id, RUN_STATUS.CANCELLED, "late");
+    expect(invoked).toEqual([active.run_id, queuedRun.run_id]);
+  });
+
   it("gates onFinalized on run.started_at (settle-and-attribute-po-turn design D3)", () => {
     // electron/main.mjs's real onFinalized wraps announceClaudeCompletion in
     // exactly this predicate — a run finalized before it ever stamped

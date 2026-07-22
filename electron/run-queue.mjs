@@ -100,11 +100,12 @@ export function toUpdateEvent(run, status, extra = {}) {
 /**
  * @param {Object} deps
  * @param {(run: Run) => void} deps.startRun - launches the transport (DEV subprocess or PO turn); must not touch the slot itself
+ * @param {(run: Run) => void} [deps.cancelRun] - ends an active run whose transport has no child process (a PO turn); must not touch the slot itself — the slot is released when the run is later finalized through the normal settle path, exactly like the DEV kill-signal branch. Optional: if omitted, stop() on such a run remains a no-op.
  * @param {(event: Object) => void} deps.emit - the sidecar event sink
  * @param {(run: Run) => void} [deps.onFinalized] - fires once per run, after a terminal claude_task_update (e.g. the voice completion announcement); NOT called for a queued run cancelled before it ever started
  * @param {number} [deps.idleTimeoutMs] - overrides runIdleTimeoutMs() for testing; production callers should omit this and let it read IRIS_RUN_IDLE_TIMEOUT_MS
  */
-export function createRunQueue({ startRun, emit, onFinalized, idleTimeoutMs = runIdleTimeoutMs() }) {
+export function createRunQueue({ startRun, cancelRun, emit, onFinalized, idleTimeoutMs = runIdleTimeoutMs() }) {
   const runs = new Map();
   const queue = [];
   let active = null;
@@ -255,8 +256,13 @@ export function createRunQueue({ startRun, emit, onFinalized, idleTimeoutMs = ru
       killWithEscalation(run, RUN_STATUS.CANCELLED, "Run was stopped before completion.");
       return run.status;
     }
-    // Active run with no child (a PO turn has no subprocess to signal): the
-    // existing no-op stands — the turn runs to completion.
+    // Active run with no child (a PO turn has no subprocess to signal):
+    // delegate the actual turn-ending to the injected cancelRun, mirroring
+    // the DEV branch above. Deliberately NOT finalize() here — the slot is
+    // released when the turn settles and the transport's own settle path
+    // finalizes it, exactly as the DEV branch relies on child.on("close").
+    run.status = RUN_STATUS.CANCELLED;
+    cancelRun?.(run);
     return run.status;
   }
 

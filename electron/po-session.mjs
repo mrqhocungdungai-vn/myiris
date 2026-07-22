@@ -252,6 +252,30 @@ export function getPoSessionState(workstreamId) {
   return state && !state.ended ? state : null;
 }
 
+// Ends the turn currently in progress on `state` via the same proven
+// teardown machinery closePoSession uses — set endReason BEFORE closing the
+// channel (so pump's `finally` always sees it once the `for await` exits),
+// close the channel, and return the SDK query. Differs from closePoSession
+// only in endReason.kind ("cancelled" vs "teardown") and in what it leaves
+// behind: the session is NOT removed from the in-memory `sessions` map here,
+// and the on-disk stored session id is untouched entirely — so the next PO
+// turn's getOrCreatePoSession resumes the same conversation. Only the
+// cancelled turn's in-flight work is discarded. See design.md D2.
+export function cancelPoTurn(state) {
+  if (!state || state.ended) return;
+  state.endReason = { kind: "cancelled" };
+  try {
+    state.channel.close();
+  } catch {
+    /* already closed */
+  }
+  try {
+    state.query?.return?.();
+  } catch {
+    /* subprocess already gone */
+  }
+}
+
 export function closePoSession(workstreamId) {
   const state = sessions.get(workstreamId);
   if (!state) return;

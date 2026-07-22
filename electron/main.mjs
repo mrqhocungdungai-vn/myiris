@@ -14,6 +14,8 @@ import {
   closePoSession,
   closeAllPoSessions,
   setPoSessionModel,
+  getPoSessionState,
+  cancelPoTurn,
 } from "./po-session.mjs";
 import { parseClaudeStreamMessage } from "./claude-stream.mjs";
 import { createRunQueue, RUN_STATUS, EMIT_STATUS, TERMINAL_STATUSES, toUpdateEvent } from "./run-queue.mjs";
@@ -239,6 +241,14 @@ let sessionStore = { active: null, sessions: [] };
 // referencing them here is safe because they're hoisted before this line ever runs.
 const runQueue = createRunQueue({
   startRun: startClaudeRun,
+  // Routes stop() on an active PO turn (no child process to signal) by
+  // workstream — a no-op if no live session exists for it. Never touches the
+  // slot itself; the slot releases when startPoRun's settle handler finalizes
+  // the run, exactly like the DEV kill-signal branch (design.md D1/D2).
+  cancelRun: (run) => {
+    const state = getPoSessionState(run.workstream_id);
+    if (state) cancelPoTurn(state);
+  },
   emit: emitEvent,
   onFinalized: (run) => {
     // Discard any pending trailing activity emit so it cannot fire after
@@ -1701,6 +1711,10 @@ function startPoRun(run) {
       // from the map by the time this settles.
       if (error?.poEndReason?.kind === "teardown") {
         runQueue.finalize(run.run_id, RUN_STATUS.CANCELLED, "PO session was reset before the turn completed.");
+        return;
+      }
+      if (error?.poEndReason?.kind === "cancelled") {
+        runQueue.finalize(run.run_id, RUN_STATUS.CANCELLED, "Run was stopped before completion.");
         return;
       }
       runQueue.finalize(run.run_id, RUN_STATUS.ERROR, `PO session error: ${error.message}`);
