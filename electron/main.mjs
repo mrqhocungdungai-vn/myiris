@@ -1625,7 +1625,16 @@ function startPoRun(run) {
       }),
     )
     .then((result) => runQueue.finalize(run.run_id, result.status, result.output))
-    .catch((error) => runQueue.finalize(run.run_id, RUN_STATUS.ERROR, `PO session error: ${error.message}`));
+    .catch((error) => {
+      // The reason travels on the rejected error (see po-session.mjs pump's
+      // finally), not on session state — the session may already be deleted
+      // from the map by the time this settles.
+      if (error?.poEndReason?.kind === "teardown") {
+        runQueue.finalize(run.run_id, RUN_STATUS.CANCELLED, "PO session was reset before the turn completed.");
+        return;
+      }
+      runQueue.finalize(run.run_id, RUN_STATUS.ERROR, `PO session error: ${error.message}`);
+    });
 }
 
 async function submitClaudeTask({ task, urgency = "normal", agent } = {}) {

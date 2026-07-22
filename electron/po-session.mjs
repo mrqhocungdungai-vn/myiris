@@ -130,13 +130,26 @@ async function pump(state) {
       routeMessage(state, message);
     }
   } catch (error) {
-    if (state.currentTurn) {
-      state.currentTurn.reject(error);
-      state.currentTurn = null;
-    }
     state.error = error;
   } finally {
     state.ended = true;
+    // A turn already resolved by routeMessage's onResult has cleared
+    // currentTurn, so this only settles a turn that would otherwise hang —
+    // covers the stream ending without throwing (channel closed by
+    // closePoSession, or the SDK stream simply stopping) as well as a throw.
+    const turn = state.currentTurn;
+    state.currentTurn = null;
+    if (turn) {
+      const error =
+        state.error ||
+        new Error(
+          state.endReason?.kind === "teardown"
+            ? "PO session was torn down before the turn completed"
+            : "PO session ended before the turn completed",
+        );
+      if (state.endReason) error.poEndReason = state.endReason;
+      turn.reject(error);
+    }
   }
 }
 
@@ -234,6 +247,10 @@ export function closePoSession(workstreamId) {
   const state = sessions.get(workstreamId);
   if (!state) return;
   sessions.delete(workstreamId);
+  // Set BEFORE closing the channel: closing is what makes pump's `for await`
+  // exit (on a later microtask), so this is always visible by the time its
+  // `finally` reads it — see design.md D2 "Ordering must be exact".
+  state.endReason = { kind: "teardown" };
   try {
     state.channel.close();
   } catch {
