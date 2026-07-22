@@ -1,30 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 
-function downsampleTo16k(input: Float32Array, inputRate: number): Int16Array {
-  const outputRate = 16000;
-  if (inputRate === outputRate) {
-    const output = new Int16Array(input.length);
-    for (let i = 0; i < input.length; i++) {
-      const sample = Math.max(-1, Math.min(1, input[i]));
-      output[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
-    }
-    return output;
-  }
-
-  const ratio = inputRate / outputRate;
-  const outputLength = Math.floor(input.length / ratio);
-  const output = new Int16Array(outputLength);
-  for (let i = 0; i < outputLength; i++) {
-    const start = Math.floor(i * ratio);
-    const end = Math.min(Math.floor((i + 1) * ratio), input.length);
-    let sum = 0;
-    for (let j = start; j < end; j++) sum += input[j];
-    const sample = Math.max(-1, Math.min(1, sum / Math.max(1, end - start)));
-    output[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
-  }
-  return output;
-}
-
 function parsePcmRate(mimeType?: string): number {
   const match = /rate=(\d+)/i.exec(mimeType ?? "");
   return match ? Number(match[1]) : 24000;
@@ -48,7 +23,7 @@ export function useAudioPipeline({ onLog }: { onLog?: (level: string, message: s
   const inputContextRef = useRef<AudioContext | null>(null);
   const inputStreamRef = useRef<MediaStream | null>(null);
   const inputSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
-  const inputProcessorRef = useRef<ScriptProcessorNode | null>(null);
+  const inputProcessorRef = useRef<AudioWorkletNode | null>(null);
   const outputContextRef = useRef<AudioContext | null>(null);
   const playbackTimeRef = useRef(0);
   const playbackSourcesRef = useRef<AudioBufferSourceNode[]>([]);
@@ -99,7 +74,6 @@ export function useAudioPipeline({ onLog }: { onLog?: (level: string, message: s
 
     const context = new AudioContext();
     const source = context.createMediaStreamSource(stream);
-    const processor = context.createScriptProcessor(1024, 1, 1);
 
     // Passive meter tap for the reactive HUD (does not affect what is sent).
     const analyser = context.createAnalyser();
@@ -107,26 +81,37 @@ export function useAudioPipeline({ onLog }: { onLog?: (level: string, message: s
     source.connect(analyser);
     inputAnalyserRef.current = analyser;
 
-    processor.onaudioprocess = (event) => {
-      const input = event.inputBuffer.getChannelData(0);
-      const output = event.outputBuffer.getChannelData(0);
-      output.fill(0);
-
-      const pcm = downsampleTo16k(input, context.sampleRate);
-      if (pcm.byteLength > 0) {
-        const chunk = new ArrayBuffer(pcm.byteLength);
-        new Uint8Array(chunk).set(new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength));
-        window.iris.sendAudioChunk(chunk);
+    // Downsampling runs off the main thread in an AudioWorklet (audio rendering
+    // thread), not a ScriptProcessorNode — see openspec/changes/unstall-render-and-audio.
+    let workletNode: AudioWorkletNode;
+    try {
+      try {
+        await context.audioWorklet.addModule(new URL("../worklets/mic-downsample.js", import.meta.url));
+      } catch {
+        // Packaged file:// builds may not resolve the Vite-bundled worklet URL;
+        // retry against the public/ copy served relative to the app's base (design D4).
+        await context.audioWorklet.addModule(`${import.meta.env.BASE_URL}worklets/mic-downsample.js`);
       }
+      workletNode = new AudioWorkletNode(context, "mic-downsample");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      onLog?.("error", `Mic capture failed: could not load the AudioWorklet (${message}).`);
+      inputAnalyserRef.current = null;
+      stream.getTracks().forEach((track) => track.stop());
+      await context.close().catch(() => undefined);
+      return;
+    }
+
+    workletNode.port.onmessage = (event: MessageEvent<ArrayBuffer>) => {
+      window.iris.sendAudioChunk(event.data);
     };
 
-    source.connect(processor);
-    processor.connect(context.destination);
+    source.connect(workletNode);
 
     inputContextRef.current = context;
     inputStreamRef.current = stream;
     inputSourceRef.current = source;
-    inputProcessorRef.current = processor;
+    inputProcessorRef.current = workletNode;
     onLog?.("info", "WebRTC echo cancellation enabled for microphone.");
   }
 
