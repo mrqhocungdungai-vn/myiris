@@ -138,12 +138,12 @@ describe("run-queue", () => {
     expect(invoked).toEqual([first.run_id, second.run_id]);
   });
 
-  it("does not finalize a run cancelled while queued (BUG K — spec vs. code disagree, see docs/BUGFIX_PLAN.md)", () => {
-    // run-execution-queue/spec.md says stopping a queued run finalizes it as
-    // "cancelled" immediately; run-queue.mjs:142-151 deliberately does not
-    // call finalize() for this case ("no announcement to make"). This test
-    // asserts the CODE's behavior, per design.md D6 — the reconciliation is
-    // deferred to BUG K's own change, not decided here.
+  it("marks a run cancelled while queued as finalized without calling finalize() (BUG K, reconcile-queued-cancel)", () => {
+    // run-execution-queue/spec.md now describes this directly: stopping a
+    // queued run reaches `cancelled`, is marked finalized, and emits exactly
+    // one update — but does NOT go through finalize()/dequeueNext(), since
+    // dequeueNext() would clobber the active run's slot. The once-guard flag
+    // is set at the stop() site itself, decided here rather than deferred.
     const { queue, finalized } = makeQueue();
     const active = makeRun();
     const queuedRun = makeRun();
@@ -153,8 +153,45 @@ describe("run-queue", () => {
     queue.stop(queuedRun.run_id);
 
     expect(queue.status(queuedRun.run_id)).toBe(RUN_STATUS.CANCELLED);
-    expect(queue.get(queuedRun.run_id).finalized).not.toBe(true);
+    expect(queue.get(queuedRun.run_id).finalized).toBe(true);
     expect(finalized).not.toContain(queuedRun.run_id);
+  });
+
+  it("does not disturb the active run when a queued run is cancelled", () => {
+    const { queue, invoked } = makeQueue();
+    const active = makeRun();
+    const queuedRun = makeRun();
+    queue.submit(active);
+    queue.submit(queuedRun);
+
+    queue.stop(queuedRun.run_id);
+
+    // The slot is still held by the active run — a further submit queues
+    // rather than starting immediately.
+    const another = makeRun();
+    const outcome = queue.submit(another);
+
+    expect(outcome).toEqual({ status: "queued", position: 1 });
+    expect(invoked).toEqual([active.run_id]);
+  });
+
+  it("treats finalize() on an already queued-cancelled run as a no-op", () => {
+    const { queue, events, finalized, invoked } = makeQueue();
+    const active = makeRun();
+    const queuedRun = makeRun();
+    queue.submit(active);
+    queue.submit(queuedRun);
+
+    queue.stop(queuedRun.run_id);
+    const eventsAfterStop = [...events];
+    const invokedAfterStop = [...invoked];
+
+    queue.finalize(queuedRun.run_id, RUN_STATUS.CANCELLED, "late finalize");
+
+    expect(events).toEqual(eventsAfterStop);
+    expect(finalized).not.toContain(queuedRun.run_id);
+    // No queue advance triggered either — the active run's slot is untouched.
+    expect(invoked).toEqual(invokedAfterStop);
   });
 
   it("returns the run's terminal status when startRun finalizes it synchronously, and releases the slot (BUG E, report-synchronous-start-failure design D1)", () => {

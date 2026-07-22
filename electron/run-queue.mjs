@@ -237,10 +237,12 @@ export function createRunQueue({ startRun, emit, onFinalized, idleTimeoutMs = ru
       if (index !== -1) queue.splice(index, 1);
       run.status = RUN_STATUS.CANCELLED;
       run.finished_at = Date.now() / 1000;
+      run.finalized = true;
       emit(toUpdateEvent(run, RUN_STATUS.CANCELLED, {}));
-      // Deliberately NOT finalize(): a queued run never started, so there is
-      // no announcement to make. Preserves today's silent queued-cancel —
-      // see design.md Risks.
+      // Deliberately NOT finalize(): dequeueNext() would clobber the active
+      // run's slot, since a queued run never held it. Marked finalized
+      // directly instead, so the once-guard protects it — nothing to
+      // announce (never started), no slot to release (never held it).
       return run.status;
     }
     if (run.child) {
