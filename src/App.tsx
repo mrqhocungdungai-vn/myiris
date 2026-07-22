@@ -268,6 +268,11 @@ export default function App() {
     };
   }, [sidecarRunning]);
 
+  const sidecarHandlerRef = useRef(handleSidecarEvent);
+  useEffect(() => {
+    sidecarHandlerRef.current = handleSidecarEvent;
+  });
+
   useEffect(() => {
     if (!hasBridge) return;
     window.iris.getSidecarStatus().then((status) => {
@@ -279,7 +284,10 @@ export default function App() {
       .getPipelineStatus()
       .then((status) => setPipelineAvailable(Boolean(status.available)))
       .catch(() => {});
-    return window.iris.onSidecarEvent((event) => handleSidecarEvent(event));
+    // Dispatch through the ref so this always calls the newest closure —
+    // handleSidecarEvent may safely read live state (pendingPoQuestion,
+    // sortedTasks, …) without a stale-render-0 read.
+    return window.iris.onSidecarEvent((event) => sidecarHandlerRef.current(event));
   }, [hasBridge]);
 
   useEffect(() => {
