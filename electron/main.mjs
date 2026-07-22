@@ -18,6 +18,7 @@ import {
 import { parseClaudeStreamMessage } from "./claude-stream.mjs";
 import { createRunQueue, RUN_STATUS, EMIT_STATUS, TERMINAL_STATUSES, toUpdateEvent } from "./run-queue.mjs";
 import { writeFileAtomicSync, quarantineFile } from "./atomic-file.mjs";
+import { createTrailingThrottle } from "./coalesce.mjs";
 
 const { app, BrowserWindow, ipcMain, session, nativeImage, Menu, dialog, Tray, screen, globalShortcut } = electron;
 
@@ -240,6 +241,12 @@ const runQueue = createRunQueue({
   startRun: startClaudeRun,
   emit: emitEvent,
   onFinalized: (run) => {
+    // Discard any pending trailing activity emit so it cannot fire after
+    // finalize's terminal update (the real result) and overwrite it with
+    // the activity log (design.md D3 of coalesce-activity-updates). Runs
+    // unconditionally: only a started run could have armed the throttle,
+    // but the started_at gate below is for the announcement, not this.
+    activityThrottle.cancel();
     // A run that never started (rejected at a gate before dispatch, e.g. a
     // missing agent) has no result worth speaking — the exact rule
     // run-queue.mjs's queued-cancel path already applies ("a queued run
@@ -884,6 +891,11 @@ function sleepDelayMs() {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 3000;
 }
 
+function activityEmitIntervalMs() {
+  const parsed = Number(process.env.IRIS_ACTIVITY_EMIT_INTERVAL_MS);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 150;
+}
+
 const GEMINI_VOICES = [
   "Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Aoede",
   "Leda", "Orus", "Callirrhoe", "Autonoe", "Enceladus", "Iapetus",
@@ -1104,12 +1116,21 @@ function rememberClaudeSessionId(run, claudeSessionId) {
   if (changed) emitSessions();
 }
 
+// Single global slot (see runQueue above) ⇒ at most one run's activity
+// throttle is ever live, so one module-level throttle handle suffices
+// (design.md D3 of coalesce-activity-updates). Only the renderer emit is
+// throttled; the buffer push, cap, and heartbeat below stay per-line (D2).
+const activityThrottle = createTrailingThrottle(
+  (run) => emitEvent(toUpdateEvent(run, RUN_STATUS.RUNNING, { output: run.activity.join("\n") })),
+  activityEmitIntervalMs(),
+);
+
 function pushActivity(run, line) {
   const clean = String(line || "").trim();
   if (!clean) return;
   run.activity.push(clean.length > 220 ? `${clean.slice(0, 220)}…` : clean);
   if (run.activity.length > 80) run.activity.splice(0, run.activity.length - 80);
-  emitEvent(toUpdateEvent(run, RUN_STATUS.RUNNING, { output: run.activity.join("\n") }));
+  activityThrottle.schedule(run);
   runQueue.heartbeat();
 }
 
