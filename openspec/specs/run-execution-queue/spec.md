@@ -57,9 +57,9 @@ The `claude_task_update` event payload SHALL be produced by one projection from 
 - **THEN** the shared fields are populated identically from the run record at each point in time, with omissions only where a value does not exist yet (e.g. `claude_session_id` before the transport reports one)
 
 ### Requirement: Stopping a run
-Stopping a queued run SHALL remove it from the queue and bring it to the `cancelled` terminal state immediately — emitting exactly one `claude_task_update` with status `cancelled` and marking the run as finalized so it cannot be finalized again — but SHALL NOT route it through the slot-release path: it SHALL NOT release or advance the execution slot and SHALL NOT trigger a completion announcement, because a queued run never held the slot and never started. Stopping the active run SHALL mark it `cancelled` and signal its transport (SIGTERM for a subprocess); the slot SHALL be released through the normal finalize-on-termination path, not by the stop call itself. Stopping an active run whose transport cannot be signalled (a PO turn has no child process) SHALL leave the run running and report its current status — the existing no-op behavior is preserved intentionally.
+Stopping a queued run SHALL remove it from the queue and bring it to the `cancelled` terminal state immediately — emitting exactly one `claude_task_update` with status `cancelled` and marking the run as finalized so it cannot be finalized again — but SHALL NOT route it through the slot-release path: it SHALL NOT release or advance the execution slot and SHALL NOT trigger a completion announcement, because a queued run never held the slot and never started. Stopping the active run SHALL mark it `cancelled` and signal its transport (SIGTERM for a subprocess); the slot SHALL be released through the normal finalize-on-termination path, not by the stop call itself. Stopping the active run whose transport has no child process (a PO turn) SHALL likewise mark it `cancelled` and cancel the in-progress turn through a transport-agnostic cancel hook, bringing the run to the `cancelled` terminal state and releasing the slot through the normal finalize path — never leaving the turn running to completion. The resident PO session SHALL survive the cancellation, or be torn down in a way that preserves continuity via its stored session id so a subsequent turn continues the same conversation; only the cancelled turn's in-flight work is discarded.
 
-A signalled transport that does not terminate SHALL NOT hold the slot indefinitely. After a bounded grace period following the signal, the system SHALL escalate to an unconditional kill, and SHALL finalize the run and release the slot even if the transport never reports termination itself.
+A signalled transport that does not terminate SHALL NOT hold the slot indefinitely. After a bounded grace period following the signal, the system SHALL escalate to an unconditional kill, and SHALL finalize the run and release the slot even if the transport never reports termination itself. For a PO turn (no subprocess), the idle-time bound remains the backstop if a cancelled turn fails to settle.
 
 #### Scenario: Stop a queued run
 - **WHEN** `stop` is called with the id of a run in status `queued`
@@ -80,7 +80,8 @@ A signalled transport that does not terminate SHALL NOT hold the slot indefinite
 
 #### Scenario: Stop an active PO turn
 - **WHEN** `stop` is called with the id of the active run and that run has no child process (a PO turn)
-- **THEN** the call returns the run's current status unchanged and the turn continues to completion
+- **THEN** the run is marked `cancelled`, the in-progress turn is cancelled through the cancel hook, the run finalizes as `cancelled` exactly once, and the slot is released
+- **AND** the turn does not continue to completion, while the resident PO session remains available (or resumable via its stored session id) for the next turn
 
 #### Scenario: A signalled process ignores the signal
 - **WHEN** `stop` is called on the active run, SIGTERM is sent, and the process has not closed when the grace period elapses
