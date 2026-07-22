@@ -8,9 +8,9 @@
 
 ## 2. Commit 1 — verification (manual; renderer is out of the Vitest harness)
 
-- [ ] 2.1 Fresh profile (clear `localStorage`): launch/connect Iris — the camera LED stays off, no MediaPipe asset fetch, no gesture inference
-- [ ] 2.2 Enable gesture control via the toggle → camera comes up and gestures work; relaunch → gesture control is enabled again without re-toggling
-- [ ] 2.3 Disable the toggle → camera releases; relaunch → still off
+- [x] 2.1 Fresh profile (clear `localStorage`): launch/connect Iris — the camera LED stays off, no MediaPipe asset fetch, no gesture inference
+- [x] 2.2 Enable gesture control via the toggle → camera comes up and gestures work; relaunch → gesture control is enabled again without re-toggling
+- [x] 2.3 Disable the toggle → camera releases; relaunch → still off
 - [x] 2.4 `npm run build` passes
 
 ## 3. Commit 2 — Item 6: clear camera error on resolve (`useHandControl.ts`)
@@ -22,9 +22,9 @@
 
 ## 4. Commit 2 — verification (manual)
 
-- [ ] 4.1 Hold the camera with another app, enable gesture control → error is reported and gestures stay unavailable (unchanged)
-- [ ] 4.2 Free the camera and re-enable (or reselect the device) → the acquire succeeds and the previously shown error clears
-- [ ] 4.3 Disable gesture control while an error is showing → the error clears
+- [x] 4.1 Hold the camera with another app, enable gesture control → error is reported and gestures stay unavailable (unchanged)
+- [x] 4.2 Free the camera and re-enable (or reselect the device) → the acquire succeeds and the previously shown error clears
+- [x] 4.3 Disable gesture control while an error is showing → the error clears
 - [x] 4.4 `npm run build` passes
 
 ## 5. Spec and record
