@@ -16,7 +16,7 @@ import {
   setPoSessionModel,
 } from "./po-session.mjs";
 import { parseClaudeStreamMessage } from "./claude-stream.mjs";
-import { createRunQueue, RUN_STATUS, EMIT_STATUS, toUpdateEvent } from "./run-queue.mjs";
+import { createRunQueue, RUN_STATUS, EMIT_STATUS, TERMINAL_STATUSES, toUpdateEvent } from "./run-queue.mjs";
 
 const { app, BrowserWindow, ipcMain, session, nativeImage, Menu, dialog, Tray, screen, globalShortcut } = electron;
 
@@ -1700,6 +1700,20 @@ async function submitClaudeTask({ task, urgency = "normal", agent } = {}) {
       position: outcome.position,
       project_folder: projectFolder,
       message: `Claude is still finishing the current task. This one is queued at position ${outcome.position} for the ${agentLabel} and will start automatically. ${whereNote}`,
+    };
+  }
+  if (TERMINAL_STATUSES.includes(outcome.status)) {
+    // The run was rejected synchronously during start (e.g. the DEV gate
+    // finding no open change with tasks) — never say "started" for a run
+    // that has already failed. onFinalized is gated on started_at (see
+    // run-queue.mjs), so this is the only channel this rejection reaches
+    // Gemini through.
+    return {
+      status: outcome.status,
+      run_id: runId,
+      agent: runAgent,
+      project_folder: projectFolder,
+      message: `${runAgent ? `Claude's ${agentLabel}` : "Claude"} did not start the task: ${outcome.output} ${whereNote}`,
     };
   }
   return {

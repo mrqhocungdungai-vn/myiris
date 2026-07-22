@@ -157,6 +157,75 @@ describe("run-queue", () => {
     expect(finalized).not.toContain(queuedRun.run_id);
   });
 
+  it("returns the run's terminal status when startRun finalizes it synchronously, and releases the slot (BUG E, report-synchronous-start-failure design D1)", () => {
+    // startRun (the injected transport) can finalize the run before beginRun
+    // returns — e.g. the DEV "no open change with tasks" gate. submit() must
+    // report that real status, not the "started" it would otherwise assume.
+    const events = [];
+    const finalized = [];
+    const invoked = [];
+    let queue;
+    const startRun = (run) => {
+      invoked.push(run.run_id);
+      // Only the first run hits the synchronous-rejection gate — the second
+      // submit (after the slot is released) takes the healthy path.
+      if (invoked.length === 1) {
+        queue.finalize(run.run_id, RUN_STATUS.FAILED, "no open change with tasks");
+      }
+    };
+    queue = createRunQueue({
+      startRun,
+      emit: (event) => events.push(event),
+      // Mirrors main.mjs's real onFinalized, which wraps the voice
+      // completion announcement in exactly this started_at gate (Wave 0.3 /
+      // settle-and-attribute-po-turn design D3) — run-queue.mjs's own
+      // finalize() always calls onFinalized unconditionally, so the gate
+      // that prevents double-speak lives in the callback, not here.
+      onFinalized: (run) => {
+        if (run.started_at) finalized.push(run.run_id);
+      },
+    });
+    const run = makeRun();
+
+    const outcome = queue.submit(run);
+
+    expect(outcome).toEqual({ status: RUN_STATUS.FAILED, output: "no open change with tasks", run_id: run.run_id });
+    expect(queue.get(run.run_id).finalized).toBe(true);
+    // Guard for the double-speak the plan warned about: a run finalized
+    // during start never stamped started_at, so the gated onFinalized never
+    // pushes it — the rejection reaches the caller exactly once, through
+    // submit()'s return value.
+    expect(finalized).not.toContain(run.run_id);
+
+    // The slot was released — the next submit starts immediately rather than
+    // being stuck behind a run that already finished.
+    const next = makeRun();
+    const nextOutcome = queue.submit(next);
+    expect(nextOutcome.status).toBe("started");
+  });
+
+  it("still returns started when startRun leaves the run running instead of finalizing it (healthy path unchanged)", () => {
+    const { queue, invoked } = makeQueue();
+    const run = makeRun();
+
+    const outcome = queue.submit(run);
+
+    expect(outcome).toEqual({ status: "started", run_id: run.run_id });
+    expect(invoked).toEqual([run.run_id]);
+    expect(queue.get(run.run_id).finalized).not.toBe(true);
+  });
+
+  it("still returns queued (with position) when submitted while another run is active, regardless of how that run will finalize", () => {
+    const { queue } = makeQueue();
+    const active = makeRun();
+    const queuedRun = makeRun();
+    queue.submit(active);
+
+    const outcome = queue.submit(queuedRun);
+
+    expect(outcome).toEqual({ status: "queued", position: 1 });
+  });
+
   it("gates onFinalized on run.started_at (settle-and-attribute-po-turn design D3)", () => {
     // electron/main.mjs's real onFinalized wraps announceClaudeCompletion in
     // exactly this predicate — a run finalized before it ever stamped

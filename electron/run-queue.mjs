@@ -194,7 +194,15 @@ export function createRunQueue({ startRun, emit, onFinalized, idleTimeoutMs = ru
     }
     emit(toUpdateEvent(run, EMIT_STATUS.STARTING, {}));
     beginRun(run);
-    return { status: "started" };
+    // beginRun calls startRun synchronously, and a start-time gate (missing
+    // agent, DEV with no open change, a transport that fails to launch) can
+    // finalize the run before this line runs — a function that invokes an
+    // injected callback must re-read state before reporting on it, so the
+    // real status is read back rather than assumed.
+    if (run.finalized) {
+      return { status: run.status, output: run.output, run_id: run.run_id };
+    }
+    return { status: "started", run_id: run.run_id };
   }
 
   function finalize(runId, status, output) {
