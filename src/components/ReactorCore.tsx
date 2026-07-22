@@ -27,6 +27,24 @@ function rgbToColor(rgb: string) {
   return new THREE.Color(r, g, b);
 }
 
+// Pre-parsed once at module scope so the per-frame render loop never
+// allocates a THREE.Color — see openspec/changes/unstall-render-and-audio.
+const PALETTE_COLORS: Record<ReactorState, { primary: THREE.Color; secondary: THREE.Color; accent: THREE.Color; glow: THREE.Color }> =
+  Object.fromEntries(
+    (Object.entries(PALETTES) as [ReactorState, Palette][]).map(([state, palette]) => [
+      state,
+      {
+        primary: rgbToColor(palette.primary),
+        secondary: rgbToColor(palette.secondary),
+        accent: rgbToColor(palette.accent),
+        glow: rgbToColor(palette.glow),
+      },
+    ])
+  ) as Record<ReactorState, { primary: THREE.Color; secondary: THREE.Color; accent: THREE.Color; glow: THREE.Color }>;
+
+// Scratch Vector3 reused every frame for the scale lerp (design D2).
+const _scaleVec = new THREE.Vector3();
+
 function targetEnergy(s: ReactorState) {
   if (s === "speaking") return 1;
   if (s === "working") return 0.88;
@@ -63,7 +81,7 @@ function Ripples({ ripplesRef }: { ripplesRef: { current: Ripple[] } }) {
       mesh.scale.setScalar(radius);
       const material = mesh.material as THREE.MeshBasicMaterial;
       material.opacity = alpha;
-      material.color = rgbToColor(ripple.kind === "wake" ? PALETTES.online.secondary : PALETTES.online.accent);
+      material.color.copy(ripple.kind === "wake" ? PALETTE_COLORS.online.secondary : PALETTE_COLORS.online.accent);
     }
   });
 
@@ -115,7 +133,7 @@ function ArcReactorScene({
   const thinkingAlphaRef = useRef(0);
 
   useFrame((threeState, delta) => {
-    const palette = PALETTES[state];
+    const pc = PALETTE_COLORS[state];
     energyRef.current += (targetEnergy(state) - energyRef.current) * 0.06;
     const inTarget = inputLevelRef ? Math.max(0, Math.min(1, inputLevelRef.current)) : 0;
     const outTarget = outputLevelRef ? Math.max(0, Math.min(1, outputLevelRef.current)) : 0;
@@ -130,22 +148,23 @@ function ArcReactorScene({
       groupRef.current.rotation.x += (targetX - groupRef.current.rotation.x) * 0.1;
       groupRef.current.rotation.y += (targetY - groupRef.current.rotation.y) * 0.1 + delta * 0.02;
       const targetScale = scaleRef?.current ?? 1;
-      groupRef.current.scale.lerp(new THREE.Vector3(targetScale, targetScale, targetScale), 0.12);
+      _scaleVec.set(targetScale, targetScale, targetScale);
+      groupRef.current.scale.lerp(_scaleVec, 0.12);
     }
 
     if (ring1Ref.current) {
       ring1Ref.current.rotation.z += delta * (0.5 + energy * 0.6 + inRef.current * 0.8);
       const mat = ring1Ref.current.material as THREE.MeshStandardMaterial;
-      mat.color = rgbToColor(palette.primary);
-      mat.emissive = rgbToColor(palette.glow);
+      mat.color.copy(pc.primary);
+      mat.emissive.copy(pc.glow);
       mat.emissiveIntensity = 1.2 + energy * 1.4 + inRef.current * 1.5;
     }
 
     if (ring2Ref.current) {
       ring2Ref.current.rotation.x -= delta * (0.3 + energy * 0.4);
       const mat = ring2Ref.current.material as THREE.MeshStandardMaterial;
-      mat.color = rgbToColor(palette.secondary);
-      mat.emissive = rgbToColor(palette.glow);
+      mat.color.copy(pc.secondary);
+      mat.emissive.copy(pc.glow);
       mat.emissiveIntensity = 0.8 + energy * 1.1 + outRef.current * 1.6;
     }
 
@@ -154,7 +173,7 @@ function ArcReactorScene({
       const breathe = 1 + Math.sin(t * 2.2) * 0.02 * (0.4 + outRef.current);
       outerRef.current.scale.setScalar(breathe);
       const mat = outerRef.current.material as THREE.MeshBasicMaterial;
-      mat.color = rgbToColor(palette.primary);
+      mat.color.copy(pc.primary);
       mat.opacity = 0.18 + energy * 0.1 + outRef.current * 0.25;
     }
 
@@ -162,7 +181,7 @@ function ArcReactorScene({
       const pulse = 1 + Math.sin(t * 4) * 0.06 * (0.3 + energy);
       coreRef.current.scale.setScalar(pulse);
       const mat = coreRef.current.material as THREE.MeshBasicMaterial;
-      mat.color = rgbToColor(palette.accent);
+      mat.color.copy(pc.accent);
       mat.opacity = 0.85 + energy * 0.15;
     }
 
@@ -177,7 +196,7 @@ function ArcReactorScene({
       spark.position.set(Math.cos(a) * orbitR, Math.sin(a) * orbitR, 0);
       spark.visible = alpha > 0.02;
       const mat = spark.material as THREE.MeshBasicMaterial;
-      mat.color = rgbToColor(palette.accent);
+      mat.color.copy(pc.accent);
       mat.opacity = 0.9 * alpha;
     }
   });
