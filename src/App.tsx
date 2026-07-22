@@ -37,12 +37,21 @@ import HoloBackdrop from "./components/HoloBackdrop";
 const MAX_LOGS = 80;
 const SOUNDS_STORAGE_KEY = "iris.soundsEnabled";
 const CAMERA_STORAGE_KEY = "iris.cameraDeviceId";
+const HAND_STORAGE_KEY = "iris.handControlEnabled";
 
 function loadSoundsEnabled(): boolean {
   try {
     return window.localStorage.getItem(SOUNDS_STORAGE_KEY) !== "off";
   } catch {
     return true;
+  }
+}
+
+function loadHandEnabled(): boolean {
+  try {
+    return window.localStorage.getItem(HAND_STORAGE_KEY) === "on";
+  } catch {
+    return false;
   }
 }
 
@@ -71,7 +80,7 @@ export default function App() {
   const [stepsOpenIds, setStepsOpenIds] = useState<Record<string, boolean>>({});
   const [taskChooser, setTaskChooser] = useState<{ query: string; matches: TaskCard[] } | null>(null);
   const [showHistory, setShowHistory] = useState(false);
-  const [handControl, setHandControl] = useState(false);
+  const [handControl, setHandControl] = useState(loadHandEnabled);
   // Non-blocking replacement for window.confirm (BUG item 3): resolving/rejecting
   // this promise never suspends the event loop, so the orb/audio/gestures keep
   // running while the user decides.
@@ -158,6 +167,18 @@ export default function App() {
       const next = !current;
       try {
         window.localStorage.setItem(SOUNDS_STORAGE_KEY, next ? "on" : "off");
+      } catch {
+        // Best-effort persistence; the toggle still works for this session.
+      }
+      return next;
+    });
+  }
+
+  function toggleHand() {
+    setHandControl((current) => {
+      const next = !current;
+      try {
+        window.localStorage.setItem(HAND_STORAGE_KEY, next ? "on" : "off");
       } catch {
         // Best-effort persistence; the toggle still works for this session.
       }
@@ -761,7 +782,6 @@ export default function App() {
     setSidecarRunning(status.running);
     setSidecarPid(status.pid);
     await audio.start();
-    setHandControl(true);
   }
 
   async function stop() {
@@ -1153,7 +1173,7 @@ export default function App() {
           commsScrollRef={commsScrollRef}
           onSendSupplement={sendContextSupplement}
           handControl={handControl}
-          onToggleHand={() => setHandControl((current) => !current)}
+          onToggleHand={toggleHand}
           hand={hand}
           handRef={liveHandRef}
           handStream={handStream}
@@ -1184,7 +1204,7 @@ export default function App() {
           linked={sidecarRunning}
           pid={sidecarPid}
           handControl={handControl}
-          onToggleHand={() => setHandControl((current) => !current)}
+          onToggleHand={toggleHand}
           onOpenSettings={openSettings}
         />
 
