@@ -224,13 +224,19 @@ let sessionStore = { active: null, sessions: [] };
 const runQueue = createRunQueue({
   startRun: startClaudeRun,
   emit: emitEvent,
-  onFinalized: (run) =>
+  onFinalized: (run) => {
+    // A run that never started (rejected at a gate before dispatch, e.g. a
+    // missing agent) has no result worth speaking — the exact rule
+    // run-queue.mjs's queued-cancel path already applies ("a queued run
+    // never started, so there is no announcement to make"), generalized here.
+    if (!run.started_at) return;
     announceClaudeCompletion({
       runId: run.run_id,
       task: run.task,
       status: run.status,
       output: String(run.output || "").slice(0, 2500),
-    }),
+    });
+  },
 });
 
 // Role pipeline: each role is a Claude Code agent installed at
@@ -1884,6 +1890,23 @@ function resolvePendingPoQuestion(answers) {
 }
 
 function announceClaudeCompletion({ runId, task, status, output }) {
+  // The UI card is correct for any terminal status, so this always emits —
+  // only the voice delivery below is conditional.
+  emitEvent({
+    type: "claude_completion",
+    run_id: runId,
+    task,
+    status,
+    output,
+  });
+
+  // A run the user themselves stopped or tore down (session reset) is not
+  // "Claude is back with a result" — that's actively wrong for a result the
+  // user chose to abandon. It still shows on the UI (above); it's just not
+  // read aloud. Every other terminal status (including a fault) stays loud —
+  // a silent failure is exactly what the user needs told about.
+  if (status === RUN_STATUS.CANCELLED) return;
+
   const eventText = [
     "SYSTEM_EVENT_CLAUDE_COMPLETE",
     `run_id: ${runId}`,
@@ -1899,14 +1922,6 @@ function announceClaudeCompletion({ runId, task, status, output }) {
     "claude_result:",
     output || "(Claude returned no text output.)",
   ].join("\n");
-
-  emitEvent({
-    type: "claude_completion",
-    run_id: runId,
-    task,
-    status,
-    output,
-  });
 
   notifyIris(eventText);
 }

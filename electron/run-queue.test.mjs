@@ -156,6 +156,34 @@ describe("run-queue", () => {
     expect(queue.get(queuedRun.run_id).finalized).not.toBe(true);
     expect(finalized).not.toContain(queuedRun.run_id);
   });
+
+  it("gates onFinalized on run.started_at (settle-and-attribute-po-turn design D3)", () => {
+    // electron/main.mjs's real onFinalized wraps announceClaudeCompletion in
+    // exactly this predicate — a run finalized before it ever stamped
+    // started_at (e.g. rejected at a gate before dispatch, like a missing
+    // agent) has no result worth announcing, same as today's queued-cancel.
+    // finalize() itself still fires for these — only the announcement is gated.
+    const { startRun } = makeStartRunFake();
+    const gated = [];
+    const queue = createRunQueue({
+      startRun,
+      emit: () => {},
+      onFinalized: (run) => {
+        if (run.started_at) gated.push(run.run_id);
+      },
+    });
+
+    const neverStarted = makeRun();
+    queue.submit(neverStarted);
+    queue.finalize(neverStarted.run_id, RUN_STATUS.FAILED, "missing agent");
+    expect(gated).not.toContain(neverStarted.run_id);
+
+    const started = makeRun();
+    queue.submit(started);
+    started.started_at = Date.now() / 1000;
+    queue.finalize(started.run_id, RUN_STATUS.COMPLETED, "done");
+    expect(gated).toEqual([started.run_id]);
+  });
 });
 
 describe("runIdleTimeoutMs", () => {
