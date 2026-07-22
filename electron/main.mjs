@@ -78,6 +78,9 @@ let reconnectAttempts = 0;
 let reconnectTimer = null;
 const MAX_RECONNECT_ATTEMPTS = 5;
 const pendingClaudeAnnouncements = [];
+// Drop-oldest cap: the newest state-change is the one worth speaking on
+// reconnect, and this stops a prolonged offline stretch from leaking memory.
+const MAX_PENDING_ANNOUNCEMENTS = 20;
 
 // Latest UI-state snapshot pushed by the renderer over iris:ui-context
 // (throttled — see App.tsx). Read by the get_ui_context Gemini tool so voice
@@ -562,6 +565,18 @@ function notifyIris(lines, { bufferIfOffline = true } = {}) {
     liveSession.sendRealtimeInput({ text });
   } else if (bufferIfOffline) {
     pendingClaudeAnnouncements.push(text);
+    while (pendingClaudeAnnouncements.length > MAX_PENDING_ANNOUNCEMENTS) {
+      pendingClaudeAnnouncements.shift();
+    }
+  }
+}
+
+// Called after `liveSession` is assigned (connect resolved) so the drain
+// actually sees a live session, unlike the old onopen-guarded loop it
+// replaces — onopen fires before that assignment lands.
+function drainPendingAnnouncements() {
+  while (pendingClaudeAnnouncements.length > 0 && liveSession) {
+    liveSession.sendRealtimeInput({ text: pendingClaudeAnnouncements.shift() });
   }
 }
 
@@ -2259,9 +2274,6 @@ async function connectLive({ isReconnect }) {
         emitEvent({ type: "gemini_status", status: "connected", model });
         emitEvent({ type: "audio_state", state: "listening" });
         updateTrayMenu();
-        while (pendingClaudeAnnouncements.length > 0 && liveSession) {
-          liveSession.sendRealtimeInput({ text: pendingClaudeAnnouncements.shift() });
-        }
         // The resumed session keeps its context; greeting again mid-conversation
         // every ~10 minutes would be jarring.
         if (!isReconnect) GreetGate.arm();
@@ -2288,6 +2300,9 @@ async function connectLive({ isReconnect }) {
       },
     },
   });
+  // Send AFTER connect resolves: onopen can fire before liveSession is
+  // assigned, so draining inside onopen would no-op (mirrors previewVoice).
+  drainPendingAnnouncements();
 }
 
 function scheduleReconnect(reason) {

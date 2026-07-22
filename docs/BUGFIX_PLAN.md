@@ -60,7 +60,7 @@ Bất biến này sống **tại từng ô**, không phải ở một lifecycle 
 |---|---|---|---|---|---|
 | A | PO turn không settle → kẹt slot vĩnh viễn | 🔴 Critical | `po-session.mjs` | ~5 dòng | [x] |
 | A' | `announceClaudeCompletion` không phân biệt status → đọc to lỗi cho run người dùng tự hủy | 🟠 Medium | `main.mjs`, `run-queue.mjs` | ~6 dòng | [x] |
-| B | Buffer thông báo không bao giờ được drain | 🔴 High | `main.mjs` | ~6 dòng | [ ] |
+| B | Buffer thông báo không bao giờ được drain | 🔴 High | `main.mjs` | ~6 dòng | [x] |
 | C | Ghi file không atomic → mất sạch dữ liệu | 🟠 Medium | `main.mjs` | ~15 dòng | [ ] |
 | D | Card hiển thị activity log như thể là kết quả | 🟡 Low | `App.tsx` | 1 dòng | [ ] |
 | E | Gemini được báo "started" cho run đã fail | 🟡 Low | `run-queue.mjs` **+ `main.mjs:1649`** | ~6 dòng | [ ] |
@@ -248,7 +248,9 @@ Code làm ngược lại, và ghi rõ là cố ý:
 
 ---
 
-### BUG B — Buffer thông báo offline không bao giờ được drain 🔴
+### BUG B — Buffer thông báo offline không bao giờ được drain 🔴 — ✅ **XONG** (`drain-offline-announcements`, 2026-07-22)
+
+Vá đúng theo hướng fix bên dưới: `drainPendingAnnouncements()` được tách ra và gọi ngay sau khi `liveSession = await ai.live.connect(...)` resolve (`main.mjs:2251` cũ, mirror `previewVoice`); vòng `while` chết trong `onopen` đã bị xóa. Buffer được chặn ở chỗ push (`notifyIris`) bằng hằng số module `MAX_PENDING_ANNOUNCEMENTS = 20`, drop-oldest khi vượt ngưỡng. `npm run build` + `npm test` sạch; `openspec validate drain-offline-announcements` pass. Nghi thức verify thủ công (ngắt mạng giữa một DEV run dài, xác nhận Iris đọc kết quả sau reconnect) còn cần chạy tay — xem `openspec/changes/drain-offline-announcements/tasks.md` mục 4.
 
 **Vị trí:** `electron/main.mjs:80, 544-551, 2211, 2222-2224`
 
