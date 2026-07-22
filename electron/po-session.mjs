@@ -85,13 +85,22 @@ function buildCanUseTool(state, onAskUserQuestion) {
   // resolves as an explicit allow — a no-op under bypassPermissions, and the
   // fallback path (see design.md "Verified against the installed SDK") if a
   // future permissionMode change makes canUseTool the sole gate for everything.
+  //
+  // onAskUserQuestion resolves with a { behavior, answers?, message? }
+  // descriptor, not a bare answers map — main.mjs's PendingQuestion decides
+  // allow (voice/UI answer, or timeout default) vs deny (a deliberate session
+  // reset abandoned the question) and this stays a thin translator, never
+  // learning what "reset" vs "timeout" means.
   return async function canUseTool(toolName, input) {
     if (toolName !== "AskUserQuestion") {
       return { behavior: "allow", updatedInput: input };
     }
     const questions = Array.isArray(input?.questions) ? input.questions : [];
-    const answers = await onAskUserQuestion(state.workstreamId, questions);
-    return { behavior: "allow", updatedInput: { ...input, answers } };
+    const result = await onAskUserQuestion(state.workstreamId, questions);
+    if (result?.behavior === "deny") {
+      return { behavior: "deny", message: result.message ?? "Question abandoned." };
+    }
+    return { behavior: "allow", updatedInput: { ...input, answers: result.answers ?? {} } };
   };
 }
 

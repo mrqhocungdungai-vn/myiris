@@ -156,7 +156,7 @@ const PendingQuestion = {
   },
 
   answer(answers) {
-    this.settle("answered", answers);
+    this.settle("answered", { behavior: "allow", answers });
   },
 
   expire() {
@@ -166,12 +166,20 @@ const PendingQuestion = {
       level: "warn",
       message: "The PO's question went unanswered — applying the recommended option for each.",
     });
-    this.settle("timed_out", defaultPoAnswers(this.current.questions));
+    this.settle("timed_out", { behavior: "allow", answers: defaultPoAnswers(this.current.questions) });
   },
 
+  // A deliberate reset denies the question rather than answering it with a
+  // fabricated default — the asking role must not continue and act on a
+  // decision the user never made (e.g. writing into the abandoned cwd). This
+  // is the opposite of expire() above, which legitimately applies the
+  // default for a question left unanswered past the configured wait.
   abandon(workstreamId) {
     if (!this.current || this.current.workstreamId !== workstreamId) return;
-    this.settle("timed_out", defaultPoAnswers(this.current.questions));
+    this.settle("abandoned", {
+      behavior: "deny",
+      message: "The session was reset; this question was abandoned.",
+    });
   },
 };
 
