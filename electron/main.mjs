@@ -934,6 +934,15 @@ function activityEmitIntervalMs() {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 150;
 }
 
+// Hard backstop for before-quit's teardown race (design.md D3 of
+// bound-shutdown-teardown) — generous enough for a SIGTERM/SIGKILL grace
+// cycle plus PO query.return() settle, but bounded so a stuck transport can
+// never wedge quit.
+function shutdownDeadlineMs() {
+  const parsed = Number(process.env.IRIS_SHUTDOWN_DEADLINE_MS);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 8000;
+}
+
 const GEMINI_VOICES = [
   "Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Aoede",
   "Leda", "Orus", "Callirrhoe", "Autonoe", "Enceladus", "Iapetus",
@@ -2801,16 +2810,30 @@ app.whenReady().then(() => {
   });
 });
 
-app.on("will-quit", () => globalShortcut.unregisterAll());
-app.on("before-quit", () => {
-  stopLive();
-  // The app is exiting regardless, so this just signals live subprocesses to
-  // die with it — run-queue.mjs owns the runs map, so kill children directly
-  // via list() rather than mutating run.status from outside the module.
+// Awaited teardown for app quit (design.md D3 of bound-shutdown-teardown):
+// closes the Gemini Live socket, group-kills every live DEV child so no tool
+// subprocess is orphaned, then closes every resident PO session. run-queue.mjs
+// owns the runs map, so children are reached directly via list() rather than
+// mutating run.status from outside the module.
+async function shutdownTeardown() {
+  await stopLive();
   for (const run of runQueue.list()) {
-    if (run.child) run.child.kill("SIGTERM");
+    if (run.child) killChild(run.child, "SIGTERM");
   }
-  closeAllPoSessions();
+  await closeAllPoSessions();
+}
+
+app.on("will-quit", () => globalShortcut.unregisterAll());
+let shuttingDown = false;
+app.on("before-quit", (event) => {
+  if (shuttingDown) return; // re-entrant quit signal — teardown already in flight
+  shuttingDown = true;
+  event.preventDefault();
+  const deadline = new Promise((resolve) => {
+    const timer = setTimeout(resolve, shutdownDeadlineMs());
+    timer.unref?.();
+  });
+  Promise.race([shutdownTeardown(), deadline]).finally(() => app.exit(0));
 });
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();

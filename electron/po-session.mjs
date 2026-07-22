@@ -278,7 +278,7 @@ export function cancelPoTurn(state) {
 
 export function closePoSession(workstreamId) {
   const state = sessions.get(workstreamId);
-  if (!state) return;
+  if (!state) return undefined;
   sessions.delete(workstreamId);
   // Set BEFORE closing the channel: closing is what makes pump's `for await`
   // exit (on a later microtask), so this is always visible by the time its
@@ -290,12 +290,13 @@ export function closePoSession(workstreamId) {
     /* already closed */
   }
   try {
-    state.query?.return?.();
+    return state.query?.return?.();
   } catch {
     /* subprocess already gone */
+    return undefined;
   }
 }
 
 export function closeAllPoSessions() {
-  for (const id of [...sessions.keys()]) closePoSession(id);
+  return Promise.all([...sessions.keys()].map(closePoSession));
 }
