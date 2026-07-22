@@ -36,5 +36,5 @@
 
 - [x] 6.1 `openspec validate unstall-render-and-audio` passes
 - [x] 6.2 Re-read the `main-thread-budget` requirements against the landed code: orb loop allocates nothing per frame + visually identical; capture downsampling runs in the worklet, send format byte-identical, capture lifecycle clean
-- [ ] 6.3 Two commits on `develop`, one per item (commit 1 = ReactorCore alloc, commit 2 = AudioWorklet incl. the lib extract + test + worklet). Do not squash. Co-Authored-By trailer
+- [x] 6.3 Two commits on `develop`, one per item (commit 1 = ReactorCore alloc, commit 2 = AudioWorklet incl. the lib extract + test + worklet). Do not squash. Co-Authored-By trailer
 - [x] 6.4 Update the log table in `docs/BUGFIX_PLAN.md`: mark the ReactorCore-alloc and ScriptProcessorNode rows done; note item 1 hoists palettes + in-place `.copy()`/`.set()` (no visual change), item 2 moves downsampling to an AudioWorklet with a shared unit-tested `src/lib/downsample.ts` (16 kHz send byte-identical), and record the new `main-thread-budget` capability. Note the remaining table rows (window.confirm→async, dwell-destructive guard/`data-no-dwell`, webcam opt-in, camera-error-stuck, barge-in flush race, output-context leak, stale-closure comment) are still open before Wave 2 (BUG I.2–I.5)
