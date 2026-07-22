@@ -1,6 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { LogLine, TaskCard, TaskStep, TranscriptLine } from "./types";
-import { TERMINAL, eventTime, findTaskMatches, readString, readStatusObject, taskKeyFor } from "./lib/tasks";
+import {
+  TERMINAL,
+  eventTime,
+  findTaskMatches,
+  readString,
+  readStatusObject,
+  resolveMergedString,
+  taskKeyFor,
+} from "./lib/tasks";
 import { AGENT_LABELS, PIPELINE, isAgentRole, modelLabel } from "./lib/agents";
 import { uiSounds } from "./lib/sounds";
 import { useAudioPipeline } from "./hooks/useAudioPipeline";
@@ -630,8 +638,6 @@ export default function App() {
       const rawRunId = readString(event.run_id);
       const runId = rawRunId || taskKeyFor(task);
       const status = readString(event.status, "unknown");
-      const output = readString(event.output);
-      const error = readString(event.error);
       const agent = isAgentRole(event.agent) ? event.agent : null;
       const model = typeof event.model === "string" ? event.model : null;
       // Additive step-timeline fields (see electron/claude-stream.mjs) — a tool
@@ -665,8 +671,8 @@ export default function App() {
           id: runId,
           task,
           status,
-          output: output || existing?.output,
-          error: error || existing?.error,
+          output: resolveMergedString(event.output, existing?.output),
+          error: resolveMergedString(event.error, existing?.error),
           agent: agent ?? existing?.agent ?? null,
           model: model ?? existing?.model ?? null,
           claudeSessionId: readString(event.claude_session_id) || existing?.claudeSessionId || null,

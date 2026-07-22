@@ -104,6 +104,14 @@ export function readString(value: unknown, fallback = ""): string {
   return typeof value === "string" ? value : fallback;
 }
 
+// Merge an incoming event field over the card's existing value: take the
+// event's value whenever the event carried a string (even ""), otherwise keep
+// what's there. Presence — not truthiness — so an empty terminal result
+// replaces the activity log instead of falling back to it (BUG D).
+export function resolveMergedString(raw: unknown, existing: string | undefined): string {
+  return typeof raw === "string" ? raw : (existing ?? "");
+}
+
 export function readStatusObject(value: unknown): {
   running?: boolean;
   pid?: number | null;
