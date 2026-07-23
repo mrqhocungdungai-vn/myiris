@@ -86,6 +86,21 @@ type PoQuestionAnswer = {
   choice: string;
 };
 
+type PromptReviewStatus = {
+  reviewMode: boolean;
+};
+
+// A brief parked by submit_claude_task for Approve/Edit/Cancel before any
+// Claude tokens are spent (prompt-review-gate spec).
+type PendingTaskReview = {
+  workstreamId: string;
+  task: string;
+  urgency: string;
+  agent: AgentRole | null;
+};
+
+type PromptReviewResolveAction = "approve" | "cancel";
+
 type IrisConfig = {
   geminiApiKey: string;
   geminiModel: string;
@@ -178,6 +193,12 @@ type IrisApi = {
     model: string,
   ) => Promise<SessionsSnapshot & { status?: string; error?: string }>;
   answerPoQuestion: (answers: PoQuestionAnswer[]) => Promise<{ status: string; error?: string }>;
+  getPromptStatus: () => Promise<PromptReviewStatus>;
+  resolvePromptReview: (payload: {
+    action: PromptReviewResolveAction;
+    editedTask?: string;
+  }) => Promise<{ status: string; error?: string }>;
+  setPromptReviewMode: (enabled: boolean) => Promise<{ status: string; reviewMode: boolean }>;
   sendContextSupplement: (text: string) => Promise<{ status: string; error?: string }>;
   toggleHud: () => Promise<{ mode: UiMode }>;
   setHudInteractive: (on: boolean) => void;

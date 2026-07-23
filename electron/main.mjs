@@ -21,6 +21,7 @@ import { parseClaudeStreamMessage } from "./claude-stream.mjs";
 import { createRunQueue, RUN_STATUS, EMIT_STATUS, TERMINAL_STATUSES, toUpdateEvent } from "./run-queue.mjs";
 import { writeFileAtomicSync, quarantineFile } from "./atomic-file.mjs";
 import { createTrailingThrottle } from "./coalesce.mjs";
+import { resolveApprovedTask } from "./task-review.mjs";
 
 const { app, BrowserWindow, ipcMain, session, nativeImage, Menu, dialog, Tray, screen, globalShortcut } = electron;
 
@@ -528,6 +529,7 @@ function createWorkstream(label) {
   // subprocess now rather than leaving it idle indefinitely.
   if (previousActiveId && previousActiveId !== workstream.id) {
     PendingQuestion.abandon(previousActiveId);
+    PendingReview.abandon(previousActiveId);
     closePoSession(previousActiveId);
   }
   return workstream;
@@ -547,6 +549,7 @@ function selectWorkstream(id) {
   announceWorkspaceUpdate();
   if (previousActiveId && previousActiveId !== workstream.id) {
     PendingQuestion.abandon(previousActiveId);
+    PendingReview.abandon(previousActiveId);
     closePoSession(previousActiveId);
   }
   return { status: "ok", ...sessionsSnapshot() };
@@ -566,6 +569,7 @@ function setWorkstreamCwd(id, dir) {
     // PO session is bound to the OLD cwd, so it must end here too — otherwise
     // its next turn would run in a directory it no longer matches.
     PendingQuestion.abandon(workstream.id);
+    PendingReview.abandon(workstream.id);
     closePoSession(workstream.id);
     workstream.agent_sessions = {};
     workstream.last_agent_used = null;
@@ -924,6 +928,14 @@ function envFlag(name, fallback = false) {
   return ["1", "true", "yes", "on"].includes(String(value).trim().toLowerCase());
 }
 
+// Pre-dispatch review gate (prompt-review-gate spec): when on, submit_claude_task
+// parks a brief for Approve/Edit/Cancel instead of dispatching it immediately —
+// modeled exactly on pipelineAvailable (module flag, one mutation choke point
+// in setPromptReviewMode below, getter IPC + sidecar event on change).
+// Default on: an unreviewed brief should never burn tokens unless the user
+// opts out (design.md D5).
+let promptReviewMode = envFlag("IRIS_PROMPT_REVIEW", true);
+
 function sleepDelayMs() {
   const parsed = Number(process.env.IRIS_SLEEP_DELAY_MS);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 3000;
@@ -943,6 +955,13 @@ function shutdownDeadlineMs() {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 8000;
 }
 
+// How long a parked review waits for Approve/Cancel before it is cancelled
+// (never auto-approved — see PendingReview.expire below).
+function promptReviewTimeoutMs() {
+  const parsed = Number(process.env.IRIS_PROMPT_REVIEW_TIMEOUT_MS);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 300000;
+}
+
 const GEMINI_VOICES = [
   "Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Aoede",
   "Leda", "Orus", "Callirrhoe", "Autonoe", "Enceladus", "Iapetus",
@@ -956,6 +975,7 @@ const ALLOWED_CONFIG_KEYS = new Set([
   "IRIS_LOAD_TEST_DATA",
   "IRIS_WAKE_WORD",
   "CLAUDE_CODE_OAUTH_TOKEN",
+  "IRIS_PROMPT_REVIEW",
 ]);
 
 // The SetupPanel's token input always renders empty (the stored value never
@@ -1043,6 +1063,21 @@ function writeUserConfig(rawUpdates, { deleteKeys = [] } = {}) {
   for (const [key, value] of Object.entries(updates)) process.env[key] = String(value ?? "").trim();
   for (const key of deletions) delete process.env[key];
   return getFullConfig();
+}
+
+// Sole mutation point for promptReviewMode — both the voice tool
+// (set_prompt_review_mode) and the UI toggle (PipelineBar) call this, so the
+// two paths can never diverge (design.md D5, mirrors setAgentModel above).
+// The toggle persists via the same IRIS_PROMPT_REVIEW key that seeds the
+// startup default, so it survives a restart.
+function setPromptReviewMode(enabled) {
+  const next = Boolean(enabled);
+  if (next !== promptReviewMode) {
+    promptReviewMode = next;
+    writeUserConfig({ IRIS_PROMPT_REVIEW: promptReviewMode ? "1" : "0" });
+    emitEvent({ type: "prompt_review_mode", reviewMode: promptReviewMode });
+  }
+  return { status: "ok", reviewMode: promptReviewMode };
 }
 
 // The live PO session captures its environment once, at creation
@@ -1763,28 +1798,114 @@ function startPoRun(run) {
     });
 }
 
-async function submitClaudeTask({ task, urgency = "normal", agent } = {}) {
-  if (!task || !String(task).trim()) {
-    return { status: "error", error: "Task is required." };
-  }
+// Parks a Gemini-authored brief for Approve/Edit/Cancel before any Claude
+// tokens are spent (prompt-review-gate spec). Mirrors PendingQuestion's
+// settle-once + timeout + abandon shape above, but deliberately does NOT call
+// runQueue.suspend/resume: a parked review holds no execution slot, and
+// pausing the queue's idle bound would wrongly disable the watchdog on
+// whatever unrelated run (typically DEV) currently holds it (design.md D2).
+const PendingReview = {
+  current: null, // { workstream_id, task, urgency, agent, timer }
+
+  raise(parked, { timeoutMs }) {
+    this.clear(); // at most one pending review — a new submit supersedes silently
+    const timer = setTimeout(() => this.expire(), timeoutMs);
+    timer.unref?.();
+    this.current = { ...parked, timer };
+    emitTaskReviewEvent(this.current, "pending");
+  },
+
+  // Tears down the pending review and, if `status` is given, emits the UI
+  // sidecar event for it. Returns the parked brief (sans timer) so the caller
+  // can act on it, or null if nothing was pending.
+  clear(status) {
+    if (!this.current) return null;
+    const { timer, ...parked } = this.current;
+    clearTimeout(timer);
+    this.current = null;
+    if (status) emitTaskReviewEvent(parked, status);
+    return parked;
+  },
+
+  expire() {
+    const parked = this.clear("timed_out");
+    if (parked) notifyTaskReviewResolved("timed_out", parked, "The review timed out and was not sent to Claude.");
+  },
+
+  // Deliberate reset denial, mirroring PendingQuestion.abandon — the parked
+  // workstream is going away, so its brief must never become approvable
+  // afterwards (design.md D4: this is what keeps approve's parked workstream
+  // always valid).
+  abandon(workstreamId) {
+    if (!this.current || this.current.workstream_id !== workstreamId) return;
+    const parked = this.clear("abandoned");
+    if (parked) {
+      notifyTaskReviewResolved("abandoned", parked, "The session changed, so the parked brief was discarded and not sent.");
+    }
+  },
+};
+
+// The event type stays `task_review` for renderer/IPC — carries the brief
+// text so the deck banner can prefill its editable textarea (not a console
+// log, so this does not violate the "never log the brief" rule below).
+function emitTaskReviewEvent(parked, status) {
+  emitEvent({
+    type: "task_review",
+    workstream_id: parked.workstream_id,
+    status,
+    task: parked.task,
+    urgency: parked.urgency,
+    agent: parked.agent,
+  });
+}
+
+// Voice narration on park (D6): a short summary, not the whole brief, plus
+// "the full brief is on screen" — and explicitly forbids querying run status,
+// since a parked review has no run_id yet.
+function notifyTaskReviewParked(parked) {
+  notifyIris([
+    "SYSTEM_EVENT_TASK_REVIEW_PARKED",
+    `agent: ${parked.agent ?? "none"}`,
+    "instructions_to_iris:",
+    "- Review mode is on: the brief you just submitted was parked, not sent to Claude — zero tokens spent so far.",
+    "- Speak a SHORT 1-2 sentence summary of the brief you just wrote (do not read it verbatim), say the full brief is on screen, then wait. Do not say it started or is queued.",
+    "- Do NOT call get_claude_task_status for this — there is no run yet.",
+    "- The user may approve (optionally after editing), or cancel — from the screen, or by telling you so you can call respond_to_task_review. If they resolve it from the screen, you will receive SYSTEM_EVENT_TASK_REVIEW_RESOLVED instead.",
+  ]);
+}
+
+// Injected on any resolution the voice layer did NOT itself initiate — a
+// UI-driven approve/cancel, a timeout, or a reset-abandon (D6, review #5).
+// respond_to_task_review's own synchronous tool return already tells Gemini
+// the outcome when IT resolves the review, so that path never also calls this
+// (see respondToTaskReview below) — this would be a redundant, confusing
+// double-narration otherwise.
+function notifyTaskReviewResolved(outcome, parked, detail) {
+  notifyIris([
+    "SYSTEM_EVENT_TASK_REVIEW_RESOLVED",
+    `outcome: ${outcome}`,
+    "instructions_to_iris:",
+    detail ? `- ${detail}` : `- The parked brief was resolved (${outcome}).`,
+    "- This did not come from your own respond_to_task_review call — the user acted from the screen, or it timed out/was abandoned. Announce it naturally; do not re-send the brief yourself.",
+  ]);
+}
+
+// D1: buildRun resolves the workstream/role and produces the run object;
+// dispatch submits it and shapes the result. Auto mode below calls
+// dispatch(buildRun(...)) inline — byte-identical to the pre-gate behavior.
+function buildRun({ task, urgency = "normal", agent, workstream }) {
   const cleanTask = String(task).trim();
-  const workstream = activeWorkstream();
-  // The role is captured at enqueue time: a queued task keeps the agent it was
-  // submitted under even if the user flips the pipeline picker afterwards.
-  // Gemini may name a role explicitly; anything not in the roster is ignored.
+  // The role is captured at enqueue time: a queued/parked task keeps the
+  // agent it was submitted under even if the user flips the pipeline picker
+  // afterwards. Gemini may name a role explicitly; anything not in the
+  // roster is ignored.
   const requestedAgent = agent ? String(agent).trim().toLowerCase() : null;
   if (requestedAgent && !AGENT_ROSTER.includes(requestedAgent)) {
     emitEvent({ type: "log", level: "warn", message: `Ignoring unknown agent "${agent}" — using the session's active agent.` });
   }
   const runAgent = AGENT_ROSTER.includes(requestedAgent) ? requestedAgent : workstream.active_agent ?? null;
-  const agentLabel = runAgent ? `${AGENT_LABELS[runAgent]} agent` : "Claude";
-  const projectFolder = workstream.cwd && fs.existsSync(workstream.cwd) ? workstream.cwd : null;
-  const whereNote = projectFolder
-    ? `Working in project folder ${projectFolder}.`
-    : "No project folder is selected — working in the default workspace.";
-  const runId = crypto.randomUUID();
-  const run = {
-    run_id: runId,
+  return {
+    run_id: crypto.randomUUID(),
     workstream_id: workstream.id,
     session_label: workstream.label,
     task: cleanTask,
@@ -1796,12 +1917,22 @@ async function submitClaudeTask({ task, urgency = "normal", agent } = {}) {
     queued_at: Date.now() / 1000,
     child: null,
   };
+}
+
+function dispatch(run) {
+  const runAgent = run.agent;
+  const agentLabel = runAgent ? `${AGENT_LABELS[runAgent]} agent` : "Claude";
+  const workstream = findWorkstream(run.workstream_id);
+  const projectFolder = workstream?.cwd && fs.existsSync(workstream.cwd) ? workstream.cwd : null;
+  const whereNote = projectFolder
+    ? `Working in project folder ${projectFolder}.`
+    : "No project folder is selected — working in the default workspace.";
 
   const outcome = runQueue.submit(run);
   if (outcome.status === "queued") {
     return {
       status: "queued",
-      run_id: runId,
+      run_id: run.run_id,
       position: outcome.position,
       project_folder: projectFolder,
       message: `Claude is still finishing the current task. This one is queued at position ${outcome.position} for the ${agentLabel} and will start automatically. ${whereNote}`,
@@ -1815,7 +1946,7 @@ async function submitClaudeTask({ task, urgency = "normal", agent } = {}) {
     // Gemini through.
     return {
       status: outcome.status,
-      run_id: runId,
+      run_id: run.run_id,
       agent: runAgent,
       project_folder: projectFolder,
       message: `${runAgent ? `Claude's ${agentLabel}` : "Claude"} did not start the task: ${outcome.output} ${whereNote}`,
@@ -1823,11 +1954,94 @@ async function submitClaudeTask({ task, urgency = "normal", agent } = {}) {
   }
   return {
     status: "started",
-    run_id: runId,
+    run_id: run.run_id,
     agent: runAgent,
     project_folder: projectFolder,
     message: `${runAgent ? `Claude's ${agentLabel} has started the task.` : "Claude has started the task."} ${whereNote}`,
   };
+}
+
+async function submitClaudeTask({ task, urgency = "normal", agent } = {}) {
+  if (!task || !String(task).trim()) {
+    return { status: "error", error: "Task is required." };
+  }
+  const workstream = activeWorkstream();
+
+  // Review gate (prompt-review-gate spec): park instead of dispatching.
+  // Zero tokens spent — no run, no run_id — until the review is approved.
+  if (promptReviewMode) {
+    const parked = {
+      workstream_id: workstream.id,
+      task: String(task).trim(),
+      urgency,
+      agent: agent ? String(agent).trim().toLowerCase() : null,
+    };
+    PendingReview.raise(parked, { timeoutMs: promptReviewTimeoutMs() });
+    notifyTaskReviewParked(parked);
+    return {
+      status: "parked_for_review",
+      workstream_id: workstream.id,
+      message: "The brief is parked for the user's review — nothing has been sent to Claude yet.",
+    };
+  }
+
+  return dispatch(buildRun({ task, urgency, agent, workstream }));
+}
+
+function cancelTaskReview({ notify }) {
+  const parked = PendingReview.clear("cancelled");
+  if (!parked) return { status: "error", error: "No task review is pending." };
+  if (notify) notifyTaskReviewResolved("cancelled", parked, "The brief was cancelled and was not sent to Claude.");
+  return { status: "ok" };
+}
+
+// Approve dispatches against the PARKED workstream_id, never a fresh
+// activeWorkstream() read — the user may have switched workstreams while the
+// review sat parked (design.md D4). editedTaskRaw is validated by the pure
+// helper below: undefined/null falls back to the parked task; an explicitly
+// empty edit is refused WITHOUT clearing the pending review, so the banner
+// stays up and the user can fix it.
+function approveTaskReview(editedTaskRaw, { notify }) {
+  const pending = PendingReview.current;
+  if (!pending) return { status: "error", error: "No task review is pending." };
+  let finalTask;
+  try {
+    finalTask = resolveApprovedTask(editedTaskRaw, pending.task);
+  } catch (error) {
+    return { status: "error", error: error.message };
+  }
+  const parked = PendingReview.clear("approved");
+  const workstream = findWorkstream(parked.workstream_id);
+  if (!workstream) {
+    const message = "That session no longer exists — the brief was not sent.";
+    if (notify) notifyTaskReviewResolved("error", parked, message);
+    return { status: "error", error: message };
+  }
+  const result = dispatch(buildRun({ task: finalTask, urgency: parked.urgency, agent: parked.agent, workstream }));
+  if (notify) notifyTaskReviewResolved(result.status, parked, result.message);
+  return result;
+}
+
+// Voice tool `respond_to_task_review` — its own synchronous tool return IS
+// Gemini's notification of the outcome, so this path never also injects
+// SYSTEM_EVENT_TASK_REVIEW_RESOLVED (reserved for channels Gemini did not
+// initiate). Editing is deck-only (D7): voice can only approve as-is or
+// cancel, never supply edited text.
+function respondToTaskReview({ decision } = {}) {
+  const clean = String(decision || "").trim().toLowerCase();
+  if (clean === "approve") return approveTaskReview(undefined, { notify: false });
+  if (clean === "cancel") return cancelTaskReview({ notify: false });
+  return { status: "error", error: `Unknown decision: ${decision}` };
+}
+
+// IPC path for the UI banner (deck Approve/Cancel + edit, HUD Approve/Cancel).
+// Gemini did not initiate this, so the resolution needs the SYSTEM_EVENT to
+// stay coherent (D6, review #5).
+function resolvePromptReview({ action, editedTask } = {}) {
+  const clean = String(action || "").trim().toLowerCase();
+  if (clean === "approve") return approveTaskReview(editedTask, { notify: true });
+  if (clean === "cancel") return cancelTaskReview({ notify: true });
+  return { status: "error", error: `Unknown action: ${action}` };
 }
 
 async function startNewClaudeSession({ label } = {}) {
@@ -1861,6 +2075,13 @@ function setAgentModelTool({ role, model } = {}) {
   if (result.status === "error") return result;
   const label = MODEL_CHOICES.find((choice) => choice.id === model)?.label ?? model;
   return { status: "ok", message: `${AGENT_LABELS[role] ?? role}'s model is now ${label}.` };
+}
+
+// Voice tool `set_prompt_review_mode` — goes through the exact same
+// setPromptReviewMode() choke point the PipelineBar toggle uses.
+function setPromptReviewModeTool({ enabled } = {}) {
+  const result = setPromptReviewMode(Boolean(enabled));
+  return { status: "ok", reviewMode: result.reviewMode, message: `Review mode is now ${result.reviewMode ? "on" : "off"}.` };
 }
 
 // Voice-driven UI control (design.md D1/D2, spec voice-ui-control). Single
@@ -1907,6 +2128,8 @@ const PIPELINE_ONLY_TOOLS = new Set([
   "get_workspace_info",
   "answer_po_question",
   "set_agent_model",
+  "respond_to_task_review",
+  "set_prompt_review_mode",
 ]);
 
 async function executeClaudeTool(name, args = {}) {
@@ -1930,6 +2153,10 @@ async function executeClaudeTool(name, args = {}) {
       return resolvePendingPoQuestion(args.answers);
     case "set_agent_model":
       return setAgentModelTool(args);
+    case "respond_to_task_review":
+      return respondToTaskReview(args);
+    case "set_prompt_review_mode":
+      return setPromptReviewModeTool(args);
     case "get_ui_context":
       return getUiContext();
     case "control_ui":
@@ -2073,7 +2300,7 @@ function buildPipelineToolDeclarations() {
         {
           name: "submit_claude_task",
           description:
-            "Immediately hand actionable work to Claude. Invoke for deals, shopping, research, coding, file work, terminal tasks, summaries, automations, or anything requiring tools. Do not ask the user clarifying questions first. Claude works in ONE continuous session: it remembers previous tasks in the session, and runs tasks one at a time — if it is busy, the new task is queued and starts automatically (the response will say 'queued'). IMPORTANT: Claude cannot hear this voice conversation — the 'task' string is the only new information it gets, so write a complete brief with every concrete detail.",
+            "Hand actionable work to Claude. Invoke for deals, shopping, research, coding, file work, terminal tasks, summaries, automations, or anything requiring tools. Do not ask the user clarifying questions first. Claude works in ONE continuous session: it remembers previous tasks in the session, and runs tasks one at a time — if it is busy, the new task is queued and starts automatically (the response will say 'queued'). IMPORTANT: Claude cannot hear this voice conversation — the 'task' string is the only new information it gets, so write a complete brief with every concrete detail. If review mode is on (the default), this does NOT start Claude — the brief is parked for the user's Approve/Edit/Cancel and the response says 'parked_for_review'; see the PRE-DISPATCH REVIEW GATE instructions for what to say and do next.",
           parameters: {
             type: "object",
             properties: {
@@ -2166,6 +2393,30 @@ function buildPipelineToolDeclarations() {
             required: ["role", "model"],
           },
         },
+        {
+          name: "respond_to_task_review",
+          description:
+            "Approve or cancel a brief that submit_claude_task just parked (status 'parked_for_review'). Call this only after the user tells you their decision by voice; if they resolve it from the screen instead, you get SYSTEM_EVENT_TASK_REVIEW_RESOLVED and must NOT also call this. This is separate from answer_po_question: that answers a LIVE, blocking question mid-PO-run; this approves/cancels a PARKED brief that has not started at all. Never call get_claude_task_status for a parked brief — it has no run yet.",
+          parameters: {
+            type: "object",
+            properties: {
+              decision: { type: "string", description: "'approve' or 'cancel'." },
+            },
+            required: ["decision"],
+          },
+        },
+        {
+          name: "set_prompt_review_mode",
+          description:
+            "Turn the pre-dispatch review gate on or off. On (the default): every submit_claude_task brief is parked for the user to Approve/Edit/Cancel before any Claude tokens are spent. Off: briefs dispatch immediately, exactly like before this feature existed. Only call this when the user EXPLICITLY asks to turn review on/off (e.g. 'stop asking me to review first', 'turn review mode back on') — never on your own initiative.",
+          parameters: {
+            type: "object",
+            properties: {
+              enabled: { type: "boolean", description: "true to turn review mode on, false to turn it off." },
+            },
+            required: ["enabled"],
+          },
+        },
   ];
 }
 
@@ -2245,6 +2496,7 @@ function buildSystemInstructionText() {
       "DECISIONS RELAY — headless DEV, and the PO for lower-stakes calls, cannot ask yes/no questions mid-run, so they hand choices back to you at the END of a run. When a Claude result contains a 'Decisions needed' (or numbered 'Open Questions') section: read each decision aloud, one at a time, with its numbered options and the recommendation, and let the user pick (they may say 'option 2' or 'go with your recommendation'). Then call submit_claude_task for the SAME role with a follow-up task stating each decision and the chosen option. If the user postpones, note that the recommended defaults stay applied.",
       `Model control: PO and DEV each run on a chosen Claude model, visible as a badge on the pipeline chip in the UI (defaults: PO on the strongest model, DEV on a faster one for routine work). Call set_agent_model(role, model) ONLY when ${userDisplayName()} explicitly asks to switch a role's model (e.g. "switch DEV to a stronger model to debug this", "put PO back on the fast one") — never change it on your own initiative. Available models: ${MODEL_CHOICES.map((choice) => `${choice.label} (${choice.id})`).join(", ")}.`,
       "PO LIVE QUESTIONS — different from Decisions Relay above: when the PO reaches a real fork in the road MID-TASK, it pauses immediately and you receive SYSTEM_EVENT_PO_QUESTION with a list of questions and options. Read each one aloud right then — don't wait for the run to finish, it hasn't. Once you have every answer, call answer_po_question with the exact question text and the chosen option's label for each; the PO resumes the same task the instant you do. If the user asks what you'd pick, suggest the first-listed option, but always submit what they actually chose.",
+      "PRE-DISPATCH REVIEW GATE — separate from PO LIVE QUESTIONS above, and applies to every role including plain Claude. By default, submit_claude_task PARKS the brief instead of starting it: the response says 'parked_for_review' and nothing has been sent to Claude yet. When that happens: speak a SHORT 1-2 sentence summary of the brief you just wrote (not the whole thing) and say the full brief is on screen, then wait — do not say it started or is queued, and never call get_claude_task_status for it (there is no run). The user approves (optionally after editing on screen), or cancels — from the screen, or by telling you so you can call respond_to_task_review with decision 'approve' or 'cancel' (never on your own initiative). If SYSTEM_EVENT_TASK_REVIEW_RESOLVED arrives instead, the user resolved it from the screen or it timed out — announce that outcome, don't re-send the brief. respond_to_task_review is for a PARKED BRIEF; answer_po_question is for a LIVE, BLOCKING PO question — never confuse the two. The user can turn this gate on/off by voice via set_prompt_review_mode, or from the UI.",
       "BRIEF WRITING — the 'task' string is the ONLY thing headless Claude receives; a detail you do not write down is lost forever. Shape every brief to the role:",
       "- PO control intent (NOT a PRD — the PO does the analysis, you just steer it): a short line forwarding the user's request plus the intent — start-and-grill, 'propose the change', 'are there tasks left?', or 'archive the change'. Include the concrete details the user gave (names, numbers, URLs, constraints) so the PO has them, but never write the PRD, tasks, or acceptance criteria yourself — that is the PO's job via grilling and the OpenSpec propose flow.",
       "- DEV brief: tell DEV to implement the open OpenSpec change — e.g. 'Implement the remaining tasks of the open change.' If the user named a specific change, include its name. Append any spoken instruction that overrides the spec ('the messages should be in English after all') — DEV cannot know it otherwise. DEV only runs when the PO has already proposed a change with tasks.",
@@ -2270,7 +2522,7 @@ function buildSystemInstructionText() {
 
   if (pipelineAvailable) {
     lines.push(
-      `After submit_claude_task returns: if status is 'started', say one short acknowledgement like: On it, Claude is handling that now. If status is 'queued', tell ${userDisplayName()} Claude is still finishing the current task and this one is queued next. (Keep what you SAY short, even though the task you SENT is detailed.)`,
+      `After submit_claude_task returns: if status is 'started', say one short acknowledgement like: On it, Claude is handling that now. If status is 'queued', tell ${userDisplayName()} Claude is still finishing the current task and this one is queued next. If status is 'parked_for_review', follow the PRE-DISPATCH REVIEW GATE instructions above instead. (Keep what you SAY short, even though the task you SENT is detailed.)`,
       `Only call start_new_claude_session when ${userDisplayName()} explicitly asks for a new session (says something like: new session, fresh session, start over). After it returns, confirm briefly that Claude has a clean slate.`,
     );
   }
@@ -2762,6 +3014,13 @@ app.whenReady().then(() => {
   // Whichever path (this, or the Gemini answer_po_question tool) answers
   // first wins; the other becomes a no-op since the question is already resolved.
   ipcMain.handle("po:answer-question", (_event, answers) => resolvePendingPoQuestion(answers));
+  // Renderer's boot-time read of the review-gate mode (see setPromptReviewMode
+  // above) plus the UI's Approve/Edit/Cancel and mode-toggle paths — mirrors
+  // the po:answer-question pattern: whichever channel (this, or the Gemini
+  // respond_to_task_review/set_prompt_review_mode tools) acts first wins.
+  ipcMain.handle("prompt:status", () => ({ reviewMode: promptReviewMode }));
+  ipcMain.handle("prompt:resolve-review", (_event, payload) => resolvePromptReview(payload));
+  ipcMain.handle("prompt:set-review-mode", (_event, payload) => setPromptReviewMode(Boolean(payload?.enabled)));
   ipcMain.handle("context-supplement:send", (_event, text) => sendContextSupplement(text));
   ipcMain.handle("hud:toggle", () => {
     toggleHud();

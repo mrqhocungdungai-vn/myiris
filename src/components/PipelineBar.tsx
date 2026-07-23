@@ -1,6 +1,27 @@
 import type { CSSProperties } from "react";
-import { Users } from "lucide-react";
+import { ShieldCheck, ShieldOff, Users } from "lucide-react";
 import { AGENT_COLORS, AGENT_LABELS, ALL_ROLES, MODEL_CHOICES, modelLabel } from "../lib/agents";
+
+// Review-gate mode toggle (prompt-review-gate spec): applies to every role
+// (and plain Claude), so it renders in both the "install agents" and normal
+// states below — review mode is meaningful even before agents are installed.
+function ReviewModeToggle({ reviewMode, onToggle }: { reviewMode: boolean; onToggle: (next: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      className={`review-mode-toggle ${reviewMode ? "on" : "off"}`}
+      onClick={() => onToggle(!reviewMode)}
+      title={
+        reviewMode
+          ? "Review mode is ON — briefs are parked for Approve/Edit/Cancel before Claude sees them. Click to turn off."
+          : "Review mode is OFF — briefs dispatch immediately. Click to turn on."
+      }
+    >
+      {reviewMode ? <ShieldCheck size={12} /> : <ShieldOff size={12} />}
+      Review {reviewMode ? "On" : "Off"}
+    </button>
+  );
+}
 
 /**
  * PO/DEV agent chips + gate ✓ marks + per-role model popover. Switching roles
@@ -12,19 +33,23 @@ export default function PipelineBar({
   activeAgent,
   installingAgents,
   modelPopoverRole,
+  reviewMode,
   onChooseAgent,
   onInstallAgents,
   onToggleModelPopover,
   onSetRoleModel,
+  onToggleReviewMode,
 }: {
   agents: AgentsSnapshot | null;
   activeAgent: AgentRole | null;
   installingAgents: boolean;
   modelPopoverRole: AgentRole | null;
+  reviewMode: boolean;
   onChooseAgent: (role: AgentRole | null) => void;
   onInstallAgents: () => void;
   onToggleModelPopover: (role: AgentRole) => void;
   onSetRoleModel: (role: AgentRole, model: string) => void;
+  onToggleReviewMode: (next: boolean) => void;
 }) {
   if (agents && !agents.installed) {
     return (
@@ -38,6 +63,7 @@ export default function PipelineBar({
           <Users size={13} />
           {installingAgents ? "Installing agents…" : "Install agents…"}
         </button>
+        <ReviewModeToggle reviewMode={reviewMode} onToggle={onToggleReviewMode} />
       </div>
     );
   }
@@ -101,6 +127,7 @@ export default function PipelineBar({
           </div>
         );
       })}
+      <ReviewModeToggle reviewMode={reviewMode} onToggle={onToggleReviewMode} />
     </div>
   );
 }

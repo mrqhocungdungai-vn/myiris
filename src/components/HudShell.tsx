@@ -3,6 +3,7 @@ import { ChevronDown, Hand, Maximize2, MessageSquare, Mic, MicOff, Power, Termin
 import ReactorCore from "./ReactorCore";
 import WorkCard from "./WorkCard";
 import PoQuestionBanner from "./PoQuestionBanner";
+import ReviewBanner from "./ReviewBanner";
 import ContextSupplementInput from "./ContextSupplementInput";
 import { HandSkeleton } from "./CameraDock";
 import type { HandoffTone, ReactorState, TaskCard, TranscriptLine } from "../types";
@@ -101,6 +102,7 @@ export default function HudShell({
   handActionTone,
   pipelineAvailable,
   poQuestion,
+  taskReview,
 }: {
   reactorState: ReactorState;
   inputLevelRef: { current: number };
@@ -153,6 +155,15 @@ export default function HudShell({
     answers: Record<string, string>;
     onPick: (question: string, choice: string) => void;
   } | null;
+  // A parked review (prompt-review-gate spec) stacks BENEATH a pending PO
+  // question when both are live — the PO question blocks a token-burning
+  // run, so it keeps precedence (design.md D3). HUD editing is voice-only
+  // (D7), so ReviewBanner renders with editable={false} here.
+  taskReview: {
+    review: PendingTaskReview;
+    onApprove: (editedTask?: string) => void;
+    onCancel: () => void;
+  } | null;
 }) {
   // Show the full stream (state caps at 20); the column has a fixed max height
   // and palm-scrolls like Comms.
@@ -167,14 +178,25 @@ export default function HudShell({
   return (
     <div className={`hud-shell ${awake ? "awake" : "asleep"}`}>
       {/* A pending PO question outranks everything else in the HUD — it stays
-          a lit, always-visible island rather than tucked behind a toggle. */}
-      {pipelineAvailable && poQuestion ? (
-        <div className="hud-po-question hud-hit">
-          <PoQuestionBanner
-            questions={poQuestion.questions}
-            answers={poQuestion.answers}
-            onPick={poQuestion.onPick}
-          />
+          a lit, always-visible island rather than tucked behind a toggle. A
+          parked review stacks beneath it (design.md D3) in the same island. */}
+      {pipelineAvailable && (poQuestion || taskReview) ? (
+        <div className="hud-review-stack hud-hit">
+          {poQuestion ? (
+            <PoQuestionBanner
+              questions={poQuestion.questions}
+              answers={poQuestion.answers}
+              onPick={poQuestion.onPick}
+            />
+          ) : null}
+          {taskReview ? (
+            <ReviewBanner
+              review={taskReview.review}
+              editable={false}
+              onApprove={taskReview.onApprove}
+              onCancel={taskReview.onCancel}
+            />
+          ) : null}
         </div>
       ) : null}
 

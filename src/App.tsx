@@ -23,6 +23,7 @@ import CenterStage from "./components/CenterStage";
 import WorkStream from "./components/WorkStream";
 import PipelineBar from "./components/PipelineBar";
 import PoQuestionBanner from "./components/PoQuestionBanner";
+import ReviewBanner from "./components/ReviewBanner";
 import ProjectBar from "./components/ProjectBar";
 import ReaderOverlay from "./components/ReaderOverlay";
 import HistoryDrawer from "./components/HistoryDrawer";
@@ -113,6 +114,15 @@ export default function App() {
   // Local picks for the CURRENT pendingPoQuestion — submitted as one batch
   // once every question has a pick, matching the voice path's batching.
   const [poAnswers, setPoAnswers] = useState<Record<string, string>>({});
+  // A brief submit_claude_task just parked for Approve/Edit/Cancel
+  // (prompt-review-gate spec) — cleared by the "task_review" sidecar event
+  // once main resolves it (approved/cancelled/timed_out/abandoned), never
+  // optimistically here, so a rejected empty edit leaves the banner up.
+  const [pendingReview, setPendingReview] = useState<PendingTaskReview | null>(null);
+  // Review-gate mode mirror (prompt-review-gate spec) — read at mount via
+  // getPromptStatus, kept live via the prompt_review_mode sidecar event.
+  // Defaults true to match main's own IRIS_PROMPT_REVIEW default.
+  const [reviewMode, setReviewModeState] = useState(true);
   // Which role's model popover is open (clicking the chip's model segment,
   // not its role-select label) — at most one at a time.
   const [modelPopoverRole, setModelPopoverRole] = useState<AgentRole | null>(null);
@@ -283,6 +293,10 @@ export default function App() {
     window.iris
       .getPipelineStatus()
       .then((status) => setPipelineAvailable(Boolean(status.available)))
+      .catch(() => {});
+    window.iris
+      .getPromptStatus()
+      .then((status) => setReviewModeState(Boolean(status.reviewMode)))
       .catch(() => {});
     // Dispatch through the ref so this always calls the newest closure —
     // handleSidecarEvent may safely read live state (pendingPoQuestion,
@@ -617,6 +631,29 @@ export default function App() {
     );
   }
 
+  // Approve/Cancel for a parked review (prompt-review-gate spec). Deliberately
+  // does NOT optimistically clear pendingReview: an edit that main rejects
+  // (empty/whitespace-only) must leave the banner up so the user can fix it —
+  // the "task_review" sidecar event is the single source of truth for when
+  // the review actually resolves.
+  async function approveReview(editedTask?: string) {
+    if (!hasBridge || !pendingReview) return;
+    const result = await window.iris.resolvePromptReview({ action: "approve", editedTask });
+    if (result.status === "error") pushLog("error", result.error ?? "Could not approve the brief.");
+  }
+
+  async function cancelReview() {
+    if (!hasBridge || !pendingReview) return;
+    const result = await window.iris.resolvePromptReview({ action: "cancel" });
+    if (result.status === "error") pushLog("error", result.error ?? "Could not cancel the brief.");
+  }
+
+  async function toggleReviewMode(next: boolean) {
+    if (!hasBridge) return;
+    const result = await window.iris.setPromptReviewMode(next);
+    setReviewModeState(Boolean(result.reviewMode));
+  }
+
   function handleSidecarEvent(event: SidecarEvent) {
     if (event.type === "pipeline_availability") {
       setPipelineAvailable(Boolean(event.available));
@@ -741,6 +778,29 @@ export default function App() {
         setPoAnswers({});
         if (status === "timed_out") {
           pushLog("warn", "The PO's question went unanswered — applied its recommended option.", eventTime(event));
+        }
+      }
+      return;
+    }
+
+    if (event.type === "prompt_review_mode") {
+      setReviewModeState(Boolean(event.reviewMode));
+      return;
+    }
+
+    if (event.type === "task_review") {
+      const status = readString(event.status, "pending");
+      if (status === "pending") {
+        setPendingReview({
+          workstreamId: readString(event.workstream_id),
+          task: readString(event.task),
+          urgency: readString(event.urgency, "normal"),
+          agent: isAgentRole(event.agent) ? event.agent : null,
+        });
+      } else {
+        setPendingReview(null);
+        if (status === "timed_out") {
+          pushLog("warn", "A parked brief went unanswered and was not sent to Claude.", eventTime(event));
         }
       }
       return;
@@ -1005,10 +1065,10 @@ export default function App() {
       return;
     }
 
-    // A pending PO question outranks disambiguation (design.md D2): the
-    // chooser must never stack over the PO banner — drop the ambiguous
-    // request rather than showing it.
-    if (pendingPoQuestion) return;
+    // A pending PO question or parked review outranks disambiguation
+    // (design.md D2, prompt-review-gate D3): the chooser must never stack
+    // over those banners — drop the ambiguous request rather than showing it.
+    if (pendingPoQuestion || pendingReview) return;
     setTaskChooser({ query: query || "task", matches: matches.map((match) => match.task) });
   }
 
@@ -1108,7 +1168,7 @@ export default function App() {
         return;
       }
     });
-  }, [hasBridge, tasks, sortedTasks, expandedTaskId, focusedTaskId, latestResultTask, pendingPoQuestion]);
+  }, [hasBridge, tasks, sortedTasks, expandedTaskId, focusedTaskId, latestResultTask, pendingPoQuestion, pendingReview]);
 
   const caption = useMemo(() => {
     if (!sidecarRunning)
@@ -1192,6 +1252,9 @@ export default function App() {
             pendingPoQuestion
               ? { questions: pendingPoQuestion.questions, answers: poAnswers, onPick: pickPoAnswer }
               : null
+          }
+          taskReview={
+            pendingReview ? { review: pendingReview, onApprove: approveReview, onCancel: cancelReview } : null
           }
         />
       ) : (
@@ -1282,14 +1345,19 @@ export default function App() {
                 activeAgent={activeAgent}
                 installingAgents={installingAgents}
                 modelPopoverRole={modelPopoverRole}
+                reviewMode={reviewMode}
                 onChooseAgent={chooseAgent}
                 onInstallAgents={installAgents}
                 onToggleModelPopover={(role) => setModelPopoverRole((current) => (current === role ? null : role))}
                 onSetRoleModel={setRoleModel}
+                onToggleReviewMode={toggleReviewMode}
               />
               <ProjectBar project={activeProject} onChoose={chooseProjectFolder} />
               {pendingPoQuestion ? (
                 <PoQuestionBanner questions={pendingPoQuestion.questions} answers={poAnswers} onPick={pickPoAnswer} />
+              ) : null}
+              {pendingReview ? (
+                <ReviewBanner review={pendingReview} onApprove={approveReview} onCancel={cancelReview} />
               ) : null}
             </WorkStream>
           ) : null}

@@ -16,6 +16,9 @@ contextBridge.exposeInMainWorld("iris", {
   setAgentModel: (workstreamId, role, model) =>
     ipcRenderer.invoke("agents:set-model", { workstreamId, role, model }),
   answerPoQuestion: (answers) => ipcRenderer.invoke("po:answer-question", answers),
+  getPromptStatus: () => ipcRenderer.invoke("prompt:status"),
+  resolvePromptReview: (payload) => ipcRenderer.invoke("prompt:resolve-review", payload),
+  setPromptReviewMode: (enabled) => ipcRenderer.invoke("prompt:set-review-mode", { enabled }),
   sendContextSupplement: (text) => ipcRenderer.invoke("context-supplement:send", text),
   toggleHud: () => ipcRenderer.invoke("hud:toggle"),
   setHudInteractive: (on) => ipcRenderer.send("hud:interactive", Boolean(on)),

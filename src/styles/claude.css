@@ -357,32 +357,171 @@
   color: var(--muted);
 }
 
-/* ----- PO question banner, floating in the Glass HUD (glass-hud-mode) -----
-   A pending PO question outranks the HUD's minimal-surface philosophy: it is
-   a permanent lit island (not tucked behind a toggle like Comms/Tasks) so it
-   can't go unnoticed while floating over another app. Positioned top-center,
-   clear of the tasks column (top-right) and orb/camera/comms clusters
-   (bottom). */
-.hud-po-question {
+/* ----- Task review banner (prompt-review-gate) — cyan accent so it reads
+   distinctly from the PO question banner's violet when both stack ----- */
+.task-review-banner {
+  margin: 0 12px 10px;
+  padding: 10px 12px;
+  border-radius: var(--r-card);
+  border: 1px solid rgba(var(--cyan-rgb), 0.4);
+  background: rgba(var(--cyan-rgb), 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.task-review-banner-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--cyan-bright);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.task-review-textarea {
+  width: 100%;
+  min-height: 72px;
+  padding: 8px 9px;
+  border-radius: var(--r-sm);
+  border: 1px solid rgba(var(--cyan-rgb), 0.3);
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  line-height: 1.4;
+  resize: vertical;
+}
+
+.task-review-textarea:focus {
+  outline: none;
+  border-color: rgba(var(--cyan-rgb), 0.7);
+}
+
+.task-review-text {
+  margin: 0;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+}
+
+.task-review-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.task-review-approve,
+.task-review-cancel {
+  flex: 1;
+  border-radius: 7px;
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.task-review-approve {
+  border: 1px solid rgba(var(--mint-rgb), 0.5);
+  background: rgba(var(--mint-rgb), 0.15);
+  color: var(--text);
+}
+
+.task-review-approve:hover {
+  background: rgba(var(--mint-rgb), 0.3);
+}
+
+.task-review-cancel {
+  border: 1px solid var(--hairline-strong);
+  background: transparent;
+  color: var(--text-soft);
+}
+
+.task-review-cancel:hover {
+  border-color: rgba(255, 255, 255, 0.4);
+  color: var(--text);
+}
+
+.task-review-hint {
+  margin: 0;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+/* ----- Review-gate mode toggle (PipelineBar) ----- */
+.review-mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  margin-left: auto;
+  padding: 0 8px;
+  border-radius: 7px;
+  border: 1px solid var(--hairline-strong);
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.review-mode-toggle.on {
+  border-color: rgba(var(--cyan-rgb), 0.5);
+  color: var(--cyan-bright);
+  background: rgba(var(--cyan-rgb), 0.1);
+}
+
+.review-mode-toggle:hover {
+  border-color: rgba(var(--cyan-rgb), 0.7);
+}
+
+/* ----- PO question / task review banners, floating in the Glass HUD -----
+   A pending PO question or parked review outranks the HUD's minimal-surface
+   philosophy: it is a permanent lit island (not tucked behind a toggle like
+   Comms/Tasks) so it can't go unnoticed while floating over another app.
+   Positioned top-center, clear of the tasks column (top-right) and
+   orb/camera/comms clusters (bottom). Both banners can be live at once
+   (prompt-review-gate spec D3) — they stack in this one flex column, PO
+   question first. */
+.hud-review-stack {
   position: absolute;
   top: 18px;
   left: 50%;
   transform: translateX(-50%);
   width: 380px;
   max-width: calc(100vw - 40px);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
   animation: hud-rise 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) 0.16s backwards;
 }
 
-.hud-po-question .po-question-banner {
+.hud-review-stack .po-question-banner,
+.hud-review-stack .task-review-banner {
   margin: 0;
   background: linear-gradient(180deg, rgba(26, 36, 57, 0.72), rgba(10, 16, 28, 0.76));
-  border-color: rgba(var(--violet-rgb), 0.5);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.14),
     0 12px 40px rgba(0, 0, 0, 0.4);
 }
 
-.hud-po-question .po-question-text,
-.hud-po-question .po-question-hint {
+.hud-review-stack .po-question-banner {
+  border-color: rgba(var(--violet-rgb), 0.5);
+}
+
+.hud-review-stack .task-review-banner {
+  border-color: rgba(var(--cyan-rgb), 0.5);
+}
+
+.hud-review-stack .po-question-text,
+.hud-review-stack .po-question-hint,
+.hud-review-stack .task-review-text,
+.hud-review-stack .task-review-hint {
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
 }
