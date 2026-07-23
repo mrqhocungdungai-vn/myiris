@@ -33,6 +33,12 @@ contextBridge.exposeInMainWorld("iris", {
     ipcRenderer.on("iris:wake", handler);
     return () => ipcRenderer.removeListener("iris:wake", handler);
   },
+  onMuteToggle: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on("iris:mute-toggle", handler);
+    return () => ipcRenderer.removeListener("iris:mute-toggle", handler);
+  },
+  reportSpeakerMute: (muted) => ipcRenderer.send("iris:speaker-mute-state", Boolean(muted)),
   getConfig: () => ipcRenderer.invoke("config:get"),
   saveConfig: (updates) => ipcRenderer.invoke("config:save", updates),
   savePoToken: (token) => ipcRenderer.invoke("config:save-po-token", { token }),

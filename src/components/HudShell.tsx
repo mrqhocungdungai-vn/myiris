@@ -1,5 +1,16 @@
 import { useEffect, useRef, useState, type CSSProperties, type RefObject } from "react";
-import { ChevronDown, Hand, Maximize2, MessageSquare, Mic, MicOff, Power, Terminal } from "lucide-react";
+import {
+  ChevronDown,
+  Hand,
+  Maximize2,
+  MessageSquare,
+  Mic,
+  MicOff,
+  Power,
+  Terminal,
+  Volume2,
+  VolumeX,
+} from "lucide-react";
 import ReactorCore from "./ReactorCore";
 import WorkCard from "./WorkCard";
 import PoQuestionBanner from "./PoQuestionBanner";
@@ -81,6 +92,8 @@ export default function HudShell({
   wakeWordEnabled,
   muted,
   onToggleMute,
+  outputMuted,
+  onToggleOutputMute,
   onWake,
   onSleep,
   onExitHud,
@@ -125,6 +138,8 @@ export default function HudShell({
   wakeWordEnabled: boolean;
   muted: boolean;
   onToggleMute: () => void;
+  outputMuted: boolean;
+  onToggleOutputMute: () => void;
   onWake: () => void;
   onSleep: () => void;
   onExitHud: () => void;
@@ -313,6 +328,13 @@ export default function HudShell({
                 title={muted ? "Unmute microphone" : "Mute microphone"}
               >
                 {muted ? <MicOff size={14} /> : <Mic size={14} />}
+              </button>
+              <button
+                className={`hud-btn ${outputMuted ? "muted" : ""}`}
+                onClick={onToggleOutputMute}
+                title={outputMuted ? "Unmute speaker" : "Mute speaker"}
+              >
+                {outputMuted ? <VolumeX size={14} /> : <Volume2 size={14} />}
               </button>
               <button className="hud-btn danger" onClick={onSleep} title="Sleep">
                 <Power size={14} />

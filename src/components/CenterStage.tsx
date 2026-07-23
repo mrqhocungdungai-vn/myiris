@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties, type RefObject } from "react";
-import { Mic, MicOff, Power } from "lucide-react";
+import { Mic, MicOff, Power, Volume2, VolumeX } from "lucide-react";
 import ReactorCore from "./ReactorCore";
 import type { HandoffTone, ReactorState } from "../types";
 
@@ -83,6 +83,8 @@ export default function CenterStage({
   captionDim,
   muted,
   onToggleMute,
+  outputMuted,
+  onToggleOutputMute,
   onSleep,
 }: {
   reactorState: ReactorState;
@@ -109,6 +111,8 @@ export default function CenterStage({
   captionDim: boolean;
   muted: boolean;
   onToggleMute: () => void;
+  outputMuted: boolean;
+  onToggleOutputMute: () => void;
   onSleep: () => void;
 }) {
   return (
@@ -148,6 +152,13 @@ export default function CenterStage({
             title={muted ? "Unmute microphone" : "Mute microphone"}
           >
             {muted ? <MicOff size={18} /> : <Mic size={18} />}
+          </button>
+          <button
+            className={`t-btn small ${outputMuted ? "muted" : ""}`}
+            onClick={onToggleOutputMute}
+            title={outputMuted ? "Unmute speaker" : "Mute speaker"}
+          >
+            {outputMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}
           </button>
           <button className="t-btn small danger" onClick={onSleep} title="Sleep (S)">
             <Power size={18} />

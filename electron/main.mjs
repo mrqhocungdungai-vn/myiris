@@ -72,6 +72,10 @@ let mainWindow = null;
 let liveSession = null;
 let ai = null;
 let liveStatus = { running: false, pid: null };
+// Mirror of the renderer's speaker-mute state, reported via
+// iris:speaker-mute-state — main never mutates audio, it only tracks this to
+// keep the tray label accurate (see openspec/changes/speaker-mute design D4).
+let speakerMuted = false;
 let userTranscriptBuffer = "";
 let modelTranscriptBuffer = "";
 // Gemini Live closes each WebSocket connection after ~10 minutes. With
@@ -3112,6 +3116,11 @@ function updateTrayMenu() {
         label: liveStatus.running ? "Sleep Iris" : "Wake Iris",
         click: () => emitToRenderer(liveStatus.running ? "iris:sleep" : "iris:wake", {}),
       },
+      {
+        label: speakerMuted ? "Unmute speaker" : "Mute speaker",
+        enabled: liveStatus.running,
+        click: () => emitToRenderer("iris:mute-toggle", {}),
+      },
       { label: uiMode === "hud" ? "Exit Glass HUD" : "Enter Glass HUD", click: () => toggleHud() },
       { type: "separator" },
       {
@@ -3141,6 +3150,10 @@ function createTray() {
 
 function hudHotkey() {
   return process.env.IRIS_HUD_HOTKEY || "Alt+Space";
+}
+
+function muteHotkey() {
+  return process.env.IRIS_MUTE_HOTKEY || "Alt+M";
 }
 
 function installAppMenu() {
@@ -3259,6 +3272,10 @@ app.whenReady().then(() => {
     }
   });
   ipcMain.on("live:audio", (_event, chunk) => sendAudioChunk(chunk));
+  ipcMain.on("iris:speaker-mute-state", (_event, muted) => {
+    speakerMuted = Boolean(muted);
+    updateTrayMenu();
+  });
   createWindow();
   createTray();
   const registered = globalShortcut.register(hudHotkey(), () => {
@@ -3267,6 +3284,12 @@ app.whenReady().then(() => {
   });
   if (!registered) {
     emitEvent({ type: "log", level: "error", message: `Could not register HUD hotkey ${hudHotkey()}.` });
+  }
+  const muteRegistered = globalShortcut.register(muteHotkey(), () => {
+    emitToRenderer("iris:mute-toggle", {});
+  });
+  if (!muteRegistered) {
+    emitEvent({ type: "log", level: "error", message: `Could not register mute hotkey ${muteHotkey()}.` });
   }
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

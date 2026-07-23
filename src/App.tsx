@@ -216,7 +216,11 @@ export default function App() {
     } else if (wasRunning && !sidecarRunning) {
       setOrbThinking(false);
       if (soundsRef.current) uiSounds.sleep();
+      // Server-initiated teardown never calls audio.stop() — reset speaker
+      // mute here too so it doesn't survive into the next wake (design D3).
+      audio.toggleOutputMute(false);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sidecarRunning]);
 
   // Deck WebGL backdrop/orb: pause their render loops when the window loses
@@ -347,12 +351,24 @@ export default function App() {
     const offWake = window.iris.onWakeRequest(() => {
       if (!sidecarRunning) start();
     });
+    const offMuteToggle = window.iris.onMuteToggle(() => {
+      if (sidecarRunning) audio.toggleOutputMute();
+    });
     return () => {
       offMode();
       offWake();
+      offMuteToggle();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasBridge, sidecarRunning]);
+
+  // Mirror speaker-mute state to main so the tray label stays accurate —
+  // fires on mount (seeds `false`), on every toggle, and on the ephemeral
+  // reset (stop or the sidecarRunning falling edge below).
+  useEffect(() => {
+    if (!hasBridge) return;
+    window.iris.reportSpeakerMute(audio.outputMuted);
+  }, [hasBridge, audio.outputMuted]);
 
   useEffect(() => {
     document.documentElement.classList.toggle("hud-mode", uiMode === "hud");
@@ -1228,6 +1244,8 @@ export default function App() {
           wakeWordEnabled={wakeWordEnabled}
           muted={audio.muted}
           onToggleMute={audio.toggleMute}
+          outputMuted={audio.outputMuted}
+          onToggleOutputMute={() => audio.toggleOutputMute()}
           onWake={start}
           onSleep={stop}
           onExitHud={() => window.iris.toggleHud()}
@@ -1321,6 +1339,8 @@ export default function App() {
             captionDim={caption.dim}
             muted={audio.muted}
             onToggleMute={audio.toggleMute}
+            outputMuted={audio.outputMuted}
+            onToggleOutputMute={() => audio.toggleOutputMute()}
             onSleep={stop}
           />
 

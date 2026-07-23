@@ -13,6 +13,22 @@ function base64ToBytes(base64: string): Uint8Array {
 }
 
 /**
+ * The single play/drop decision for a Gemini audio chunk, used at both guard
+ * points in playGeminiAudio so the tested logic is the production logic.
+ */
+export function shouldDropChunk({
+  muted,
+  chunkEpoch,
+  currentEpoch,
+}: {
+  muted: boolean;
+  chunkEpoch: number;
+  currentEpoch: number;
+}): boolean {
+  return muted || chunkEpoch !== currentEpoch;
+}
+
+/**
  * Owns the mic-capture/Gemini-playback Web Audio graph, its lifecycle refs,
  * and the passive level meters — mirrors the extraction pattern already used
  * for gesture control in useHandControl.ts. Mic and playback levels are
@@ -34,6 +50,8 @@ export function useAudioPipeline({ onLog }: { onLog?: (level: string, message: s
   const outputLevelRef = useRef(0);
   const sessionStartRef = useRef<number | null>(null);
   const [muted, setMuted] = useState(false);
+  const outputMutedRef = useRef(false);
+  const [outputMuted, setOutputMuted] = useState(false);
 
   // Passive audio level meters (mic in / Gemini out) for the reactive HUD.
   useEffect(() => {
@@ -146,6 +164,9 @@ export function useAudioPipeline({ onLog }: { onLog?: (level: string, message: s
 
   async function playGeminiAudio(chunk: LiveAudioChunk) {
     const epoch = flushEpochRef.current;
+    if (shouldDropChunk({ muted: outputMutedRef.current, chunkEpoch: epoch, currentEpoch: flushEpochRef.current })) {
+      return;
+    }
     const rate = parsePcmRate(chunk.mimeType);
     const bytes = base64ToBytes(chunk.data);
     const sampleCount = Math.floor(bytes.byteLength / 2);
@@ -177,7 +198,7 @@ export function useAudioPipeline({ onLog }: { onLog?: (level: string, message: s
       playbackSourcesRef.current = playbackSourcesRef.current.filter((item) => item !== source);
     };
 
-    if (epoch !== flushEpochRef.current) {
+    if (shouldDropChunk({ muted: outputMutedRef.current, chunkEpoch: epoch, currentEpoch: flushEpochRef.current })) {
       source.disconnect();
       return;
     }
@@ -200,6 +221,13 @@ export function useAudioPipeline({ onLog }: { onLog?: (level: string, message: s
     setMuted(next);
   }
 
+  function toggleOutputMute(next?: boolean) {
+    const value = next ?? !outputMutedRef.current;
+    outputMutedRef.current = value;
+    setOutputMuted(value);
+    if (value) flushPlayback();
+  }
+
   async function start() {
     sessionStartRef.current = Date.now();
     await startCapture();
@@ -213,6 +241,8 @@ export function useAudioPipeline({ onLog }: { onLog?: (level: string, message: s
     outputAnalyserRef.current = null;
     playbackTimeRef.current = 0;
     setMuted(false);
+    outputMutedRef.current = false;
+    setOutputMuted(false);
     sessionStartRef.current = null;
   }
 
@@ -221,10 +251,12 @@ export function useAudioPipeline({ onLog }: { onLog?: (level: string, message: s
     outputLevelRef,
     sessionStartRef,
     muted,
+    outputMuted,
     start,
     stop,
     flushPlayback,
     playGeminiAudio,
     toggleMute,
+    toggleOutputMute,
   };
 }
