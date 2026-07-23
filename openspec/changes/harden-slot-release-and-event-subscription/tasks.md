@@ -20,8 +20,8 @@
 ## 4. Verification
 
 - [x] 4.1 `npm run build` passes (typecheck + build)
-- [ ] 4.2 Manual smoke (real app): sidecar-driven UI still updates — task cards, session list, gemini/claude status, PO question banner — confirming the ref dispatch didn't break the subscription
-- [ ] 4.3 Manual smoke: submit a task while one is running, let the active run finish → the queued run starts exactly once (single-slot behavior unchanged by the guard)
+- [x] 4.2 Manual smoke (real app): sidecar-driven UI still updates — task cards, session list, gemini/claude status, PO question banner — confirming the ref dispatch didn't break the subscription
+- [x] 4.3 Manual smoke: submit a task while one is running, let the active run finish → the queued run starts exactly once (single-slot behavior unchanged by the guard)
 
 ## 5. Spec and record
 
