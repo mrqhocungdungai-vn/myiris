@@ -24,8 +24,6 @@
     "start:prod": "node scripts/run-electron.mjs --prod",
     "package:mac": "npm run build && electron-builder --mac --dir",
     "dist:mac": "npm run build && electron-builder --mac",
-    "package:win": "npm run build && electron-builder --win --dir",
-    "dist:win": "npm run build && electron-builder --win",
     "electron": "node scripts/run-electron.mjs"
   },
   "dependencies": {
@@ -85,11 +83,6 @@
     "mac": {
       "category": "public.app-category.productivity",
       "icon": "build/icon.png",
-      "target": [
-        "dir"
-      ]
-    },
-    "win": {
       "target": [
         "dir"
       ]

@@ -22,6 +22,7 @@ import { createRunQueue, RUN_STATUS, EMIT_STATUS, TERMINAL_STATUSES, toUpdateEve
 import { writeFileAtomicSync, quarantineFile } from "./atomic-file.mjs";
 import { createTrailingThrottle } from "./coalesce.mjs";
 import { resolveApprovedTask } from "./task-review.mjs";
+import { shouldRefuseLaunch } from "./platform.mjs";
 
 const { app, BrowserWindow, ipcMain, session, nativeImage, Menu, dialog, Tray, screen, globalShortcut } = electron;
 
@@ -246,12 +247,6 @@ let sessionStore = { active: null, sessions: [] };
 function killChild(child, signal) {
   if (!child?.pid) {
     child?.kill?.(signal);
-    return;
-  }
-  if (process.platform === "win32") {
-    // detached process groups don't take POSIX signals on Windows — kill the
-    // whole tree instead; `signal` is advisory here.
-    spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"]);
     return;
   }
   try {
@@ -2976,6 +2971,16 @@ function installAppMenu() {
 }
 
 app.whenReady().then(() => {
+  if (shouldRefuseLaunch(process.platform, process.env)) {
+    dialog.showMessageBoxSync({
+      type: "error",
+      title: "Unsupported platform",
+      message: "Iris only supports macOS.",
+    });
+    app.quit();
+    return;
+  }
+
   if (appIcon && process.platform === "darwin" && app.dock) {
     app.dock.setIcon(appIcon);
   }

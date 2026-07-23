@@ -21,14 +21,14 @@ npm start              # build then launch Electron from dist/ (production-like)
 npm run start:prod     # launch prod build without rebuilding
 npm run package:mac    # build + electron-builder --mac --dir (unpacked .app)
 npm run dist:mac       # build + full macOS distributable
-npm run package:win    # build + unpacked Windows dir
 ```
 
 There is **no test runner and no linter** configured. `npm run build` (which runs `tsc --noEmit`) is the only automated check — run it to verify changes typecheck.
 
 ## Runtime prerequisites
 
-- `GEMINI_API_KEY` in `.env` (copy from `.env.example`). Read from repo `.env` in dev, or `~/.iris/.env` (`%USERPROFILE%\.iris\.env` on Windows) for the packaged app. This alone is enough to run Iris in chat-only mode.
+- Iris supports **macOS only** — it refuses to launch on other platforms (see `electron/platform.mjs`'s `shouldRefuseLaunch`, gated by `IRIS_ALLOW_ANY_PLATFORM=1` as a developer escape hatch).
+- `GEMINI_API_KEY` in `.env` (copy from `.env.example`). Read from repo `.env` in dev, or `~/.iris/.env` for the packaged app. This alone is enough to run Iris in chat-only mode.
 - Optional, for the PO → DEV pipeline: Claude Code CLI installed and authenticated (`claude --version` must work). A packaged GUI app may not inherit shell PATH — `main.mjs` probes `~/.local/bin`, `/usr/local/bin`, `/opt/homebrew/bin`, or set `IRIS_CLAUDE_BIN`. Presence of this binary is the sole switch that enables the pipeline — see "Pipeline availability" below.
 
 ## Architecture

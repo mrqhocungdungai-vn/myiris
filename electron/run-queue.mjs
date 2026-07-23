@@ -101,7 +101,7 @@ export function toUpdateEvent(run, status, extra = {}) {
  * @param {Object} deps
  * @param {(run: Run) => void} deps.startRun - launches the transport (DEV subprocess or PO turn); must not touch the slot itself
  * @param {(run: Run) => void} [deps.cancelRun] - ends an active run whose transport has no child process (a PO turn); must not touch the slot itself — the slot is released when the run is later finalized through the normal settle path, exactly like the DEV kill-signal branch. Optional: if omitted, stop() on such a run remains a no-op.
- * @param {(child: import("node:child_process").ChildProcess, signal: string) => void} [deps.killChild] - signals a run's subprocess transport; defaults to `(child, signal) => child.kill(signal)`. Injected (parallel to cancelRun) so process-group/platform knowledge (e.g. a negative-pid group kill, or Windows taskkill) lives in the caller, not here.
+ * @param {(child: import("node:child_process").ChildProcess, signal: string) => void} [deps.killChild] - signals a run's subprocess transport; defaults to `(child, signal) => child.kill(signal)`. Injected (parallel to cancelRun) so process-group knowledge (e.g. a negative-pid group kill) lives in the caller, not here.
  * @param {(event: Object) => void} deps.emit - the sidecar event sink
  * @param {(run: Run) => void} [deps.onFinalized] - fires once per run, after a terminal claude_task_update (e.g. the voice completion announcement); NOT called for a queued run cancelled before it ever started
  * @param {number} [deps.idleTimeoutMs] - overrides runIdleTimeoutMs() for testing; production callers should omit this and let it read IRIS_RUN_IDLE_TIMEOUT_MS

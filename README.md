@@ -6,6 +6,10 @@ A desktop voice companion built on **Gemini Live** for natural realtime conversa
 
 **Out of the box, Iris just talks to you** — add a Gemini API key and start speaking; no other setup required. If you also have the [Claude Code](https://code.claude.com/docs/en/headless) CLI installed, Iris automatically unlocks a second layer: a **PO → DEV** build pipeline that lets you delegate real work (coding, research, files, terminal, automation) by voice. The two roles run on deliberately different mechanisms: **PO** is a **stateful** module — a persistent Agent SDK session that stays open across turns and can pause mid-turn to ask you something — while **DEV** is a **stateless** module — a one-shot headless `claude -p` run per issue. The pipeline uses [mattpocock/skills](https://github.com/mattpocock/skills), especially **Grill Me** on the PO side, and [Fission-AI/openspec](https://github.com/Fission-AI/openspec) for **SDD (spec-driven development)**. PO grills and shapes the request into a proper spec first; once the spec is complete, DEV implements it using **`opsx:apply`**. See "Claude pipeline (PO → DEV)" below for how it's detected and enabled.
 
+**Iris supports macOS only.** It refuses to launch on other platforms; see
+"App Environment" below for the `IRIS_ALLOW_ANY_PLATFORM` developer escape
+hatch.
+
 ## Quickstart (chat only)
 
 ```bash
@@ -84,20 +88,13 @@ directly from Claude Code.
 Iris reads environment values from:
 
 1. `.env` in this repo (development and `npm start`).
-2. `~/.iris/.env` (packaged app on macOS/Linux).
-3. `%USERPROFILE%\\.iris\\.env` (packaged app on Windows).
-4. `.env` bundled next to app resources (optional packaging flow).
+2. `~/.iris/.env` (packaged app).
+3. `.env` bundled next to app resources (optional packaging flow).
 
 Copy the example file:
 
 ```bash
 cp .env.example .env
-```
-
-On Windows PowerShell:
-
-```powershell
-Copy-Item .env.example .env
 ```
 
 Minimum required (chat only — this alone is enough to talk to Iris):
@@ -113,12 +110,13 @@ GEMINI_API_KEY=your_google_ai_studio_key
 IRIS_USER_NAME=there
 GEMINI_LIVE_MODEL=models/gemini-3.1-flash-live-preview
 GEMINI_LIVE_VOICE=Zephyr
+# CLAUDE_CODE_OAUTH_TOKEN=your_setup_token_value
 # IRIS_CLAUDE_CWD=/Users/you/.iris/workspace
 # IRIS_CLAUDE_PERMISSION_MODE=bypassPermissions
 # IRIS_CLAUDE_BIN=/Users/you/.local/bin/claude
-# CLAUDE_CODE_OAUTH_TOKEN=your_setup_token_value
 # IRIS_PO_QUESTION_TIMEOUT_MS=300000
 # IRIS_PO_LIVE_SESSION=1
+# IRIS_ALLOW_ANY_PLATFORM=1
 ```
 
 The `IRIS_CLAUDE_*` values are optional. Set `IRIS_CLAUDE_BIN` only if the
@@ -127,6 +125,10 @@ is required for the **PO** module specifically (generate it with `claude setup-t
 DEV keeps working without it via your interactive `claude` login. You can set or
 clear it from Settings → Claude pipeline instead of editing this file; that path
 also works in a packaged build, where the file lives at `~/.iris/.env`.
+
+`IRIS_ALLOW_ANY_PLATFORM` is a developer escape hatch: Iris refuses to launch
+on anything other than macOS by default, and setting this to `1` bypasses that
+check for deliberate non-macOS runs (e.g. Linux).
 
 ## Reference
 
@@ -142,7 +144,7 @@ synchronous function calls): see **[docs/REFERENCE.md](docs/REFERENCE.md)**.
 - Node.js 20+ (LTS recommended).
 - npm.
 - A Gemini API key for the Live model (`GEMINI_API_KEY`).
-- macOS, Windows, or Linux with microphone permission available.
+- macOS with microphone permission available. Iris refuses to launch on other platforms; set `IRIS_ALLOW_ANY_PLATFORM=1` to bypass this as a developer escape hatch.
 - *Optional, for the Claude pipeline:* Claude Code installed and authenticated (`claude --version` works) — see "Claude pipeline (PO → DEV)" above.
 
 ### 1. Install dependencies
@@ -209,37 +211,6 @@ open release/mac-arm64/Iris.app
 The app is unsigned by default. If macOS blocks it, right-click the app and choose
 **Open** once.
 
-### Windows
-
-From Windows:
-
-```powershell
-npm ci
-Copy-Item .env.example .env
-# edit .env and set GEMINI_API_KEY (and IRIS_CLAUDE_BIN if needed)
-npm start
-```
-
-To create an unpacked Windows app directory:
-
-```powershell
-npm run package:win
-```
-
-To create a distributable Windows build:
-
-```powershell
-npm run dist:win
-```
-
-For the packaged Windows app, copy `.env.example` to:
-
-```text
-%USERPROFILE%\\.iris\\.env
-```
-
-Then set `GEMINI_API_KEY` (and `IRIS_CLAUDE_BIN` if the packaged app cannot find `claude`) there.
-
 ## Controls
 
 - **W**: Wake
@@ -304,7 +275,7 @@ the one you're on.
 ## Open-Source Notes
 
 - `.env` is ignored. Do not commit real Gemini keys.
-- The packaged app is unsigned unless you add your own Apple/Windows signing
+- The packaged app is unsigned unless you add your own Apple signing
   certificates.
 - Licensed under the MIT License. See `LICENSE`.
 
