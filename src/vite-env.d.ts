@@ -137,6 +137,9 @@ type ClaudeHealth = {
   skillsInstallHint: string;
   agentsOk: boolean;
   missingAgents: string[];
+  notesSkillsOk: boolean;
+  missingNotesSkills: string[];
+  notesSkillsInstallHint: string;
 };
 
 type PipelineStatus = {

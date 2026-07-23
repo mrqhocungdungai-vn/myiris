@@ -360,8 +360,19 @@ export default function SetupPanel({
               okDetail={pipelinePrereqs.agentsOk ? undefined : `missing: ${pipelinePrereqs.missingAgents.join(", ")}`}
               installHint='Use "Install missing" below, or the Install agents button on the pipeline bar.'
             />
+            <PrereqRow
+              label="Second-brain notes (LLM-Wiki skills)"
+              ok={pipelinePrereqs.notesSkillsOk}
+              okDetail={
+                pipelinePrereqs.notesSkillsOk ? undefined : `missing: ${pipelinePrereqs.missingNotesSkills.join(", ")}`
+              }
+              installHint={pipelinePrereqs.notesSkillsInstallHint}
+            />
           </div>
-          {!pipelinePrereqs.openspecOk || !pipelinePrereqs.skillsOk || !pipelinePrereqs.agentsOk ? (
+          {!pipelinePrereqs.openspecOk ||
+          !pipelinePrereqs.skillsOk ||
+          !pipelinePrereqs.agentsOk ||
+          !pipelinePrereqs.notesSkillsOk ? (
             <div className="setup-actions">
               <button className="setup-btn" onClick={installMissingPrereqs} disabled={installingPrereqs}>
                 {installingPrereqs ? <Loader2 size={14} className="spin" /> : null}

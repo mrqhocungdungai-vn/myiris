@@ -896,6 +896,7 @@ async function checkClaudeHealth() {
   const openspecStatus = await checkOpenSpecStatus();
   const skillsStatus = checkSkillsStatus();
   const agentsStatus = checkAgentsStatus();
+  const notesSkillsStatus = checkNotesSkillsStatus();
   return {
     reachable: available,
     pipelineAvailable: available,
@@ -913,6 +914,12 @@ async function checkClaudeHealth() {
     skillsInstallHint: "Use \"Install missing\" below, or run: npx skills@latest add mattpocock/skills (and `openspec init` for its Claude skills)",
     agentsOk: agentsStatus.ok,
     missingAgents: agentsStatus.missing,
+    // Informational only — not a pipeline gate (see NOTES_SKILLS above): a
+    // Talk-only user with these missing is not "missing a prerequisite" for
+    // PO/DEV, just missing the second-brain notes capability specifically.
+    notesSkillsOk: notesSkillsStatus.ok,
+    missingNotesSkills: notesSkillsStatus.missing,
+    notesSkillsInstallHint: 'Use "Install missing" below to add the second-brain notes skills.',
   };
 }
 
@@ -1613,6 +1620,136 @@ function startClaudeRun(run) {
   startDevRun(run);
 }
 
+// Personal-knowledge-notes capability (see openspec/changes/llm-wiki/):
+// the LLM-Wiki vault is pinned to this fixed, user-level path, independent of
+// any workstream's project cwd — plain-Claude runs only, never PO/DEV.
+const NOTES_VAULT_DIR = path.join(os.homedir(), "iris-second-brain");
+
+// The 6 vendored skill names this capability needs installed in
+// ~/.claude/skills before Claude actually has LLM-Wiki instructions to follow
+// (they are deliberately NOT in REQUIRED_SKILLS — that list gates the
+// PO/DEV pipeline, not Talk-mode notes; see checkSkillsStatus()). Vault
+// creation (ensureNotesVaultReady, below) and skill installation
+// (installPipelinePrereqs, via the SetupPanel's "Install missing" button) are
+// two independent actions on two different schedules — the vault can exist
+// before the skills are ever installed. Without this check, the
+// append-system-prompt directive would tell Claude to "use the wiki skills"
+// that aren't actually there, and Claude would either invent an ungoverned
+// note format or hallucinate the skill's behavior instead of doing the real
+// LLM-Wiki workflow.
+const NOTES_SKILLS = ["wiki-config", "wiki-ingest", "wiki-query", "wiki-lint", "wiki-integrate", "wiki-crystallize"];
+
+// Same presence-only shape as checkSkillsStatus()/checkAgentsStatus() — used
+// both to gate the append-system-prompt directive (startDevRun, below) and to
+// surface a status row in the SetupPanel (checkClaudeHealth), so the user has
+// a visible signal for whether the notes capability is actually installed,
+// not just whether the vault directory happens to exist.
+function checkNotesSkillsStatus() {
+  const skillsDir = path.join(os.homedir(), ".claude", "skills");
+  const missing = NOTES_SKILLS.filter((name) => !fs.existsSync(path.join(skillsDir, name)));
+  return { ok: missing.length === 0, missing, skillsDir };
+}
+
+// Ensures the vault directory exists and, on first use, pre-seeds
+// wiki-config.md + wiki-schema.md from the vendored wiki-config skill's own
+// bundled templates. Without this, the operational wiki skills' "Config
+// Discovery" step finds no config on a genuinely first-ever run and ends the
+// turn asking the user to run an interactive /wiki-config setup — a question
+// a one-shot `claude -p` run has no way to answer (design.md D5 of the
+// llm-wiki change). Idempotent: never overwrites either file once present, so
+// user edits or a missing bundle (skillsSourceDir() unresolved) are safe —
+// the directory still gets created either way.
+function ensureNotesVaultReady() {
+  try {
+    fs.mkdirSync(NOTES_VAULT_DIR, { recursive: true });
+  } catch (error) {
+    emitEvent({ type: "log", level: "warn", message: `Could not create notes vault at ${NOTES_VAULT_DIR}: ${error.message}` });
+    return;
+  }
+
+  const configTarget = path.join(NOTES_VAULT_DIR, "wiki-config.md");
+  const schemaTarget = path.join(NOTES_VAULT_DIR, "wiki-schema.md");
+  if (fs.existsSync(configTarget) && fs.existsSync(schemaTarget)) return;
+
+  const skillsRoot = skillsSourceDir();
+  if (!skillsRoot) return; // bundle not present (e.g. unpackaged dev checkout) — directory alone is still created above
+  const assetsDir = path.join(skillsRoot, "claude-skills", "wiki-config", "assets");
+
+  try {
+    if (!fs.existsSync(schemaTarget)) {
+      const schemaSource = path.join(assetsDir, "wiki-schema.md");
+      if (fs.existsSync(schemaSource)) fs.copyFileSync(schemaSource, schemaTarget);
+    }
+    if (!fs.existsSync(configTarget)) {
+      const configSource = path.join(assetsDir, "wiki-config-template.md");
+      if (fs.existsSync(configSource)) {
+        fs.writeFileSync(configTarget, renderNotesVaultConfig(fs.readFileSync(configSource, "utf8")));
+      }
+    }
+  } catch (error) {
+    emitEvent({ type: "log", level: "warn", message: `Could not pre-seed notes vault config: ${error.message}` });
+  }
+}
+
+// Adapts the vendored wiki-config template's frontmatter for this
+// single-purpose, macOS-only vault (design.md D5): the template ships
+// `blacklist` as placeholder prose ("Folder(s) where the wiki should not
+// write"), not real folder names — wiki-config's own Validate step flags
+// leftover placeholder text, and since nothing but wiki content ever lives
+// under ~/iris-second-brain, an empty list is the correct config, not a stub.
+// `index_excludes`/`templates_folder` ship with the template's Windows-style
+// trailing backslash; this app is macOS-only, so those become forward
+// slashes. Everything else (ingested_folder, ingested_subdirs, log_format,
+// and all prose below the frontmatter) is left exactly as vendored.
+function renderNotesVaultConfig(templateText) {
+  const match = templateText.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+  if (!match) return templateText; // unexpected shape — copy verbatim rather than risk corrupting it
+  const [, frontmatter, body] = match;
+  const adapted = frontmatter
+    .replace(/^blacklist:\n(?:  - .*\n)+/m, "blacklist: []\n")
+    .replace(/^(\s*- (?:raw|archive|ingested))\\$/gm, "$1/")
+    .replace(/^templates_folder: templates\\$/m, "templates_folder: templates/");
+  return `---\n${adapted}\n---\n${body}`;
+}
+
+// Loose heuristic for the vault-write backstop below — matches common
+// English/Vietnamese phrasing for "save/capture a note" (mirrors the example
+// utterances in specs/personal-knowledge-notes/spec.md). False negatives just
+// mean the backstop caveat isn't appended (same as before this capability
+// existed); false positives are harmless (the caveat only fires when nothing
+// in the vault changed, so a request that never intended to write there
+// stays silent).
+const NOTE_CAPTURE_HINT_RE = /ghi ch[uú]|note (it |this )?down|jot down|save (a |this )?note|second[- ]brain/i;
+
+// True if any file under the notes vault has an mtime at/after `sinceMs`.
+// Cheap, best-effort backstop — not a guarantee (a write racing the scan, or
+// one outside the vault entirely, can still be missed or misreported).
+function vaultChangedSince(sinceMs) {
+  const stack = [NOTES_VAULT_DIR];
+  while (stack.length) {
+    const dir = stack.pop();
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(full);
+        continue;
+      }
+      try {
+        if (fs.statSync(full).mtimeMs >= sinceMs) return true;
+      } catch {
+        // file removed mid-scan — ignore
+      }
+    }
+  }
+  return false;
+}
+
 // The stateless module: unchanged one-shot `claude -p` subprocess per run,
 // exactly as before this change — mechanism AND auth (process.env, `/login`).
 function startDevRun(run) {
@@ -1627,13 +1764,38 @@ function startDevRun(run) {
   // DEV (stateless module): never asks mid-run, always defaults. The PO
   // (stateful module, see startPoRun) gets the opposite instruction — it is
   // allowed to pause via AskUserQuestion — so the two must not share this string.
+  let systemPrompt =
+    "You are invoked from Iris voice. Work autonomously. Do not ask for clarification unless absolutely impossible. Use sensible defaults and report concise final results.";
+
+  // Personal-knowledge-notes capability: plain-Claude runs only (`!run.agent`)
+  // — PO and DEV must see this exact string unchanged (design.md D3/D5 of the
+  // llm-wiki change). Verified manually per task 2.3: when `run.agent` is set,
+  // this whole branch is skipped, so `systemPrompt` stays byte-identical to
+  // the base string above — there is no other place that mutates it.
+  if (!run.agent) {
+    ensureNotesVaultReady();
+    if (checkNotesSkillsStatus().ok) {
+      systemPrompt +=
+        ` The personal-notes / LLM-Wiki vault root is fixed at ${NOTES_VAULT_DIR}, regardless of the current working directory — use the wiki skills there for any note-taking or second-brain request. wiki-config.md and wiki-schema.md already exist in that vault; never ask the user for the wiki root path or wait for a reply — proceed directly using this path.`;
+    } else {
+      // Vault creation and skill installation are independent actions on
+      // independent schedules (see NOTES_SKILLS above) — the vault can exist
+      // before "Install missing" is ever clicked. Without this branch the
+      // directive above would send Claude looking for wiki skills that
+      // aren't installed, and it would either invent an ungoverned note
+      // format or hallucinate the skill's behavior instead of refusing honestly.
+      systemPrompt +=
+        " The personal-notes / LLM-Wiki skills are not installed on this machine yet. If the user asks to capture, save, or retrieve a personal note or second-brain entry, tell them the notes capability needs to be installed first (Iris's setup panel, \"Install missing\") — do not attempt an ad-hoc note file in its place.";
+    }
+  }
+
   const args = [
     "-p", run.task,
     "--output-format", "stream-json",
     "--verbose",
     "--permission-mode", process.env.IRIS_CLAUDE_PERMISSION_MODE || "bypassPermissions",
     "--append-system-prompt",
-    "You are invoked from Iris voice. Work autonomously. Do not ask for clarification unless absolutely impossible. Use sensible defaults and report concise final results.",
+    systemPrompt,
   ];
   if (run.agent) args.push("--agent", `${AGENT_PREFIX}${run.agent}`);
   if (run.model) args.push("--model", run.model);
@@ -1697,7 +1859,18 @@ function startDevRun(run) {
     }
     const result = run.result;
     if (code === 0 && result && !result.is_error) {
-      runQueue.finalize(run.run_id, RUN_STATUS.COMPLETED, String(result.result ?? ""));
+      let output = String(result.result ?? "");
+      // Backstop for the soft append-system-prompt vault directive (design.md
+      // Risks): the directive is a prompt, not a sandboxed writable root, so
+      // Claude could ignore it. Only checked for plain-Claude tasks that look
+      // like a note-capture request, so unrelated tasks (e.g. "translate
+      // this") never get a spurious caveat — and only when nothing under the
+      // vault changed, so a real save is never second-guessed.
+      if (!run.agent && NOTE_CAPTURE_HINT_RE.test(run.task) && !vaultChangedSince(run.started_at * 1000)) {
+        output +=
+          `\n\n[vault-check: no file changes detected under ${NOTES_VAULT_DIR} during this run — verify the note actually saved before confirming that to the user]`;
+      }
+      runQueue.finalize(run.run_id, RUN_STATUS.COMPLETED, output);
     } else {
       const detail = result?.result || stderr.trim() || `claude exited with code ${code}`;
       // A dead --resume id (deleted history, moved project) would otherwise fail
