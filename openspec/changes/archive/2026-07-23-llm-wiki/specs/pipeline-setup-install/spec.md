@@ -1,8 +1,4 @@
-## Purpose
-
-Bundles the third-party skills and commands the PO/DEV personas invoke as repo-vendored snapshots, and provides a single explicit install action that provisions a fresh machine's `~/.claude` in one click — personas sync-installed (Iris-owned), everything else copied only where missing, so no existing tool-managed install (skills.sh, manual `openspec init`) is ever overwritten.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Required third-party skills ship as bundled snapshots
 
@@ -46,17 +42,3 @@ The app SHALL provide a single explicit install action (`installPipelinePrereqs`
 
 - **WHEN** the app starts up on any machine
 - **THEN** nothing is written to `~/.claude`; the installer runs only from the explicit UI action
-
-### Requirement: Setup and workflow guide is documented bilingually
-
-The repo SHALL contain a voice-first pipeline guide in English (`docs/PIPELINE_GUIDE.md`) and Vietnamese (`docs/PIPELINE_GUIDE.vi.md`), cross-linked, sharing one section structure: what the pipeline is, setup steps ending at the in-app install action, a walkthrough of what to say at each stage (PO grilling → "propose" → DEV "implement remaining tasks" → archive) that explains `/opsx:propose`/`/opsx:apply` are run by the agents rather than typed by the user, an appendix on using the agents directly in Claude Code, and troubleshooting mapped to the SetupPanel check rows. The README pipeline section SHALL link to the guide instead of duplicating it.
-
-#### Scenario: A new user reaches a working pipeline from the guide alone
-
-- **WHEN** a community user follows the guide's setup section on a machine with none of the prerequisites
-- **THEN** every step is covered in order (Claude CLI, `claude setup-token`, openspec CLI, in-app install) and ends with the SetupPanel checks green
-
-#### Scenario: Voice walkthrough teaches speaking, not typing
-
-- **WHEN** the user reads the walkthrough section
-- **THEN** each pipeline stage is described as what to say to Iris and what to expect back, and the `/opsx` commands are explained as the agents' internal mechanism
