@@ -27,5 +27,5 @@
 
 - [x] 5.1 `openspec validate harden-slot-release-and-event-subscription` passes
 - [x] 5.2 Re-read the MODIFIED `run-execution-queue` "A run finalizes exactly once": the slot-release clause now scopes side-effects to the slot-holder; double-finalize and slot-release scenarios unchanged and still true; new non-slot-holder scenario matches the guard
-- [ ] 5.3 Two commits on `develop` (independent concerns, do NOT squash): (a) I.5 — `finalize()` slot-ownership guard + run-queue test + the spec delta; (b) `App.tsx` sidecar latest-handler ref + comment. Co-Authored-By trailer
+- [x] 5.3 Two commits on `develop` (independent concerns, do NOT squash): (a) I.5 — `finalize()` slot-ownership guard + run-queue test + the spec delta; (b) `App.tsx` sidecar latest-handler ref + comment. Co-Authored-By trailer
 - [x] 5.4 Update the log table in `docs/BUGFIX_PLAN.md`: mark BUG I.5 done (structural slot-ownership guard in `finalize()`; refines the earlier "no code needed" note — safe by convention today, now safe by construction) and the `handleSidecarEvent` stale-closure item done (latest-handler ref + comment). Note this closes the Wave 2 tail — confirm whether any waves remain in the plan
