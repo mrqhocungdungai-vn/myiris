@@ -23,6 +23,7 @@ type Draft = {
   IRIS_USER_NAME: string;
   IRIS_LOAD_TEST_DATA: string;
   IRIS_WAKE_WORD: string;
+  IRIS_ENABLE_GOOGLE_SEARCH: string;
 };
 
 const WIZARD_STEPS = ["welcome", "gemini", "claude", "you", "permissions", "finish"] as const;
@@ -59,6 +60,7 @@ export default function SetupPanel({
     IRIS_USER_NAME: config.userName,
     IRIS_LOAD_TEST_DATA: config.loadTestData ? "true" : "false",
     IRIS_WAKE_WORD: config.wakeWord ? "true" : "false",
+    IRIS_ENABLE_GOOGLE_SEARCH: config.googleSearch ? "true" : "false",
   });
   const [step, setStep] = useState(0);
   const [gemini, setGemini] = useState<TestState>({ status: "idle" });
@@ -275,6 +277,23 @@ export default function SetupPanel({
         </button>
         <TestBadge state={gemini} okLabel="Key works" />
       </div>
+      <label className="setup-field">
+        <span>Google Search</span>
+        <ThemedSelect
+          ariaLabel="Google Search"
+          value={draft.IRIS_ENABLE_GOOGLE_SEARCH}
+          options={[
+            { value: "false", label: "Off" },
+            { value: "true", label: "On" },
+          ]}
+          onChange={(value) => set("IRIS_ENABLE_GOOGLE_SEARCH", value)}
+        />
+        <small className="setup-note">
+          Lets Iris search the web directly for quick facts. Needs a paid Gemini key — on a free-tier key, enabling
+          this disconnects the live session with a 1011 quota error. Applies on the next reconnect (no need to
+          restart Iris).
+        </small>
+      </label>
     </Section>
   );
 

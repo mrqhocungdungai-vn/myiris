@@ -83,6 +83,19 @@ one-click **"Install missing"** action that provisions whatever's absent
 guide for the full walkthrough, troubleshooting, and using the agents
 directly from Claude Code.
 
+## Roles & modes
+
+Iris presents exactly **three roles**, split across **two co-equal modes**:
+
+- **Talk mode** — the conversation you're having right now: interface/HUD control, wake/sleep, note-taking to your second brain (below), and Google Search when you've turned it on. This is **Iris**, always available with just a Gemini key.
+- **Build mode** — the PO → DEV pipeline, once the Claude Code CLI is detected (see "Claude pipeline (PO → DEV)" above). **PO** grills your request and proposes an OpenSpec change (decides WHAT gets built); **DEV** implements it headlessly (decides HOW). Ask Iris "what can you do" or "how do I build software with you" any time and it explains this model by voice — it never volunteers the explanation unprompted.
+
+Ask to start a new project or feature while chatting, and Iris tells you it's Build-mode work and forwards it to PO automatically — no need to switch roles yourself first. Quick tasks (lookups, checks, small automations, notes) stay decisive and are handled directly.
+
+**Second brain (notes).** When the Claude CLI is installed, Iris can also capture and retrieve personal notes by voice into a plain-markdown Obsidian vault at `~/iris-second-brain`, independent of whatever project you're working in. After a research exchange or a worked-out decision, Iris may offer once to save it — it never saves without you agreeing, and you can always ask directly to save or recall a note.
+
+**Google Search** is optional and off by default — it's a billed Gemini feature that disconnects a free-tier key with a quota error the moment it's enabled. Turn it on from Settings → Gemini API key, once you have a paid key.
+
 ## App Environment
 
 Iris reads environment values from:

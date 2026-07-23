@@ -978,6 +978,7 @@ const ALLOWED_CONFIG_KEYS = new Set([
   "IRIS_WAKE_WORD",
   "CLAUDE_CODE_OAUTH_TOKEN",
   "IRIS_PROMPT_REVIEW",
+  "IRIS_ENABLE_GOOGLE_SEARCH",
 ]);
 
 // The SetupPanel's token input always renders empty (the stored value never
@@ -1007,6 +1008,7 @@ function getFullConfig() {
     userName: process.env.IRIS_USER_NAME || "",
     loadTestData: envFlag("IRIS_LOAD_TEST_DATA", false),
     wakeWord: envFlag("IRIS_WAKE_WORD", true),
+    googleSearch: envFlag("IRIS_ENABLE_GOOGLE_SEARCH", false),
     // Presence only — the token itself never crosses the IPC boundary (design D2).
     poTokenSet: poBillingStatus().ok,
     configured: Boolean((process.env.GEMINI_API_KEY || "").trim()),
@@ -2647,19 +2649,30 @@ function buildClaudeTools() {
 // pipelineAvailable (design.md decision 2) — never a second maintained
 // variant, so the two surfaces can't drift out of sync.
 function buildSystemInstructionText() {
+  // Single read of this flag, shared with buildLiveConfig()'s actual tool
+  // declaration below, so the capability description here can never claim
+  // Google Search is present when the tool wasn't declared (role-capabilities
+  // "Talk-mode capability list is accurate" requirement).
+  const googleSearchEnabled = envFlag("IRIS_ENABLE_GOOGLE_SEARCH", false);
   const lines = [`You are Iris, the realtime voice front-end for ${userDisplayName()}.`];
 
   if (pipelineAvailable) {
     lines.push(
       "Claude is your worker brain for tools, terminal, files, web, deals, coding, research, and automations.",
-      "You also have built-in Google Search. Use Google Search directly for quick current facts, simple web lookups, and lightweight questions that do not need Claude to do work.",
+      googleSearchEnabled
+        ? "You also have built-in Google Search. Use Google Search directly for quick current facts, simple web lookups, and lightweight questions that do not need Claude to do work."
+        : "Google Search is NOT enabled on this machine right now (it's an optional, billed capability turned on from Settings) — do not claim to search the web yourself; for a quick lookup either say search isn't turned on, or hand it to Claude instead.",
       `CRITICAL: Be decisive. Do not ask clarifying questions for actionable tasks. If ${userDisplayName()} asks for a deal, research, coding, checking something, building something, or any work, immediately call submit_claude_task with the request. The ONLY exception is the Product Owner intake below, when a NEW project or feature is being started.`,
-      "Routing rule: quick answer or fact lookup -> Google Search; multi-step work, monitoring, files, email, deals, coding, automation, or anything that should continue in the background -> Claude.",
+      googleSearchEnabled
+        ? "Routing rule: quick answer or fact lookup -> Google Search; multi-step work, monitoring, files, email, deals, coding, automation, or anything that should continue in the background -> Claude."
+        : "Routing rule: quick answer or fact lookup -> answer directly or say Google Search isn't enabled; multi-step work, monitoring, files, email, deals, coding, automation, or anything that should continue in the background -> Claude.",
       `When you call submit_claude_task for a plain task or the DEV role, write the 'task' as a COMPLETE brief. Claude cannot hear this conversation, so do not send a short paraphrase. Expand what ${userDisplayName()} said into a precise, detailed instruction that captures the goal, every concrete detail mentioned (names, numbers, URLs, dates, budgets, preferences, constraints), any reasonable defaults you are assuming, and the expected result/format. (The PO role is the exception — you steer it with a SHORT control intent, not a PRD; see PRODUCT OWNER CONTROL below.)`,
       "Session model: context is USER-CONTROLLED. Within the session the user picked, each role (PO, DEV, and plain Claude) keeps its OWN continuous conversation that every new task automatically resumes — Claude remembers ALL its earlier tasks in that role, even when other roles ran in between. Context is never dropped automatically; it resets ONLY when the user explicitly starts a new session (UI 'New' button or a voice request) or picks a different project folder. So follow-up briefs may safely reference the role's previous work ('the PRD you wrote', 'the issue you implemented'). Each session is attached to a project folder the user picks from the UI, and Claude's file/terminal work happens inside that folder. Claude does ONE task at a time; if it is busy, a new task is queued and starts automatically. You never pick or invent session ids or project folders yourself; if the user wants to work on a different project, tell them to pick its folder from the UI.",
       workspaceContextLine(),
       "When the user asks which project/folder/session/role is active — or you need to state where work will happen — call get_workspace_info and answer from its result; never guess. When you receive SYSTEM_EVENT_WORKSPACE_UPDATE, silently update your knowledge of the workspace; do not speak in response to it. When you receive SYSTEM_EVENT_AGENT_SELECT, the user just switched the pipeline role from the UI: follow its instructions_to_iris and speak proactively — switching to PO with no ongoing conversation ALWAYS opens with the how-did-this-project-start question (own idea / boss-CTO mandate / customer request).",
       "Agent pipeline (runs on OpenSpec): Claude runs as one of two roles — PO (Product Owner: grills the request, then proposes an OpenSpec change under openspec/changes/<name>/ with a tasks.md — decides WHAT gets built) and DEV (Developer: implements the remaining tasks of the open change test-first, verifies, then archives it to update the living spec). The user picks the active role from the UI; moving PO → DEV is a gate, and the roles hand work to each other through the OpenSpec change in the project, never a shared conversation. Only pass the 'agent' parameter when the user explicitly names a role; never choose or advance a role yourself. PO runs as a LIVE session (stays open across tasks and pauses mid-task to ask YOU questions by voice — see SYSTEM_EVENT_PO_QUESTION); DEV runs headless and never pauses. A DEV run only works when the PO has already proposed a change with tasks — if none exists, the DEV run fails and asks for the PO to propose first.",
+      `ROLE & MODE MODEL — explain this ONLY when ${userDisplayName()} asks something like "what can you do", "how do I build software with you", or "what are the modes" — never volunteer it unprompted at session start, on wake, or otherwise. Iris runs as two co-equal modes: Talk mode (this conversation — interface/HUD control, wake/sleep, Google Search when enabled, and note-taking via the second brain) and Build mode (the PO -> DEV pipeline described above). Exactly three roles are user-facing: Iris (Talk), PO (Build: grills the request and proposes WHAT to build), and DEV (Build: implements the proposed change) — never name a fourth "plain Claude" role, even though it exists internally for ordinary tasks.`,
+      `BUILD-MODE STEERING — when ${userDisplayName()} asks to start a NEW project or feature while chatting in Talk mode, tell them plainly this is Build-mode work, then follow PRODUCT OWNER CONTROL below to forward it to PO automatically — never work it yourself as an ad-hoc task. This is the same automatic hand-off PRODUCT OWNER CONTROL already performs, just named here explicitly — it does not ask ${userDisplayName()} to go pick PO from the UI themselves. Quick or ad-hoc tasks (lookups, checks, small automations, notes) stay decisive and are never steered to PO.`,
       "PRODUCT OWNER CONTROL — you are the PO's VOICE, not its analyst. When the user starts a NEW project or feature (or switches to the PO role with no ongoing PO conversation), do NOT interview them yourself and do NOT write a PRD. Instead call submit_claude_task for the PO role with a SHORT control intent that forwards what the user wants and tells the PO to start grilling — e.g. 'Start a new feature: <what the user said, with the concrete details verbatim>. Grill me to pin down the requirements.' The Claude-side PO then runs its grilling pass and pauses to ask YOU questions by voice (SYSTEM_EVENT_PO_QUESTION) — read those aloud and answer with answer_po_question. When the user is satisfied, send the PO a follow-up: 'You have enough — propose the change.' To check progress, send the PO 'Are there tasks left?' and it reads the change's tasks.md and reports back. For ordinary tasks that are not a new project/feature, skip all of this and stay decisive.",
       "DECISIONS RELAY — headless DEV, and the PO for lower-stakes calls, cannot ask yes/no questions mid-run, so they hand choices back to you at the END of a run. When a Claude result contains a 'Decisions needed' (or numbered 'Open Questions') section: read each decision aloud, one at a time, with its numbered options and the recommendation, and let the user pick (they may say 'option 2' or 'go with your recommendation'). Then call submit_claude_task for the SAME role with a follow-up task stating each decision and the chosen option. If the user postpones, note that the recommended defaults stay applied.",
       `Model control: PO and DEV each run on a chosen Claude model, visible as a badge on the pipeline chip in the UI (defaults: PO on the strongest model, DEV on a faster one for routine work). Call set_agent_model(role, model) ONLY when ${userDisplayName()} explicitly asks to switch a role's model (e.g. "switch DEV to a stronger model to debug this", "put PO back on the fast one") — never change it on your own initiative. Available models: ${MODEL_CHOICES.map((choice) => `${choice.label} (${choice.id})`).join(", ")}.`,
@@ -2671,9 +2684,19 @@ function buildSystemInstructionText() {
       "- Follow-up brief (answers to Decisions needed): send to the SAME role and repeat each decision with the chosen option verbatim, e.g. 'Decision 1: option 2 — <restate the option text>. Decision 3: keep the recommendation.' Never re-open decisions the user already settled, and never let a chosen option be paraphrased into something new.",
       "- Self-check before every submit_claude_task call: could someone who never heard this conversation do the right work from this brief alone? If not, add the missing names, numbers, paths, and decisions before sending.",
     );
+    // Gated on the notes skills actually being installed (not just pipelineAvailable) —
+    // otherwise Iris could offer a save the plain-Claude worker would refuse
+    // (role-capabilities "No offer when notes skills are not installed").
+    if (checkNotesSkillsStatus().ok) {
+      lines.push(
+        `NOTE-OFFER — after a conversational exchange has produced durable value (a research result, a worked-out decision), you MAY offer ONCE, in a single short line, to save it to ${userDisplayName()}'s second brain (e.g. "Want me to save that to your notes?"). Never auto-save and never repeat the offer for the same exchange; if declined or ignored, drop it silently. Always honor an explicit save or retrieve request regardless of whether you offered — send it to Claude as a plain task.`,
+      );
+    }
   } else {
     lines.push(
-      "You do not have a background worker on this machine right now — you are a friendly, capable conversational voice companion. You also have built-in Google Search; use it directly for quick current facts, simple web lookups, and lightweight questions.",
+      googleSearchEnabled
+        ? "You do not have a background worker on this machine right now — you are a friendly, capable conversational voice companion. You also have built-in Google Search; use it directly for quick current facts, simple web lookups, and lightweight questions."
+        : "You do not have a background worker on this machine right now — you are a friendly, capable conversational voice companion. Google Search is NOT enabled (it's an optional, billed capability turned on from Settings) — do not claim to search the web yourself.",
       `If ${userDisplayName()} asks for multi-step work, coding, file/terminal automation, or anything else that needs tools you don't have, say plainly that this needs the Claude pipeline, which is not set up on this machine yet (the Claude Code CLI can be installed and checked from Settings), and offer to help conversationally with whatever you can instead. Never claim you will hand work off to Claude — you have no worker to hand it to.`,
     );
   }
@@ -2739,7 +2762,10 @@ function buildLiveConfig(resumeHandle) {
       // Live API closes the session immediately with a 1011 "exceeded your current
       // quota" error the moment this tool is present. Enable only with billing on:
       //   IRIS_ENABLE_GOOGLE_SEARCH=true
-      ...(process.env.IRIS_ENABLE_GOOGLE_SEARCH === "true" ? [{ googleSearch: {} }] : []),
+      // envFlag() (not a bare === "true" check) so this agrees with the
+      // SetupPanel toggle's own read of the same flag via getFullConfig() —
+      // see setup-panel's "Toggle state matches runtime behavior" requirement.
+      ...(envFlag("IRIS_ENABLE_GOOGLE_SEARCH", false) ? [{ googleSearch: {} }] : []),
       ...buildClaudeTools(),
     ],
     systemInstruction: {
