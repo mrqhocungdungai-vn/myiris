@@ -23,6 +23,7 @@ import { writeFileAtomicSync, quarantineFile } from "./atomic-file.mjs";
 import { createTrailingThrottle } from "./coalesce.mjs";
 import { resolveApprovedTask } from "./task-review.mjs";
 import { shouldRefuseLaunch } from "./platform.mjs";
+import { createCanvasStore } from "./canvas-store.mjs";
 
 const { app, BrowserWindow, ipcMain, session, nativeImage, Menu, dialog, Tray, screen, globalShortcut } = electron;
 
@@ -237,6 +238,12 @@ function flushTranscripts() {
 // (or asks by voice for a new one); Gemini cannot choose or invent session ids.
 // Every task resumes the active session's Claude session (--resume), tasks run
 // strictly one at a time (queued), and sessions survive app restarts.
+// Drawing panel scene seam (hud-drawing-canvas): the renderer pushes the
+// serialized excalidraw scene here; this is the same cache the
+// canvas-claude-mcp change will read from. See design.md D5.
+const CANVAS_STORE_FILE = path.join(os.homedir(), ".iris", "canvas.json");
+const canvasStore = createCanvasStore({ file: CANVAS_STORE_FILE });
+
 const SESSION_STORE = path.join(os.homedir(), ".iris", "claude-sessions.json");
 // Bumped when the on-disk shape changes; a store written by a newer build is
 // quarantined rather than parsed-and-overwritten (design.md D3).
@@ -3249,6 +3256,56 @@ app.whenReady().then(() => {
       mainWindow.setIgnoreMouseEvents(!on, { forward: true });
     }
   });
+  // Drawing panel activation (hud-drawing-canvas design.md D4): the HUD
+  // window is transparent/frameless/always-on-top, which on macOS commonly
+  // does not receive key events without an explicit focus() — needed for
+  // excalidraw's text tool, Delete, and tool shortcuts.
+  ipcMain.on("canvas:activate", () => {
+    if (mainWindow) mainWindow.focus();
+  });
+  // Scene-access seam (design.md D5): the in-memory cache updates
+  // immediately on every push so `canvas:get-scene` is never behind the
+  // debounced disk write; that debounced write is the only async part.
+  ipcMain.on("canvas:scene", (_event, scene) => {
+    if (scene && typeof scene === "object") canvasStore.setScene(scene);
+  });
+  ipcMain.handle("canvas:get-scene", () => canvasStore.getScene());
+  // Native file-dialog fallback (design.md D5a) for when the renderer's File
+  // System Access path is unavailable under file:// — feeds excalidraw's
+  // own loadFromBlob / serializeAsJSON / exportToBlob on the renderer side.
+  ipcMain.handle("canvas:native-open-file", async () => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: "Open drawing",
+      filters: [{ name: "Excalidraw", extensions: ["excalidraw"] }],
+      properties: ["openFile"],
+    });
+    if (result.canceled || !result.filePaths[0]) return { canceled: true };
+    const content = fs.readFileSync(result.filePaths[0], "utf8");
+    return { canceled: false, content };
+  });
+  ipcMain.handle("canvas:native-save-file", async (_event, payload) => {
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: "Save drawing",
+      defaultPath: payload?.suggestedName || "drawing.excalidraw",
+      filters: [{ name: "Excalidraw", extensions: ["excalidraw"] }],
+    });
+    if (result.canceled || !result.filePath) return { canceled: true };
+    fs.writeFileSync(result.filePath, String(payload?.content ?? ""), "utf8");
+    return { canceled: false, filePath: result.filePath };
+  });
+  ipcMain.handle("canvas:native-export-image", async (_event, payload) => {
+    const format = payload?.format === "svg" ? "svg" : "png";
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: "Export image",
+      defaultPath: payload?.suggestedName || `drawing.${format}`,
+      filters: [{ name: format.toUpperCase(), extensions: [format] }],
+    });
+    if (result.canceled || !result.filePath) return { canceled: true };
+    // SVG exports as raw markup text; PNG as a base64 payload (no data: URL prefix).
+    if (format === "svg") fs.writeFileSync(result.filePath, String(payload?.data ?? ""), "utf8");
+    else fs.writeFileSync(result.filePath, String(payload?.data ?? ""), "base64");
+    return { canceled: false, filePath: result.filePath };
+  });
   ipcMain.on("win:control", (_event, action) => {
     if (!mainWindow) return;
     if (action === "close") mainWindow.close();
@@ -3307,6 +3364,9 @@ async function shutdownTeardown() {
     if (run.child) killChild(run.child, "SIGTERM");
   }
   await closeAllPoSessions();
+  // A quit-while-drawing shouldn't lose recent strokes (hud-drawing-canvas
+  // design.md D5 "Flush").
+  await canvasStore.flush().catch(() => {});
 }
 
 app.on("will-quit", () => globalShortcut.unregisterAll());

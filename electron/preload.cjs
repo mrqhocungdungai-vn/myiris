@@ -22,6 +22,14 @@ contextBridge.exposeInMainWorld("iris", {
   sendContextSupplement: (text) => ipcRenderer.invoke("context-supplement:send", text),
   toggleHud: () => ipcRenderer.invoke("hud:toggle"),
   setHudInteractive: (on) => ipcRenderer.send("hud:interactive", Boolean(on)),
+  activateDrawingCanvas: () => ipcRenderer.send("canvas:activate"),
+  saveCanvasScene: (scene) => ipcRenderer.send("canvas:scene", scene),
+  getCanvasScene: () => ipcRenderer.invoke("canvas:get-scene"),
+  nativeOpenCanvasFile: () => ipcRenderer.invoke("canvas:native-open-file"),
+  nativeSaveCanvasFile: (content, suggestedName) =>
+    ipcRenderer.invoke("canvas:native-save-file", { content, suggestedName }),
+  nativeExportCanvasImage: (data, format, suggestedName) =>
+    ipcRenderer.invoke("canvas:native-export-image", { data, format, suggestedName }),
   windowControl: (action) => ipcRenderer.send("win:control", action),
   onHudMode: (callback) => {
     const handler = (_event, payload) => callback(payload);

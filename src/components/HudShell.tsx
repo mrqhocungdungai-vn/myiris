@@ -6,6 +6,7 @@ import {
   MessageSquare,
   Mic,
   MicOff,
+  PenTool,
   Power,
   Terminal,
   Volume2,
@@ -17,6 +18,7 @@ import PoQuestionBanner from "./PoQuestionBanner";
 import ReviewBanner from "./ReviewBanner";
 import ContextSupplementInput from "./ContextSupplementInput";
 import { HandSkeleton } from "./CameraDock";
+import DrawingCanvas from "./DrawingCanvas";
 import type { HandoffTone, ReactorState, TaskCard, TranscriptLine } from "../types";
 import type { HandState } from "../hooks/useHandControl";
 import { acceptedKey } from "../lib/tasks";
@@ -116,6 +118,8 @@ export default function HudShell({
   pipelineAvailable,
   poQuestion,
   taskReview,
+  drawingActive,
+  onToggleDrawing,
 }: {
   reactorState: ReactorState;
   inputLevelRef: { current: number };
@@ -179,6 +183,10 @@ export default function HudShell({
     onApprove: (editedTask?: string) => void;
     onCancel: () => void;
   } | null;
+  // Toggleable excalidraw drawing panel (hud-drawing-canvas) — hidden by
+  // default, unmounted when off so its lazy chunk never loads unless opened.
+  drawingActive: boolean;
+  onToggleDrawing: () => void;
 }) {
   // Show the full stream (state caps at 20); the column has a fixed max height
   // and palm-scrolls like Comms.
@@ -352,11 +360,20 @@ export default function HudShell({
           >
             <Hand size={14} />
           </button>
+          <button
+            className={`hud-btn ${drawingActive ? "active" : ""}`}
+            onClick={onToggleDrawing}
+            title={drawingActive ? "Hide drawing panel" : "Show drawing panel"}
+          >
+            <PenTool size={14} />
+          </button>
           <button className="hud-btn" onClick={onExitHud} title="Back to deck (⌥Space)">
             <Maximize2 size={14} />
           </button>
         </div>
       </div>
+
+      {drawingActive ? <DrawingCanvas /> : null}
     </div>
   );
 }

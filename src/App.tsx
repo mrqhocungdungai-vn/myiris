@@ -136,6 +136,10 @@ export default function App() {
   const [uiMode, setUiMode] = useState<UiMode>("deck");
   const [modeTransition, setModeTransition] = useState<"to-hud" | "to-deck" | null>(null);
   const modeTimerRef = useRef<number | null>(null);
+  // Toggleable excalidraw drawing panel (hud-drawing-canvas), HUD-only and
+  // hidden by default; unmounting DrawingCanvas when false keeps its lazy
+  // chunk from ever loading unless the user opens it.
+  const [drawingActive, setDrawingActive] = useState(false);
 
   // Orb micro-expressions + sound cues.
   const [orbThinking, setOrbThinking] = useState(false);
@@ -194,6 +198,17 @@ export default function App() {
       }
       return next;
     });
+  }
+
+  function toggleDrawing() {
+    setDrawingActive((current) => !current);
+  }
+
+  function exitHud() {
+    // Drawing is HUD-only (glass-hud-mode design.md D7); hide it before
+    // leaving so it isn't left mounted the next time the HUD is entered.
+    setDrawingActive(false);
+    window.iris.toggleHud();
   }
 
   function setCameraDeviceId(next: string) {
@@ -345,6 +360,10 @@ export default function App() {
       } else {
         setUiMode("deck");
         setModeTransition("to-deck");
+        // Drawing is HUD-only (glass-hud-mode design.md D7) — any exit path
+        // (button, hotkey, tray) hides the panel so it isn't left mounted
+        // (and interactivity-latching) once back in deck mode.
+        setDrawingActive(false);
         modeTimerRef.current = window.setTimeout(() => setModeTransition(null), 600);
       }
     });
@@ -377,8 +396,18 @@ export default function App() {
   // Click-through management: in HUD mode the window ignores the mouse except
   // when the pointer is over a `.hud-hit` element. elementFromPoint respects
   // pointer-events, so it only returns elements that opted in.
+  //
+  // While the drawing panel is active, interactivity is latched on for the
+  // whole duration instead of being re-decided per pointermove (hud-drawing-
+  // canvas design.md D3) — per-move flipping races with excalidraw gestures,
+  // so a fast drag/marquee/wheel-zoom crossing the panel edge could otherwise
+  // drop the pointer stream mid-gesture.
   useEffect(() => {
     if (!hasBridge || uiMode !== "hud") return;
+    if (drawingActive) {
+      window.iris.setHudInteractive(true);
+      return;
+    }
     let interactive = false;
     let raf = 0;
     window.iris.setHudInteractive(false);
@@ -390,7 +419,7 @@ export default function App() {
         const el = document.elementFromPoint(event.clientX, event.clientY);
         const next = Boolean(
           el?.closest?.(
-            ".hud-hit, .reader-backdrop, .history-backdrop, .match-backdrop, .setup-backdrop, .boot",
+            ".hud-hit, .reader-backdrop, .history-backdrop, .match-backdrop, .setup-backdrop, .boot, .excalidraw-modal-container",
           ),
         );
         if (next !== interactive) {
@@ -406,7 +435,7 @@ export default function App() {
       if (raf) cancelAnimationFrame(raf);
       window.iris.setHudInteractive(false);
     };
-  }, [hasBridge, uiMode]);
+  }, [hasBridge, uiMode, drawingActive]);
 
   // First-run onboarding + settings affordance (design.md D3/D4): load the
   // effective config once, auto-open the wizard if no Gemini key is set yet.
@@ -1248,7 +1277,7 @@ export default function App() {
           onToggleOutputMute={() => audio.toggleOutputMute()}
           onWake={start}
           onSleep={stop}
-          onExitHud={() => window.iris.toggleHud()}
+          onExitHud={exitHud}
           tasks={sortedTasks}
           acceptedIds={acceptedIds}
           stepsOpenIds={stepsOpenIds}
@@ -1274,6 +1303,8 @@ export default function App() {
           taskReview={
             pendingReview ? { review: pendingReview, onApprove: approveReview, onCancel: cancelReview } : null
           }
+          drawingActive={drawingActive}
+          onToggleDrawing={toggleDrawing}
         />
       ) : (
       <div

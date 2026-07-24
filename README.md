@@ -287,6 +287,13 @@ Spaces while the HUD is up should keep it visible, but if you notice it get
 left behind on a specific Space, toggle it off and back on to re-attach it to
 the one you're on.
 
+**Drawing panel** — a bounded excalidraw whiteboard, toggled from the pen icon
+in the orb control cluster. Hidden by default; while open, its region (and,
+while active, the whole HUD) accepts clicks so you can draw, use the color
+picker, and reach excalidraw's own Open/Save/Export-image menu. The working
+board auto-persists to `~/.iris/canvas.json` and survives toggles, HUD/deck
+switches, and restarts. Works without Claude — it's a plain whiteboard today.
+
 ## Notes
 
 - The app now uses Electron/Chromium microphone capture instead of Python `pyaudio` for the main Gemini Live path. This gives better echo cancellation on laptop speakers.
@@ -294,6 +301,7 @@ the one you're on.
 - Gemini 3.1 Live function calls are synchronous, so Claude tasks return a `run_id` immediately and finish in the background.
 - The background worker is Claude Code running headless (`claude -p`).
 - Hand tracking uses `@mediapipe/tasks-vision` (`GestureRecognizer`) entirely on-device and starts only after wake unless manually enabled.
+- The HUD drawing panel embeds `@excalidraw/excalidraw` `0.18.1` (MIT, exact-pinned — its asset path and `appState` schema are version-coupled), lazy-loaded on first activation, with fonts vendored into `public/excalidraw-assets` for offline `file://` use.
 
 ## Open-Source Notes
 

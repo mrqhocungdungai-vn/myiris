@@ -155,6 +155,20 @@ type UiActionPayload = {
 
 type UiMode = "deck" | "hud";
 
+// The canonical excalidraw scene JSON (serializeAsJSON's shape) — main only
+// caches/persists it, never inspects `elements`/`appState` contents, so this
+// stays loosely typed (hud-drawing-canvas design.md D5).
+type CanvasScene = {
+  type: string;
+  version?: number;
+  source?: string;
+  elements: unknown[];
+  appState: Record<string, unknown>;
+  files: Record<string, unknown>;
+};
+
+type NativeFileResult = { canceled: true } | { canceled: false; filePath: string };
+
 type UiContextSnapshot = {
   expandedTaskId: string | null;
   focusedTaskId: string | null;
@@ -206,6 +220,16 @@ type IrisApi = {
   sendContextSupplement: (text: string) => Promise<{ status: string; error?: string }>;
   toggleHud: () => Promise<{ mode: UiMode }>;
   setHudInteractive: (on: boolean) => void;
+  activateDrawingCanvas: () => void;
+  saveCanvasScene: (scene: CanvasScene) => void;
+  getCanvasScene: () => Promise<CanvasScene | null>;
+  nativeOpenCanvasFile: () => Promise<{ canceled: true } | { canceled: false; content: string }>;
+  nativeSaveCanvasFile: (content: string, suggestedName?: string) => Promise<NativeFileResult>;
+  nativeExportCanvasImage: (
+    data: string,
+    format: "png" | "svg",
+    suggestedName?: string,
+  ) => Promise<NativeFileResult>;
   windowControl: (action: "close" | "minimize") => void;
   onHudMode: (callback: (payload: { mode: UiMode }) => void) => () => void;
   onWakeRequest: (callback: () => void) => () => void;
@@ -231,4 +255,7 @@ type IrisApi = {
 
 interface Window {
   iris: IrisApi;
+  // Read by @excalidraw/excalidraw to resolve its fonts locally instead of
+  // its default CDN (hud-drawing-canvas design.md D1).
+  EXCALIDRAW_ASSET_PATH?: string;
 }
