@@ -31,10 +31,12 @@
     "@excalidraw/excalidraw": "0.18.1",
     "@google/genai": "^2.10.0",
     "@mediapipe/tasks-vision": "^0.10.35",
+    "@modelcontextprotocol/sdk": "1.29.0",
     "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.4.0",
     "@react-three/postprocessing": "^3.0.4",
     "@vitejs/plugin-react": "latest",
+    "fractional-indexing": "3.2.0",
     "lucide-react": "latest",
     "onnxruntime-web": "^1.27.0",
     "react": "latest",
@@ -43,7 +45,8 @@
     "remark-gfm": "^4.0.1",
     "three": "^0.181.2",
     "typescript": "latest",
-    "vite": "latest"
+    "vite": "latest",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@types/node": "latest",
@@ -52,6 +55,7 @@
     "concurrently": "latest",
     "electron": "latest",
     "electron-builder": "^26.15.3",
+    "jsdom": "^29.1.1",
     "vitest": "4.1.10",
     "wait-on": "latest"
   },

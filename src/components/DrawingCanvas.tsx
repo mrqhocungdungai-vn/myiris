@@ -41,6 +41,22 @@ function blobToBase64(blob: Blob): Promise<string> {
   });
 }
 
+// Identity of a scene state for echo suppression (canvas-claude-mcp
+// design.md D4): (id, version, versionNonce) changes on every excalidraw
+// mutation, so two elements arrays with an identical signature are the same
+// state, not just visually equal. Deliberately NOT a one-shot "skip the next
+// onChange" flag — updateScene may fire onChange zero times (leaving a flag
+// armed to swallow the next real user edit) or more than once; comparing
+// against the last-applied signature on every onChange handles both without
+// ever needing to "disarm" it.
+export function sceneSignature(elements: readonly { id: string; version?: number; versionNonce?: number; isDeleted?: boolean }[]): string {
+  return elements
+    .filter((element) => !element.isDeleted)
+    .map((element) => `${element.id}:${element.version}:${element.versionNonce}`)
+    .sort()
+    .join("|");
+}
+
 export default function DrawingCanvas() {
   const apiRef = useRef<ExcalidrawImperativeAPI | null>(null);
   const pushTimerRef = useRef<number | null>(null);
@@ -51,6 +67,9 @@ export default function DrawingCanvas() {
   // strip only exists as the native-dialog escape hatch design.md D5a asks
   // for, in case that shim is ever blocked in a packaged build.
   const [hasFsAccess] = useState(() => typeof window !== "undefined" && "showOpenFilePicker" in window);
+  // Signature of the elements this component itself last applied via
+  // canvas:apply — read by handleChange's echo guard below.
+  const lastAppliedSignatureRef = useRef<string | null>(null);
 
   // The panel only exists while active (App.tsx unmounts it when
   // drawingActive is false), so mount == activate: tell main to bring the
@@ -58,6 +77,48 @@ export default function DrawingCanvas() {
   // and shortcuts reach excalidraw.
   useEffect(() => {
     window.iris.activateDrawingCanvas();
+  }, []);
+
+  // canvas-claude-mcp design.md D4/4.2: apply an externally-originated
+  // (Claude) write into the live scene. Registered inside this effect so its
+  // lifetime is exactly "panel mounted" — while unmounted, get_canvas's
+  // includeImage request degrades to JSON-only for the same reason (no
+  // listener to answer canvas:request-image, see the effect below).
+  useEffect(() => {
+    return window.iris.onCanvasApply((payload) => {
+      if (!excalidrawModule || !apiRef.current) return; // mid-mount race — rare, main's cache stays the source of truth
+      const elements = payload.elements as never[];
+      lastAppliedSignatureRef.current = sceneSignature(elements as never);
+      apiRef.current.updateScene({
+        elements,
+        // Remote update, not a local edit — must not pollute the user's undo
+        // stack (design.md D4).
+        captureUpdate: excalidrawModule.CaptureUpdateAction.NEVER,
+      });
+    });
+  }, []);
+
+  // canvas-claude-mcp design.md D3/4.3: reply to main's image-export request
+  // (get_canvas({ includeImage: true })) with a rendered PNG of the current
+  // scene. Same mount-scoped lifetime as the apply handler above — while
+  // unmounted, main's own timeout degrades the tool result to JSON-only.
+  useEffect(() => {
+    return window.iris.onCanvasImageRequest((payload) => {
+      if (!excalidrawModule || !apiRef.current) {
+        window.iris.replyCanvasImage(payload.id, null);
+        return;
+      }
+      const api = apiRef.current;
+      const mod = excalidrawModule;
+      mod
+        .exportToBlob({ elements: api.getSceneElements(), appState: api.getAppState(), files: api.getFiles() })
+        .then(async (blob: Blob) => {
+          window.iris.replyCanvasImage(payload.id, { mimeType: "image/png", data: await blobToBase64(blob) });
+        })
+        .catch(() => {
+          window.iris.replyCanvasImage(payload.id, null);
+        });
+    });
   }, []);
 
   const flushPending = useCallback(() => {
@@ -84,6 +145,14 @@ export default function DrawingCanvas() {
 
   const handleChange = useCallback<NonNullable<ExcalidrawProps["onChange"]>>((elements, appState, files) => {
     if (!excalidrawModule) return;
+    // Echo of our own canvas:apply — do not push it back up as a
+    // whole-scene write, or it could clobber main's cache with a
+    // slightly-stale copy captured mid-apply (design.md D4). A genuine user
+    // edit changes every touched element's version/versionNonce, so it never
+    // matches this signature and always still propagates below.
+    if (lastAppliedSignatureRef.current !== null && sceneSignature(elements) === lastAppliedSignatureRef.current) {
+      return;
+    }
     const scene = JSON.parse(
       excalidrawModule.serializeAsJSON(elements, appState, files, "local"),
     ) as CanvasScene;

@@ -25,6 +25,22 @@ contextBridge.exposeInMainWorld("iris", {
   activateDrawingCanvas: () => ipcRenderer.send("canvas:activate"),
   saveCanvasScene: (scene) => ipcRenderer.send("canvas:scene", scene),
   getCanvasScene: () => ipcRenderer.invoke("canvas:get-scene"),
+  // canvas-claude-mcp (design.md D3/4.1): main→renderer apply of an
+  // externally-originated (Claude) write, and the image-export request/reply
+  // pair backing get_canvas({ includeImage: true }). Both only matter while
+  // DrawingCanvas is mounted — it registers/tears these down in its own
+  // effect, mirroring the on/off pattern of the other subscriptions below.
+  onCanvasApply: (callback) => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on("canvas:apply", handler);
+    return () => ipcRenderer.removeListener("canvas:apply", handler);
+  },
+  onCanvasImageRequest: (callback) => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on("canvas:request-image", handler);
+    return () => ipcRenderer.removeListener("canvas:request-image", handler);
+  },
+  replyCanvasImage: (id, image) => ipcRenderer.send("canvas:image-result", { id, image }),
   nativeOpenCanvasFile: () => ipcRenderer.invoke("canvas:native-open-file"),
   nativeSaveCanvasFile: (content, suggestedName) =>
     ipcRenderer.invoke("canvas:native-save-file", { content, suggestedName }),

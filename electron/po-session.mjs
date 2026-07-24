@@ -168,7 +168,7 @@ async function pump(state) {
 // or from the pre-live-session `-p --resume` era — is not lost).
 export function getOrCreatePoSession(
   workstream,
-  { agent, cwd, resumeSessionId, onAskUserQuestion, claudeExecutable, model, query: queryFn = query } = {},
+  { agent, cwd, resumeSessionId, onAskUserQuestion, claudeExecutable, model, mcpServers, query: queryFn = query } = {},
 ) {
   const existing = sessions.get(workstream.id);
   if (existing && !existing.ended) return existing;
@@ -183,6 +183,12 @@ export function getOrCreatePoSession(
     // Tracks the model the live SDK session is actually running on, so callers
     // can tell whether a `setModel()` round-trip is needed before the next turn.
     currentModel: model || null,
+    // Tracks whether the canvas MCP has already been wired into this live
+    // session (design.md D8 of canvas-claude-mcp) — set true here when it's
+    // supplied at creation, or by setPoSessionMcpServers on a follow-up turn.
+    // po-session.mjs never learns anything about canvas beyond this opaque
+    // record; it stays canvas-ignorant.
+    currentMcp: mcpServers ? true : null,
   };
 
   const options = {
@@ -208,6 +214,7 @@ export function getOrCreatePoSession(
   if (model) options.model = model;
   if (claudeExecutable) options.pathToClaudeCodeExecutable = claudeExecutable;
   if (resumeSessionId) options.resume = resumeSessionId;
+  if (mcpServers) options.mcpServers = mcpServers;
 
   state.query = queryFn({ prompt: channel.iterable, options });
   sessions.set(workstream.id, state);
@@ -223,6 +230,18 @@ export async function setPoSessionModel(state, model) {
   if (!model || !state?.query?.setModel) return;
   await state.query.setModel(model);
   state.currentModel = model;
+}
+
+// Wires the canvas MCP into an already-live session — mirrors
+// setPoSessionModel's shape exactly, but there is no "different servers"
+// case to react to (the canvas MCP's url/token are stable for the server's
+// whole lifetime), so this is applied at most once per session: callers
+// check state.currentMcp first and only call this when it's still falsy
+// (canvas-claude-mcp design.md D6/D8's "lazily per turn" wiring).
+export async function setPoSessionMcpServers(state, servers) {
+  if (!servers || !state?.query?.setMcpServers) return;
+  await state.query.setMcpServers(servers);
+  state.currentMcp = true;
 }
 
 export function deliverPoTurn(state, taskText, { onActivity, onSessionId, onToolStart, onToolEnd } = {}) {

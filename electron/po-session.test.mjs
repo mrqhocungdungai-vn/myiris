@@ -4,7 +4,7 @@
 // `query` seam — a fake async iterator, no subprocess, no Electron. See
 // openspec/changes/settle-and-attribute-po-turn/design.md D1/D2/D5.
 import { describe, it, expect } from "vitest";
-import { getOrCreatePoSession, deliverPoTurn, closePoSession } from "./po-session.mjs";
+import { getOrCreatePoSession, deliverPoTurn, closePoSession, setPoSessionMcpServers } from "./po-session.mjs";
 
 // A hand-rolled async iterator (not a generator function) so the test has
 // direct control over `.return()` — mirroring exactly what
@@ -144,5 +144,57 @@ describe("po-session pump settlement", () => {
     // turn already resolved and currentTurn is already cleared.
     source.endSilently();
     await new Promise((resolve) => setTimeout(resolve, 10));
+  });
+});
+
+// canvas-claude-mcp wiring (design.md D8, task 5.1): po-session.mjs forwards
+// an opaque mcpServers record into the SDK session without knowing anything
+// about canvas.
+describe("po-session canvas MCP wiring", () => {
+  const record = { "iris-canvas": { type: "http", url: "http://127.0.0.1:1234/mcp", headers: { Authorization: "Bearer tok" }, alwaysLoad: true } };
+
+  it("passes mcpServers through to the SDK query() options at session creation", () => {
+    const source = createFakeQuerySource();
+    const workstream = makeWorkstream();
+    let capturedOptions;
+    const queryFn = ({ options }) => {
+      capturedOptions = options;
+      return source.query;
+    };
+
+    const state = getOrCreatePoSession(workstream, { mcpServers: record, query: queryFn });
+
+    expect(capturedOptions.mcpServers).toBe(record);
+    expect(state.currentMcp).toBe(true);
+  });
+
+  it("omits mcpServers entirely when the canvas MCP is not available", () => {
+    const source = createFakeQuerySource();
+    const workstream = makeWorkstream();
+    let capturedOptions;
+    const queryFn = ({ options }) => {
+      capturedOptions = options;
+      return source.query;
+    };
+
+    const state = getOrCreatePoSession(workstream, { query: queryFn });
+
+    expect(capturedOptions.mcpServers).toBeUndefined();
+    expect(state.currentMcp).toBeNull();
+  });
+
+  it("setPoSessionMcpServers wires an already-live session via query.setMcpServers", async () => {
+    const source = createFakeQuerySource();
+    const workstream = makeWorkstream();
+    const state = getOrCreatePoSession(workstream, { query: () => source.query });
+    let calledWith;
+    state.query.setMcpServers = async (servers) => {
+      calledWith = servers;
+    };
+
+    await setPoSessionMcpServers(state, record);
+
+    expect(calledWith).toBe(record);
+    expect(state.currentMcp).toBe(true);
   });
 });

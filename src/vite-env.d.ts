@@ -169,6 +169,22 @@ type CanvasScene = {
 
 type NativeFileResult = { canceled: true } | { canceled: false; filePath: string };
 
+// canvas-claude-mcp (design.md D3/D4): a Claude-originated write, applied to
+// the live scene while the panel is mounted. Always the FULL post-write
+// element set (updateScene replaces the whole array — see DrawingCanvas.tsx).
+type CanvasApplyPayload = {
+  elements: unknown[];
+};
+
+type CanvasImageRequestPayload = {
+  id: string;
+};
+
+type CanvasImagePayload = {
+  mimeType: string;
+  data: string;
+} | null;
+
 type UiContextSnapshot = {
   expandedTaskId: string | null;
   focusedTaskId: string | null;
@@ -230,6 +246,9 @@ type IrisApi = {
     format: "png" | "svg",
     suggestedName?: string,
   ) => Promise<NativeFileResult>;
+  onCanvasApply: (callback: (payload: CanvasApplyPayload) => void) => () => void;
+  onCanvasImageRequest: (callback: (payload: CanvasImageRequestPayload) => void) => () => void;
+  replyCanvasImage: (id: string, image: CanvasImagePayload) => void;
   windowControl: (action: "close" | "minimize") => void;
   onHudMode: (callback: (payload: { mode: UiMode }) => void) => () => void;
   onWakeRequest: (callback: () => void) => () => void;

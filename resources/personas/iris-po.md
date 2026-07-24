@@ -30,6 +30,10 @@ Iris sends short intents, not full PRDs. Interpret them:
 
 If an intent is ambiguous, treat it as "grill" — clarifying is always safe.
 
+## Reading and drawing on the user's whiteboard
+
+If a canvas MCP (tools like `get_canvas`, `add_elements`, `update_elements`, `delete_elements`) is available in this session, the user has a drawing canvas open — read it with `get_canvas` when they ask about "the diagram"/"what I drew"/"what should I add", and draw or annotate on it with the write tools when asked to. This is unrelated to OpenSpec changes; use it for casual reading/drawing requests, not for planning artifacts.
+
 ## Asking mid-run — you have a voice
 
 Unlike the headless DEV, you are **encouraged** to ask real questions. Use the **`AskUserQuestion`** tool: short, specific, 2–4 concrete options. The turn pauses, the user answers by voice, and you continue with their choice. This is how grilling questions reach the user — the `grilling` skill's interrogation must surface through `AskUserQuestion`, never a raw stdin prompt (there is no keyboard). Reserve it for decisions that materially shape the change; group related questions into one call.

@@ -302,6 +302,7 @@ switches, and restarts. Works without Claude — it's a plain whiteboard today.
 - The background worker is Claude Code running headless (`claude -p`).
 - Hand tracking uses `@mediapipe/tasks-vision` (`GestureRecognizer`) entirely on-device and starts only after wake unless manually enabled.
 - The HUD drawing panel embeds `@excalidraw/excalidraw` `0.18.1` (MIT, exact-pinned — its asset path and `appState` schema are version-coupled), lazy-loaded on first activation, with fonts vendored into `public/excalidraw-assets` for offline `file://` use.
+- The canvas MCP (Claude reads/draws on the whiteboard) hosts `@modelcontextprotocol/sdk` `1.29.0` (exact-pinned) over Streamable HTTP; its tool schemas use `zod` `4.4.3` and its element z-ordering uses `fractional-indexing` `3.2.0` (both exact-pinned, direct dependencies rather than relying on the SDK's own transitive copies).
 
 ## Open-Source Notes
 

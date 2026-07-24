@@ -14,6 +14,7 @@ import {
   closePoSession,
   closeAllPoSessions,
   setPoSessionModel,
+  setPoSessionMcpServers,
   getPoSessionState,
   cancelPoTurn,
 } from "./po-session.mjs";
@@ -24,6 +25,7 @@ import { createTrailingThrottle } from "./coalesce.mjs";
 import { resolveApprovedTask } from "./task-review.mjs";
 import { shouldRefuseLaunch } from "./platform.mjs";
 import { createCanvasStore } from "./canvas-store.mjs";
+import { createCanvasMcp, buildMcpServerRecord } from "./canvas-mcp.mjs";
 
 const { app, BrowserWindow, ipcMain, session, nativeImage, Menu, dialog, Tray, screen, globalShortcut } = electron;
 
@@ -243,6 +245,76 @@ function flushTranscripts() {
 // canvas-claude-mcp change will read from. See design.md D5.
 const CANVAS_STORE_FILE = path.join(os.homedir(), ".iris", "canvas.json");
 const canvasStore = createCanvasStore({ file: CANVAS_STORE_FILE });
+
+// canvas-claude-mcp: main→renderer image-export request/response. Keyed by a
+// correlation id since preload has no invoke-based main→renderer req/resp
+// primitive (design.md D3) — a plain `on`+`send` pair, with a pending-promise
+// registry here and a generous cleanup timer so a request that never gets a
+// reply (panel unmounted mid-flight) can't leak the map entry. canvas-mcp.mjs
+// itself owns the hard timeout the get_canvas tool actually blocks on
+// (DEFAULT_IMAGE_TIMEOUT_MS) — this cleanup timer is just a longer backstop.
+const pendingCanvasImageRequests = new Map(); // id -> resolve
+const CANVAS_IMAGE_CLEANUP_MS = 8000;
+
+function requestCanvasImage() {
+  if (!mainWindow || mainWindow.isDestroyed()) return Promise.resolve(null);
+  const id = crypto.randomUUID();
+  return new Promise((resolve) => {
+    pendingCanvasImageRequests.set(id, resolve);
+    emitToRenderer("canvas:request-image", { id });
+    const timer = setTimeout(() => {
+      if (pendingCanvasImageRequests.delete(id)) resolve(null);
+    }, CANVAS_IMAGE_CLEANUP_MS);
+    timer.unref?.();
+  });
+}
+
+// One Iris-hosted local MCP server exposing the drawing canvas to Claude
+// (design.md of canvas-claude-mcp) — gated on pipelineAvailable AND
+// canvasEngaged below, never started for a session that never opens the
+// drawing panel.
+const canvasMcp = createCanvasMcp({
+  getScene: () => canvasStore.getScene(),
+  setScene: (scene) => canvasStore.setScene(scene),
+  flush: () => canvasStore.flush(),
+  broadcastApply: (elements) => emitToRenderer("canvas:apply", { elements }),
+  requestImage: () => requestCanvasImage(),
+  log: (event, detail) => {
+    emitEvent({ type: "log", level: "info", message: `[canvas-mcp] ${event} ${JSON.stringify(detail || {})}` });
+  },
+});
+
+// Sticky per-session flag (design.md D6): set true the first time the
+// drawing panel reports it was opened; never reset except by an app
+// restart. Combined with pipelineAvailable, this is the sole gate on
+// whether the canvas MCP is ever wired — a pure-voice session that never
+// opens the canvas starts nothing.
+let canvasEngaged = false;
+
+// Idempotent no-op unless BOTH gates hold; safe to call from any signal that
+// might have just flipped one of them (probePipelineAvailability, and the
+// drawing panel's first canvas:activate).
+function maybeStartCanvasMcp() {
+  if (!pipelineAvailable || !canvasEngaged) return;
+  canvasMcp.start().catch((error) => {
+    emitEvent({ type: "log", level: "warn", message: `Canvas MCP server failed to start: ${error.message}` });
+  });
+}
+
+// Awaited by both run paths (§5) right before wiring a Claude run — ensures
+// the server is up (starting it if this is the very first turn where both
+// gates already held) and returns the Iris-scoped McpHttpServerConfig record,
+// or null when the canvas MCP does not apply to this run.
+async function ensureCanvasMcpForRun() {
+  if (!pipelineAvailable || !canvasEngaged) return null;
+  try {
+    await canvasMcp.start();
+  } catch (error) {
+    emitEvent({ type: "log", level: "warn", message: `Canvas MCP unavailable for this run: ${error.message}` });
+    return null;
+  }
+  return buildMcpServerRecord(canvasMcp.getInfo());
+}
 
 const SESSION_STORE = path.join(os.homedir(), ".iris", "claude-sessions.json");
 // Bumped when the on-disk shape changes; a store written by a newer build is
@@ -848,6 +920,10 @@ async function probePipelineAvailability() {
   if (next !== pipelineAvailable) {
     pipelineAvailable = next;
     emitEvent({ type: "pipeline_availability", available: pipelineAvailable });
+    // Claude just became available mid-session: bring the canvas MCP up if
+    // the drawing panel was already engaged (design.md D6 of
+    // canvas-claude-mcp) — a no-op otherwise.
+    maybeStartCanvasMcp();
   }
   return { available: pipelineAvailable, status };
 }
@@ -1765,7 +1841,7 @@ function vaultChangedSince(sinceMs) {
 
 // The stateless module: unchanged one-shot `claude -p` subprocess per run,
 // exactly as before this change — mechanism AND auth (process.env, `/login`).
-function startDevRun(run) {
+async function startDevRun(run) {
   // Model is resolved at run START (not at submit time), so a model change
   // made while this task was queued still applies — see design.md D4. Only
   // role runs are model-selectable; plain Claude gets no --model flag and no
@@ -1813,6 +1889,24 @@ function startDevRun(run) {
   if (run.agent) args.push("--agent", `${AGENT_PREFIX}${run.agent}`);
   if (run.model) args.push("--model", run.model);
 
+  // canvas-claude-mcp (design.md D6/5.2): Iris-scoped per-run wiring, never
+  // written to ~/.claude. A 0600 temp file (not inline argv) so the bearer
+  // token isn't visible via `ps`; deleted once the run's own process ends
+  // (see the child "close"/"error" handlers and the spawn-failure catch
+  // below) — cleanupMcpConfig() is idempotent and safe to call from all three.
+  const mcpRecord = await ensureCanvasMcpForRun();
+  let mcpConfigDir = null;
+  if (mcpRecord) {
+    mcpConfigDir = fs.mkdtempSync(path.join(os.tmpdir(), "iris-mcp-"));
+    const mcpConfigPath = path.join(mcpConfigDir, "mcp-config.json");
+    fs.writeFileSync(mcpConfigPath, JSON.stringify({ mcpServers: { "iris-canvas": mcpRecord } }), { mode: 0o600 });
+    args.push("--mcp-config", mcpConfigPath);
+  }
+  function cleanupMcpConfig() {
+    if (mcpConfigDir) fs.rmSync(mcpConfigDir, { recursive: true, force: true });
+    mcpConfigDir = null;
+  }
+
   // CONTEXT IS USER-CONTROLLED. Every role (and plain Claude) keeps its OWN
   // continuous conversation within this workstream: a task always --resumes the
   // role's stored session, no matter what ran in between. Nothing here ever
@@ -1838,6 +1932,7 @@ function startDevRun(run) {
       detached: true,
     });
   } catch (error) {
+    cleanupMcpConfig();
     runQueue.finalize(run.run_id, RUN_STATUS.ERROR, `Failed to launch claude: ${error.message}`);
     return;
   }
@@ -1863,9 +1958,11 @@ function startDevRun(run) {
   });
   child.stderr.on("data", (chunk) => { stderr += chunk; });
   child.on("error", (error) => {
+    cleanupMcpConfig();
     runQueue.finalize(run.run_id, RUN_STATUS.ERROR, `Failed to launch claude: ${error.message}`);
   });
   child.on("close", (code) => {
+    cleanupMcpConfig();
     if (run.status === RUN_STATUS.CANCELLED) {
       runQueue.finalize(run.run_id, RUN_STATUS.CANCELLED, "Run was stopped before completion.");
       return;
@@ -1903,7 +2000,7 @@ function startDevRun(run) {
 // The stateful module: delivers the turn into the workstream's resident Agent
 // SDK session (creating it on the first PO turn), instead of spawning a new
 // process. See electron/po-session.mjs and design.md D1/D2/D3.
-function startPoRun(run) {
+async function startPoRun(run) {
   const workstream = findWorkstream(run.workstream_id);
   if (!workstream) {
     runQueue.finalize(run.run_id, RUN_STATUS.ERROR, "Unknown workstream for PO run.");
@@ -1922,6 +2019,12 @@ function startPoRun(run) {
   // Resolved at run start (not submit time) so a model change made while this
   // task was queued still applies — see design.md D5.
   run.model = resolveAgentModel(workstream, "po");
+  // canvas-claude-mcp (design.md D6/5.1): awaits server-ready before wiring,
+  // so a PO turn that fires the instant the canvas is engaged never wires an
+  // undefined URL, and never wires anything at all when the canvas MCP does
+  // not apply to this session.
+  const mcpRecord = await ensureCanvasMcpForRun();
+  const mcpServers = mcpRecord ? { "iris-canvas": mcpRecord } : undefined;
 
   run.status = RUN_STATUS.RUNNING;
   run.started_at = Date.now() / 1000;
@@ -1937,6 +2040,7 @@ function startPoRun(run) {
       claudeExecutable: claudeBinary(),
       onAskUserQuestion: (workstreamId, questions) => askUserQuestionViaVoice(workstreamId, questions),
       model: run.model,
+      mcpServers,
     });
   } catch (error) {
     runQueue.finalize(run.run_id, RUN_STATUS.ERROR, `Failed to start PO session: ${error.message}`);
@@ -1947,13 +2051,22 @@ function startPoRun(run) {
   // queued model change) — switch it via setModel() so the turn about to run
   // uses the current choice with the session's context fully preserved,
   // instead of closing/resuming just to change models.
-  const modelReady =
-    state.currentModel === run.model ? Promise.resolve() : setPoSessionModel(state, run.model);
+  const modelReady = (
+    state.currentModel === run.model ? Promise.resolve() : setPoSessionModel(state, run.model)
+  ).catch((error) => {
+    emitEvent({ type: "log", level: "warn", message: `Could not switch PO's live session model: ${error.message}` });
+  });
+  // Applied lazily, at most once per session (design.md D6/D8) — a session
+  // created before the canvas was engaged gets wired here on its first turn
+  // after; a session created with it already set (mcpServers above) has
+  // state.currentMcp === true and this is a no-op.
+  const mcpReady = (
+    state.currentMcp || !mcpServers ? Promise.resolve() : setPoSessionMcpServers(state, mcpServers)
+  ).catch((error) => {
+    emitEvent({ type: "log", level: "warn", message: `Could not wire the canvas MCP into PO's live session: ${error.message}` });
+  });
 
-  modelReady
-    .catch((error) => {
-      emitEvent({ type: "log", level: "warn", message: `Could not switch PO's live session model: ${error.message}` });
-    })
+  Promise.all([modelReady, mcpReady])
     .then(() =>
       deliverPoTurn(state, run.task, {
         onActivity: (line) => pushActivity(run, line),
@@ -2682,6 +2795,7 @@ function buildSystemInstructionText() {
       workspaceContextLine(),
       "When the user asks which project/folder/session/role is active — or you need to state where work will happen — call get_workspace_info and answer from its result; never guess. When you receive SYSTEM_EVENT_WORKSPACE_UPDATE, silently update your knowledge of the workspace; do not speak in response to it. When you receive SYSTEM_EVENT_AGENT_SELECT, the user just switched the pipeline role from the UI: follow its instructions_to_iris and speak proactively — switching to PO with no ongoing conversation ALWAYS opens with the how-did-this-project-start question (own idea / boss-CTO mandate / customer request).",
       "Agent pipeline (runs on OpenSpec): Claude runs as one of two roles — PO (Product Owner: grills the request, then proposes an OpenSpec change under openspec/changes/<name>/ with a tasks.md — decides WHAT gets built) and DEV (Developer: implements the remaining tasks of the open change test-first, verifies, then archives it to update the living spec). The user picks the active role from the UI; moving PO → DEV is a gate, and the roles hand work to each other through the OpenSpec change in the project, never a shared conversation. Only pass the 'agent' parameter when the user explicitly names a role; never choose or advance a role yourself. PO runs as a LIVE session (stays open across tasks and pauses mid-task to ask YOU questions by voice — see SYSTEM_EVENT_PO_QUESTION); DEV runs headless and never pauses. A DEV run only works when the PO has already proposed a change with tasks — if none exists, the DEV run fails and asks for the PO to propose first.",
+      `CANVAS — ${userDisplayName()} has a drawing canvas/whiteboard in the app that YOU cannot see. When they ask something like "what should I add to my diagram", "what do you think of my drawing", "connect these two boxes", or anything else about the canvas/diagram/whiteboard, that is real work for Claude (which CAN read and draw on it) — call submit_claude_task with no 'agent' parameter (never DEV, which would be refused for lacking an open OpenSpec change) describing exactly what they asked. Never guess at what is drawn yourself.`,
       `ROLE & MODE MODEL — explain this ONLY when ${userDisplayName()} asks something like "what can you do", "how do I build software with you", or "what are the modes" — never volunteer it unprompted at session start, on wake, or otherwise. Iris runs as two co-equal modes: Talk mode (this conversation — interface/HUD control, wake/sleep, Google Search when enabled, and note-taking via the second brain) and Build mode (the PO -> DEV pipeline described above). Exactly three roles are user-facing: Iris (Talk), PO (Build: grills the request and proposes WHAT to build), and DEV (Build: implements the proposed change) — never name a fourth "plain Claude" role, even though it exists internally for ordinary tasks.`,
       `BUILD-MODE STEERING — when ${userDisplayName()} asks to start a NEW project or feature while chatting in Talk mode, tell them plainly this is Build-mode work, then follow PRODUCT OWNER CONTROL below to forward it to PO automatically — never work it yourself as an ad-hoc task. This is the same automatic hand-off PRODUCT OWNER CONTROL already performs, just named here explicitly — it does not ask ${userDisplayName()} to go pick PO from the UI themselves. Quick or ad-hoc tasks (lookups, checks, small automations, notes) stay decisive and are never steered to PO.`,
       "PRODUCT OWNER CONTROL — you are the PO's VOICE, not its analyst. When the user starts a NEW project or feature (or switches to the PO role with no ongoing PO conversation), do NOT interview them yourself and do NOT write a PRD. Instead call submit_claude_task for the PO role with a SHORT control intent that forwards what the user wants and tells the PO to start grilling — e.g. 'Start a new feature: <what the user said, with the concrete details verbatim>. Grill me to pin down the requirements.' The Claude-side PO then runs its grilling pass and pauses to ask YOU questions by voice (SYSTEM_EVENT_PO_QUESTION) — read those aloud and answer with answer_po_question. When the user is satisfied, send the PO a follow-up: 'You have enough — propose the change.' To check progress, send the PO 'Are there tasks left?' and it reads the change's tasks.md and reports back. For ordinary tasks that are not a new project/feature, skip all of this and stay decisive.",
@@ -3262,6 +3376,19 @@ app.whenReady().then(() => {
   // excalidraw's text tool, Delete, and tool shortcuts.
   ipcMain.on("canvas:activate", () => {
     if (mainWindow) mainWindow.focus();
+    // First-open signal for canvas-claude-mcp's sticky canvasEngaged gate
+    // (design.md D6) — a no-op on every subsequent open/close of the panel.
+    canvasEngaged = true;
+    maybeStartCanvasMcp();
+  });
+  // Reply half of the main→renderer image-export request (design.md D3);
+  // resolves the pending promise requestCanvasImage() created, if it hasn't
+  // already been cleaned up by its own timeout.
+  ipcMain.on("canvas:image-result", (_event, payload) => {
+    const resolve = pendingCanvasImageRequests.get(payload?.id);
+    if (!resolve) return;
+    pendingCanvasImageRequests.delete(payload.id);
+    resolve(payload?.image ?? null);
   });
   // Scene-access seam (design.md D5): the in-memory cache updates
   // immediately on every push so `canvas:get-scene` is never behind the
@@ -3367,6 +3494,9 @@ async function shutdownTeardown() {
   // A quit-while-drawing shouldn't lose recent strokes (hud-drawing-canvas
   // design.md D5 "Flush").
   await canvasStore.flush().catch(() => {});
+  // Stop the canvas MCP listener (canvas-claude-mcp design.md D6) — a no-op
+  // if it was never started this session.
+  await canvasMcp.stop().catch(() => {});
 }
 
 app.on("will-quit", () => globalShortcut.unregisterAll());
