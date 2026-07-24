@@ -6,6 +6,7 @@ import {
   MessageSquare,
   Mic,
   MicOff,
+  Network,
   PenTool,
   Power,
   Terminal,
@@ -19,6 +20,7 @@ import ReviewBanner from "./ReviewBanner";
 import ContextSupplementInput from "./ContextSupplementInput";
 import { HandSkeleton } from "./CameraDock";
 import DrawingCanvas from "./DrawingCanvas";
+import VaultGalaxy, { type GalaxyNode } from "./VaultGalaxy";
 import type { HandoffTone, ReactorState, TaskCard, TranscriptLine } from "../types";
 import type { HandState } from "../hooks/useHandControl";
 import { acceptedKey } from "../lib/tasks";
@@ -120,6 +122,12 @@ export default function HudShell({
   taskReview,
   drawingActive,
   onToggleDrawing,
+  secondBrainAvailable,
+  secondBrainActive,
+  onToggleSecondBrain,
+  galaxyPositionsRef,
+  onOpenNote,
+  onForceCloseSecondBrain,
 }: {
   reactorState: ReactorState;
   inputLevelRef: { current: number };
@@ -187,6 +195,16 @@ export default function HudShell({
   // default, unmounted when off so its lazy chunk never loads unless opened.
   drawingActive: boolean;
   onToggleDrawing: () => void;
+  // second-brain-galaxy-view: the toggle itself is shown only when the vault
+  // exists (design.md D7), independent of pipelineAvailable. The galaxy
+  // layer is unmounted when off, mirroring the drawing panel.
+  secondBrainAvailable: boolean;
+  secondBrainActive: boolean;
+  onToggleSecondBrain: () => void;
+  /** Hoisted above this component in App.tsx (design.md M-3) so toggling off/on rehydrates positions instead of re-scrambling. */
+  galaxyPositionsRef: { current: Map<string, GalaxyNode> };
+  onOpenNote: (id: string, title: string) => void;
+  onForceCloseSecondBrain: () => void;
 }) {
   // Show the full stream (state caps at 20); the column has a fixed max height
   // and palm-scrolls like Comms.
@@ -367,6 +385,15 @@ export default function HudShell({
           >
             <PenTool size={14} />
           </button>
+          {secondBrainAvailable ? (
+            <button
+              className={`hud-btn ${secondBrainActive ? "active" : ""}`}
+              onClick={onToggleSecondBrain}
+              title={secondBrainActive ? "Hide second brain" : "Show second brain"}
+            >
+              <Network size={14} />
+            </button>
+          ) : null}
           <button className="hud-btn" onClick={onExitHud} title="Back to deck (⌥Space)">
             <Maximize2 size={14} />
           </button>
@@ -374,6 +401,14 @@ export default function HudShell({
       </div>
 
       {drawingActive ? <DrawingCanvas /> : null}
+      {secondBrainActive ? (
+        <VaultGalaxy
+          running={running}
+          positionsRef={galaxyPositionsRef}
+          onOpenNote={onOpenNote}
+          onForceClose={onForceCloseSecondBrain}
+        />
+      ) : null}
     </div>
   );
 }

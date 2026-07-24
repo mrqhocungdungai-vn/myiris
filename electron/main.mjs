@@ -26,8 +26,10 @@ import { resolveApprovedTask } from "./task-review.mjs";
 import { shouldRefuseLaunch } from "./platform.mjs";
 import { createCanvasStore } from "./canvas-store.mjs";
 import { createCanvasMcp, buildMcpServerRecord } from "./canvas-mcp.mjs";
+import { isUserNote } from "./vault-graph-parse.mjs";
+import { createVaultGraph } from "./vault-graph.mjs";
 
-const { app, BrowserWindow, ipcMain, session, nativeImage, Menu, dialog, Tray, screen, globalShortcut } = electron;
+const { app, BrowserWindow, ipcMain, session, nativeImage, Menu, dialog, Tray, screen, globalShortcut, shell } = electron;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
@@ -1714,6 +1716,18 @@ function startClaudeRun(run) {
 // any workstream's project cwd — plain-Claude runs only, never PO/DEV.
 const NOTES_VAULT_DIR = path.join(os.homedir(), "iris-second-brain");
 
+// isUserNote (imported above from vault-graph-parse.mjs) is the single
+// authoritative "what is a user note" predicate for this capability (design.md
+// D3/H-1 of second-brain-galaxy-view) — it excludes the LLM-Wiki system files
+// (index.md, log.md, wiki-config.md, wiki-schema.md) and plumbing folders
+// (templates/, raw/, archive/, ingested/). Reading excludes from
+// wiki-config.md's own frontmatter is insufficient: renderNotesVaultConfig
+// (below) writes `blacklist: []`, and the template's `index_excludes` never
+// lists index.md/log.md themselves. It lives in vault-graph-parse.mjs (pure,
+// no fs/IPC) rather than here so vault-graph.mjs can consume it without
+// importing this Electron entry module; main.mjs re-uses the same function
+// rather than re-deriving the list.
+
 // The 6 vendored skill names this capability needs installed in
 // ~/.claude/skills before Claude actually has LLM-Wiki instructions to follow
 // (they are deliberately NOT in REQUIRED_SKILLS — that list gates the
@@ -1837,6 +1851,37 @@ function vaultChangedSince(sinceMs) {
     }
   }
   return false;
+}
+
+// Second-brain galaxy view (second-brain-galaxy-view): reads the same
+// NOTES_VAULT_DIR the notes capability writes, purely for viewing — never
+// creates or writes to the vault. Module-level singleton, like canvasStore,
+// so its watcher/cache lifecycle survives window recreation.
+const notesVaultGraph = createVaultGraph({ dir: NOTES_VAULT_DIR });
+// Dedicated channel for the (potentially large) full graph payload, kept out
+// of the sidecar:event log stream (design.md D3/L2). Only fires while the
+// watcher is actually running (start()'d), so this subscription is safe to
+// hold for the module's whole lifetime rather than churning per toggle.
+notesVaultGraph.onUpdate((graph) => emitToRenderer("secondbrain:graph-updated", graph));
+
+// Gated purely on the vault existing, independent of pipelineAvailable
+// (design.md D7) — viewing only reads local markdown. Modeled exactly on
+// probePipelineAvailability's single-mutation-choke-point shape: tracks the
+// last-emitted value and only emits on a real false<->true transition, never
+// on every ensureNotesVaultReady() call (which runs on every plain-Claude
+// turn and would otherwise fire constantly).
+let secondBrainAvailable = false;
+function probeSecondBrainAvailability() {
+  const next = fs.existsSync(NOTES_VAULT_DIR);
+  if (next !== secondBrainAvailable) {
+    secondBrainAvailable = next;
+    emitEvent({ type: "secondbrain_availability", available: secondBrainAvailable });
+    // The vault disappeared out from under an active watch (e.g. deleted
+    // while the galaxy was open) — stop rather than let fs.watch spin on a
+    // now-missing directory.
+    if (!secondBrainAvailable) notesVaultGraph.stop();
+  }
+  return secondBrainAvailable;
 }
 
 // The stateless module: unchanged one-shot `claude -p` subprocess per run,
@@ -3163,6 +3208,28 @@ function createWindow() {
   const useProd = app.isPackaged || process.env.IRIS_START_PROD === "1";
   if (useProd) mainWindow.loadFile(path.join(repoRoot, "dist", "index.html"));
   else mainWindow.loadURL(devUrl);
+  // App-wide navigation hardening (second-brain-galaxy-view design.md
+  // D9/M1): the galaxy renders genuinely untrusted note content
+  // (wiki-ingest pulls web articles/PDFs into the vault), and
+  // react-markdown turns `[text](https://…)` into a real `<a>` — without
+  // this, clicking one would top-level-navigate the single BrowserWindow to
+  // the remote page and the app would be gone. Deny window.open entirely
+  // and block any top-level navigation except the dev/prod app URL itself,
+  // routing external links through the OS browser instead.
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  mainWindow.webContents.on("will-navigate", (event, url) => {
+    if (url === devUrl || url.startsWith(`${devUrl}/`) || url.startsWith("file://")) return;
+    event.preventDefault();
+    shell.openExternal(url).catch(() => {});
+  });
+  // A crashed renderer or a reload/navigation doesn't fire the window's
+  // "closed" event, so an active vault-graph fs.watch stream would
+  // otherwise orphan while a fresh renderer starts a second one
+  // (second-brain-galaxy-view design.md D3 M3).
+  mainWindow.webContents.on("render-process-gone", () => notesVaultGraph.stop());
+  mainWindow.webContents.on("did-start-navigation", (_event, _url, _isInPlace, isMainFrame) => {
+    if (isMainFrame) notesVaultGraph.stop();
+  });
   // Avoid a translucent first-paint flash on the transparent window.
   mainWindow.once("ready-to-show", () => mainWindow?.show());
   mainWindow.on("closed", () => {
@@ -3183,6 +3250,11 @@ function enterHud() {
   if (!mainWindow || uiMode === "hud") return;
   uiMode = "hud";
   deckBounds = mainWindow.getBounds();
+  // Re-check vault existence on every HUD open (design.md D7 of
+  // second-brain-galaxy-view) — cheap existsSync, only emits on a real
+  // transition, so the "show second brain" toggle's visibility stays in
+  // sync even if the vault appeared/disappeared since the last HUD session.
+  probeSecondBrainAvailability();
   // Let the renderer fade the deck out before the window jumps to full screen.
   emitToRenderer("hud:mode", { mode: "hud" });
   setTimeout(() => {
@@ -3324,6 +3396,10 @@ app.whenReady().then(() => {
   // updates the renderer whenever this resolves, and connectLive() re-probes
   // before the Gemini session that actually consumes the value is built.
   probePipelineAvailability().catch(() => {});
+  // Cheap synchronous existsSync check — establishes the initial value so
+  // the boot-time secondbrain:availability read (below) isn't just the
+  // `false` default before the toggle has ever been checked.
+  probeSecondBrainAvailability();
 
   session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
     callback(permission === "media" || permission === "audioCapture" || permission === "videoCapture");
@@ -3433,6 +3509,56 @@ app.whenReady().then(() => {
     else fs.writeFileSync(result.filePath, String(payload?.data ?? ""), "base64");
     return { canceled: false, filePath: result.filePath };
   });
+  // Second-brain galaxy view (second-brain-galaxy-view design.md D3/D7/D8):
+  // renderer's boot-time/HUD-open availability pull — the live push half of
+  // this rides the existing sidecar:event stream (secondbrain_availability),
+  // not a new dedicated channel (design.md D7, L2).
+  ipcMain.handle("secondbrain:availability", () => ({ available: probeSecondBrainAvailability() }));
+  // Always a fresh scan (design.md D3) — re-checks availability inline so a
+  // vault that vanished between the toggle showing and being clicked is
+  // caught here too, not just on the next HUD-open re-check.
+  ipcMain.handle("secondbrain:get-graph", async () => {
+    const available = probeSecondBrainAvailability();
+    if (!available) return { graph: { nodes: [], links: [] }, available };
+    const graph = await notesVaultGraph.getGraph();
+    return { graph, available };
+  });
+  // Start/stop the watcher exactly on galaxy toggle-on/off (design.md D3
+  // M-2) — an always-on recursive watcher would rebuild constantly during
+  // normal note-capture use for a view that's off by default. start() is
+  // idempotent; stop() is safe to call even if never started.
+  ipcMain.on("secondbrain:activate", () => {
+    notesVaultGraph.start();
+  });
+  ipcMain.on("secondbrain:deactivate", () => {
+    notesVaultGraph.stop();
+  });
+  // Read-by-node-id only, resolved against the single graph cache — never a
+  // renderer-supplied filesystem path (design.md D8/L-1). Type/bound-check
+  // the arg since an XSS-in-renderer could pass anything (L1), then assert
+  // the resolved path (after following symlinks) is inside the vault
+  // (H3) before reading — refuses a note symlinked outside the vault
+  // (e.g. `secret.md -> ~/.ssh/id_rsa`).
+  ipcMain.handle("secondbrain:read-note", (_event, id) => {
+    if (typeof id !== "string" || id.length === 0 || id.length > 512) return { ok: false };
+    const notePath = notesVaultGraph.resolveNotePath(id);
+    if (!notePath) return { ok: false }; // ghost node, unknown id, or since-removed file
+    let realNotePath;
+    let realVaultDir;
+    try {
+      realNotePath = fs.realpathSync(notePath);
+      realVaultDir = fs.realpathSync(NOTES_VAULT_DIR);
+    } catch {
+      return { ok: false };
+    }
+    const withinVault = realNotePath === realVaultDir || realNotePath.startsWith(realVaultDir + path.sep);
+    if (!withinVault) return { ok: false };
+    try {
+      return { ok: true, content: fs.readFileSync(realNotePath, "utf8") };
+    } catch {
+      return { ok: false };
+    }
+  });
   ipcMain.on("win:control", (_event, action) => {
     if (!mainWindow) return;
     if (action === "close") mainWindow.close();
@@ -3497,6 +3623,8 @@ async function shutdownTeardown() {
   // Stop the canvas MCP listener (canvas-claude-mcp design.md D6) — a no-op
   // if it was never started this session.
   await canvasMcp.stop().catch(() => {});
+  // Tear down the vault-graph watcher, if it was running (second-brain-galaxy-view design.md D3).
+  notesVaultGraph.stop();
 }
 
 app.on("will-quit", () => globalShortcut.unregisterAll());

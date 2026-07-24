@@ -21,6 +21,8 @@ so future changes don't reintroduce wrong/deprecated names or version drift.
 | React renderer for Three.js | `@react-three/fiber` `^9.4.0` | `package.json` | npm |
 | Three.js helpers | `@react-three/drei` `^10.7.7` | `package.json` | npm |
 | Bloom/post-processing | `@react-three/postprocessing` `^3.0.4` | `package.json` | npm |
+| Second-brain galaxy 3D graph | `3d-force-graph` `1.80.0` (exact) | `package.json` | npm |
+| Note frontmatter parser | `gray-matter` `4.0.3` (exact) | `package.json` | npm |
 
 ## Known footguns / lessons (avoid repeating these)
 
@@ -42,3 +44,8 @@ so future changes don't reintroduce wrong/deprecated names or version drift.
   long Claude work; return a `run_id` immediately and track completion separately.
 - **Send realtime input with `sendRealtimeInput`** (not the deprecated
   `media_chunks` path) for audio/text streaming.
+- **Keep exactly one `three` copy resolved.** `3d-force-graph` bundles its own
+  `three`; `package.json`'s `overrides.three` + `vite.config.ts`'s
+  `resolve.dedupe: ["three"]` collapse it (and any transitive copy, e.g.
+  `stats-gl`) onto the app's single `three`. `npm run build` fails via
+  `scripts/check-three-dedupe.mjs` if a second copy reappears.

@@ -99,4 +99,20 @@ contextBridge.exposeInMainWorld("iris", {
     ipcRenderer.on("sidecar:event", handler);
     return () => ipcRenderer.removeListener("sidecar:event", handler);
   },
+  // second-brain-galaxy-view (design.md D3/D7/D8): availability's live push
+  // half rides onSidecarEvent above (secondbrain_availability) — this is
+  // just the boot-time/HUD-open pull. getSecondBrainGraph always triggers a
+  // fresh main-process scan. activate/deactivateSecondBrain start/stop the
+  // vault fs.watch exactly on galaxy toggle-on/off (design.md D3 M-2) — the
+  // galaxy layer's mount/unmount effect calls these.
+  getSecondBrainAvailability: () => ipcRenderer.invoke("secondbrain:availability"),
+  getSecondBrainGraph: () => ipcRenderer.invoke("secondbrain:get-graph"),
+  readSecondBrainNote: (id) => ipcRenderer.invoke("secondbrain:read-note", id),
+  activateSecondBrain: () => ipcRenderer.send("secondbrain:activate"),
+  deactivateSecondBrain: () => ipcRenderer.send("secondbrain:deactivate"),
+  onSecondBrainGraphUpdated: (callback) => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on("secondbrain:graph-updated", handler);
+    return () => ipcRenderer.removeListener("secondbrain:graph-updated", handler);
+  },
 });

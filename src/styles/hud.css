@@ -527,6 +527,49 @@ html:not(.hud-mode) .setup-backdrop {
   to { opacity: 1; transform: none; }
 }
 
+/* ===== Second-brain galaxy (toggleable, second-brain-galaxy-view) =====
+   Fullscreen (unlike the bounded drawing panel) — an immersive "fly through
+   your vault" backdrop — but z-index 1 keeps it beneath the orb
+   cluster/tasks/comms (z-index 2) so the toggle stays reachable to close it. */
+.hud-galaxy,
+.hud-galaxy-loading,
+.hud-galaxy-empty {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+}
+
+.hud-galaxy canvas {
+  display: block;
+}
+
+.hud-galaxy-loading,
+.hud-galaxy-empty {
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  background: #05060c;
+  color: #dbe6f5;
+  font-family: var(--font-mono);
+  text-align: center;
+}
+
+.hud-galaxy-loading {
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.hud-galaxy-empty p {
+  margin: 0;
+  font-size: 13px;
+}
+
+.hud-galaxy-empty .hint {
+  font-size: 11px;
+  color: var(--muted);
+}
+
 @keyframes hud-slide {
   from { opacity: 0; transform: translateX(30px); }
   to { opacity: 1; transform: none; }

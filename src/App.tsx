@@ -26,6 +26,8 @@ import PoQuestionBanner from "./components/PoQuestionBanner";
 import ReviewBanner from "./components/ReviewBanner";
 import ProjectBar from "./components/ProjectBar";
 import ReaderOverlay from "./components/ReaderOverlay";
+import NoteReader from "./components/NoteReader";
+import type { GalaxyNode } from "./components/VaultGalaxy";
 import HistoryDrawer from "./components/HistoryDrawer";
 import ConfirmModal from "./components/ConfirmModal";
 import TaskChooser from "./components/TaskChooser";
@@ -140,6 +142,15 @@ export default function App() {
   // hidden by default; unmounting DrawingCanvas when false keeps its lazy
   // chunk from ever loading unless the user opens it.
   const [drawingActive, setDrawingActive] = useState(false);
+  // second-brain-galaxy-view: the "show second brain" toggle, HUD-only and
+  // hidden by default; mutually exclusive with drawingActive (design.md D5).
+  const [secondBrainActive, setSecondBrainActive] = useState(false);
+  const [secondBrainAvailable, setSecondBrainAvailable] = useState(false);
+  // Hoisted above VaultGalaxy's own mount (design.md M-3) so toggling the
+  // galaxy off and back on rehydrates node positions instead of
+  // re-scrambling the force-directed layout on every reopen.
+  const galaxyPositionsRef = useRef<Map<string, GalaxyNode>>(new Map());
+  const [openNote, setOpenNote] = useState<{ id: string; title: string; markdown: string } | null>(null);
 
   // Orb micro-expressions + sound cues.
   const [orbThinking, setOrbThinking] = useState(false);
@@ -201,13 +212,41 @@ export default function App() {
   }
 
   function toggleDrawing() {
-    setDrawingActive((current) => !current);
+    setDrawingActive((current) => {
+      const next = !current;
+      // Single active-layer invariant (design.md D5 of second-brain-galaxy-view):
+      // opening the drawing panel closes the galaxy, and vice versa (below).
+      if (next) setSecondBrainActive(false);
+      return next;
+    });
+  }
+
+  function toggleSecondBrain() {
+    setSecondBrainActive((current) => {
+      const next = !current;
+      if (next) setDrawingActive(false);
+      return next;
+    });
+  }
+
+  function closeNoteReader() {
+    setOpenNote(null);
+  }
+
+  async function openNoteFromGalaxy(id: string, title: string) {
+    // Reader single-instance invariant (design.md D5/spec "At most one
+    // reader open at a time") — opening a note closes the task reader.
+    setExpandedTaskId(null);
+    const result = await window.iris.readSecondBrainNote(id);
+    if (!result.ok) return;
+    setOpenNote({ id, title, markdown: result.content });
   }
 
   function exitHud() {
-    // Drawing is HUD-only (glass-hud-mode design.md D7); hide it before
-    // leaving so it isn't left mounted the next time the HUD is entered.
+    // Drawing/galaxy are HUD-only (glass-hud-mode design.md D7); hide them
+    // before leaving so neither is left mounted the next time the HUD is entered.
     setDrawingActive(false);
+    setSecondBrainActive(false);
     window.iris.toggleHud();
   }
 
@@ -314,6 +353,10 @@ export default function App() {
       .then((status) => setPipelineAvailable(Boolean(status.available)))
       .catch(() => {});
     window.iris
+      .getSecondBrainAvailability()
+      .then((status) => setSecondBrainAvailable(Boolean(status.available)))
+      .catch(() => {});
+    window.iris
       .getPromptStatus()
       .then((status) => setReviewModeState(Boolean(status.reviewMode)))
       .catch(() => {});
@@ -397,14 +440,15 @@ export default function App() {
   // when the pointer is over a `.hud-hit` element. elementFromPoint respects
   // pointer-events, so it only returns elements that opted in.
   //
-  // While the drawing panel is active, interactivity is latched on for the
+  // While the drawing panel (or the second-brain galaxy, second-brain-galaxy-
+  // view design.md D5/4.3) is active, interactivity is latched on for the
   // whole duration instead of being re-decided per pointermove (hud-drawing-
-  // canvas design.md D3) — per-move flipping races with excalidraw gestures,
-  // so a fast drag/marquee/wheel-zoom crossing the panel edge could otherwise
-  // drop the pointer stream mid-gesture.
+  // canvas design.md D3) — per-move flipping races with excalidraw/orbit-
+  // control gestures, so a fast drag/marquee/wheel-zoom/orbit-drag crossing
+  // the panel edge could otherwise drop the pointer stream mid-gesture.
   useEffect(() => {
     if (!hasBridge || uiMode !== "hud") return;
-    if (drawingActive) {
+    if (drawingActive || secondBrainActive) {
       window.iris.setHudInteractive(true);
       return;
     }
@@ -435,7 +479,20 @@ export default function App() {
       if (raf) cancelAnimationFrame(raf);
       window.iris.setHudInteractive(false);
     };
-  }, [hasBridge, uiMode, drawingActive]);
+  }, [hasBridge, uiMode, drawingActive, secondBrainActive]);
+
+  // Esc force-closes the galaxy regardless of its internal state (design.md
+  // D9/L3 of second-brain-galaxy-view) — a crashed WebGL layer (caught by
+  // VaultGalaxy's own error boundary, which also force-closes) must not be
+  // the only way out of the fullscreen click-through-disabled overlay.
+  useEffect(() => {
+    if (!secondBrainActive) return;
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") setSecondBrainActive(false);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [secondBrainActive]);
 
   // First-run onboarding + settings affordance (design.md D3/D4): load the
   // effective config once, auto-open the wizard if no Gemini key is set yet.
@@ -705,6 +762,15 @@ export default function App() {
       return;
     }
 
+    if (event.type === "secondbrain_availability") {
+      const available = Boolean(event.available);
+      setSecondBrainAvailable(available);
+      // On disappearance, force-close the galaxy and hide the toggle
+      // (design.md D7/M4/M-5/L2).
+      if (!available) setSecondBrainActive(false);
+      return;
+    }
+
     if (event.type === "claude_session") {
       applySessions({
         active: typeof event.active === "string" ? event.active : null,
@@ -943,7 +1009,12 @@ export default function App() {
     };
     const loop = () => {
       const h = liveHandRef.current;
-      if (!handControl || !h.present || !h.point || !h.pointing || expandedTaskId) {
+      // Suppressed while the reader, drawing panel, or second-brain galaxy
+      // is open — those layers own the pointer/gesture surface themselves
+      // (or, for the galaxy, gesture bindings are deferred to
+      // second-brain-gesture-nav), so dwell-click must not fire through to
+      // whatever's underneath.
+      if (!handControl || !h.present || !h.point || !h.pointing || expandedTaskId || drawingActive || secondBrainActive) {
         dwellRef.current = null;
         syncDwell(false, false);
         raf = requestAnimationFrame(loop);
@@ -979,7 +1050,7 @@ export default function App() {
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [handControl, expandedTaskId]);
+  }, [handControl, expandedTaskId, drawingActive, secondBrainActive]);
 
   // Open-palm hold-to-scroll: scrolls whichever scrollable region (Comms or
   // Work Stream column) is under the hand.
@@ -988,7 +1059,7 @@ export default function App() {
     const SCROLLABLES = ".activity-timeline, .comms-scroll, .work-scroll, .history-grid";
     const loop = () => {
       const h = liveHandRef.current;
-      if (handControl && h?.openPalm && h.point && !expandedTaskId && !showHistory) {
+      if (handControl && h?.openPalm && h.point && !expandedTaskId && !showHistory && !drawingActive && !secondBrainActive) {
         const el = document.elementFromPoint(h.point.x, h.point.y);
         const target = el?.closest<HTMLElement>(SCROLLABLES) ?? null;
         if (target) {
@@ -1007,12 +1078,16 @@ export default function App() {
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [handControl, expandedTaskId, showHistory]);
+  }, [handControl, expandedTaskId, showHistory, drawingActive, secondBrainActive]);
 
   // Closed-fist rotates the Arc Reactor orb, pinch scales it — only while the
-  // reader is closed, so this never collides with the reader-open fist-close
-  // or two-palm-resize bindings. Written straight into refs (not React state)
-  // every frame, same as the audio-level refs ReactorCore already reads.
+  // reader is closed and neither the drawing panel nor the second-brain
+  // galaxy is active (BUG: gesture control leaking through to the orb while
+  // those layers own the HUD's pointer/gesture surface — reported by user,
+  // 2026-07-24), so this never collides with the reader-open fist-close or
+  // two-palm-resize bindings, nor with excalidraw/the galaxy's own input.
+  // Written straight into refs (not React state) every frame, same as the
+  // audio-level refs ReactorCore already reads.
   const orbRotationRef = useRef({ x: 0, y: 0 });
   const orbScaleRef = useRef(1);
   useEffect(() => {
@@ -1020,7 +1095,7 @@ export default function App() {
     let prevFistPoint: HandPoint | null = null;
     const loop = () => {
       const h = liveHandRef.current;
-      const engaged = handControl && h?.present && !expandedTaskId;
+      const engaged = handControl && h?.present && !expandedTaskId && !drawingActive && !secondBrainActive;
 
       if (engaged && h.fist && h.point) {
         if (prevFistPoint) {
@@ -1050,7 +1125,7 @@ export default function App() {
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [handControl, expandedTaskId]);
+  }, [handControl, expandedTaskId, drawingActive, secondBrainActive]);
 
   const handAction = useMemo(() => {
     if (!hand.present) return { label: "Show your hand", tone: "idle" };
@@ -1058,7 +1133,9 @@ export default function App() {
     if (hand.fist) {
       return expandedTaskId
         ? { label: "Closed_Fist · close", tone: "fist" }
-        : { label: "Closed_Fist · rotate orb", tone: "fist" };
+        : drawingActive || secondBrainActive
+          ? { label: "Closed_Fist · idle", tone: "idle" }
+          : { label: "Closed_Fist · rotate orb", tone: "fist" };
     }
     if (hand.openPalm) return { label: "Open_Palm · scroll", tone: "open" };
     if (!hand.pointing) return { label: `${hand.gesture} · idle`, tone: "idle" };
@@ -1072,6 +1149,8 @@ export default function App() {
     hand.pointing,
     hand.gesture,
     dwellActive,
+    drawingActive,
+    secondBrainActive,
     expandedTaskId,
   ]);
 
@@ -1235,6 +1314,8 @@ export default function App() {
     setTaskChooser(null);
     setExpandedTaskId(task.id);
     setShowHistory(false);
+    // Reader single-instance invariant, other direction (design.md D5).
+    setOpenNote(null);
   }
 
   function closeReader() {
@@ -1305,6 +1386,12 @@ export default function App() {
           }
           drawingActive={drawingActive}
           onToggleDrawing={toggleDrawing}
+          secondBrainAvailable={secondBrainAvailable}
+          secondBrainActive={secondBrainActive}
+          onToggleSecondBrain={toggleSecondBrain}
+          galaxyPositionsRef={galaxyPositionsRef}
+          onOpenNote={openNoteFromGalaxy}
+          onForceCloseSecondBrain={() => setSecondBrainActive(false)}
         />
       ) : (
       <div
@@ -1434,6 +1521,8 @@ export default function App() {
       {expandedTask ? (
         <ReaderOverlay task={expandedTask} hand={handControl ? hand : null} handRef={liveHandRef} onClose={closeReader} />
       ) : null}
+
+      {openNote ? <NoteReader title={openNote.title} markdown={openNote.markdown} onClose={closeNoteReader} /> : null}
 
       {showHistory ? (
         <HistoryDrawer

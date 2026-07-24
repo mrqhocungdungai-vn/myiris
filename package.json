@@ -17,7 +17,7 @@
   "main": "electron/main.mjs",
   "scripts": {
     "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on tcp:5173 && node scripts/run-electron.mjs\"",
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc --noEmit && vite build && node scripts/check-three-dedupe.mjs",
     "test": "vitest run",
     "preview": "vite preview",
     "start": "npm run build && node scripts/run-electron.mjs --prod",
@@ -27,6 +27,7 @@
     "electron": "node scripts/run-electron.mjs"
   },
   "dependencies": {
+    "3d-force-graph": "1.80.0",
     "@anthropic-ai/claude-agent-sdk": "^0.3.210",
     "@excalidraw/excalidraw": "0.18.1",
     "@google/genai": "^2.10.0",
@@ -37,6 +38,7 @@
     "@react-three/postprocessing": "^3.0.4",
     "@vitejs/plugin-react": "latest",
     "fractional-indexing": "3.2.0",
+    "gray-matter": "4.0.3",
     "lucide-react": "latest",
     "onnxruntime-web": "^1.27.0",
     "react": "latest",
@@ -58,6 +60,9 @@
     "jsdom": "^29.1.1",
     "vitest": "4.1.10",
     "wait-on": "latest"
+  },
+  "overrides": {
+    "three": "$three"
   },
   "build": {
     "appId": "app.iris.voice",

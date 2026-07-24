@@ -169,6 +169,38 @@ type CanvasScene = {
 
 type NativeFileResult = { canceled: true } | { canceled: false; filePath: string };
 
+// second-brain-galaxy-view (design.md D3): position-free — the renderer's
+// force simulation owns x/y/z. `path` is never sent over the wire (D8/L-1);
+// a ghost node (unresolved wikilink target) is not openable.
+type VaultGraphNode = {
+  id: string;
+  title: string;
+  tags: string[];
+  ghost: boolean;
+  malformed: boolean;
+};
+
+type VaultGraphLink = {
+  source: string;
+  target: string;
+};
+
+type VaultGraph = {
+  nodes: VaultGraphNode[];
+  links: VaultGraphLink[];
+};
+
+type SecondBrainAvailability = {
+  available: boolean;
+};
+
+type SecondBrainGraphResult = {
+  graph: VaultGraph;
+  available: boolean;
+};
+
+type SecondBrainReadNoteResult = { ok: true; content: string } | { ok: false };
+
 // canvas-claude-mcp (design.md D3/D4): a Claude-originated write, applied to
 // the live scene while the panel is mounted. Always the FULL post-write
 // element set (updateScene replaces the whole array — see DrawingCanvas.tsx).
@@ -270,6 +302,12 @@ type IrisApi = {
   onAudioChunk: (callback: (chunk: LiveAudioChunk) => void) => () => void;
   onAudioInterrupt: (callback: () => void) => () => void;
   onSidecarEvent: (callback: (event: SidecarEvent) => void) => () => void;
+  getSecondBrainAvailability: () => Promise<SecondBrainAvailability>;
+  getSecondBrainGraph: () => Promise<SecondBrainGraphResult>;
+  readSecondBrainNote: (id: string) => Promise<SecondBrainReadNoteResult>;
+  activateSecondBrain: () => void;
+  deactivateSecondBrain: () => void;
+  onSecondBrainGraphUpdated: (callback: (graph: VaultGraph) => void) => () => void;
 };
 
 interface Window {
