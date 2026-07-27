@@ -17,13 +17,20 @@ See "Pipeline availability (chat-only mode)" below for exactly how detection and
 npm ci           # install deps
 npm run dev            # Vite + Electron with hot reload (dev)
 npm run build          # tsc --noEmit + vite build (typecheck + build to dist/)
+npm test               # vitest run — unit tests (src/lib + electron), node env
 npm start              # build then launch Electron from dist/ (production-like)
 npm run start:prod     # launch prod build without rebuilding
 npm run package:mac    # build + electron-builder --mac --dir (unpacked .app)
 npm run dist:mac       # build + full macOS distributable
 ```
 
-There is **no test runner and no linter** configured. `npm run build` (which runs `tsc --noEmit`) is the only automated check — run it to verify changes typecheck.
+Two independent automated checks: `npm run build` (`tsc --noEmit` + Vite build) is the typecheck gate, and `npm test` (**vitest**, pinned at `4.1.10`) is the behavioral one. They stay separate on purpose — `npm run build` must never depend on the test runner, so a typecheck is always runnable on its own. Run both to verify a change. There is still **no linter** configured (no eslint/prettier/biome dependency or config), despite a few stray `eslint-disable` comments in the source.
+
+`vitest.config.mjs` runs in the `node` environment and picks up `src/**/*.test.ts` plus `electron/**/*.test.mjs`, so both renderer helpers and main-process modules are covered — today `src/lib/{downsample,hand,tasks}.test.ts` and `electron/{run-queue,po-session,atomic-file,coalesce,platform,task-review}.test.mjs`.
+
+The conventions are a living spec (`openspec/specs/test-harness/spec.md`), not just habit — read it before adding tests. In short: pure logic belongs in `src/lib/*.ts` or an `electron/*.mjs` module with a colocated `*.test.*` (e.g. `downsample.ts` was extracted out of the mic path precisely to make it testable); a module is made testable by **accepting its dependencies as injected parameters with production defaults**, never by restructuring it or reaching into its internals; and no test may boot Electron, spawn `claude`, need `GEMINI_API_KEY`/`CLAUDE_CODE_OAUTH_TOKEN`, or touch the network.
+
+If `npm test` reports `vitest: command not found`, the checkout's `node_modules` predates the runner being added — `npm ci` fixes it.
 
 ## Runtime prerequisites
 
