@@ -21,8 +21,22 @@ const COOLDOWN_MS = 2500;
 let ortConfigured = false;
 function configureOrt() {
   if (ortConfigured) return;
-  // Match the installed package version. Consistent with the MediaPipe CDN approach.
-  ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.27.0/dist/";
+  // Vendored under public/runtime/ort/ by scripts/vendor-runtime-assets.mjs
+  // (renderer-content-security: no runtime-fetched script/WASM glue) — kept
+  // in lockstep with the installed onnxruntime-web version by that script,
+  // never a hand-copied CDN URL.
+  //
+  // onnxruntime-web loads its own wasm glue via a runtime `import(url)`.
+  // Vite's dev server intercepts same-origin-relative dynamic imports and
+  // refuses to serve public/ assets through them ("this file is in /public
+  // ... should not be imported from source code") — a dev-server-only 500
+  // that a fully-qualified absolute URL sidesteps (Vite treats any absolute
+  // http(s) URL as already-resolved and leaves it alone, same as the CDN URL
+  // this replaced always did). The relative BASE_URL path still runs in the
+  // production build, where there is no dev transform pipeline to trip over.
+  ort.env.wasm.wasmPaths = import.meta.env.DEV
+    ? `${window.location.origin}/runtime/ort/`
+    : `${import.meta.env.BASE_URL}runtime/ort/`;
   ort.env.wasm.numThreads = 1; // avoid SharedArrayBuffer / COOP-COEP requirements
   ortConfigured = true;
 }

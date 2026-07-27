@@ -9,6 +9,7 @@ __pycache__/
 *.pyc
 *.log
 sidecar/runtime/
+public/runtime/
 roadmap.md
 .env_test*
 .ui-shots/

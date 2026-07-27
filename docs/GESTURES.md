@@ -18,8 +18,9 @@ File: `src/useHandControl.ts` (consumed by `src/App.tsx`).
 - **Task:** `GestureRecognizer` — a pre-trained model that returns both hand
   landmarks and a classified gesture in one pass.
 - **Model asset:** `gesture_recognizer.task` (Google's canned-gesture classifier).
-- **WASM runtime:** loaded via `FilesetResolver.forVisionTasks(...)` from the
-  MediaPipe CDN.
+- **WASM runtime:** loaded via `FilesetResolver.forVisionTasks(...)` from
+  locally vendored assets under `public/runtime/mediapipe/` (see
+  `scripts/vendor-runtime-assets.mjs` and `docs/REFERENCE.md`) — no CDN fetch.
 
 ### How we configure it
 

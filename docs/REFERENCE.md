@@ -12,10 +12,10 @@ so future changes don't reintroduce wrong/deprecated names or version drift.
 | Gemini SDK | `@google/genai` `^2.10.0` | `package.json` | npm |
 | Gemini built-in search tool | `{ googleSearch: {} }` | `electron/main.mjs` `tools` | Gemini Live tools |
 | Gesture/hand ML runtime | `@mediapipe/tasks-vision` `^0.10.35` | `package.json` | npm |
-| MediaPipe WASM fileset | `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm` | `src/useHandControl.ts` (`WASM_URL`) | jsDelivr CDN |
-| MediaPipe model asset | `https://storage.googleapis.com/mediapipe-tasks/gesture_recognizer/gesture_recognizer.task` | `src/useHandControl.ts` (`MODEL_URL`) | Google Cloud Storage |
+| MediaPipe WASM fileset | `public/runtime/mediapipe/vision_wasm_internal.{js,wasm}` | `src/hooks/useHandControl.ts` (`WASM_URL`) | vendored from `node_modules/@mediapipe/tasks-vision/wasm/` by `scripts/vendor-runtime-assets.mjs` |
+| MediaPipe model asset | `public/runtime/mediapipe/gesture_recognizer.task` | `src/hooks/useHandControl.ts` (`MODEL_URL`) | vendored (downloaded once, cached) by `scripts/vendor-runtime-assets.mjs` from Google Cloud Storage |
 | Wake-word ONNX runtime | `onnxruntime-web` `^1.27.0` | `package.json` | npm |
-| Wake-word ONNX WASM fileset | `https://cdn.jsdelivr.net/npm/onnxruntime-web@1.27.0/dist/` | `src/hooks/useWakeWord.ts` (`ort.env.wasm.wasmPaths`) | jsDelivr CDN |
+| Wake-word ONNX WASM fileset | `public/runtime/ort/ort-wasm-simd-threaded.jsep.{mjs,wasm}` | `src/hooks/useWakeWord.ts` (`ort.env.wasm.wasmPaths`) | vendored from `node_modules/onnxruntime-web/dist/` by `scripts/vendor-runtime-assets.mjs` |
 | Wake-word model assets | `melspectrogram.onnx`, `embedding_model.onnx`, `hey_iris.onnx` | `public/wakeword/` (bundled, no runtime fetch) | vendored from the "Hey Iris" openWakeWord training run |
 | WebGL 3D engine | `three` `^0.181.2` | `package.json` | npm |
 | React renderer for Three.js | `@react-three/fiber` `^9.4.0` | `package.json` | npm |
@@ -23,21 +23,33 @@ so future changes don't reintroduce wrong/deprecated names or version drift.
 | Bloom/post-processing | `@react-three/postprocessing` `^3.0.4` | `package.json` | npm |
 | Second-brain galaxy 3D graph | `3d-force-graph` `1.80.0` (exact) | `package.json` | npm |
 | Note frontmatter parser | `gray-matter` `4.0.3` (exact) | `package.json` | npm |
+| Electron | `42.5.0` (exact) | `package.json` | npm |
 
 ## Known footguns / lessons (avoid repeating these)
 
 - **Use the exact Live model name `gemini-3.1-flash-live-preview`.** Live models
   are a distinct family from regular `gemini-*` chat models; a normal chat model
   name will fail to open a Live session. Keep the `models/` prefix.
-- **Keep the MediaPipe WASM URL version equal to the installed npm version.**
-  Both are pinned to `0.10.35` today. A mismatch between the JS API
-  (`@mediapipe/tasks-vision`) and the WASM fileset can cause subtle runtime/ABI
-  breakage, so update the `@x.y.z` in `WASM_URL` whenever you bump the package
-  (or self-host the WASM from the installed package instead of a CDN).
-- **Keep the onnxruntime-web WASM URL version equal to the installed npm version**, same reasoning as MediaPipe above — both are pinned to `1.27.0` today.
-- **MediaPipe WASM + model are fetched from Google/jsDelivr at first load**, so
-  gesture control needs network access on first run. Vendor both locally if you
-  need fully offline startup.
+- **The MediaPipe and onnxruntime-web WASM filesets are vendored, not
+  CDN-fetched.** `scripts/vendor-runtime-assets.mjs` copies them straight from
+  the installed `node_modules` package into `public/runtime/` (wired into
+  `npm run build` and `postinstall`), so the shipped WASM version can never
+  drift from the pinned npm version the way a hand-typed CDN URL could — there
+  is no `@x.y.z` to remember to bump. See `renderer-content-security` in
+  `openspec/specs/`: the renderer executes only code shipped inside the app,
+  enforced by a CSP that blocks any remaining third-party script/WASM origin.
+- **The gesture model asset is vendored too**, downloaded once by the same
+  script and cached in `public/runtime/mediapipe/` (skipped on subsequent
+  builds if already present) — the only remaining network dependency is that
+  one-time vendoring step, not first app launch.
+- **Only one WASM variant is copied per runtime**, matching what the app's own
+  import actually resolves at runtime (see design.md of
+  `harden-security-boundaries` for how each was determined): onnxruntime-web
+  resolves to the `ort-wasm-simd-threaded.jsep` pair (not the smaller
+  non-jsep/asyncify/jspi variants) because the bare `import "onnxruntime-web"`
+  hits the package's default bundle, which hardcodes that filename; MediaPipe
+  resolves to the `vision_wasm_internal` pair (SIMD, non-module) since
+  Electron's bundled Chromium always supports WASM SIMD.
 - **Gemini Live audio formats are fixed:** send **16 kHz** PCM, receive **24 kHz**
   PCM. Don't assume a single sample rate for both directions.
 - **Gemini 3.1 Live function calls are synchronous** — never block a tool call on
@@ -49,3 +61,4 @@ so future changes don't reintroduce wrong/deprecated names or version drift.
   `resolve.dedupe: ["three"]` collapse it (and any transitive copy, e.g.
   `stats-gl`) onto the app's single `three`. `npm run build` fails via
   `scripts/check-three-dedupe.mjs` if a second copy reappears.
+- **`electron` is pinned to an exact version, not `"latest"`.** `webPreferences.sandbox: true` and the renderer's Content-Security-Policy (`renderer-content-security`) both depend on a fixed, known Electron version rather than one that can silently shift on the next `npm ci`.

@@ -54,7 +54,10 @@ export default function SetupPanel({
   onRunWizard?: () => void;
 }) {
   const [draft, setDraft] = useState<Draft>({
-    GEMINI_API_KEY: config.geminiApiKey,
+    // The stored key never reaches the renderer (design D11, mirrors the PO
+    // token below), so the input always starts empty regardless of whether a
+    // key is already configured — see `geminiApiKeySet`.
+    GEMINI_API_KEY: "",
     GEMINI_LIVE_MODEL: config.geminiModel,
     GEMINI_LIVE_VOICE: config.geminiVoice,
     IRIS_USER_NAME: config.userName,
@@ -68,6 +71,7 @@ export default function SetupPanel({
   const [pipelinePrereqs, setPipelinePrereqs] = useState<ClaudeHealth | null>(null);
   const [installingPrereqs, setInstallingPrereqs] = useState(false);
   const [installReport, setInstallReport] = useState<string | null>(null);
+  const [geminiApiKeySet, setGeminiApiKeySet] = useState(config.geminiApiKeySet);
   // The stored token never reaches the renderer, so the input is always empty
   // and `poTokenSet` is the only thing we know about it.
   const [poToken, setPoToken] = useState("");
@@ -79,6 +83,7 @@ export default function SetupPanel({
   const [cam, setCam] = useState<PermState>("idle");
   const [camDevices, setCamDevices] = useState<MediaDeviceInfo[]>([]);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const set = (key: keyof Draft, value: string) => setDraft((current) => ({ ...current, [key]: value }));
 
@@ -230,21 +235,37 @@ export default function SetupPanel({
     }
   }
 
+  // A save can be refused (e.g. a control character in a value, see
+  // config-persistence) — surface that instead of failing silently, and
+  // don't close the panel or advance the wizard on refusal.
   async function save() {
     setSaving(true);
-    const updated = await window.iris.saveConfig({ ...draft });
-    setSaving(false);
-    onSaved(updated);
-    return updated;
+    setSaveError(null);
+    try {
+      const updated = await window.iris.saveConfig({ ...draft });
+      onSaved(updated);
+      setGeminiApiKeySet(updated.geminiApiKeySet);
+      return updated;
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : String(error));
+      return null;
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function finishWizard() {
-    await save();
+    const updated = await save();
+    if (!updated) return;
     onClose();
     onStart?.();
   }
 
-  const keyReady = draft.GEMINI_API_KEY.trim().length > 0;
+  // A stored key (geminiApiKeySet) satisfies readiness even with the input
+  // left empty — onboarding never has a stored key yet, so this reduces to
+  // "typed a key" there exactly as before; settings additionally allows
+  // testing/saving with the field empty when a key is already configured.
+  const keyReady = draft.GEMINI_API_KEY.trim().length > 0 || geminiApiKeySet;
 
   // ---- Section renderers (shared between wizard steps and settings) ----
   const geminiSection = (
@@ -254,7 +275,7 @@ export default function SetupPanel({
         <input
           type="password"
           value={draft.GEMINI_API_KEY}
-          placeholder="AI… paste your key"
+          placeholder={geminiApiKeySet ? "Key saved — paste a new one to replace it" : "AI… paste your key"}
           onChange={(event) => {
             set("GEMINI_API_KEY", event.target.value);
             setGemini({ status: "idle" });
@@ -267,7 +288,8 @@ export default function SetupPanel({
           <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">
             Google AI Studio
           </a>
-          , then paste the whole thing. Stored locally only.
+          , then paste the whole thing. Stored locally only, never shown again.
+          {geminiApiKeySet ? " A key is currently configured." : ""}
         </small>
       </label>
       <div className="setup-actions">
@@ -562,6 +584,7 @@ export default function SetupPanel({
             {permissionsSection}
             {advancedSection}
             <p className="setup-path">Saved to {config.configPath}</p>
+            {saveError ? <p className="setup-note">{saveError}</p> : null}
           </div>
           <footer className="setup-foot">
             <button className="setup-btn ghost" onClick={() => onRunWizard?.()}>
@@ -575,8 +598,8 @@ export default function SetupPanel({
               <button
                 className="setup-btn primary"
                 onClick={async () => {
-                  await save();
-                  onClose();
+                  const updated = await save();
+                  if (updated) onClose();
                 }}
                 disabled={saving}
               >
@@ -647,7 +670,10 @@ export default function SetupPanel({
             <X size={16} />
           </button>
         </header>
-        <div className="setup-scroll">{body}</div>
+        <div className="setup-scroll">
+          {body}
+          {isLast && saveError ? <p className="setup-note">{saveError}</p> : null}
+        </div>
         <footer className="setup-foot">
           <button className="setup-btn ghost" onClick={() => setStep((s) => Math.max(0, s - 1))} disabled={isFirst}>
             <ChevronLeft size={14} />

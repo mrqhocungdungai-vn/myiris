@@ -50,6 +50,12 @@ on-device, starts only after wake) — see
 [docs/GESTURES.md](docs/GESTURES.md) for how it's configured and the
 gesture → action mapping.
 
+Working on the bridge itself? **[docs/PIPELINE_INTERNALS.md](docs/PIPELINE_INTERNALS.md)**
+is the implementation-level reference for pipeline availability gating, the
+delegation flow, the PO voice question relay, session/context ownership, and PO
+subscription auth. Test harness and the two verification gates:
+**[docs/TESTING.md](docs/TESTING.md)**.
+
 ## Claude pipeline (PO → DEV) — optional, advanced
 
 This entire section is optional. Skip it if you only want to talk to Iris. It

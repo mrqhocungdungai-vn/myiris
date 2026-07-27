@@ -295,6 +295,23 @@ export default function App() {
     };
   }, []);
 
+  // renderer-content-security (harden-security-boundaries D9): Chromium's
+  // default for an unhandled drop is to navigate the window to the dropped
+  // file/URL — the window carrying `preload.cjs`. Cancelling dragover/drop at
+  // the document level means a drop never starts a navigation in the first
+  // place, independent of main's own will-navigate guard.
+  useEffect(() => {
+    function preventDefaultDrop(event: DragEvent) {
+      event.preventDefault();
+    }
+    document.addEventListener("dragover", preventDefaultDrop);
+    document.addEventListener("drop", preventDefaultDrop);
+    return () => {
+      document.removeEventListener("dragover", preventDefaultDrop);
+      document.removeEventListener("drop", preventDefaultDrop);
+    };
+  }, []);
+
   // "Thinking" detector: you stopped talking but Iris hasn't started speaking
   // yet — that gap gets the orbiting swirl. Driven by the real mic level, so
   // it needs no extra events from the model.

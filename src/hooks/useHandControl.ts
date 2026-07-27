@@ -31,11 +31,12 @@ export type HandState = {
   hands: TrackedHand[];
 };
 
-// Keep this version in sync with the @mediapipe/tasks-vision version in
-// package.json to avoid runtime/ABI mismatches between the JS API and the WASM.
-const WASM_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm";
-const MODEL_URL =
-  "https://storage.googleapis.com/mediapipe-tasks/gesture_recognizer/gesture_recognizer.task";
+// Vendored under public/runtime/mediapipe/ by scripts/vendor-runtime-assets.mjs
+// (renderer-content-security: no runtime-fetched script/WASM glue) — the JS
+// glue is copied straight from the installed @mediapipe/tasks-vision version,
+// so it can't drift from package.json the way a hand-copied CDN URL could.
+const WASM_URL = `${import.meta.env.BASE_URL}runtime/mediapipe`;
+const MODEL_URL = `${import.meta.env.BASE_URL}runtime/mediapipe/gesture_recognizer.task`;
 
 // Camera coordinates rarely use the full 0..1 range in practice. Expand the
 // useful center region to the full screen so reaching UI edges doesn't require

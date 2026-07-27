@@ -62,13 +62,13 @@ Bất biến này sống **tại từng ô**, không phải ở một lifecycle 
 | A' | `announceClaudeCompletion` không phân biệt status → đọc to lỗi cho run người dùng tự hủy | 🟠 Medium | `main.mjs`, `run-queue.mjs` | ~6 dòng | [x] |
 | B | Buffer thông báo không bao giờ được drain | 🔴 High | `main.mjs` | ~6 dòng | [x] |
 | C | Ghi file không atomic → mất sạch dữ liệu | 🟠 Medium | `main.mjs` | ~15 dòng | [x] |
-| D | Card hiển thị activity log như thể là kết quả | 🟡 Low | `App.tsx` | 1 dòng | [ ] |
+| D | Card hiển thị activity log như thể là kết quả | 🟡 Low | `App.tsx` | 1 dòng | [x] (`show-real-result-not-activity-log`) |
 | E | Gemini được báo "started" cho run đã fail | 🟡 Low | `run-queue.mjs` **+ `main.mjs:1649`** | ~6 dòng | [x] |
 | J | `abandon` trả lời hộ người dùng rồi phá session ngay câu lệnh sau → SDK có thể ghi file vào cwd cũ | 🟠 Medium | `main.mjs:159-162, 477-486` | ~4 dòng | [x] |
-| K | Spec/code lệch nhau: hủy run đang queued **không** finalize → `run.finalized` không set → once-guard không bảo vệ | 🟡 Low | spec hoặc `run-queue.mjs:142-151` | quyết định | [ ] |
-| F | `useHandControl` setState 60fps → re-render toàn cây | 🟠 Perf | `useHandControl.ts` | vừa | [ ] |
-| G | Orb trong Glass HUD không bao giờ dừng render | 🟠 Perf | `HudShell.tsx` | 1-3 dòng | [ ] |
-| H | `pushActivity` gửi ~17KB mỗi dòng activity | 🟡 Perf | `main.mjs` | vừa | [ ] |
+| K | Spec/code lệch nhau: hủy run đang queued **không** finalize → `run.finalized` không set → once-guard không bảo vệ | 🟡 Low | spec hoặc `run-queue.mjs:142-151` | quyết định | [x] (`reconcile-queued-cancel`) |
+| F | `useHandControl` setState 60fps → re-render toàn cây | 🟠 Perf | `useHandControl.ts` | vừa | [x] (`bound-hand-and-orb-render-cost`) |
+| G | Orb trong Glass HUD không bao giờ dừng render | 🟠 Perf | `HudShell.tsx` | 1-3 dòng | [x] (`bound-hand-and-orb-render-cost`) |
+| H | `pushActivity` gửi ~17KB mỗi dòng activity | 🟡 Perf | `main.mjs` | vừa | [x] (`coalesce-activity-updates`) |
 | I | Không có watchdog / PO không hủy được / subprocess mồ côi | 🟠 Design | `run-queue.mjs`, `main.mjs` | lớn | [x] I.1-I.5 xong |
 
 Ký hiệu trạng thái: `[ ]` chưa làm · `[~]` đang làm · `[x]` xong, đã verify.

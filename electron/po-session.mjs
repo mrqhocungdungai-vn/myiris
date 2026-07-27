@@ -5,6 +5,7 @@
 // separate modules rather than one code path with a role flag.
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { parseClaudeStreamMessage } from "./claude-stream.mjs";
+import { computeWorkerEnv } from "./worker-env.mjs";
 
 export const DEFAULT_PO_QUESTION_TIMEOUT_MS = 300000; // 5 minutes
 
@@ -13,14 +14,15 @@ export const DEFAULT_PO_QUESTION_TIMEOUT_MS = 300000; // 5 minutes
 // themselves. ANTHROPIC_API_KEY outranks CLAUDE_CODE_OAUTH_TOKEN in the SDK's
 // own auth precedence, so a stray key left in the environment would silently
 // switch PO usage from subscription billing to metered API billing — strip
-// it (and its bearer-token sibling) unconditionally for the PO session only.
-// This scrubbing is intentionally PO-scoped: the DEV subprocess keeps using
-// process.env untouched, per design D3.
+// it (and its bearer-token sibling) unconditionally for the PO session.
+// GEMINI_API_KEY is stripped too, for the separate least-privilege reason
+// worker-env.mjs describes: PO has no use for the voice credential
+// (harden-security-boundaries D12). This is now one case of the shared
+// subtraction helper both DEV's spawn and this session route through, so the
+// two paths cannot drift apart — the billing-scoped ANTHROPIC_* exclusion
+// stays PO-only exactly as before.
 export function computePoSessionEnv(baseEnv = process.env) {
-  const env = { ...baseEnv };
-  delete env.ANTHROPIC_API_KEY;
-  delete env.ANTHROPIC_AUTH_TOKEN;
-  return env;
+  return computeWorkerEnv(baseEnv, ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "GEMINI_API_KEY"]);
 }
 
 export function poBillingStatus(env = process.env) {

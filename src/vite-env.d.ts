@@ -102,7 +102,8 @@ type PendingTaskReview = {
 type PromptReviewResolveAction = "approve" | "cancel";
 
 type IrisConfig = {
-  geminiApiKey: string;
+  /** Presence only — the Gemini API key itself never reaches the renderer. */
+  geminiApiKeySet: boolean;
   geminiModel: string;
   geminiVoice: string;
   userName: string;
