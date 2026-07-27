@@ -10,6 +10,7 @@ import {
   taskKeyFor,
 } from "./lib/tasks";
 import { AGENT_LABELS, PIPELINE, isAgentRole, modelLabel } from "./lib/agents";
+import { resolveGestureContext } from "./lib/gestureContext";
 import { uiSounds } from "./lib/sounds";
 import { useAudioPipeline } from "./hooks/useAudioPipeline";
 import { useHandoffFx } from "./hooks/useHandoffFx";
@@ -403,10 +404,12 @@ export default function App() {
       } else {
         setUiMode("deck");
         setModeTransition("to-deck");
-        // Drawing is HUD-only (glass-hud-mode design.md D7) — any exit path
-        // (button, hotkey, tray) hides the panel so it isn't left mounted
-        // (and interactivity-latching) once back in deck mode.
+        // Drawing/galaxy are HUD-only (glass-hud-mode design.md D7); any exit
+        // path (button, hotkey, tray) hides both so neither is left mounted
+        // (and interactivity-latching, or — for the galaxy — snapping back on
+        // by design.md D7 of second-brain-gesture-nav) once back in deck mode.
         setDrawingActive(false);
+        setSecondBrainActive(false);
         modeTimerRef.current = window.setTimeout(() => setModeTransition(null), 600);
       }
     });
@@ -492,6 +495,16 @@ export default function App() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
+  }, [secondBrainActive]);
+
+  // The note reader's existence is derived from secondBrainActive at the
+  // render call site below (`secondBrainActive && openNote`), which closes
+  // the openNoteFromGalaxy await race — but that only suppresses rendering,
+  // leaving `openNote` set. Without also clearing it here, toggling the
+  // galaxy back on would pop the stale reader open again over a freshly-
+  // loading graph (second-brain-gesture-nav design.md D7 — ship both).
+  useEffect(() => {
+    if (!secondBrainActive) setOpenNote(null);
   }, [secondBrainActive]);
 
   // First-run onboarding + settings affordance (design.md D3/D4): load the
@@ -1009,12 +1022,11 @@ export default function App() {
     };
     const loop = () => {
       const h = liveHandRef.current;
-      // Suppressed while the reader, drawing panel, or second-brain galaxy
-      // is open — those layers own the pointer/gesture surface themselves
-      // (or, for the galaxy, gesture bindings are deferred to
-      // second-brain-gesture-nav), so dwell-click must not fire through to
-      // whatever's underneath.
-      if (!handControl || !h.present || !h.point || !h.pointing || expandedTaskId || drawingActive || secondBrainActive) {
+      // Suppressed while the reader is open — it owns the pointer/gesture
+      // surface itself. (Suppression for the drawing panel / second-brain
+      // galaxy is handled below, AFTER actionable resolves, so the HUD
+      // control island can be exempted — design.md D11.)
+      if (!handControl || !h.present || !h.point || !h.pointing || expandedTaskId) {
         dwellRef.current = null;
         syncDwell(false, false);
         raf = requestAnimationFrame(loop);
@@ -1024,6 +1036,19 @@ export default function App() {
       const el = document.elementFromPoint(h.point.x, h.point.y);
       const actionable = el?.closest<HTMLElement>('button, a, [data-task-id], [role="button"]') ?? null;
       if (!actionable || actionable.closest("[data-no-dwell]")) {
+        dwellRef.current = null;
+        syncDwell(false, false);
+        raf = requestAnimationFrame(loop);
+        return;
+      }
+
+      // A fullscreen HUD layer (drawing panel or second-brain galaxy) owns
+      // the pointer/gesture surface beneath it (for the galaxy, gesture
+      // bindings are its own — second-brain-gesture-nav) — EXCEPT the HUD
+      // control island, which stays dwell-reachable so a layer opened
+      // hands-free can also be closed hands-free (design.md D11). Resolved
+      // after `actionable` so there is something to test against here.
+      if ((drawingActive || secondBrainActive) && !actionable.closest(".hud-controls")) {
         dwellRef.current = null;
         syncDwell(false, false);
         raf = requestAnimationFrame(loop);
@@ -1127,15 +1152,48 @@ export default function App() {
     return () => cancelAnimationFrame(raf);
   }, [handControl, expandedTaskId, drawingActive, secondBrainActive]);
 
+  // Single authoritative context for the indicator (second-brain-gesture-nav
+  // design.md D9/D10) — reader outranks the galaxy, which outranks the deck.
+  const gestureContext = useMemo(
+    () =>
+      resolveGestureContext({
+        readerOpen: expandedTaskId != null || openNote != null,
+        secondBrainActive,
+        drawingActive,
+        historyOpen: showHistory,
+      }),
+    [expandedTaskId, openNote, secondBrainActive, drawingActive, showHistory],
+  );
+
   const handAction = useMemo(() => {
     if (!hand.present) return { label: "Show your hand", tone: "idle" };
+
+    if (gestureContext === "reader") {
+      // Both readers (task and vault note) share ReaderCore's bindings — a
+      // fist closes here, never orbits/rotates, fixing the fist branch's
+      // prior expandedTaskId-only test (design.md M11).
+      if (hand.hands.filter((item) => item.openPalm).length >= 2) return { label: "Two palms · resize", tone: "open" };
+      if (hand.fist) return { label: "Closed_Fist · close", tone: "fist" };
+      if (hand.openPalm) return { label: "Open_Palm · scroll", tone: "open" };
+      return { label: `${hand.gesture} · idle`, tone: "idle" };
+    }
+
+    if (gestureContext === "galaxy") {
+      // Mirrors driveFor's pose partition (src/lib/galaxy-nav.ts) so the
+      // indicator names the binding actually live, not "idle" or an orb/
+      // deck label the galaxy has taken over (design.md D10).
+      if (hand.fist) return { label: "Closed_Fist · orbit", tone: "fist" };
+      if (hand.pointing) return { label: "Pointing_Up · target a node", tone: "move" };
+      if (hand.pinchDistance < 0.08) return { label: "Pinch · zoom", tone: "open" };
+      return { label: `${hand.gesture} · idle`, tone: "idle" };
+    }
+
+    // Deck (and drawing/history, which don't bind their own gestures here).
     if (hand.hands.filter((item) => item.openPalm).length >= 2) return { label: "Two palms · resize", tone: "open" };
     if (hand.fist) {
-      return expandedTaskId
-        ? { label: "Closed_Fist · close", tone: "fist" }
-        : drawingActive || secondBrainActive
-          ? { label: "Closed_Fist · idle", tone: "idle" }
-          : { label: "Closed_Fist · rotate orb", tone: "fist" };
+      return drawingActive
+        ? { label: "Closed_Fist · idle", tone: "idle" }
+        : { label: "Closed_Fist · rotate orb", tone: "fist" };
     }
     if (hand.openPalm) return { label: "Open_Palm · scroll", tone: "open" };
     if (!hand.pointing) return { label: `${hand.gesture} · idle`, tone: "idle" };
@@ -1148,10 +1206,10 @@ export default function App() {
     hand.openPalm,
     hand.pointing,
     hand.gesture,
+    hand.pinchDistance,
     dwellActive,
     drawingActive,
-    secondBrainActive,
-    expandedTaskId,
+    gestureContext,
   ]);
 
   const activeProject = activeSession?.cwd ?? null;
@@ -1392,6 +1450,7 @@ export default function App() {
           galaxyPositionsRef={galaxyPositionsRef}
           onOpenNote={openNoteFromGalaxy}
           onForceCloseSecondBrain={() => setSecondBrainActive(false)}
+          readerOpen={openNote != null || expandedTaskId != null}
         />
       ) : (
       <div
@@ -1522,7 +1581,15 @@ export default function App() {
         <ReaderOverlay task={expandedTask} hand={handControl ? hand : null} handRef={liveHandRef} onClose={closeReader} />
       ) : null}
 
-      {openNote ? <NoteReader title={openNote.title} markdown={openNote.markdown} onClose={closeNoteReader} /> : null}
+      {secondBrainActive && openNote ? (
+        <NoteReader
+          title={openNote.title}
+          markdown={openNote.markdown}
+          hand={handControl ? hand : null}
+          handRef={liveHandRef}
+          onClose={closeNoteReader}
+        />
+      ) : null}
 
       {showHistory ? (
         <HistoryDrawer

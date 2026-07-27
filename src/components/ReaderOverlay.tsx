@@ -23,6 +23,7 @@ export default function ReaderOverlay({
       title={task.task}
       hand={hand}
       handRef={handRef}
+      gesturesEnabled={hand != null}
       onClose={onClose}
       footerHint={
         hand

@@ -1,6 +1,18 @@
 import { Component, useEffect, useRef, useState, type ReactNode } from "react";
 import * as THREE from "three";
 import type { ForceGraph3DInstance } from "3d-force-graph";
+import type { HandState } from "../hooks/useHandControl";
+import {
+  dwellStep,
+  driveFor,
+  orbitStep,
+  radiusStep,
+  nearestNodeAt,
+  INITIAL_DWELL_STATE,
+  INITIAL_POSE_DRIVE_STATE,
+  type DwellState,
+  type PoseDriveState,
+} from "../lib/galaxy-nav";
 
 // second-brain-galaxy-view: 3d-force-graph is a vanilla (non-React) library
 // that attaches imperatively to a container element — it has no React
@@ -56,6 +68,33 @@ function colorForNode(node: GalaxyNode): string {
   for (let i = 0; i < tag.length; i++) hash = (hash * 31 + tag.charCodeAt(i)) >>> 0;
   return TAG_COLORS[hash % TAG_COLORS.length];
 }
+
+// second-brain-gesture-nav tuning constants (design.md R2/R3/5.1/6.x) — tuned
+// during the manual pass, not further pre-optimized.
+const DWELL_THRESHOLD_PX = 48;
+const DWELL_HOLD_MS = 300;
+const ORBIT_SENSITIVITY = 0.006; // radians per pixel, matching the orb loop's feel
+const ZOOM_SENSITIVITY = 600;
+const ZOOM_MIN_RADIUS = 15;
+const ZOOM_MAX_RADIUS = 2500;
+const DWELL_HIGHLIGHT_COLOR = "#fff2a8";
+
+// Re-assigning `nodeColor` (rather than mutating a ref the existing accessor
+// closes over) is what forces 3d-force-graph to re-digest and repaint
+// (design.md D2/M6) — a fresh closure each call is simplest since the caller
+// only invokes this on an actual target change, already debounced by
+// dwellStep's own dead-band/hold (M14).
+function makeNodeColor(targetId: string | null) {
+  return (node: GalaxyNode) => (node.id === targetId ? DWELL_HIGHLIGHT_COLOR : colorForNode(node));
+}
+
+// 3d-force-graph types `controls()` as `object` (it's a TrackballControls
+// instance internally — design.md D3) — this is the minimal shape the
+// gesture loop actually touches, confirmed against three-render-objects'
+// source (tick() gates its `.update()` on `.enabled`; `cameraPosition`'s
+// `setLookAt` only writes `.target` while `.enabled` is true, replacing the
+// Vector3 outright rather than mutating it — R1/M5/L16).
+type TrackballControlsLike = { enabled: boolean; target?: THREE.Vector3 };
 
 // Deep-space backdrop mechanism (design.md D4, spike-resolved 3.2b): the
 // composer's UnrealBloomPass forces full-screen opacity, so the backdrop is
@@ -129,11 +168,20 @@ function GalaxyCanvas({
   running,
   positionsRef,
   onOpenNote,
+  handRef,
+  handControl,
+  readerOpen,
+  onForceClose,
 }: {
   graph: VaultGraph;
   running: boolean;
   positionsRef: { current: Map<string, GalaxyNode> };
   onOpenNote: (id: string, title: string) => void;
+  /** Per-frame hand data (useHandControl's stateRef) — read every rAF, not React state. */
+  handRef: { current: HandState };
+  handControl: boolean;
+  readerOpen: boolean;
+  onForceClose: () => void;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const fgRef = useRef<ForceGraph3DInstance<GalaxyNode, GalaxyLink> | null>(null);
@@ -141,9 +189,36 @@ function GalaxyCanvas({
   const pendingGraphRef = useRef(graph);
   pendingGraphRef.current = graph;
 
+  // Props mirrored into refs so the gesture loop's rAF closure — created
+  // once per [handControl, running] pair, not per render — always reads the
+  // current value instead of one captured at mount (design.md H2/M5).
+  const readerOpenRef = useRef(readerOpen);
+  readerOpenRef.current = readerOpen;
+  const onOpenNoteRef = useRef(onOpenNote);
+  onOpenNoteRef.current = onOpenNote;
+  const onForceCloseRef = useRef(onForceClose);
+  onForceCloseRef.current = onForceClose;
+
+  // Orbit center (design.md D3/6.1): recomputed from positionsRef at most
+  // once per dirty flag, never inside applyGraph's own position-free moment.
+  const centerRef = useRef(new THREE.Vector3());
+  const centerDirtyRef = useRef(true);
+
+  // Gesture state — all pure-module state objects threaded through
+  // src/lib/galaxy-nav.ts, plus the imperative camera-drive bookkeeping the
+  // thin driver below owns.
+  const dwellStateRef = useRef<DwellState>(INITIAL_DWELL_STATE);
+  const lastHighlightedRef = useRef<string | null>(null);
+  const poseStateRef = useRef<PoseDriveState>(INITIAL_POSE_DRIVE_STATE);
+  const sphericalRef = useRef<THREE.Spherical | null>(null);
+  const cameraEngagedRef = useRef<"orbit" | "zoom" | null>(null);
+  const prevOrbitPointRef = useRef<{ x: number; y: number } | null>(null);
+  const zoomReferenceRef = useRef<{ pinch: number; radius: number } | null>(null);
+
   function applyGraph(nextGraph: VaultGraph) {
     const fg = fgRef.current;
     if (!fg) return;
+    centerDirtyRef.current = true;
     const { nodes, links, topologyChanged } = reconcile(nextGraph, positionsRef.current, topologyKeyRef);
     if (!topologyChanged) {
       // Metadata-only change (a tag/title edit) — pin current positions so
@@ -193,6 +268,12 @@ function GalaxyCanvas({
           if (node.ghost) return; // unresolved wikilink target — no backing file to open (D8)
           onOpenNote(node.id, node.title);
         });
+      // The other half of the dirty-flag center (design.md D3/6.1): the sim
+      // settling long after applyGraph last ran (cooldownTicks(Infinity) on
+      // fresh topology) must also invalidate the cached orbit center.
+      fg.onEngineStop(() => {
+        centerDirtyRef.current = true;
+      });
       addStarfield(fg.scene());
       await addBloom(fg);
       if (disposed) return;
@@ -224,6 +305,154 @@ function GalaxyCanvas({
     if (running) fg.resumeAnimation();
     else fg.pauseAnimation();
   }, [running]);
+
+  // Gesture drive (design.md D4b/D5): a thin driver over the pure policy in
+  // src/lib/galaxy-nav.ts. Schedules NOTHING while gestures are off or the
+  // HUD is asleep (H-1/M-1) — `backgroundThrottling:false` means nothing
+  // else would throttle a spinning loop, and driving the camera while
+  // `pauseAnimation()` holds the render would let it silently drift and
+  // snap on wake.
+  useEffect(() => {
+    if (!handControl || !running) return;
+    let raf = 0;
+
+    function restoreControlsIfNeeded(fg: ForceGraph3DInstance<GalaxyNode, GalaxyLink> | null) {
+      if (!fg) return;
+      const controls = fg.controls() as unknown as TrackballControlsLike;
+      if (!controls || controls.enabled) return;
+      // Re-sync target before re-enabling (R1/M5): `setLookAt` only writes
+      // `.target` while `.enabled` is true and REPLACES the Vector3 outright
+      // on every enabled `cameraPosition()` call, so it must be re-read
+      // (never cached) and copied into, not assumed still valid, here.
+      controls.target?.copy(centerRef.current);
+      controls.enabled = true;
+    }
+
+    function ensureCenterFresh() {
+      if (!centerDirtyRef.current) return;
+      let sx = 0;
+      let sy = 0;
+      let sz = 0;
+      let n = 0;
+      for (const node of positionsRef.current.values()) {
+        if (node.x === undefined) continue;
+        sx += node.x;
+        sy += node.y ?? 0;
+        sz += node.z ?? 0;
+        n++;
+      }
+      if (n > 0) centerRef.current.set(sx / n, sy / n, sz / n);
+      centerDirtyRef.current = false;
+    }
+
+    function writeCameraFromSpherical(fg: ForceGraph3DInstance<GalaxyNode, GalaxyLink>) {
+      const spherical = sphericalRef.current;
+      if (!spherical) return;
+      const offset = new THREE.Vector3().setFromSpherical(spherical);
+      const pos = centerRef.current.clone().add(offset);
+      const center = centerRef.current;
+      fg.cameraPosition({ x: pos.x, y: pos.y, z: pos.z }, { x: center.x, y: center.y, z: center.z }, 0);
+    }
+
+    function loop() {
+      try {
+        const fg = fgRef.current;
+        if (!fg || readerOpenRef.current) {
+          restoreControlsIfNeeded(fg);
+          cameraEngagedRef.current = null;
+          raf = requestAnimationFrame(loop);
+          return;
+        }
+
+        const hand = handRef.current;
+        const { drive, state: poseState } = driveFor(hand, poseStateRef.current);
+        poseStateRef.current = poseState;
+
+        // Node-dwell: dwellStep runs every frame (candidate null when the
+        // pose isn't Pointing_Up) so leaving the pose immediately drops any
+        // charging dwell — "leave the node" per design.md D2.
+        const candidate =
+          drive === "dwell" && hand.point && containerRef.current
+            ? nearestNodeAt(
+                positionsRef.current.values(),
+                fg.camera(),
+                containerRef.current.getBoundingClientRect(),
+                hand.point,
+                DWELL_THRESHOLD_PX,
+                dwellStateRef.current.target,
+              )
+            : null;
+        const dwellResult = dwellStep(dwellStateRef.current, candidate, performance.now(), DWELL_HOLD_MS);
+        dwellStateRef.current = dwellResult.state;
+        if (dwellResult.target !== lastHighlightedRef.current) {
+          lastHighlightedRef.current = dwellResult.target;
+          fg.nodeColor(makeNodeColor(dwellResult.target));
+        }
+        if (dwellResult.fire && candidate) onOpenNoteRef.current(candidate.id, candidate.title);
+
+        // Camera drive: orbit and zoom share one spherical — re-derived from
+        // the LIVE camera on every engage (fist<->zoom switch or mouse-drag
+        // handoff, design.md M13), never carried over stale.
+        const activeCameraDrive = drive === "orbit" || drive === "zoom" ? drive : null;
+        if (activeCameraDrive !== cameraEngagedRef.current) {
+          if (activeCameraDrive) {
+            ensureCenterFresh();
+            sphericalRef.current = new THREE.Spherical().setFromVector3(
+              fg.camera().position.clone().sub(centerRef.current),
+            );
+            zoomReferenceRef.current =
+              activeCameraDrive === "zoom" ? { pinch: hand.pinchDistance, radius: sphericalRef.current.radius } : null;
+            prevOrbitPointRef.current = activeCameraDrive === "orbit" ? hand.point : null;
+          } else {
+            zoomReferenceRef.current = null;
+            prevOrbitPointRef.current = null;
+          }
+          cameraEngagedRef.current = activeCameraDrive;
+        } else if (activeCameraDrive === "orbit" && sphericalRef.current && prevOrbitPointRef.current && hand.point) {
+          const delta = {
+            x: hand.point.x - prevOrbitPointRef.current.x,
+            y: hand.point.y - prevOrbitPointRef.current.y,
+          };
+          const next = orbitStep(sphericalRef.current, delta, ORBIT_SENSITIVITY);
+          sphericalRef.current.set(next.radius, next.phi, next.theta);
+          prevOrbitPointRef.current = hand.point;
+          writeCameraFromSpherical(fg);
+        } else if (activeCameraDrive === "zoom" && sphericalRef.current && zoomReferenceRef.current) {
+          const pinchDelta = hand.pinchDistance - zoomReferenceRef.current.pinch;
+          const next = radiusStep(
+            zoomReferenceRef.current.radius,
+            pinchDelta,
+            ZOOM_SENSITIVITY,
+            ZOOM_MIN_RADIUS,
+            ZOOM_MAX_RADIUS,
+          );
+          sphericalRef.current.set(next, sphericalRef.current.phi, sphericalRef.current.theta);
+          writeCameraFromSpherical(fg);
+        }
+
+        if (activeCameraDrive) {
+          const controls = fg.controls() as unknown as TrackballControlsLike;
+          if (controls.enabled) controls.enabled = false;
+        } else {
+          restoreControlsIfNeeded(fg);
+        }
+      } catch (err) {
+        // The error boundary does NOT catch rAF throws (design.md R6) — a
+        // per-frame throw must force-close instead of throwing into the void
+        // every frame with the click-through-disabled overlay left trapped.
+        console.error("[second-brain-gesture-nav] gesture loop crashed, force-closing:", err);
+        onForceCloseRef.current();
+        return;
+      }
+      raf = requestAnimationFrame(loop);
+    }
+
+    raf = requestAnimationFrame(loop);
+    return () => {
+      cancelAnimationFrame(raf);
+      restoreControlsIfNeeded(fgRef.current);
+    };
+  }, [handControl, running]);
 
   return <div ref={containerRef} className="hud-galaxy hud-hit" />;
 }
@@ -258,11 +487,18 @@ export default function VaultGalaxy({
   positionsRef,
   onOpenNote,
   onForceClose,
+  handRef,
+  handControl,
+  readerOpen,
 }: {
   running: boolean;
   positionsRef: { current: Map<string, GalaxyNode> };
   onOpenNote: (id: string, title: string) => void;
   onForceClose: () => void;
+  /** Per-frame hand data (useHandControl's stateRef) — read every rAF, not React state. */
+  handRef: { current: HandState };
+  handControl: boolean;
+  readerOpen: boolean;
 }) {
   const [state, setState] = useState<
     { status: "loading" } | { status: "empty" } | { status: "ready"; graph: VaultGraph }
@@ -310,7 +546,16 @@ export default function VaultGalaxy({
 
   return (
     <GalaxyErrorBoundary onCrash={onForceClose}>
-      <GalaxyCanvas graph={state.graph} running={running} positionsRef={positionsRef} onOpenNote={onOpenNote} />
+      <GalaxyCanvas
+        graph={state.graph}
+        running={running}
+        positionsRef={positionsRef}
+        onOpenNote={onOpenNote}
+        handRef={handRef}
+        handControl={handControl}
+        readerOpen={readerOpen}
+        onForceClose={onForceClose}
+      />
     </GalaxyErrorBoundary>
   );
 }

@@ -128,6 +128,7 @@ export default function HudShell({
   galaxyPositionsRef,
   onOpenNote,
   onForceCloseSecondBrain,
+  readerOpen,
 }: {
   reactorState: ReactorState;
   inputLevelRef: { current: number };
@@ -205,6 +206,10 @@ export default function HudShell({
   galaxyPositionsRef: { current: Map<string, GalaxyNode> };
   onOpenNote: (id: string, title: string) => void;
   onForceCloseSecondBrain: () => void;
+  // second-brain-gesture-nav design.md D5: `openNote != null || expandedTaskId
+  // != null`, computed in App.tsx and forwarded so the galaxy's gesture loop
+  // can suppress node-dwell + camera nav while a reader is open.
+  readerOpen: boolean;
 }) {
   // Show the full stream (state caps at 20); the column has a fixed max height
   // and palm-scrolls like Comms.
@@ -407,6 +412,9 @@ export default function HudShell({
           positionsRef={galaxyPositionsRef}
           onOpenNote={onOpenNote}
           onForceClose={onForceCloseSecondBrain}
+          handRef={handRef}
+          handControl={handControl}
+          readerOpen={readerOpen}
         />
       ) : null}
     </div>

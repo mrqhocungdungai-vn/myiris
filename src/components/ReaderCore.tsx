@@ -17,6 +17,7 @@ export default function ReaderCore({
   headerSlot,
   hand,
   handRef,
+  gesturesEnabled,
   onClose,
 }: {
   title: string;
@@ -26,10 +27,17 @@ export default function ReaderCore({
   hand: HandState | null;
   /**
    * Per-frame hand data (useHandControl's stateRef) — read every rAF, not
-   * React state. `{ current: null }` is safe (e.g. NoteReader, which has no
-   * gesture bindings in this change) — the loop below reads it via `?.`.
+   * React state. `{ current: null }` is safe (e.g. NoteReader with hand
+   * control off) — the loop below reads it via `?.`.
    */
   handRef: { current: HandState | null };
+  /**
+   * Gates the palm-scroll/two-palm-resize rAF loop (second-brain-gesture-nav
+   * design.md D6/M-A1): without this, the loop's `useEffect(…, [])` would
+   * schedule a frame for as long as any reader is mounted, even with hand
+   * control off — a no-op 60fps loop over an empty hand ref.
+   */
+  gesturesEnabled: boolean;
   onClose: () => void;
 }) {
   const [offset, setOffset] = useState({ x: 0, y: 0 });
@@ -65,6 +73,7 @@ export default function ReaderCore({
   // card's center scrolls up, below scrolls down, and the middle is a dead zone.
   // Two open palms control reader scale instead.
   useEffect(() => {
+    if (!gesturesEnabled) return;
     let raf = 0;
     const distance = (a: { x: number; y: number }, b: { x: number; y: number }) =>
       Math.hypot(a.x - b.x, a.y - b.y);
@@ -102,7 +111,7 @@ export default function ReaderCore({
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, []);
+  }, [gesturesEnabled]);
 
   function beginDrag(clientX: number, clientY: number, target: HTMLElement, pointerId: number) {
     startRef.current = { x: clientX, y: clientY };
