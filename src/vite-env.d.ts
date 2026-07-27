@@ -109,6 +109,9 @@ type IrisConfig = {
   userName: string;
   loadTestData: boolean;
   wakeWord: boolean;
+  wakeThreshold: number;
+  wakeConsecutive: number;
+  wakeDebug: boolean;
   googleSearch: boolean;
   /** Presence only — the PO subscription token itself never reaches the renderer. */
   poTokenSet: boolean;

@@ -11,6 +11,7 @@ import {
   Wand2,
   X,
 } from "lucide-react";
+import { SYSTEM_DEFAULT_MIC } from "../lib/mic-device";
 
 type Mode = "onboarding" | "settings";
 type TestState = { status: "idle" | "testing" | "ok" | "error"; message?: string };
@@ -23,12 +24,23 @@ type Draft = {
   IRIS_USER_NAME: string;
   IRIS_LOAD_TEST_DATA: string;
   IRIS_WAKE_WORD: string;
+  IRIS_WAKE_THRESHOLD: string;
   IRIS_ENABLE_GOOGLE_SEARCH: string;
 };
 
 const WIZARD_STEPS = ["welcome", "gemini", "claude", "you", "permissions", "finish"] as const;
 
 const SYSTEM_DEFAULT_CAMERA = "default";
+
+// Wake-word sensitivity presets (design D5) — anchored to the values the code
+// itself recorded: 0.10 caused false wakes, 0.18 missed too much, 0.15 is
+// today's shipped compromise. A raw 0-1 float invites values that make the
+// feature useless in either direction, so the panel offers only these three.
+const WAKE_THRESHOLD_PRESETS: Option[] = [
+  { value: "0.18", label: "Strict" },
+  { value: "0.15", label: "Balanced" },
+  { value: "0.11", label: "Sensitive" },
+];
 
 export default function SetupPanel({
   mode,
@@ -37,6 +49,8 @@ export default function SetupPanel({
   onToggleSounds,
   cameraDeviceId,
   onChangeCameraDevice,
+  micDeviceId,
+  onChangeMicDevice,
   onClose,
   onSaved,
   onStart,
@@ -48,6 +62,8 @@ export default function SetupPanel({
   onToggleSounds: () => void;
   cameraDeviceId: string;
   onChangeCameraDevice: (deviceId: string) => void;
+  micDeviceId: string;
+  onChangeMicDevice: (deviceId: string) => void;
   onClose: () => void;
   onSaved: (config: IrisConfig) => void;
   onStart?: () => void;
@@ -63,6 +79,7 @@ export default function SetupPanel({
     IRIS_USER_NAME: config.userName,
     IRIS_LOAD_TEST_DATA: config.loadTestData ? "true" : "false",
     IRIS_WAKE_WORD: config.wakeWord ? "true" : "false",
+    IRIS_WAKE_THRESHOLD: String(config.wakeThreshold),
     IRIS_ENABLE_GOOGLE_SEARCH: config.googleSearch ? "true" : "false",
   });
   const [step, setStep] = useState(0);
@@ -82,6 +99,7 @@ export default function SetupPanel({
   const [mic, setMic] = useState<PermState>("idle");
   const [cam, setCam] = useState<PermState>("idle");
   const [camDevices, setCamDevices] = useState<MediaDeviceInfo[]>([]);
+  const [micDevices, setMicDevices] = useState<MediaDeviceInfo[]>([]);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
@@ -138,6 +156,30 @@ export default function SetupPanel({
       navigator.mediaDevices.removeEventListener?.("devicechange", refresh);
     };
   }, [cam]);
+
+  // Same live-refresh pattern as the camera list above, filtered to audio
+  // input devices and gated on Microphone permission instead of Camera.
+  useEffect(() => {
+    if (mic !== "granted") {
+      setMicDevices([]);
+      return;
+    }
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        if (!cancelled) setMicDevices(devices.filter((device) => device.kind === "audioinput"));
+      } catch {
+        // Leave the list as-is; enumeration can fail transiently.
+      }
+    };
+    refresh();
+    navigator.mediaDevices.addEventListener?.("devicechange", refresh);
+    return () => {
+      cancelled = true;
+      navigator.mediaDevices.removeEventListener?.("devicechange", refresh);
+    };
+  }, [mic]);
 
   // Run the Claude CLI + subscription-billing check once when the panel opens
   // so Settings mode shows current status without an extra click.
@@ -491,6 +533,24 @@ export default function SetupPanel({
         </small>
       </label>
       <label className="setup-field">
+        <span>Wake-word sensitivity</span>
+        <ThemedSelect
+          ariaLabel="Wake-word sensitivity"
+          value={draft.IRIS_WAKE_THRESHOLD}
+          options={
+            WAKE_THRESHOLD_PRESETS.some((preset) => preset.value === draft.IRIS_WAKE_THRESHOLD)
+              ? WAKE_THRESHOLD_PRESETS
+              : [...WAKE_THRESHOLD_PRESETS, { value: draft.IRIS_WAKE_THRESHOLD, label: "Custom" }]
+          }
+          onChange={(value) => set("IRIS_WAKE_THRESHOLD", value)}
+          disabled={draft.IRIS_WAKE_WORD !== "true"}
+        />
+        <small className="setup-note">
+          Strict wakes less easily (fewer false wakes, may miss quieter “Hey Iris”). Sensitive wakes more easily. A
+          hand-edited value outside these three shows as Custom and is left alone unless you pick a level here.
+        </small>
+      </label>
+      <label className="setup-field">
         <span>Interface sounds</span>
         <ThemedSelect
           ariaLabel="Interface sounds"
@@ -522,12 +582,48 @@ export default function SetupPanel({
     cameraOptions.push({ value: cameraDeviceId, label: "Previously selected camera (unavailable)" });
   }
 
+  const micOptions: Option[] = [{ value: SYSTEM_DEFAULT_MIC, label: "System Default" }].concat(
+    micDevices.map((device, index) => ({
+      value: device.deviceId,
+      label: device.label || `Microphone ${index + 1}`,
+    })),
+  );
+  // Unlike the camera list, this entry is self-correcting: once either mic
+  // consumer actually tries to open the missing device it auto-falls-back to
+  // System Default and App.tsx reconciles micDeviceId to match, at which
+  // point this condition stops matching on its own — no extra "already
+  // corrected" flag needed.
+  const micSelectionMissing =
+    micDeviceId !== SYSTEM_DEFAULT_MIC && !micDevices.some((device) => device.deviceId === micDeviceId);
+  if (micSelectionMissing) {
+    micOptions.push({ value: micDeviceId, label: "Previously selected microphone (unavailable)" });
+  }
+
   const permissionsSection = (
     <Section title="Permissions" hint="Iris needs your mic to hear you. Camera is optional (hand gestures).">
       <div className="setup-perms">
         <PermRow icon={<Mic size={16} />} label="Microphone" required state={mic} onRequest={requestMic} />
         <PermRow icon={<Camera size={16} />} label="Camera (gestures)" state={cam} onRequest={requestCam} />
       </div>
+      <label className="setup-field">
+        <span>Microphone</span>
+        {mic === "granted" ? (
+          <ThemedSelect
+            ariaLabel="Microphone"
+            value={micDeviceId}
+            options={micOptions}
+            onChange={onChangeMicDevice}
+          />
+        ) : (
+          <p className="setup-note">Grant Microphone permission above to choose a specific device.</p>
+        )}
+        <small className="setup-note">
+          Governs both voice conversation and local “Hey Iris” wake-word listening — pick a specific device (e.g. a
+          USB mic) instead of the system default. Applies immediately to whichever is currently listening. If the
+          chosen device fails or is unplugged, Iris automatically falls back to System Default rather than going
+          silent.
+        </small>
+      </label>
       <label className="setup-field">
         <span>Gesture camera</span>
         {cam === "granted" ? (
@@ -710,11 +806,13 @@ function ThemedSelect({
   options,
   onChange,
   ariaLabel,
+  disabled,
 }: {
   value: string;
   options: Option[];
   onChange: (value: string) => void;
   ariaLabel?: string;
+  disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ left: number; width: number; top?: number; bottom?: number } | null>(null);
@@ -751,6 +849,7 @@ function ThemedSelect({
   }, [open]);
 
   function toggle() {
+    if (disabled) return;
     if (open) {
       setOpen(false);
       return;
@@ -768,12 +867,13 @@ function ThemedSelect({
   }
 
   return (
-    <div className="ts">
+    <div className={`ts ${disabled ? "disabled" : ""}`}>
       <button
         ref={btnRef}
         type="button"
         className={`ts-trigger ${open ? "open" : ""}`}
         onClick={toggle}
+        disabled={disabled}
         aria-label={ariaLabel}
         aria-expanded={open}
       >

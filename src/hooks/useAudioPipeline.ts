@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { SYSTEM_DEFAULT_MIC, micConstraints } from "../lib/mic-device";
 
 function parsePcmRate(mimeType?: string): number {
   const match = /rate=(\d+)/i.exec(mimeType ?? "");
@@ -35,7 +36,13 @@ export function shouldDropChunk({
  * tracked separately so the orb can tell WHO is talking: your mic drives the
  * radial-bar signature, Gemini's playback drives the smooth wave.
  */
-export function useAudioPipeline({ onLog }: { onLog?: (level: string, message: string) => void } = {}) {
+export function useAudioPipeline({
+  onLog,
+  micDeviceId,
+}: {
+  onLog?: (level: string, message: string) => void;
+  micDeviceId?: string;
+} = {}) {
   const inputContextRef = useRef<AudioContext | null>(null);
   const inputStreamRef = useRef<MediaStream | null>(null);
   const inputSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
@@ -50,8 +57,16 @@ export function useAudioPipeline({ onLog }: { onLog?: (level: string, message: s
   const outputLevelRef = useRef(0);
   const sessionStartRef = useRef<number | null>(null);
   const [muted, setMuted] = useState(false);
+  const mutedRef = useRef(false);
   const outputMutedRef = useRef(false);
   const [outputMuted, setOutputMuted] = useState(false);
+  const micDeviceIdRef = useRef(micDeviceId ?? SYSTEM_DEFAULT_MIC);
+  micDeviceIdRef.current = micDeviceId ?? SYSTEM_DEFAULT_MIC;
+  // Bumped at the entry of every startCapture() call (mirrors flushEpochRef's
+  // pattern for playback). A losing call whose awaits resolve after a newer
+  // one has started is detected here and cleaned up rather than left as an
+  // unreferenced, never-stopped MediaStream (hot mic, lit OS recording light).
+  const captureEpochRef = useRef(0);
 
   // Passive audio level meters (mic in / Gemini out) for the reactive HUD.
   useEffect(() => {
@@ -78,18 +93,62 @@ export function useAudioPipeline({ onLog }: { onLog?: (level: string, message: s
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  async function startCapture() {
-    if (typeof window.iris === "undefined" || inputContextRef.current) return;
+  const captureBaseConstraints: MediaTrackConstraints = {
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
+    channelCount: 1,
+  };
 
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-        channelCount: 1,
-      },
+  async function acquireStream(deviceId: string): Promise<MediaStream> {
+    return navigator.mediaDevices.getUserMedia({
+      audio: micConstraints(captureBaseConstraints, deviceId),
       video: false,
     });
+  }
+
+  // Returns the actually-active device id (which may differ from the
+  // requested one after a fallback), or null if capture did not start —
+  // callers reconcile persisted/displayed selection from this return value
+  // rather than a second callback channel.
+  async function startCapture(deviceId?: string): Promise<string | null> {
+    if (typeof window.iris === "undefined" || inputContextRef.current) return null;
+
+    const epoch = ++captureEpochRef.current;
+    const requestedDeviceId = deviceId ?? micDeviceIdRef.current;
+    let activeDeviceId = requestedDeviceId;
+    let stream: MediaStream;
+    try {
+      stream = await acquireStream(requestedDeviceId);
+    } catch (error) {
+      if (requestedDeviceId === SYSTEM_DEFAULT_MIC) {
+        const message = error instanceof Error ? error.message : String(error);
+        onLog?.("error", `Mic capture failed: could not open the microphone (${message}).`);
+        return null;
+      }
+      onLog?.(
+        "warn",
+        `Mic capture: selected microphone (${requestedDeviceId}) unavailable, falling back to System Default.`,
+      );
+      try {
+        stream = await acquireStream(SYSTEM_DEFAULT_MIC);
+        activeDeviceId = SYSTEM_DEFAULT_MIC;
+      } catch (fallbackError) {
+        const message = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+        onLog?.("error", `Mic capture failed: System Default microphone unavailable (${message}).`);
+        return null;
+      }
+    }
+
+    if (captureEpochRef.current !== epoch) {
+      stream.getTracks().forEach((track) => track.stop());
+      return null;
+    }
+
+    // Apply mute state to the freshly acquired stream before wiring it in —
+    // read via the ref so a mute toggled during the acquisition window above
+    // is honored rather than silently resuming transmission (design.md).
+    stream.getAudioTracks().forEach((track) => (track.enabled = !mutedRef.current));
 
     const context = new AudioContext();
     const source = context.createMediaStreamSource(stream);
@@ -118,7 +177,16 @@ export function useAudioPipeline({ onLog }: { onLog?: (level: string, message: s
       inputAnalyserRef.current = null;
       stream.getTracks().forEach((track) => track.stop());
       await context.close().catch(() => undefined);
-      return;
+      return null;
+    }
+
+    if (captureEpochRef.current !== epoch) {
+      // A newer startCapture()/restartCapture() call won the race — stop the
+      // just-opened tracks/context instead of assigning them to the live refs.
+      inputAnalyserRef.current = null;
+      stream.getTracks().forEach((track) => track.stop());
+      await context.close().catch(() => undefined);
+      return null;
     }
 
     workletNode.port.onmessage = (event: MessageEvent<ArrayBuffer>) => {
@@ -132,6 +200,7 @@ export function useAudioPipeline({ onLog }: { onLog?: (level: string, message: s
     inputSourceRef.current = source;
     inputProcessorRef.current = workletNode;
     onLog?.("info", "WebRTC echo cancellation enabled for microphone.");
+    return activeDeviceId;
   }
 
   async function stopCapture() {
@@ -217,6 +286,7 @@ export function useAudioPipeline({ onLog }: { onLog?: (level: string, message: s
   function toggleMute() {
     const stream = inputStreamRef.current;
     const next = !muted;
+    mutedRef.current = next;
     stream?.getAudioTracks().forEach((track) => (track.enabled = !next));
     setMuted(next);
   }
@@ -228,9 +298,18 @@ export function useAudioPipeline({ onLog }: { onLog?: (level: string, message: s
     if (value) flushPlayback();
   }
 
-  async function start() {
+  async function start(): Promise<string | null> {
     sessionStartRef.current = Date.now();
-    await startCapture();
+    return startCapture();
+  }
+
+  // App.tsx's hot-swap path: tears down and rebuilds the capture graph on a
+  // newly selected device without touching the output/playback context or
+  // resetting sessionStartRef/muted — that's the full stop()'s job, not this
+  // one's (design.md).
+  async function restartCapture(deviceId: string): Promise<string | null> {
+    await stopCapture();
+    return startCapture(deviceId);
   }
 
   async function stop() {
@@ -240,6 +319,7 @@ export function useAudioPipeline({ onLog }: { onLog?: (level: string, message: s
     outputContextRef.current = null;
     outputAnalyserRef.current = null;
     playbackTimeRef.current = 0;
+    mutedRef.current = false;
     setMuted(false);
     outputMutedRef.current = false;
     setOutputMuted(false);
@@ -254,6 +334,7 @@ export function useAudioPipeline({ onLog }: { onLog?: (level: string, message: s
     outputMuted,
     start,
     stop,
+    restartCapture,
     flushPlayback,
     playGeminiAudio,
     toggleMute,

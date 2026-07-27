@@ -16,6 +16,7 @@ import { useAudioPipeline } from "./hooks/useAudioPipeline";
 import { useHandoffFx } from "./hooks/useHandoffFx";
 import { useHandControl, SYSTEM_DEFAULT_CAMERA, type HandPoint } from "./hooks/useHandControl";
 import { useWakeWord } from "./hooks/useWakeWord";
+import { SYSTEM_DEFAULT_MIC } from "./lib/mic-device";
 import TopBar from "./components/TopBar";
 import HudShell from "./components/HudShell";
 import CommsPanel from "./components/CommsPanel";
@@ -41,6 +42,7 @@ import HoloBackdrop from "./components/HoloBackdrop";
 const MAX_LOGS = 80;
 const SOUNDS_STORAGE_KEY = "iris.soundsEnabled";
 const CAMERA_STORAGE_KEY = "iris.cameraDeviceId";
+const MIC_STORAGE_KEY = "iris.micDeviceId";
 const HAND_STORAGE_KEY = "iris.handControlEnabled";
 
 function loadSoundsEnabled(): boolean {
@@ -64,6 +66,14 @@ function loadCameraDeviceId(): string {
     return window.localStorage.getItem(CAMERA_STORAGE_KEY) || SYSTEM_DEFAULT_CAMERA;
   } catch {
     return SYSTEM_DEFAULT_CAMERA;
+  }
+}
+
+function loadMicDeviceId(): string {
+  try {
+    return window.localStorage.getItem(MIC_STORAGE_KEY) || SYSTEM_DEFAULT_MIC;
+  } catch {
+    return SYSTEM_DEFAULT_MIC;
   }
 }
 
@@ -161,6 +171,7 @@ export default function App() {
   const soundsRef = useRef(soundsEnabled);
   soundsRef.current = soundsEnabled;
   const [cameraDeviceId, setCameraDeviceIdState] = useState(loadCameraDeviceId);
+  const [micDeviceId, setMicDeviceIdState] = useState(loadMicDeviceId);
   const audioStateRef = useRef(audioState);
   audioStateRef.current = audioState;
 
@@ -173,7 +184,7 @@ export default function App() {
     setLogs((current) => [{ id: crypto.randomUUID(), level, message, timestamp }, ...current].slice(0, MAX_LOGS));
   }
 
-  const audio = useAudioPipeline({ onLog: pushLog });
+  const audio = useAudioPipeline({ onLog: pushLog, micDeviceId });
   const { pulses, removePulse, orbFlash, clearOrbFlash, acceptedIds } = useHandoffFx(
     tasks,
     orbStageRef,
@@ -257,6 +268,33 @@ export default function App() {
       window.localStorage.setItem(CAMERA_STORAGE_KEY, next);
     } catch {
       // Best-effort persistence; the selection still applies for this session.
+    }
+  }
+
+  // Updates state + persistence only, with no hot-swap side effect — used both
+  // for an explicit user pick (setMicDeviceId below) and to reconcile the
+  // selector/persisted value after either mic consumer's auto-fallback to
+  // System Default (design.md's "return value, not a callback" decision).
+  function applyMicDeviceId(next: string) {
+    setMicDeviceIdState(next);
+    try {
+      window.localStorage.setItem(MIC_STORAGE_KEY, next);
+    } catch {
+      // Best-effort persistence; the selection still applies for this session.
+    }
+  }
+
+  // The user picked a mic from Settings. useWakeWord picks up the new
+  // micDeviceId through its own [enabled, deviceId] effect dependency (it only
+  // holds a stream while idle, i.e. exactly when a session isn't capturing),
+  // so only the useAudioPipeline path needs an explicit hot-swap here — the
+  // two consumers are temporally exclusive and never both fire for one change.
+  function setMicDeviceId(next: string) {
+    applyMicDeviceId(next);
+    if (sidecarRunning) {
+      audio.restartCapture(next).then((active) => {
+        if (active && active !== next) applyMicDeviceId(active);
+      });
     }
   }
 
@@ -551,10 +589,19 @@ export default function App() {
   // detection wakes Iris exactly like pressing W (design.md D5).
   useWakeWord(
     hasBridge && wakeWordEnabled && !sidecarRunning,
+    {
+      threshold: fullConfig?.wakeThreshold ?? 0.15,
+      consecutive: fullConfig?.wakeConsecutive ?? 2,
+      debug: fullConfig?.wakeDebug ?? false,
+    },
     () => {
       if (!sidecarRunning) start();
     },
-    (message) => pushLog("error", `Wake word: ${message}`),
+    (message, fallbackDeviceId) => {
+      pushLog("error", `Wake word: ${message}`);
+      if (fallbackDeviceId) applyMicDeviceId(fallbackDeviceId);
+    },
+    micDeviceId,
   );
 
   useEffect(() => {
@@ -990,7 +1037,8 @@ export default function App() {
     const status = await window.iris.startSidecar({ mode: "none" });
     setSidecarRunning(status.running);
     setSidecarPid(status.pid);
-    await audio.start();
+    const activeDevice = await audio.start();
+    if (activeDevice && activeDevice !== micDeviceId) applyMicDeviceId(activeDevice);
   }
 
   async function stop() {
@@ -1635,6 +1683,8 @@ export default function App() {
           onToggleSounds={toggleSounds}
           cameraDeviceId={cameraDeviceId}
           onChangeCameraDevice={setCameraDeviceId}
+          micDeviceId={micDeviceId}
+          onChangeMicDevice={setMicDeviceId}
           onClose={() => setSetup(null)}
           onSaved={setFullConfig}
           onStart={() => {

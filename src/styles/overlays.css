@@ -607,6 +607,15 @@
   border-color: rgba(var(--cyan-rgb), 0.35);
 }
 
+.ts.disabled .ts-trigger {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.ts.disabled .ts-trigger:hover {
+  border-color: var(--hairline);
+}
+
 .ts-trigger.open {
   border-color: rgba(var(--cyan-rgb), 0.5);
   box-shadow: 0 0 0 3px rgba(var(--cyan-rgb), 0.12);

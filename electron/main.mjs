@@ -1097,6 +1097,20 @@ function envFlag(name, fallback = false) {
   return ["1", "true", "yes", "on"].includes(String(value).trim().toLowerCase());
 }
 
+// Shared numeric-config parser (harden-wake-word-detection D4): a malformed
+// `.env` must fall back to the default rather than disabling detection or
+// throwing, so any missing, non-numeric, non-integer (when required), or
+// out-of-range value is treated the same as absent.
+function envNumber(name, fallback, { min = -Infinity, max = Infinity, integer = false } = {}) {
+  const raw = process.env[name];
+  if (raw == null || raw === "") return fallback;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return fallback;
+  if (integer && !Number.isInteger(parsed)) return fallback;
+  if (parsed < min || parsed > max) return fallback;
+  return parsed;
+}
+
 // Pre-dispatch review gate (prompt-review-gate spec): when on, submit_claude_task
 // parks a brief for Approve/Edit/Cancel instead of dispatching it immediately —
 // modeled exactly on pipelineAvailable (module flag, one mutation choke point
@@ -1143,6 +1157,9 @@ const ALLOWED_CONFIG_KEYS = new Set([
   "IRIS_USER_NAME",
   "IRIS_LOAD_TEST_DATA",
   "IRIS_WAKE_WORD",
+  "IRIS_WAKE_THRESHOLD",
+  "IRIS_WAKE_CONSECUTIVE",
+  "IRIS_WAKE_DEBUG",
   "CLAUDE_CODE_OAUTH_TOKEN",
   "IRIS_PROMPT_REVIEW",
   "IRIS_ENABLE_GOOGLE_SEARCH",
@@ -1177,6 +1194,9 @@ function getFullConfig() {
     userName: process.env.IRIS_USER_NAME || "",
     loadTestData: envFlag("IRIS_LOAD_TEST_DATA", false),
     wakeWord: envFlag("IRIS_WAKE_WORD", true),
+    wakeThreshold: envNumber("IRIS_WAKE_THRESHOLD", 0.15, { min: 0, max: 1 }),
+    wakeConsecutive: envNumber("IRIS_WAKE_CONSECUTIVE", 2, { min: 1, max: 10, integer: true }),
+    wakeDebug: envFlag("IRIS_WAKE_DEBUG", false),
     googleSearch: envFlag("IRIS_ENABLE_GOOGLE_SEARCH", false),
     // Presence only — the token itself never crosses the IPC boundary (design D2).
     poTokenSet: poBillingStatus().ok,
@@ -3312,6 +3332,11 @@ function createWindow() {
   const useProd = app.isPackaged || process.env.IRIS_START_PROD === "1";
   if (useProd) mainWindow.loadFile(path.join(repoRoot, "dist", "index.html"));
   else mainWindow.loadURL(APP_DEV_URL);
+  // harden-wake-word-detection D6: the application menu ships with no View
+  // role and nothing else calls openDevTools(), so the renderer console —
+  // where IRIS_WAKE_DEBUG's score diagnostics land — is otherwise unreachable
+  // by menu or accelerator in both dev and packaged builds.
+  if (envFlag("IRIS_WAKE_DEBUG", false)) mainWindow.webContents.openDevTools();
   // Navigation containment and the external-link handoff now live on
   // app.on("web-contents-created") below, covering every web contents the
   // app ever creates instead of just this one window.

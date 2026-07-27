@@ -1,5 +1,7 @@
 import { useEffect, useRef } from "react";
 import * as ort from "onnxruntime-web";
+import { createWakeGate, type WakeGate } from "../lib/wake-gate";
+import { SYSTEM_DEFAULT_MIC, micConstraints } from "../lib/mic-device";
 
 // Local "Hey Iris" wake word. Ports the livekit-wakeword / openWakeWord inference
 // pipeline (mel-spectrogram -> speech embedding -> classifier) to the browser via
@@ -13,10 +15,14 @@ const EMB_WINDOW = 76; // mel frames per embedding
 const EMB_STRIDE = 8; // mel frames between embeddings
 const N_EMB = 16; // classifier input length
 const PREDICT_INTERVAL_MS = 200;
-// Balanced default (model's eval-optimal): high enough to reject random words,
-// low enough for a clear "Hey Iris". 0.10 caused false wakes; 0.18 missed too much.
-const DEFAULT_THRESHOLD = 0.15;
 const COOLDOWN_MS = 2500;
+// A gap this much larger than the expected evaluation interval means two
+// evaluations are no longer "adjacent" for run-confirmation purposes (design D3).
+const MAX_GAP_MS = PREDICT_INTERVAL_MS * 3;
+// Below-threshold scores at or above this fraction of the threshold are logged
+// as near-misses when diagnostics are on (design D6) — fixed, not configurable.
+const NEAR_MISS_FRACTION = 0.6;
+const NEAR_MISS_LOG_INTERVAL_MS = 1000;
 
 let ortConfigured = false;
 function configureOrt() {
@@ -73,15 +79,25 @@ function getSessions(): Promise<WakeSessions> {
   return sessionsPromise;
 }
 
+export type WakeWordSettings = {
+  threshold: number;
+  consecutive: number;
+  debug: boolean;
+};
+
 export function useWakeWord(
   enabled: boolean,
+  settings: WakeWordSettings,
   onWake: () => void,
-  onError?: (message: string) => void,
+  onError?: (message: string, fallbackDeviceId?: string) => void,
+  deviceId: string = SYSTEM_DEFAULT_MIC,
 ) {
   const onWakeRef = useRef(onWake);
   const onErrorRef = useRef(onError);
+  const settingsRef = useRef(settings);
   onWakeRef.current = onWake;
   onErrorRef.current = onError;
+  settingsRef.current = settings;
 
   useEffect(() => {
     if (!enabled) return;
@@ -100,7 +116,27 @@ export function useWakeWord(
     const ring = new Float32Array(WINDOW_SAMPLES);
     let filled = 0;
     let busy = false;
-    let lastWakeAt = 0;
+
+    // The fire/hold/reset decision lives entirely in wake-gate (design D1-D3).
+    // Settings can change live (via settingsRef) while this listener stays
+    // armed; a settings change swaps in a freshly-constructed gate rather than
+    // mutating the old one, which correctly discards any in-flight run counted
+    // against the previous threshold (design D2).
+    let gateThreshold = settingsRef.current.threshold;
+    let gateConsecutive = settingsRef.current.consecutive;
+    let gate: WakeGate = createWakeGate({
+      threshold: gateThreshold,
+      consecutive: gateConsecutive,
+      cooldownMs: COOLDOWN_MS,
+      maxGapMs: MAX_GAP_MS,
+    });
+
+    // Diagnostics-only bookkeeping (design D6): mirrors the gate's above-threshold
+    // run length purely for the log line — it does not participate in the wake
+    // decision, which stays the gate's sole responsibility.
+    let diagRun = 0;
+    let diagLastEvalAt: number | null = null;
+    let lastNearMissLogAt = -Infinity;
 
     async function predict() {
       if (busy || cancelled || !mel || !emb || !cls || filled < WINDOW_SAMPLES) return;
@@ -138,12 +174,36 @@ export function useWakeWord(
         const clsResult = await cls.run({ [cls.inputNames[0]]: clsInput });
         const score = (clsResult[cls.outputNames[0]].data as Float32Array)[0];
 
-        // Fire on the first frame that clears the threshold (cooldown prevents
-        // rapid double-fires from the same utterance).
+        const settings = settingsRef.current;
+        if (settings.threshold !== gateThreshold || settings.consecutive !== gateConsecutive) {
+          gateThreshold = settings.threshold;
+          gateConsecutive = settings.consecutive;
+          gate = createWakeGate({
+            threshold: gateThreshold,
+            consecutive: gateConsecutive,
+            cooldownMs: COOLDOWN_MS,
+            maxGapMs: MAX_GAP_MS,
+          });
+        }
+
         const now = performance.now();
-        if (score >= DEFAULT_THRESHOLD && now - lastWakeAt > COOLDOWN_MS) {
-          lastWakeAt = now;
+
+        const diagGapTooLarge = diagLastEvalAt !== null && now - diagLastEvalAt > MAX_GAP_MS;
+        diagLastEvalAt = now;
+        diagRun = score >= gateThreshold ? (diagGapTooLarge ? 1 : diagRun + 1) : 0;
+
+        const fired = gate.step(score, now);
+        if (fired) {
           onWakeRef.current();
+          if (settings.debug) console.log(`[wakeword] fired score=${score.toFixed(3)} run=${diagRun}`);
+        } else if (
+          settings.debug &&
+          score < gateThreshold &&
+          score >= gateThreshold * NEAR_MISS_FRACTION &&
+          now - lastNearMissLogAt >= NEAR_MISS_LOG_INTERVAL_MS
+        ) {
+          lastNearMissLogAt = now;
+          console.log(`[wakeword] near-miss score=${score.toFixed(3)} threshold=${gateThreshold}`);
         }
       } catch (error) {
         // Best-effort: a single failed frame shouldn't kill the listener.
@@ -161,10 +221,38 @@ export function useWakeWord(
         cls = sessions.cls;
         if (cancelled) return;
 
-        stream = await navigator.mediaDevices.getUserMedia({
-          audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-          video: false,
-        });
+        // AGC off (design D7): a quiet room otherwise gets normalised toward
+        // full scale, feeding the model amplified ambient noise and distant
+        // speech. Echo cancellation and noise suppression stay on. This is
+        // the wake-word listener's own capture stream — useAudioPipeline's
+        // conversation mic is untouched.
+        const baseConstraints: MediaTrackConstraints = {
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: false,
+        };
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: micConstraints(baseConstraints, deviceId),
+            video: false,
+          });
+        } catch (error) {
+          if (deviceId === SYSTEM_DEFAULT_MIC) throw error;
+          const message = error instanceof Error ? error.message : String(error);
+          onErrorRef.current?.(
+            `selected microphone unavailable (${message}), falling back to System Default`,
+            SYSTEM_DEFAULT_MIC,
+          );
+          // Not epoch-guarded like useAudioPipeline's restartCapture: this
+          // effect instance owns its own `cancelled` flag, and a deviceId
+          // change tears down and re-runs the whole effect (dependency array
+          // below), so there is no concurrent init() to race against here.
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: micConstraints(baseConstraints, SYSTEM_DEFAULT_MIC),
+            video: false,
+          });
+        }
         if (cancelled) {
           stream.getTracks().forEach((track) => track.stop());
           return;
@@ -212,8 +300,13 @@ export function useWakeWord(
       }
       stream?.getTracks().forEach((track) => track.stop());
       audioCtx?.close().catch(() => undefined);
+      gate.reset();
       // NOTE: ONNX sessions are cached module-level and intentionally NOT released
       // here, so re-arming after sleep is instant.
     };
-  }, [enabled]);
+    // Only enabled/deviceId belong here: a device change fundamentally cannot
+    // apply to an already-open stream and must re-acquire, while settings
+    // (threshold/consecutive/debug) are deliberately ref-threaded above so a
+    // sensitivity save never tears down and re-acquires the microphone.
+  }, [enabled, deviceId]);
 }
