@@ -1,65 +1,4 @@
-## Purpose
-
-TBD — two-hand tracking, dwell-click, two-palm reader resize, and per-hand reticles/skeleton for the gesture-driven UI.
-## Requirements
-### Requirement: Two hands tracked with per-hand stabilization
-
-The gesture engine SHALL track up to two hands simultaneously (`numHands: 2`), stabilize gesture classification per hand (per-hand candidate/stable maps), expose a `TrackedHand[]` state (id, smoothed point, mirrored landmarks, gesture flags), and select a primary hand (preferring the pointing hand, with anti-flicker continuity). The MediaPipe package version and WASM URL version SHALL remain equal (0.10.35).
-
-#### Scenario: Both hands visible
-
-- **WHEN** two hands are in the camera frame
-- **THEN** the state lists two tracked hands with independent gesture classification, and one is designated primary
-
-#### Scenario: Pin preserved
-
-- **WHEN** dependencies are inspected
-- **THEN** `@mediapipe/tasks-vision` and the WASM_URL version are both 0.10.35
-
-### Requirement: Gesture control is an opt-in, persisted preference
-
-Gesture (hand/camera) control SHALL be an opt-in preference that is persisted across sessions, defaulting to **off**. The gesture engine SHALL acquire the camera and load its MediaPipe assets only while the preference is enabled; launching or connecting Iris SHALL NOT turn on the webcam or load those assets by default. Toggling the preference SHALL persist the new value (like the sound and camera-device preferences), so enabling it once carries to the next session, and disabling it releases the camera.
-
-#### Scenario: Camera stays off at launch by default
-
-- **WHEN** Iris connects and the user has never enabled gesture control
-- **THEN** the webcam is not acquired and MediaPipe assets are not loaded — the camera LED stays off
-
-#### Scenario: The preference persists across sessions
-
-- **WHEN** the user enables gesture control and later relaunches Iris
-- **THEN** gesture control is enabled again on the next session without re-toggling, and disabling it likewise persists as off
-
-### Requirement: Device-selectable camera acquisition
-
-The gesture engine's camera acquisition SHALL accept a selected video input device identifier (a `deviceId`, or a `"System Default"` sentinel) and use it to constrain `getUserMedia`: the System Default sentinel SHALL preserve the unconstrained `facingMode: "user"` behavior, while an explicit `deviceId` SHALL be requested via an exact `deviceId` constraint with no `facingMode` constraint applied. A change to the selected device SHALL be treated as a reason to re-acquire the camera stream — tearing down the previous stream, recognizer, and tracking loop before acquiring the new one — including while gesture control is already enabled and running.
-
-If the selected device cannot be opened (not present among current devices, or `getUserMedia` rejects), the engine SHALL surface that failure through its existing error-reporting path and SHALL NOT silently retry with a different device or with the system default; gesture control remains unavailable until the failure is resolved (e.g. the user starts the missing device or selects a different one). When a subsequent acquire succeeds — or when gesture control is disabled — the engine SHALL clear the previously reported error, so a transient failure does not remain displayed after it has been resolved.
-
-#### Scenario: System Default preserves prior behavior
-
-- **WHEN** the selected device is System Default (or no selection has ever been made)
-- **THEN** the camera is acquired exactly as before this change, with no `deviceId` constraint
-
-#### Scenario: Explicit device selected
-
-- **WHEN** a specific `deviceId` is selected
-- **THEN** `getUserMedia` is called with that `deviceId` as an exact constraint and no `facingMode` constraint
-
-#### Scenario: Device changes while gesture control is running
-
-- **WHEN** gesture control is active and the selected device changes
-- **THEN** the previous stream, recognizer, and tracking loop are torn down and a new stream is acquired from the newly selected device, without requiring the user to toggle gesture control off and on
-
-#### Scenario: Selected device unavailable
-
-- **WHEN** the selected device cannot be opened (missing or rejected by `getUserMedia`)
-- **THEN** the failure is reported through the existing hand-control error path and gesture control does not silently start using a different camera
-
-#### Scenario: Error clears when a re-acquire succeeds
-
-- **WHEN** a camera failure has been reported and a later acquire succeeds (the user fixed the device or selected a different one), or gesture control is disabled
-- **THEN** the previously reported error is cleared and no longer displayed
+## MODIFIED Requirements
 
 ### Requirement: Universal point-and-hold click
 
@@ -110,15 +49,6 @@ When a reader overlay is open — the task run-reader or the vault note reader, 
 - **WHEN** the galaxy or the drawing panel is active
 - **THEN** open-palm hold-to-scroll does not scroll the deck panels beneath it
 
-### Requirement: Per-hand reticles and hand skeleton
-
-The UI SHALL render one reticle per tracked hand (secondary hand visually distinct) via a `HandReticles` component, and the camera dock SHALL render a 21-landmark hand skeleton for each tracked hand.
-
-#### Scenario: Reticles follow hands
-
-- **WHEN** two hands are tracked
-- **THEN** two reticles render at their smoothed screen positions and the camera dock shows both skeletons
-
 ### Requirement: Fist rotates and pinch scales the orb
 
 When hand control is enabled, the reader overlay is closed, and no fullscreen HUD layer (the second-brain galaxy or the drawing panel) is active, the primary hand showing `Closed_Fist` SHALL incrementally rotate the Arc Reactor orb by the hand's movement delta, and either tracked hand's thumb-tip-to-index-tip pinch distance SHALL scale the orb within a clamped range. These bindings SHALL NOT engage while the reader overlay is open, so they never collide with the existing reader-open `Closed_Fist`-closes-reader or two-palm-resize bindings; and they SHALL NOT engage while the galaxy or the drawing panel owns the HUD surface, so a fist meant to orbit the galaxy camera never also rotates the orb underneath it. The gesture action indicator SHALL report the binding that is actually live for the current context, never a binding that the active layer has taken over.
@@ -147,4 +77,3 @@ When hand control is enabled, the reader overlay is closed, and no fullscreen HU
 
 - **WHEN** the galaxy is active and the user makes a fist (which orbits the galaxy camera)
 - **THEN** the gesture action indicator reports the orbit binding, not "idle" and not "rotate orb"
-

@@ -1,12 +1,10 @@
 ## Purpose
 
 Iris renders the `~/iris-second-brain` vault (the `personal-knowledge-notes` capability's write target) as a live 3D link-graph galaxy inside the Glass HUD — a main-process graph owner (scan + parse + RAM cache + `fs.watch` live refresh), a toggleable immersive galaxy layer with a deep-space backdrop, and a note-reader overlay for opening a node's markdown. Viewing is gated only on the vault existing, independent of the Claude pipeline, since it is pure-local reading of markdown.
-
 ## Requirements
-
 ### Requirement: The second-brain vault is rendered as a 3D galaxy in the Glass HUD
 
-Iris SHALL provide a "show second brain" toggle in the Glass HUD that, when enabled, renders the `~/iris-second-brain` vault as an interactive 3D force-directed galaxy: one node per markdown note, one edge per `[[wikilink]]` between notes. The toggle SHALL sit alongside the drawing-panel control and SHALL be **mutually exclusive** with the drawing canvas — enabling the galaxy disables the drawing panel and vice versa — so two heavy interactive WebGL layers are never active at once. While the galaxy is active its layer SHALL be pointer-interactive (`.hud-hit`), and exiting the galaxy SHALL restore the transparent, click-through HUD.
+Iris SHALL provide a "show second brain" toggle in the Glass HUD that, when enabled, renders the `~/iris-second-brain` vault as an interactive 3D force-directed galaxy: one node per markdown note, one edge per `[[wikilink]]` between notes. The toggle SHALL sit alongside the drawing-panel control and SHALL be **mutually exclusive** with the drawing canvas — enabling the galaxy disables the drawing panel and vice versa — so two heavy interactive WebGL layers are never active at once. While the galaxy is active its layer SHALL be pointer-interactive (`.hud-hit`), and exiting the galaxy SHALL restore the transparent, click-through HUD. The galaxy is **HUD-only**: in deck mode it SHALL NOT be present, and **every** exit from the HUD — the HUD button, the global hotkey, and the tray item alike — SHALL clear the galaxy, exactly as the drawing panel is cleared, so returning to the HUD does not snap straight back into the galaxy and no galaxy-owned overlay is left mounted over the deck.
 
 #### Scenario: Toggling the galaxy on shows the vault graph
 
@@ -22,6 +20,11 @@ Iris SHALL provide a "show second brain" toggle in the Glass HUD that, when enab
 
 - **WHEN** the user disables "show second brain"
 - **THEN** the galaxy layer is removed and the HUD returns to its transparent, click-through state (interactive only over `.hud-hit` islands)
+
+#### Scenario: Leaving the HUD by hotkey or tray clears the galaxy
+
+- **WHEN** the galaxy is active and the user leaves HUD mode by the global hotkey or the tray item (not the HUD button)
+- **THEN** the galaxy is cleared just as the drawing panel is — re-entering the HUD starts without the galaxy, and nothing the galaxy owns remains mounted over the deck
 
 ### Requirement: The galaxy renders over an immersive opaque deep-space backdrop
 
@@ -39,8 +42,8 @@ While the galaxy is active, Iris SHALL paint an **opaque** deep-space backdrop (
 
 #### Scenario: The galaxy stops rendering when the HUD is idle
 
-- **WHEN** the galaxy is active and the HUD goes to sleep or loses focus (the same signal that pauses the reactor orb)
-- **THEN** the galaxy's force simulation and render loop pause so it consumes no GPU while idle, and resume without losing node positions when the HUD is active again
+- **WHEN** the galaxy is active and Iris goes to sleep (the same signal that pauses the reactor orb — sleep only; like the orb, the galaxy keeps rendering while awake even if the OS window is unfocused)
+- **THEN** the galaxy's force simulation and render loop pause so it consumes no GPU while idle, and resume without losing node positions when Iris is awake again
 
 #### Scenario: A single three instance is used
 
@@ -83,7 +86,7 @@ The main process SHALL own the vault graph: it SHALL scan `~/iris-second-brain` 
 
 ### Requirement: Opening a node shows the note's content
 
-Clicking a real note-node in the galaxy SHALL open that note in a note-reader overlay that renders the note's markdown (title plus body). The note's content SHALL be fetched by node id and resolved to a file in the main process (never by a renderer-supplied path); a ghost node (unresolved link with no backing file) SHALL NOT be openable. The overlay SHALL present the note's own content without the task-specific chrome of the run reader (no run/session id, agent, or status badges), and at most one reader (task or note) SHALL be open at a time. Closing the overlay SHALL return to the galaxy with the layer still active.
+Clicking a real note-node in the galaxy SHALL open that note in a note-reader overlay that renders the note's markdown (title plus body). The note's content SHALL be fetched by node id and resolved to a file in the main process (never by a renderer-supplied path); a ghost node (unresolved link with no backing file) SHALL NOT be openable. The overlay SHALL present the note's own content without the task-specific chrome of the run reader (no run/session id, agent, or status badges), and at most one reader (task or note) SHALL be open at a time. Closing the overlay SHALL return to the galaxy with the layer still active. The note reader SHALL exist only while the galaxy layer does: whenever the galaxy is not active the note reader SHALL NOT be shown **and** the stored open-note state SHALL be cleared — the first makes the invariant hold by construction even for a fetch that lands after the close, the second prevents a stale note from reappearing the next time the galaxy is opened — so that **no** galaxy-close path — the toggle, opening the drawing panel, leaving the HUD by button/hotkey/tray, or a force-close after a render crash — and no in-flight note fetch that completes after the galaxy closed can leave a note reader stranded over the transparent HUD or the deck.
 
 #### Scenario: Clicking a node opens its note
 
@@ -109,6 +112,21 @@ Clicking a real note-node in the galaxy SHALL open that note in a note-reader ov
 
 - **WHEN** the task run-reader is open and the user opens a note from the galaxy (or vice versa)
 - **THEN** only one reader is shown — the two never stack — so a single reader-open state is authoritative
+
+#### Scenario: Closing the galaxy dismisses an open note
+
+- **WHEN** a note is open and the galaxy closes by any route (the toggle, opening the drawing panel, leaving the HUD by button/hotkey/tray, or a force-close after a crash)
+- **THEN** the note reader is dismissed with it — no reader is left over the transparent HUD or the deck
+
+#### Scenario: Reopening the galaxy does not resurrect the previous note
+
+- **WHEN** a note was open when the galaxy closed, and the user later opens the galaxy again
+- **THEN** the galaxy opens showing the graph — the previously-open note reader does not reappear
+
+#### Scenario: A note fetch that lands after the galaxy closed opens nothing
+
+- **WHEN** the user opens a node and the galaxy closes before the note's content finishes loading
+- **THEN** no note reader appears when the fetch completes
 
 ### Requirement: Untrusted note content is contained
 
@@ -152,3 +170,4 @@ The "show second brain" capability SHALL be available exactly when the vault dir
 
 - **WHEN** the vault did not exist and the user captures their first note (which creates `~/iris-second-brain`)
 - **THEN** the "show second brain" toggle becomes available without relaunching Iris
+
