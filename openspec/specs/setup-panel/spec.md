@@ -6,7 +6,9 @@ A Claude-oriented setup and settings panel (adopted from upstream, Deep Space st
 
 ### Requirement: Claude-oriented setup and settings panel
 
-The app SHALL provide a SetupPanel (adopted from upstream, Deep Space styled) that offers: Gemini API key entry with a live connection test, a Claude CLI availability check (same binary resolution as the worker: PATH probing and `IRIS_CLAUDE_BIN`), subscription-auth status derived from the existing PO billing-path logic (`CLAUDE_CODE_OAUTH_TOKEN` present vs missing) together with an entry field that lets the user set or remove that token, a voice preview, toggles for wake word, interface sounds, demo test data, and Google Search, a camera device selector for gesture control, and a microphone device selector for voice capture (see `microphone-device-selection` spec for its enumeration/persistence/hot-swap/fallback behavior). No Hermes endpoint configuration SHALL exist.
+The app SHALL provide a SetupPanel (adopted from upstream, Deep Space styled) that offers: Gemini API key entry with a live connection test, a Claude CLI availability check (same binary resolution as the worker: PATH probing and `IRIS_CLAUDE_BIN`), subscription-auth status derived from the existing PO billing-path logic (`CLAUDE_CODE_OAUTH_TOKEN` present vs missing) together with an entry field that lets the user set or remove that token, a voice preview, toggles for wake word, interface sounds, demo test data, and Google Search, a wake-word sensitivity control, a camera device selector for gesture control, and a microphone device selector for voice capture (see `microphone-device-selection` spec for its enumeration/persistence/hot-swap/fallback behavior). No Hermes endpoint configuration SHALL exist.
+
+The wake-word sensitivity control SHALL sit with the existing wake-word toggle and SHALL present a small set of named sensitivity levels rather than a raw numeric field, so a user cannot enter a value that makes wake-word detection unusable in either direction. It SHALL control only the detection threshold; the consecutive-evaluation count specified in `wake-sleep-voice` SHALL remain configuration-only and SHALL NOT appear in the panel. When the effective configuration holds a threshold that matches no named level (a hand-edited `.env`), the control SHALL indicate that a custom value is in effect and SHALL NOT silently rewrite it to the nearest level; only an explicit user selection SHALL change it. The control SHALL be shown regardless of pipeline availability, since the wake word is part of chat-only operation, and SHALL be disabled or visibly inert while the wake-word toggle is off.
 
 The subscription token control SHALL render only where the Claude prerequisite rows render — that is, when the Claude binary is reachable — so a chat-only install surfaces no token UI. It SHALL be a masked (password-type) input that is always empty on render, never pre-filled with the stored token, and SHALL carry its own save action rather than depending on the panel's global Save, so it also works inside the onboarding wizard's Claude step. A remove action SHALL be offered only while a token is stored. After a successful save or removal the panel SHALL re-run its existing Claude check so the displayed billing line reflects the new state without reopening the panel. The panel SHALL NOT validate the token by calling Claude or by inspecting its format; an unusable token surfaces through the normal PO run error.
 
@@ -20,6 +22,21 @@ The microphone device selector SHALL render directly below the Microphone permis
 
 - **WHEN** the app starts and no Gemini API key is configured
 - **THEN** the SetupPanel opens automatically and a successful key test enables starting the session
+
+#### Scenario: Raising wake-word strictness
+
+- **WHEN** a user whose Iris wakes on its own selects a stricter sensitivity level and saves
+- **THEN** the threshold is persisted to the effective `.env` and the next armed listener uses it, without an app restart or hand-editing `.env`
+
+#### Scenario: Hand-set threshold shown as custom
+
+- **WHEN** the effective configuration holds a wake-word threshold that matches none of the named levels
+- **THEN** the control reports a custom value is in effect and leaves it unchanged unless the user explicitly picks a level
+
+#### Scenario: Sensitivity inert while wake word is off
+
+- **WHEN** the wake-word toggle is off
+- **THEN** the sensitivity control is disabled or visibly inert, since no detection is running
 
 #### Scenario: Claude health surfaced
 
@@ -80,7 +97,7 @@ The microphone device selector SHALL render directly below the Microphone permis
 
 A `config:get`/`config:save` IPC pair SHALL back the panel: reads return effective config with secrets reduced to presence/masked form; saves upsert keys line-wise into the existing `.env` location (repo `.env` in dev, `~/.iris/.env` packaged), preserving unrelated lines and comments, and never logging secret values. Settings that cannot hot-apply SHALL surface a reconnect/restart prompt instead of silently requiring one.
 
-The writable key set SHALL include the PO subscription token (`CLAUDE_CODE_OAUTH_TOKEN`) and the Google Search flag (`IRIS_ENABLE_GOOGLE_SEARCH`). The token's value SHALL never be returned to the renderer in any form — the config read SHALL expose only a boolean presence flag for it. A save carrying an empty value for the token SHALL be treated as "no change" so that a global save cannot erase a stored token; clearing it SHALL require the panel's explicit remove action. The Google Search flag is a non-secret boolean read back to the renderer as its current value; because it is consumed only when the Gemini Live session is created, it is a setting that cannot hot-apply and SHALL surface the standard reconnect prompt on change rather than forcing a mid-session disconnect.
+The writable key set SHALL include the PO subscription token (`CLAUDE_CODE_OAUTH_TOKEN`), the Google Search flag (`IRIS_ENABLE_GOOGLE_SEARCH`), and the wake-word sensitivity keys defined in `wake-sleep-voice`. The token's value SHALL never be returned to the renderer in any form — the config read SHALL expose only a boolean presence flag for it. A save carrying an empty value for the token SHALL be treated as "no change" so that a global save cannot erase a stored token; clearing it SHALL require the panel's explicit remove action. The Google Search flag is a non-secret boolean read back to the renderer as its current value; because it is consumed only when the Gemini Live session is created, it is a setting that cannot hot-apply and SHALL surface the standard reconnect prompt on change rather than forcing a mid-session disconnect. The wake-word sensitivity keys are non-secret values read back to the renderer as their effective values; they hot-apply on the next arm of the listener and SHALL NOT trigger a reconnect or restart prompt.
 
 #### Scenario: Saving the Gemini key
 
@@ -106,6 +123,11 @@ The writable key set SHALL include the PO subscription token (`CLAUDE_CODE_OAUTH
 
 - **WHEN** the user toggles Google Search and saves
 - **THEN** `IRIS_ENABLE_GOOGLE_SEARCH` is written to the correct `.env` for the run mode, unrelated lines are preserved, and the UI offers to reconnect the live session because the flag applies only on the next connect, not mid-session
+
+#### Scenario: Saving wake-word sensitivity does not prompt a reconnect
+
+- **WHEN** the user changes wake-word sensitivity and saves
+- **THEN** the value is written to the correct `.env` for the run mode, unrelated lines are preserved, and no reconnect or restart prompt is shown because the setting applies on the next arm of the listener
 
 ### Requirement: The Gemini API key follows the same presence-only read contract as the subscription token
 

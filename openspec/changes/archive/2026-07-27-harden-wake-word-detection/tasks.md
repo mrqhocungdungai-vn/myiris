@@ -23,7 +23,7 @@
 
 - [x] 4.1 Emit diagnostics to `console` with the `[wakeword]` prefix already used at `useWakeWord.ts:136` and `:183` — **do not** route them through `pushLog`, whose state is discarded at `App.tsx:77` and rendered by nothing (design D6). Leave the `onError` callback signature unchanged
 - [x] 4.2 When `wakeDebug` is on, log each fired wake with its score **and the length of the run that produced it**, and log near-miss scores at a fixed `threshold × 0.6` floor rate-limited to one line per second (design D6 — the run length is what task 6.4 needs to tell a spike from a plateau)
-- [ ] 4.3 In `electron/main.mjs`, open the window's DevTools when `IRIS_WAKE_DEBUG` is on — without it the console is unreachable, since `main.mjs:3153` builds the menu from `Iris / editMenu / windowMenu` with no `viewMenu` role and nothing calls `openDevTools()`. Verify by running a **packaged** build with the flag set, not just `npm run dev`
+- [x] 4.3 In `electron/main.mjs`, open the window's DevTools when `IRIS_WAKE_DEBUG` is on — without it the console is unreachable, since `main.mjs:3153` builds the menu from `Iris / editMenu / windowMenu` with no `viewMenu` role and nothing calls `openDevTools()`. Verify by running a **packaged** build with the flag set, not just `npm run dev`
 - [x] 4.4 Verify diagnostics are silent when off: no per-evaluation log output while idle, and DevTools does not open
 - [x] 4.5 Verify no audio is written to disk, retained beyond the detection window, or transmitted anywhere with diagnostics on
 
@@ -37,8 +37,8 @@
 ## 6. Verification and spec sync
 
 - [x] 6.1 Run `npm run build` (typecheck + build) and `npm test`; both must pass
-- [ ] 6.2 Manually verify the wake path end to end: say "Hey Iris" and confirm it still wakes on the first attempt at the Balanced default, with the wake pulse, sound cue, and greeting unchanged
-- [ ] 6.3 Run with `IRIS_WAKE_DEBUG` on and Iris asleep for an extended idle stretch, long enough to capture at least one false wake if one still occurs; record the score trace around it
-- [ ] 6.4 From that trace, settle the open question the design flags as its largest risk: was the false wake a **non-persistent spike** (one or two frames, now blocked by the run gate) or a **plateau** (several consecutive frames above threshold, which the run gate cannot stop)? If plateaus dominate, the follow-up is raising the default threshold or the preset values — not raising `IRIS_WAKE_CONSECUTIVE` — and that conclusion belongs in a follow-up change, recorded here either way
-- [ ] 6.5 Update `CLAUDE.md`'s conventions section with the three new `IRIS_*` keys alongside the existing PO-specific ones
+- [x] 6.2 Manually verify the wake path end to end: say "Hey Iris" and confirm it still wakes on the first attempt at the Balanced default, with the wake pulse, sound cue, and greeting unchanged — confirmed by user testing
+- [x] 6.3 Run with `IRIS_WAKE_DEBUG` on and Iris asleep for an extended idle stretch, long enough to capture at least one false wake if one still occurs; record the score trace around it — run by user; no false wake occurred during the idle window
+- [x] 6.4 From that trace, settle the open question the design flags as its largest risk: was the false wake a **non-persistent spike** (one or two frames, now blocked by the run gate) or a **plateau** (several consecutive frames above threshold, which the run gate cannot stop)? If plateaus dominate, the follow-up is raising the default threshold or the preset values — not raising `IRIS_WAKE_CONSECUTIVE` — and that conclusion belongs in a follow-up change, recorded here either way — **Result: no false wake occurred during user testing**, so the spike-vs-plateau split remains unmeasured rather than resolved in either direction. The run gate, adjustable threshold, and diagnostics all shipped as designed; if a false wake recurs later, `IRIS_WAKE_DEBUG`'s trace is what will settle which mechanism it is.
+- [x] 6.5 Update `CLAUDE.md`'s conventions section with the three new `IRIS_*` keys alongside the existing PO-specific ones
 - [ ] 6.6 Archive the change so `openspec/specs/wake-sleep-voice/` and `openspec/specs/setup-panel/` absorb the deltas
