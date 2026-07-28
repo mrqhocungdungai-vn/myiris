@@ -93,6 +93,11 @@ function buildCanUseTool(state, onAskUserQuestion) {
   // allow (voice/UI answer, or timeout default) vs deny (a deliberate session
   // reset abandoned the question) and this stays a thin translator, never
   // learning what "reset" vs "timeout" means.
+  /**
+   * @param {string} toolName
+   * @param {any} input
+   * @returns {Promise<import("@anthropic-ai/claude-agent-sdk").PermissionResult>}
+   */
   return async function canUseTool(toolName, input) {
     if (toolName !== "AskUserQuestion") {
       return { behavior: "allow", updatedInput: input };
@@ -168,6 +173,19 @@ async function pump(state) {
 // session for this workstream, or opens a fresh one (resuming the stored
 // on-disk Claude session id if one exists, so history from a prior app run —
 // or from the pre-live-session `-p --resume` era — is not lost).
+/**
+ * @param {{ id: string, agent_sessions?: Record<string, string> }} workstream
+ * @param {{
+ *   agent?: string,
+ *   cwd?: string,
+ *   resumeSessionId?: string|null,
+ *   onAskUserQuestion?: (workstreamId: string, questions: unknown[]) => Promise<{ behavior?: string, message?: string, answers?: Record<string, unknown> }>,
+ *   claudeExecutable?: string,
+ *   model?: string,
+ *   mcpServers?: Record<string, unknown>,
+ *   query?: typeof query,
+ * }} [options]
+ */
 export function getOrCreatePoSession(
   workstream,
   { agent, cwd, resumeSessionId, onAskUserQuestion, claudeExecutable, model, mcpServers, query: queryFn = query } = {},
@@ -196,7 +214,7 @@ export function getOrCreatePoSession(
   const options = {
     agent,
     cwd,
-    permissionMode: "bypassPermissions",
+    permissionMode: /** @type {"bypassPermissions"} */ ("bypassPermissions"),
     allowDangerouslySkipPermissions: true,
     // Enable the globally-installed skills (grilling, the OpenSpec workflow
     // skills, tdd/verify/code-review) for the live PO session explicitly.
@@ -205,7 +223,7 @@ export function getOrCreatePoSession(
     // loaded regardless of the workstream `cwd`. Verified against SDK 0.3.210:
     // `skills: 'all'` + default settingSources surfaces every ~/.claude/skills
     // even from a cwd with no local skills. See the po-voice-controller change.
-    skills: "all",
+    skills: /** @type {"all"} */ ("all"),
     env: computePoSessionEnv(process.env),
     canUseTool: buildCanUseTool(state, onAskUserQuestion),
     appendSystemPrompt:
@@ -246,6 +264,11 @@ export async function setPoSessionMcpServers(state, servers) {
   state.currentMcp = true;
 }
 
+/**
+ * @param {any} state
+ * @param {string} taskText
+ * @param {{ onActivity?: (text: string) => void, onSessionId?: (sessionId: string) => void, onToolStart?: (toolId: string, toolName: string, detail: unknown) => void, onToolEnd?: (toolId: string, isError: boolean) => void }} [callbacks]
+ */
 export function deliverPoTurn(state, taskText, { onActivity, onSessionId, onToolStart, onToolEnd } = {}) {
   return new Promise((resolve, reject) => {
     if (state.ended) {

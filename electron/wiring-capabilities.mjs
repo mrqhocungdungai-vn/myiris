@@ -1,0 +1,161 @@
+// A further slice of the composition root's wiring — split out of
+// wiring.mjs purely because the whole wiring block together exceeded the
+// 450-line ceiling once every module existed (design.md's Risks section
+// explicitly permits this kind of extraction). This slice wires the canvas
+// and second-brain capabilities, the run-execution module they feed into
+// (ensureCanvasMcpForRun/ensureNotesVaultReady are run-exec's own gates),
+// and the Gemini tool/prompt modules that compose each capability's
+// contribution — a cohesive "capability + what consumes it" unit.
+// Electron-free itself: `dialog` is received injected from wiring.mjs,
+// which received it from main.mjs.
+import { createRunExec } from "./run-exec.mjs";
+import { createGeminiTools } from "./gemini-tools.mjs";
+import { createGeminiPrompts } from "./gemini-prompts.mjs";
+import { createCanvasCapability } from "./capabilities/canvas.mjs";
+import { createSecondBrainCapability } from "./capabilities/second-brain.mjs";
+
+/**
+ * @param {{
+ *   canvasStoreFile: string,
+ *   emitToRenderer: (channel: string, payload: any) => void,
+ *   emitEvent: (event: any) => void,
+ *   getMainWindow: () => any,
+ *   getPipelineAvailable: () => boolean,
+ *   userDisplayName: () => string,
+ *   dialog: { showOpenDialog: Function, showSaveDialog: Function },
+ *   skillsSourceDir: () => string | null,
+ *   runQueue: any,
+ *   findWorkstream: any,
+ *   persistSessionStore: any,
+ *   agentKey: any,
+ *   resolveAgentModel: any,
+ *   agentLabels: Record<string, string>,
+ *   agentPrefix: string,
+ *   claudeWorkdir: any,
+ *   claudeBinary: any,
+ *   installedAgentFile: any,
+ *   ensureProjectScaffold: any,
+ *   openChangesWithTasks: any,
+ *   handleClaudeStreamEvent: any,
+ *   pushActivity: any,
+ *   rememberClaudeSessionId: any,
+ *   pushToolStart: any,
+ *   pushToolEnd: any,
+ *   askUserQuestionViaVoice: any,
+ *   modelChoices: Array<{ id: string, label: string }>,
+ *   envFlag: (name: string, fallback?: boolean) => boolean,
+ *   workspaceContextLine: () => string,
+ *   fenceUntrustedText: (text: string, label: string) => string,
+ * }} deps
+ */
+export function createCapabilitiesWiring({
+  canvasStoreFile,
+  emitToRenderer,
+  emitEvent,
+  getMainWindow,
+  getPipelineAvailable,
+  userDisplayName,
+  dialog,
+  skillsSourceDir,
+  runQueue,
+  findWorkstream,
+  persistSessionStore,
+  agentKey,
+  resolveAgentModel,
+  agentLabels,
+  agentPrefix,
+  claudeWorkdir,
+  claudeBinary,
+  installedAgentFile,
+  ensureProjectScaffold,
+  openChangesWithTasks,
+  handleClaudeStreamEvent,
+  pushActivity,
+  rememberClaudeSessionId,
+  pushToolStart,
+  pushToolEnd,
+  askUserQuestionViaVoice,
+  modelChoices,
+  envFlag,
+  workspaceContextLine,
+  fenceUntrustedText,
+}) {
+  // Canvas capability (canvas-claude-mcp) and second-brain capability
+  // (personal-knowledge-notes, second-brain-galaxy-view), gathered end to end
+  // per design.md D10 rather than spread across the layered core modules.
+  const canvasCapability = createCanvasCapability({
+    canvasStoreFile,
+    emitToRenderer,
+    emitEvent,
+    getMainWindow,
+    getPipelineAvailable,
+    userDisplayName,
+    dialog,
+  });
+
+  const secondBrainCapability = createSecondBrainCapability({
+    emitEvent,
+    emitToRenderer,
+    skillsSourceDir,
+    userDisplayName,
+    getPipelineAvailable,
+  });
+
+  const runExec = createRunExec({
+    runQueue,
+    emitEvent,
+    findWorkstream,
+    persistSessionStore,
+    agentKey,
+    resolveAgentModel,
+    agentLabels,
+    agentPrefix,
+    claudeWorkdir,
+    claudeBinary,
+    installedAgentFile,
+    ensureProjectScaffold,
+    openChangesWithTasks,
+    ensureCanvasMcpForRun: () => canvasCapability.ensureCanvasMcpForRun(),
+    ensureNotesVaultReady: () => secondBrainCapability.ensureNotesVaultReady(),
+    checkNotesSkillsStatus: () => secondBrainCapability.checkNotesSkillsStatus(),
+    notesVaultDir: secondBrainCapability.notesVaultDir,
+    noteCaptureHintRe: secondBrainCapability.noteCaptureHintRe,
+    vaultChangedSince: (sinceMs) => secondBrainCapability.vaultChangedSince(sinceMs),
+    handleClaudeStreamEvent,
+    pushActivity,
+    rememberClaudeSessionId,
+    pushToolStart,
+    pushToolEnd,
+    askUserQuestionViaVoice,
+  });
+  const { killChild, startClaudeRun } = runExec;
+
+  const capabilities = [canvasCapability, secondBrainCapability];
+
+  const geminiTools = createGeminiTools({
+    getPipelineAvailable,
+    modelChoices,
+    envFlag,
+    capabilities,
+  });
+
+  const geminiPrompts = createGeminiPrompts({
+    getPipelineAvailable,
+    modelChoices,
+    envFlag,
+    userDisplayName,
+    workspaceContextLine,
+    fenceUntrustedText,
+    capabilities,
+  });
+
+  return {
+    canvasCapability,
+    secondBrainCapability,
+    killChild,
+    startClaudeRun,
+    capabilities,
+    geminiTools,
+    geminiPrompts,
+  };
+}

@@ -35,7 +35,7 @@ that can pause mid-turn to ask a voice question; DEV is a **stateless** one-shot
 ```bash
 npm ci                 # install deps
 npm run dev            # Vite + Electron with hot reload (dev)
-npm run build          # tsc --noEmit + vite build (typecheck gate)
+npm run build          # tsc --noEmit (src) + tsc -p tsconfig.electron.json (electron) + vite build
 npm test               # vitest run (behavioral gate)
 npm start              # build then launch Electron from dist/ (production-like)
 npm run start:prod     # launch prod build without rebuilding
@@ -55,15 +55,32 @@ verify a change. There is no linter. Details and test conventions:
 
 ## File map
 
-Two-process Electron app. The Gemini↔Claude bridge is the heart of the system and
-lives almost entirely in `electron/main.mjs` (~1500 lines).
+Two-process Electron app. The Gemini↔Claude bridge used to live almost entirely
+in `electron/main.mjs`; it's now ~20 single-responsibility modules under
+`electron/`, with Electron API access confined to four of them (`main.mjs`,
+`ipc.mjs`, `window.mjs`, `renderer-security.mjs`) — every other module is
+Electron-free and importable in a plain vitest file with no harness. See the
+`main-process-structure` capability spec for the full discipline.
 
-- **`electron/main.mjs`** — Gemini Live session (`@google/genai`), Gemini's tool declarations, spawning/streaming headless Claude runs, sessions/roles, all audio IPC. Also the Glass HUD window-shape morph (`enterHud`/`exitHud`/`toggleHud`), the Tray, listening mode's enter/exit/rotation sequences, and the `IRIS_HUD_HOTKEY`/`IRIS_LISTEN_HOTKEY` global shortcuts.
+- **`electron/main.mjs`** (~240 lines) — the composition root: imports every module, wires dependency injection via `wiring.mjs`, and runs the `app.whenReady()` startup sequence, `shutdownTeardown`, and quit handlers. No domain logic.
+- **`electron/wiring.mjs`** (+ **`wiring-capabilities.mjs`**, **`wiring-live.mjs`**) — the composition root's dependency-injection wiring, split across three files purely because the block exceeded the 450-line file-size convention once every module existed. `wiring-capabilities.mjs` wires the canvas/second-brain capabilities, run-exec, and the Gemini tool/prompt modules; `wiring-live.mjs` wires the Live session, listening mode, and window/HUD/tray (a genuine three-way mutual dependency).
+- **`electron/ipc.mjs`** — every `ipcMain.handle`/`on` registration (the renderer↔main channel surface), diffable against `preload.cjs`. Marshals arguments and delegates only.
+- **`electron/window.mjs`** — the main window, the Glass HUD shape-morph (`enterHud`/`exitHud`/`toggleHud`), and the Tray.
+- **`electron/renderer-security.mjs`** — navigation containment and device-permission scoping (`renderer-content-security` capability); installed before the first window is created.
+- **`electron/live-session.mjs`** (+ **`live-messages.mjs`**) — the Gemini Live session (`@google/genai`): connect/reconnect lifecycle in the former, server-message/tool-call handling in the latter.
+- **`electron/listen-mode.mjs`** — listening mode's enter/exit/rotation sequences and engagement state; drives `live-session.mjs` via named transitions, never raw field writes.
+- **`electron/gemini-tools.mjs`** / **`gemini-prompts.mjs`** — Gemini's function-declaration schemas and system-instruction prose; both compose contributions from registered capabilities rather than hardcoding them.
+- **`electron/session-store.mjs`** — workstreams, the agent roster, and per-role model selection.
+- **`electron/run-dispatch.mjs`** (+ **`run-stream.mjs`**, **`run-exec.mjs`**) — the pre-dispatch review gate and tool-execution surface; run activity/tool-step streaming and the PO live-question relay; spawning/driving DEV and PO runs.
+- **`electron/announcements.mjs`** — voice announcements to the Live session, buffered while offline.
+- **`electron/pipeline-probes.mjs`** / **`pipeline-install.mjs`** — Claude/OpenSpec availability probing and agent/skill installation.
+- **`electron/user-config.mjs`** — env/user config, the prompt-review-mode flag, and API-key/token handling.
+- **`electron/capabilities/canvas.mjs`** / **`capabilities/second-brain.mjs`** — the canvas-claude-mcp and personal-knowledge-notes/second-brain capabilities, each owning its own state, IPC handlers, teardown, and Gemini prompt fragment end to end (`electron/capabilities/` is where a new capability's main-process code should live).
 - **`electron/live-config.mjs`** — `buildLiveConfig()`, extracted so the Live session config (converse vs. listening) is testable without booting Electron.
 - **`electron/listen-boundary.mjs`** — the measured chunk-boundary sequence (`runBoundary()`) listening mode's rotations and exit run through; takes an injected session-like driver so it's testable without a live connection.
 - **`electron/po-session.mjs`** — the stateful PO module: Agent SDK session lifecycle, streaming user-message channel, and the `canUseTool` callback intercepting `AskUserQuestion`. Isolated so DEV's one-shot path never has to know it exists.
 - **`electron/preload.cjs`** — the `window.iris` IPC bridge. Any new renderer↔main channel must be exposed here.
-- **`src/App.tsx`** (~1350 lines) — renderer: mic capture (WebRTC AEC → 16 kHz PCM), Gemini playback (24 kHz PCM), the "Orbital Deck" UI, keyboard shortcuts, gestures, and the `uiMode` (`deck` | `hud`) switch.
+- **`src/App.tsx`** (1738 lines) — renderer: mic capture (WebRTC AEC → 16 kHz PCM), Gemini playback (24 kHz PCM), the "Orbital Deck" UI, keyboard shortcuts, gestures, and the `uiMode` (`deck` | `hud`) switch.
 - **`src/components/HudShell.tsx`** + **`src/styles/hud.css`** — the Glass HUD overlay; pointer-transparent except `.hud-hit` islands (App.tsx reports pointer-over-island via `hud:interactive`; main toggles `setIgnoreMouseEvents`).
 - **`src/hooks/useHandControl.ts`** — MediaPipe `GestureRecognizer` hook (on-device, starts only after wake).
 - **`src/ReactorCore.tsx`, `src/BootSequence.tsx`, `src/deck.css`, `src/App.css`** — UI/animation.
@@ -95,4 +112,6 @@ any of these.
 - Role workers get their environment by **subtraction, not `process.env` passed through** — `electron/worker-env.mjs`'s `computeWorkerEnv` is the shared helper both `startClaudeRun`'s DEV spawn and `computePoSessionEnv` route through, so the two paths can't drift. `GEMINI_API_KEY` is withheld from both roles (no role has a use for the voice credential); `CLAUDE_CODE_OAUTH_TOKEN` is additionally withheld from DEV, confirmed empirically to authenticate via its own `/login` session, never that env var.
 - The renderer executes only code shipped inside the app: a Content-Security-Policy (`vite.config.ts`'s `transformIndexHtml`) blocks remote script/WASM execution, the privileged window can't navigate off-origin, and device permissions are scoped to the app's own document. See the `renderer-content-security` capability spec.
 - `@anthropic-ai/claude-agent-sdk` is a real npm dependency (drives the same `claude` binary DEV spawns directly) — keep its version pinned like the other exact identifiers in [docs/REFERENCE.md](docs/REFERENCE.md).
+- `electron/` is typechecked by `tsconfig.electron.json` (a second `tsc -p` in `npm run build`), covering every `.mjs`/`.cjs` under it automatically — no per-file opt-in. Coverage is raised by enabling a compiler flag, not by annotating files; the three currently-deferred flags and their measured error-count cost: `useUnknownInCatchVariables` +26, `strictNullChecks` +91, `noImplicitAny` +719. Two-project typecheck setup and rationale: [docs/TESTING.md](docs/TESTING.md).
+- File-size convention: one responsibility per file, graspable in a few minutes, target 250–450 lines; `*.test.*` files are exempt (append-only case lists, not read start-to-end). Enforcement is convention-only by deliberate decision — no guard script — so don't mistake the absence of a check for an oversight.
 - Docs discipline: keep this file a router. New deep detail goes to `docs/` or a capability spec, with a one-line pointer here.

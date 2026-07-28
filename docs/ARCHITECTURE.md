@@ -115,17 +115,18 @@ flowchart TD
 
 ### Electron Main
 
-File: `electron/main.mjs`
+Files: `electron/main.mjs` (composition root) plus the ~20 modules it wires
+together via `wiring.mjs` — see CLAUDE.md's File map for the full list.
 
-Responsibilities:
+Responsibilities, and where each now lives:
 
-- Loads `.env`.
-- Creates the Gemini Live session.
-- Defines Gemini tools.
-- Bridges Gemini tool calls to headless Claude Code runs (`claude -p`).
-- Sends/receives Gemini audio.
-- Tracks Claude runs and keeps per-session continuity via `--resume`.
-- Announces Claude completion back into Gemini.
+- Loads `.env` (`electron/user-config.mjs`).
+- Creates the Gemini Live session (`electron/live-session.mjs`).
+- Defines Gemini tools (`electron/gemini-tools.mjs`).
+- Bridges Gemini tool calls to headless Claude Code runs, `claude -p` (`electron/run-exec.mjs`, `electron/run-dispatch.mjs`).
+- Sends/receives Gemini audio (`electron/live-messages.mjs`).
+- Tracks Claude runs and keeps per-session continuity via `--resume` (`electron/session-store.mjs`, `electron/run-stream.mjs`).
+- Announces Claude completion back into Gemini (`electron/announcements.mjs`).
 
 ### Electron Preload
 
@@ -176,7 +177,7 @@ Routing behavior:
 A toggle (ear icon, tray item, `IRIS_LISTEN_HOTKEY`) that puts the Gemini Live session into a listen-only configuration: Iris hears and retains everything but is structurally incapable of taking a turn the user did not ask for. See `openspec/specs/listening-mode/spec.md` for the full authoritative behavior; this section is the practical summary plus the constraints that will trip up anyone touching the code.
 
 - **Mechanism**: the same Live session, reconnected with `realtimeInputConfig.automaticActivityDetection.disabled: true`, `turnCoverage: "TURN_INCLUDES_ALL_INPUT"`, and an empty tool set (`electron/live-config.mjs`, `mode: "listen"`). Silence is a property of this config, not a system-prompt instruction.
-- **Chunking**: the Live connection lasts ~10 minutes, shorter than the monologues this mode is for, so a listening session rotates on its own timer (`IRIS_LISTEN_CHUNK_MS`, default 8 minutes) and immediately on the server's `goAway`. Each rotation is a **boundary** (`electron/listen-boundary.mjs`): close the activity, wait for the turn it forces to complete, wait for a **fresh** resumption handle, then reconnect. Boundary turns are suppressed in `main.mjs`'s `handleLiveMessage` — never heard, never shown as a transcript line, and any tool call they trigger is ignored.
+- **Chunking**: the Live connection lasts ~10 minutes, shorter than the monologues this mode is for, so a listening session rotates on its own timer (`IRIS_LISTEN_CHUNK_MS`, default 8 minutes) and immediately on the server's `goAway`. Each rotation is a **boundary** (`electron/listen-boundary.mjs`): close the activity, wait for the turn it forces to complete, wait for a **fresh** resumption handle, then reconnect. Boundary turns are suppressed in `electron/live-messages.mjs`'s `handleLiveMessage` — never heard, never shown as a transcript line, and any tool call they trigger is ignored.
 - **Ending the mode**: a final boundary (suppressed like any rotation), then a reconnect into ordinary conversation, and only then does Iris speak a synthesis of everything it heard — drawn from an in-memory segment record that exists only for the life of the listening session and is never written to disk or the notes vault.
 - **Three measured constraints** a future change here will otherwise trip over:
   1. Audio streamed outside an explicitly opened activity (`activityStart`) is discarded entirely — there is no "accumulate quietly, answer when asked" shortcut.

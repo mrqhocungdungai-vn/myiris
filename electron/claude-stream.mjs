@@ -23,6 +23,16 @@ export function summarizeToolInput(input = {}) {
 // instead of by name — good enough to drive a live per-task step timeline
 // (see openspec/changes/two-hand-gestures-and-orb design.md D2). Optional: a
 // caller that only wants the flat activity log can omit them.
+/**
+ * @param {any} message
+ * @param {{
+ *   onSessionId?: (sessionId: string) => void,
+ *   onActivity?: (text: string) => void,
+ *   onToolStart?: (toolId: string, toolName: string, detail: string) => void,
+ *   onToolEnd?: (toolId: string, isError: boolean) => void,
+ *   onResult?: (message: any) => void,
+ * }} [callbacks]
+ */
 export function parseClaudeStreamMessage(
   message,
   { onSessionId, onActivity, onToolStart, onToolEnd, onResult } = {},

@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import * as ort from "onnxruntime-web";
 import { createWakeGate, type WakeGate } from "../lib/wake-gate";
 import { SYSTEM_DEFAULT_MIC, micConstraints } from "../lib/mic-device";
+import { resolveVendoredAssetUrl } from "../lib/asset-url";
 
 // Local "Hey Iris" wake word. Ports the livekit-wakeword / openWakeWord inference
 // pipeline (mel-spectrogram -> speech embedding -> classifier) to the browser via
@@ -32,17 +33,21 @@ function configureOrt() {
   // in lockstep with the installed onnxruntime-web version by that script,
   // never a hand-copied CDN URL.
   //
-  // onnxruntime-web loads its own wasm glue via a runtime `import(url)`.
-  // Vite's dev server intercepts same-origin-relative dynamic imports and
-  // refuses to serve public/ assets through them ("this file is in /public
-  // ... should not be imported from source code") — a dev-server-only 500
-  // that a fully-qualified absolute URL sidesteps (Vite treats any absolute
-  // http(s) URL as already-resolved and leaves it alone, same as the CDN URL
-  // this replaced always did). The relative BASE_URL path still runs in the
-  // production build, where there is no dev transform pipeline to trip over.
-  ort.env.wasm.wasmPaths = import.meta.env.DEV
-    ? `${window.location.origin}/runtime/ort/`
-    : `${import.meta.env.BASE_URL}runtime/ort/`;
+  // onnxruntime-web loads its own wasm glue via a runtime `import(url)`, which
+  // resolves a relative specifier against the *importing chunk's* URL
+  // (Vite emits the app chunk under dist/assets/), not against the document —
+  // so the path must be absolute before it is handed over, in every
+  // environment, or it silently resolves under dist/assets/ instead of the
+  // vendored dist/runtime/ort/ (design D1).
+  //
+  // Separately, observed in dev: BASE_URL is "/" there, so an un-resolved
+  // string is only path-absolute, not fully qualified, and Vite's dev-server
+  // transform refuses to serve public/ assets through a runtime dynamic
+  // import ("this file is in /public ... should not be imported from source
+  // code"). Pre-resolving against document.baseURI sidesteps that too, since
+  // Vite treats an already-absolute URL as resolved and leaves it alone (same
+  // as the CDN URL this replaced always did).
+  ort.env.wasm.wasmPaths = resolveVendoredAssetUrl("runtime/ort/", import.meta.env.BASE_URL, document.baseURI);
   ort.env.wasm.numThreads = 1; // avoid SharedArrayBuffer / COOP-COEP requirements
   ortConfigured = true;
 }
@@ -64,6 +69,13 @@ function getSessions(): Promise<WakeSessions> {
   if (!sessionsPromise) {
     sessionsPromise = (async () => {
       configureOrt();
+      // Left relative, deliberately: fetch() resolves against the document's
+      // base URL, not the importing module, so these already land on
+      // dist/wakeword/ in both environments — unlike configureOrt()'s
+      // dynamic-import path above, which needed the fix (design D5).
+      // Confirmed by the observed failure being "no available backend
+      // found" rather than a 404 from createSession's fetch check, i.e. all
+      // three model loads succeeded even on the broken build.
       const base = import.meta.env.BASE_URL;
       const [mel, emb, cls] = await Promise.all([
         createSession(`${base}wakeword/melspectrogram.onnx`),
@@ -89,14 +101,33 @@ export function useWakeWord(
   enabled: boolean,
   settings: WakeWordSettings,
   onWake: () => void,
+  // Non-fatal only: the selected microphone was unavailable and the listener
+  // fell back to System Default (fallbackDeviceId is always present) and then
+  // armed successfully. A fatal init failure — the listener is not running —
+  // goes through onInitFailed instead, so one channel doesn't have to carry
+  // two opposite meanings (design D3).
   onError?: (message: string, fallbackDeviceId?: string) => void,
   deviceId: string = SYSTEM_DEFAULT_MIC,
+  // Fired once the prediction interval is installed and the effect has not
+  // been cancelled in the meantime — the listener's only "armed" signal
+  // (design D3). Recovery (clearing a prior init failure) depends on this;
+  // without it, the only lever is the enabled/deviceId effect re-run, which
+  // clears on re-arm *attempt* rather than on success.
+  onReady?: () => void,
+  // Fatal: the listener is not running. Kept separate from onError so a
+  // permanent "failed" affordance can't land on a working listener whose
+  // saved microphone merely fell back to System Default.
+  onInitFailed?: (message: string) => void,
 ) {
   const onWakeRef = useRef(onWake);
   const onErrorRef = useRef(onError);
+  const onReadyRef = useRef(onReady);
+  const onInitFailedRef = useRef(onInitFailed);
   const settingsRef = useRef(settings);
   onWakeRef.current = onWake;
   onErrorRef.current = onError;
+  onReadyRef.current = onReady;
+  onInitFailedRef.current = onInitFailed;
   settingsRef.current = settings;
 
   useEffect(() => {
@@ -280,10 +311,11 @@ export function useWakeWord(
         source.connect(processor);
         processor.connect(audioCtx.destination);
         timer = window.setInterval(predict, PREDICT_INTERVAL_MS);
+        if (!cancelled) onReadyRef.current?.();
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         console.error("[wakeword] init failed", error);
-        onErrorRef.current?.(message);
+        onInitFailedRef.current?.(message);
       }
     }
 

@@ -1,0 +1,187 @@
+// The renderer↔main IPC channel surface. Split out of electron/main.mjs
+// (split-main-process-modules design.md D3) — every ipcMain.handle/on
+// registration, and only those, live here. This module marshals arguments
+// and delegates to the domain modules constructed in main.mjs's wiring
+// block; it holds no logic of its own. One of the four modules permitted to
+// import Electron directly.
+//
+// Diffable against electron/preload.cjs's window.iris surface (design.md
+// D3): every channel name here should have a matching preload call, and
+// vice versa.
+//
+// Capability composition (design.md D10): core channels are registered
+// directly below; each registered capability's own ipcHandlers (see the
+// capability contract in gemini-tools.mjs's header comment) are then
+// registered by iteration, never by name — so a capability-specific channel
+// is never hardcoded here.
+import electron from "electron";
+
+const { ipcMain } = electron;
+
+/**
+ * @param {{
+ *   getMainWindow: () => any,
+ *   getUiMode: () => string,
+ *   toggleHud: () => void,
+ *   updateTrayMenu: () => void,
+ *   startLive: () => any,
+ *   stopLive: () => any,
+ *   getLiveStatus: () => any,
+ *   greetGateFire: () => void,
+ *   setSpeakerMuted: (muted: boolean) => void,
+ *   toggleListenMode: () => void,
+ *   isListenModeEngaged: () => boolean,
+ *   sendCommand: (command: any) => any,
+ *   sendAudioChunk: (chunk: any) => void,
+ *   sessionsSnapshot: () => any,
+ *   selectWorkstream: (id: string) => any,
+ *   createWorkstream: (label: any) => any,
+ *   chooseWorkstreamCwd: (id: string) => any,
+ *   agentsSnapshot: (id: string) => any,
+ *   setWorkstreamAgent: (workstreamId: string, agent: any) => any,
+ *   setAgentModel: (workstreamId: string, role: any, model: any) => any,
+ *   installIrisAgents: () => any,
+ *   installPipelinePrereqs: () => any,
+ *   resolvePendingPoQuestion: (answers: any) => any,
+ *   getPromptReviewMode: () => boolean,
+ *   setPromptReviewMode: (enabled: boolean) => any,
+ *   resolvePromptReview: (payload: any) => any,
+ *   sendContextSupplement: (text: any) => any,
+ *   getFullConfig: () => any,
+ *   writeUserConfig: (updates: any) => any,
+ *   savePoToken: (token: any, opts?: any) => any,
+ *   testGeminiKey: (key: any) => any,
+ *   previewVoice: (payload: any) => any,
+ *   checkClaudeHealth: () => any,
+ *   getPipelineAvailable: () => boolean,
+ *   setUiContextSnapshot: (context: any) => void,
+ *   capabilities?: Array<{ ipcHandlers?: Array<{ channel: string, kind: "handle"|"on", fn: Function }> }>,
+ * }} deps
+ */
+export function registerIpc(deps) {
+  const {
+    getMainWindow,
+    getUiMode,
+    toggleHud,
+    updateTrayMenu,
+    startLive,
+    stopLive,
+    getLiveStatus,
+    greetGateFire,
+    setSpeakerMuted,
+    toggleListenMode,
+    isListenModeEngaged,
+    sendCommand,
+    sendAudioChunk,
+    sessionsSnapshot,
+    selectWorkstream,
+    createWorkstream,
+    chooseWorkstreamCwd,
+    agentsSnapshot,
+    setWorkstreamAgent,
+    setAgentModel,
+    installIrisAgents,
+    installPipelinePrereqs,
+    resolvePendingPoQuestion,
+    getPromptReviewMode,
+    setPromptReviewMode,
+    resolvePromptReview,
+    sendContextSupplement,
+    getFullConfig,
+    writeUserConfig,
+    savePoToken,
+    testGeminiKey,
+    previewVoice,
+    checkClaudeHealth,
+    getPipelineAvailable,
+    setUiContextSnapshot,
+    capabilities = [],
+  } = deps;
+
+  ipcMain.handle("sidecar:start", () => startLive());
+  ipcMain.handle("sidecar:stop", () => stopLive());
+  ipcMain.handle("sidecar:status", () => getLiveStatus());
+  // Listening mode's narrow bridge (design.md Decision 11): a toggle
+  // request, and a query for boot/reload — no report-back channel. State
+  // pushes to the renderer one-way over "listen-mode:state" from
+  // setListenEngaged, never the reverse.
+  ipcMain.on("listen-mode:toggle-request", () => toggleListenMode());
+  ipcMain.handle("listen-mode:query", () => ({ engaged: isListenModeEngaged() }));
+  ipcMain.handle("sidecar:command", (_event, command) => sendCommand(command));
+  ipcMain.handle("sessions:get", () => sessionsSnapshot());
+  ipcMain.handle("sessions:select", (_event, id) => selectWorkstream(String(id || "")));
+  ipcMain.handle("sessions:new", (_event, label) => {
+    const workstream = createWorkstream(label);
+    return { status: "ok", session: { id: workstream.id, label: workstream.label }, ...sessionsSnapshot() };
+  });
+  ipcMain.handle("sessions:choose-cwd", (_event, id) => chooseWorkstreamCwd(String(id || "")));
+  ipcMain.handle("agents:list", (_event, id) => agentsSnapshot(String(id || "")));
+  ipcMain.handle("agents:select", (_event, payload) =>
+    setWorkstreamAgent(String(payload?.workstreamId || ""), payload?.agent ?? null));
+  ipcMain.handle("agents:install", () => installIrisAgents());
+  ipcMain.handle("pipeline:install-prereqs", () => installPipelinePrereqs());
+  ipcMain.handle("agents:set-model", (_event, payload) =>
+    setAgentModel(String(payload?.workstreamId || ""), payload?.role, payload?.model));
+  // Secondary answer path for the PO's pending AskUserQuestion — lets a
+  // sighted user click an option directly instead of answering by voice.
+  // Whichever path (this, or the Gemini answer_po_question tool) answers
+  // first wins; the other becomes a no-op since the question is already resolved.
+  ipcMain.handle("po:answer-question", (_event, answers) => resolvePendingPoQuestion(answers));
+  // Renderer's boot-time read of the review-gate mode (see setPromptReviewMode
+  // above) plus the UI's Approve/Edit/Cancel and mode-toggle paths. Only
+  // Approve/Edit/Cancel have a voice counterpart (respond_to_task_review) —
+  // the mode toggle below is UI-only, never model-writable — mirroring the
+  // po:answer-question pattern for whichever channel resolves first.
+  ipcMain.handle("prompt:status", () => ({ reviewMode: getPromptReviewMode() }));
+  ipcMain.handle("prompt:resolve-review", (_event, payload) => resolvePromptReview(payload));
+  ipcMain.handle("prompt:set-review-mode", (_event, payload) => setPromptReviewMode(Boolean(payload?.enabled)));
+  ipcMain.handle("context-supplement:send", (_event, text) => sendContextSupplement(text));
+  ipcMain.handle("hud:toggle", () => {
+    toggleHud();
+    updateTrayMenu();
+    return { mode: getUiMode() };
+  });
+  ipcMain.on("hud:interactive", (_event, on) => {
+    const win = getMainWindow();
+    if (win && getUiMode() === "hud") {
+      win.setIgnoreMouseEvents(!on, { forward: true });
+    }
+  });
+  ipcMain.on("win:control", (_event, action) => {
+    const win = getMainWindow();
+    if (!win) return;
+    if (action === "close") win.close();
+    else if (action === "minimize") win.minimize();
+  });
+  ipcMain.handle("config:get", () => getFullConfig());
+  ipcMain.handle("config:save", (_event, updates) => writeUserConfig(updates));
+  ipcMain.handle("config:save-po-token", (_event, payload) => savePoToken(payload?.token));
+  ipcMain.handle("config:remove-po-token", () => savePoToken("", { remove: true }));
+  ipcMain.handle("config:test-gemini", (_event, payload) => testGeminiKey(payload?.key));
+  ipcMain.handle("config:test-claude", () => checkClaudeHealth());
+  // Renderer's boot-time read of the pipeline master switch (see design.md
+  // decision 1/3) — cached, synchronous-feeling; live updates arrive over the
+  // pipeline_availability sidecar event emitted whenever the value flips.
+  ipcMain.handle("pipeline:status", () => ({ available: getPipelineAvailable() }));
+  ipcMain.handle("config:preview-voice", (_event, payload) => previewVoice(payload || {}));
+  ipcMain.on("iris:boot-done", () => greetGateFire());
+  ipcMain.on("iris:ui-context", (_event, context) => {
+    if (context && typeof context === "object") {
+      setUiContextSnapshot(context);
+    }
+  });
+  ipcMain.on("live:audio", (_event, chunk) => sendAudioChunk(chunk));
+  ipcMain.on("iris:speaker-mute-state", (_event, muted) => {
+    setSpeakerMuted(muted);
+    updateTrayMenu();
+  });
+
+  // Capability composition (design.md D10): each registered capability's own
+  // channels, registered by iteration — never by name, so a capability's
+  // channel set never needs a matching edit here.
+  for (const cap of capabilities) {
+    for (const { channel, kind, fn } of cap.ipcHandlers || []) {
+      ipcMain[kind](channel, /** @type {any} */ (fn));
+    }
+  }
+}

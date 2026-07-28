@@ -45,7 +45,7 @@ describe("buildLiveConfig", () => {
   it("carries the resumption handle and voice through unchanged", () => {
     const config = buildLiveConfig({ mode: "converse", ...BASE_INPUTS });
     expect(config.sessionResumption).toEqual({ handle: "handle-123" });
-    expect(config.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Zephyr");
+    expect(/** @type {any} */ (config.speechConfig).voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Zephyr");
   });
 
   it("an empty resumption handle still opts in to receiving one", () => {

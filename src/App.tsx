@@ -17,6 +17,7 @@ import { useHandoffFx } from "./hooks/useHandoffFx";
 import { useHandControl, SYSTEM_DEFAULT_CAMERA, type HandPoint } from "./hooks/useHandControl";
 import { useWakeWord } from "./hooks/useWakeWord";
 import { SYSTEM_DEFAULT_MIC } from "./lib/mic-device";
+import { wakeCaption } from "./lib/wake-caption";
 import TopBar from "./components/TopBar";
 import HudShell from "./components/HudShell";
 import CommsPanel from "./components/CommsPanel";
@@ -112,6 +113,10 @@ export default function App() {
   const [fullConfig, setFullConfig] = useState<IrisConfig | null>(null);
   const [setup, setSetup] = useState<{ mode: "onboarding" | "settings" } | null>(null);
   const [wakeWordEnabled, setWakeWordEnabled] = useState(false);
+  // Fatal wake-word init failure (not the recoverable mic-fallback case) — held
+  // here rather than routed to pushLog, whose state is discarded at
+  // declaration and rendered by no component (design D3, wake-sleep-voice).
+  const [wakeFailed, setWakeFailed] = useState(false);
   const [sessions, setSessions] = useState<ClaudeSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [agents, setAgents] = useState<AgentsSnapshot | null>(null);
@@ -622,7 +627,20 @@ export default function App() {
       if (fallbackDeviceId) applyMicDeviceId(fallbackDeviceId);
     },
     micDeviceId,
+    () => setWakeFailed(false),
+    (message) => {
+      pushLog("error", `Wake word: ${message}`);
+      setWakeFailed(true);
+    },
   );
+
+  // Toggling wake word off tears down the listener with no callback (it
+  // returns early on `enabled: false`), so a stale failure banner must be
+  // cleared here rather than left next to a caption reading "Press W to wake
+  // Iris" (design D3, wake-sleep-voice).
+  useEffect(() => {
+    if (!wakeWordEnabled) setWakeFailed(false);
+  }, [wakeWordEnabled]);
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
@@ -1438,11 +1456,8 @@ export default function App() {
   }, [hasBridge, tasks, sortedTasks, expandedTaskId, focusedTaskId, latestResultTask, pendingPoQuestion, pendingReview]);
 
   const caption = useMemo(() => {
-    if (!sidecarRunning)
-      return {
-        text: wakeWordEnabled ? "Say “Hey Iris” or press W to wake" : "Press W to wake Iris",
-        dim: true,
-      };
+    const wake = wakeCaption({ sidecarRunning, wakeWordEnabled, wakeFailed });
+    if (wake) return wake;
     if (audioState === "speaking") return { text: "Speaking…", dim: false };
     if (audioState === "listening") return { text: "Listening…", dim: false };
     if (working) return { text: "Working on it…", dim: false };
@@ -1450,7 +1465,7 @@ export default function App() {
     if (last) return { text: last.text, dim: false };
     if (geminiStatus === "connected") return { text: "How can I help?", dim: true };
     return { text: "Connecting…", dim: true };
-  }, [sidecarRunning, audioState, working, transcript, geminiStatus, wakeWordEnabled]);
+  }, [sidecarRunning, audioState, working, transcript, geminiStatus, wakeWordEnabled, wakeFailed]);
 
   function openTask(task: TaskCard) {
     if (!(task.output || task.error)) return;

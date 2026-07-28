@@ -6,6 +6,10 @@ import { describe, it, expect, vi } from "vitest";
 import { createRunQueue, RUN_STATUS, runIdleTimeoutMs, DEFAULT_RUN_IDLE_TIMEOUT_MS } from "./run-queue.mjs";
 
 let nextId = 0;
+/**
+ * @param {Partial<import("./run-queue.mjs").Run>} [overrides]
+ * @returns {import("./run-queue.mjs").Run}
+ */
 function makeRun(overrides = {}) {
   nextId += 1;
   return {
@@ -507,7 +511,7 @@ describe("run-queue idle watchdog", () => {
       const { killChild, calls } = makeKillChildFake();
       const { queue, events, finalized } = makeQueue({ killChild });
       const { child } = makeChildFake();
-      const run = makeRun({ child, status: RUN_STATUS.RUNNING });
+      const run = makeRun({ child: /** @type {any} */ (child), status: RUN_STATUS.RUNNING });
       queue.submit(run);
 
       queue.stop(run.run_id);
@@ -534,7 +538,7 @@ describe("run-queue idle watchdog", () => {
     try {
       const { queue } = makeQueue(); // no killChild override
       const { child, killCalls } = makeChildFake();
-      const run = makeRun({ child, status: RUN_STATUS.RUNNING });
+      const run = makeRun({ child: /** @type {any} */ (child), status: RUN_STATUS.RUNNING });
       queue.submit(run);
 
       queue.stop(run.run_id);

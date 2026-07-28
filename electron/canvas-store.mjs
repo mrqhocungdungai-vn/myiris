@@ -15,6 +15,9 @@ export const DEFAULT_DEBOUNCE_MS = 2000;
 // (so `getScene` is never behind the disk-write debounce), with the disk
 // write itself coarse-debounced and off the hot path via an async atomic
 // write. See design.md D5 of hud-drawing-canvas.
+/**
+ * @param {{ file?: string, debounceMs?: number, maxBytes?: number }} options
+ */
 export function createCanvasStore({
   file,
   debounceMs = DEFAULT_DEBOUNCE_MS,

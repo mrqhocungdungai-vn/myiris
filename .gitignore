@@ -10,6 +10,7 @@ __pycache__/
 *.log
 sidecar/runtime/
 public/runtime/
+scripts/.wake-e2e-cache/
 roadmap.md
 .env_test*
 .ui-shots/

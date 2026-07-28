@@ -1,0 +1,57 @@
+# Baseline (task 1.2), recorded before any split commit
+
+`wc -l electron/main.mjs`: **4297**
+
+`grep -o 'ipcMain\.\(handle\|on\)("[^"]*"' electron/main.mjs`, sorted, 47 channels:
+
+```
+agents:install [handle]
+agents:list [handle]
+agents:select [handle]
+agents:set-model [handle]
+canvas:activate [on]
+canvas:get-scene [handle]
+canvas:image-result [on]
+canvas:native-export-image [handle]
+canvas:native-open-file [handle]
+canvas:native-save-file [handle]
+canvas:scene [on]
+config:get [handle]
+config:preview-voice [handle]
+config:remove-po-token [handle]
+config:save [handle]
+config:save-po-token [handle]
+config:test-claude [handle]
+config:test-gemini [handle]
+context-supplement:send [handle]
+hud:interactive [on]
+hud:toggle [handle]
+iris:boot-done [on]
+iris:speaker-mute-state [on]
+iris:ui-context [on]
+listen-mode:query [handle]
+listen-mode:toggle-request [on]
+live:audio [on]
+pipeline:install-prereqs [handle]
+pipeline:status [handle]
+po:answer-question [handle]
+prompt:resolve-review [handle]
+prompt:set-review-mode [handle]
+prompt:status [handle]
+secondbrain:activate [on]
+secondbrain:availability [handle]
+secondbrain:deactivate [on]
+secondbrain:get-graph [handle]
+secondbrain:read-note [handle]
+sessions:choose-cwd [handle]
+sessions:get [handle]
+sessions:new [handle]
+sessions:select [handle]
+sidecar:command [handle]
+sidecar:start [handle]
+sidecar:status [handle]
+sidecar:stop [handle]
+win:control [on]
+```
+
+Both gates (`npm run build`, `npm test`) were green on this tree before any split commit.

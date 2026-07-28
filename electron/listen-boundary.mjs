@@ -35,6 +35,16 @@ function waitForEvent(subscribe, timeoutMs, setTimeoutFn, clearTimeoutFn, onTime
   });
 }
 
+/**
+ * @param {any} session
+ * @param {{
+ *   turnCompleteTimeoutMs?: number,
+ *   handleTimeoutMs?: number,
+ *   setTimeoutFn?: typeof setTimeout,
+ *   clearTimeoutFn?: typeof clearTimeout,
+ *   onMissing?: (kind: string) => void,
+ * }} [options]
+ */
 export async function runBoundary(
   session,
   {

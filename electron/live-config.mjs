@@ -11,7 +11,11 @@
 // Decision 6 — `handleLiveMessage` dispatches a tool call before it looks at
 // serverContent, so suppressing audio/text alone would still let a boundary
 // start a real Claude run).
+/**
+ * @param {{ mode?: string, resumeHandle?: string, tools?: unknown[], systemInstruction?: string, voice?: string }} options
+ */
 export function buildLiveConfig({ mode = "converse", resumeHandle, tools = [], systemInstruction = "", voice = "Zephyr" } = {}) {
+  /** @type {Record<string, unknown>} */
   const config = {
     responseModalities: ["AUDIO"],
     mediaResolution: "MEDIA_RESOLUTION_MEDIUM",

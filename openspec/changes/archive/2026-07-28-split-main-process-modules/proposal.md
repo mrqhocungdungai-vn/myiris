@@ -1,0 +1,43 @@
+## Why
+
+`electron/main.mjs` is 4297 lines. It fails the repo's file-size convention (one responsibility, graspable in minutes, 250–450 lines) by a factor of nine, and it is the only file in the repo that misses it by that margin — of the 87 `.mjs`/`.cjs`/`.ts`/`.tsx` files under `src/`, `electron/` and `scripts/` (tests included), 72 are ≤250 lines and 81 are ≤500.
+
+It did not get there through bad code. The archived `2026-07-16-architecture-deepening-refactors` change deepened five shallow modules but never targeted this file's size, and afterwards twelve feature changes each added a defensible amount to a file with no gate: prompt-review-gate +280, security hardening +193, personal-knowledge-notes +175, canvas-claude-mcp +138, second-brain-galaxy +129, drawing-canvas +60, and nine smaller. Every increment was reasonable; the sum is not.
+
+Two consequences are already being paid. First, the file has **no automated coverage of any kind** — the 13 sibling modules that were extracted over time all have tests, and `main.mjs` has none, because it cannot be imported without Electron. `run-queue.test.mjs:481` records a behavior it cannot assert "without a main.mjs harness". Second, the same concentration shows up in type checking: at `strict: true` the file holds **376** of `electron/`'s 822 errors, 46% of a directory it is one file of.
+
+The favorable finding: the file is not tangled. It is already 18 cohesive, contiguous, mostly banner-marked blocks, and Electron API coupling is already concentrated — 71 references in the `app.whenReady()`/IPC block, 17 in window/HUD/tray, and **zero** in eight of the domain blocks. These are 18 modules that were never given filenames. Splitting them is mechanical, and doing so makes the majority of the main process testable for the first time.
+
+## What Changes
+
+- Split `electron/main.mjs` into **~17 modules of 150–450 lines**, leaving `main.mjs` as a ~150–250-line composition root that imports, wires, and starts.
+- Each extracted module takes its external dependencies as **injected parameters via a factory function**, matching the pattern all 13 existing siblings already use (`createRunQueue`, `createCanvasStore`, `createCanvasMcp`, `createVaultGraph`) or plain pure functions (`buildLiveConfig`, `runBoundary`, `computeWorkerEnv`, `resolveApprovedTask`). **Explicitly not** a shared mutable app-state module — those 25 bindings are what currently weld the file together, and re-exporting them as a global would satisfy the line count while keeping every module untestable.
+- All **47 `ipcMain.handle`/`on` registrations** move into a single `electron/ipc.mjs` — and only those; the rest of the `app.whenReady()` block is startup sequence and security, not IPC. Combined with `electron/window.mjs` (window, HUD, tray, menu) and `electron/renderer-security.mjs` (navigation containment, device-permission scoping), this confines Electron imports to exactly four files: `main.mjs`, `ipc.mjs`, `window.mjs`, `renderer-security.mjs`. **Every other module is Electron-free** and therefore importable in a plain vitest file with no harness.
+- Renderer security gets its own named module rather than being folded into the IPC registrar, so the `renderer-content-security` capability is locatable in one file, and `main.mjs` installs it **before** creating any window — an ordering that is currently free from lexical position and becomes a real contract after the split, whose violation fails silently.
+- Each extracted module lands with **its own `.test.mjs`**, and is picked up automatically by the import-graph test added in `add-electron-test-signal`.
+- The decomposition is a **hybrid**, not a pure layering. Measuring what recent feature commits actually touched shows this codebase's unit of change is a capability, not a layer: `harden-security-boundaries` touched functions belonging to 10 of the proposed modules, `prompt-review-gate` 8, `canvas-claude-mcp` 7, and five of six touched `app.whenReady()`. Every feature adds the same slice — a tool declaration, a prompt fragment, an IPC channel, state, a probe, run wiring. So alongside the layered core, **canvas and second-brain get their own modules under `electron/capabilities/`**, each owning its slice end to end and registering into the core, mirroring how `openspec/specs/` is already organized.
+  - This matters beyond tidiness. Under a purely layered split the next feature would add ~30 lines to each of six files instead of ~180 to one: the accretion continues at the same rate while no file trips the 450-line convention for years. That would **destroy the signal that detected this problem without stopping the problem** — and with enforcement being convention-only, that signal is the only detector there is.
+- Work is ordered by risk in four groups: tier 1 stateless/Electron-free (near-zero regression risk, proves the pattern), tier 2 stateful/Electron-free, tier 3 the Electron edge, then the capability tier, which gathers code out of the earlier modules once each piece has a home and a test.
+- One task is **not** a verbatim move and is called out as such: the Live session currently drives listening mode's state machine by direct field assignment (`connectLive` writes five `ListenMode` fields). Those become named transitions owned by the listening-mode module — a deepening in the same vocabulary the archived `architecture-deepening-refactors` change used, applied to the one seam that needs it.
+
+**Zero behavior change.** No IPC channel is added, removed, or renamed; `electron/preload.cjs`'s `window.iris` surface is untouched; no dependency is added; every pinned identifier (Gemini Live model, voice, sample rates, `sendRealtimeInput`) moves verbatim. Every existing capability spec must still be true afterwards, unmodified.
+
+**Depends on `add-electron-test-signal`**, which must land first — it provides the only signal capable of catching this change's characteristic failure (a fumbled import, a missing export, a dropped reference), since `tsc` does not currently read `electron/` and no test imports `main.mjs`.
+
+## Capabilities
+
+### New Capabilities
+
+- `main-process-structure`: the Electron main process is organized as a set of narrow, single-responsibility modules under `electron/`, with Electron API access confined to a composition root, an IPC registrar, a window module and a renderer-security module, so that all domain logic is importable and testable without booting Electron. Parallels the existing `renderer-structure` capability, which established the same discipline for `src/`.
+
+### Modified Capabilities
+
+(none — every existing capability describes observable behavior that this change preserves exactly. `voice-decision-relay`, `po-live-session`, `run-execution-queue`, `listening-mode`, `glass-hud-mode`, `session-announcements`, `config-persistence`, `pipeline-availability` and the rest must all remain true against their current text, unedited. If any spec requires a wording change to stay true, that is a signal the split altered behavior and must be corrected, not documented.)
+
+## Impact
+
+- **Modified**: `electron/main.mjs` (4297 → ~150–250 lines).
+- **New**: ~17 modules plus their `.test.mjs` files. Core — tier 1: `gemini-tools`, `gemini-prompts`, `pipeline-install`, `pipeline-probes`, `user-config`. Tier 2: `session-store` (incl. agent models), `announcements`, `renderer-bridge`, `run-dispatch`, `run-exec`. Tier 3: `live-session`, `listen-mode`, `window`, `renderer-security`, `ipc`. Capabilities — `capabilities/canvas`, `capabilities/second-brain`. (`notes-vault` is absent by design: it was capability code, and now lives in `capabilities/second-brain`.)
+- **Unmodified**: `electron/preload.cjs`, all of `src/`, all 13 existing `electron/` modules and their tests, `package.json` dependencies. **Packaging needs no change** — `build.files` already globs `electron/**` while excluding `*.test.mjs`, so every new module ships automatically.
+- **Docs**: `CLAUDE.md`'s File map is rewritten for the new layout — its current single-bullet description of `main.mjs` as "the heart of the system… ~1500 lines" becomes a module list. `docs/ARCHITECTURE.md` and `docs/PIPELINE_INTERNALS.md` gain updated file references.
+- **Typing debt inherited: none.** `add-electron-test-signal` sets the `electron/` typecheck floor at `checkJs: true, strict: false` (plus six zero-cost strict-family flags) and clears the 76 errors that reports, `main.mjs`'s 20 included. Because that project's include glob covers `electron/**/*.mjs`, every module this change creates is type-checked from the moment the file exists — no per-module opt-in step, and no typing work in scope here.

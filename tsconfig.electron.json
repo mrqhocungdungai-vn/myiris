@@ -1,0 +1,32 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "allowJs": true,
+    "checkJs": true,
+    "strict": false,
+    "strictFunctionTypes": true,
+    "strictBindCallApply": true,
+    "noImplicitThis": true,
+    "alwaysStrict": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "types": ["node"]
+  },
+  "include": ["electron/**/*.mjs", "electron/**/*.cjs"],
+  // canvas-mcp.golden.test.mjs runs under `// @vitest-environment jsdom` and
+  // legitimately uses DOM globals (HTMLCanvasElement, document, FontFace).
+  // Adding "DOM" to this project's lib would admit browser globals into all
+  // 16 main-process modules; a per-file `/// <reference lib="dom" />` was
+  // tried instead but only swaps its 3 errors for 2 different ones, because
+  // the file's intentionally bare stubs (see its own comment) don't satisfy
+  // full DOM interfaces once strict DOM typing applies. Excluded here.
+  "exclude": [
+    "electron/canvas-mcp.golden.test.mjs"
+  ]
+}
