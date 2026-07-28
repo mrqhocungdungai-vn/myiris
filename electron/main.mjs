@@ -1,12 +1,10 @@
 import electron from "electron";
-import { GoogleGenAI } from "@google/genai";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
 import {
-  poBillingStatus,
   closeAllPoSessions,
   getPoSessionState,
   cancelPoTurn,
@@ -16,7 +14,6 @@ import { shouldRefuseLaunch } from "./platform.mjs";
 import { createCanvasStore } from "./canvas-store.mjs";
 import { createCanvasMcp, buildMcpServerRecord } from "./canvas-mcp.mjs";
 import { createVaultGraph } from "./vault-graph.mjs";
-import { buildLiveConfig } from "./live-config.mjs";
 import { runBoundary } from "./listen-boundary.mjs";
 import { createGeminiTools } from "./gemini-tools.mjs";
 import { createGeminiPrompts } from "./gemini-prompts.mjs";
@@ -37,6 +34,8 @@ import { createRunStream } from "./run-stream.mjs";
 import { createRunExec } from "./run-exec.mjs";
 import { installRendererSecurity } from "./renderer-security.mjs";
 import { createWindowModule } from "./window.mjs";
+import { createLiveSession } from "./live-session.mjs";
+import { createLiveMessages } from "./live-messages.mjs";
 
 const { app, BrowserWindow, ipcMain, nativeImage, dialog, globalShortcut } = electron;
 
@@ -51,7 +50,6 @@ const iconPath = path.join(repoRoot, "build", "icon.png");
 const appIcon = fs.existsSync(iconPath) ? nativeImage.createFromPath(iconPath) : null;
 
 loadEnvFile({ repoRoot });
-logPoBillingPathOnce();
 
 // windowModule (constructed further down) owns mainWindow/uiMode/tray now.
 let windowModule;
@@ -61,22 +59,15 @@ function getMainWindow() {
 function getUiMode() {
   return windowModule.getUiMode();
 }
-let liveSession = null;
-let ai = null;
-let liveStatus = { running: false, pid: null };
-// Mirror of the renderer's speaker-mute state, reported via
-// iris:speaker-mute-state — main never mutates audio, it only tracks this to
-// keep the tray label accurate (see openspec/changes/speaker-mute design D4).
-let speakerMuted = false;
-// Gemini Live closes each WebSocket connection after ~10 minutes. With
-// sessionResumption enabled the server hands us refresh handles; on close we
-// reconnect with the latest handle so the conversation continues seamlessly
-// instead of dropping Iris back to the "Press W to wake" sleep screen.
-let resumptionHandle = null;
-let userStopped = false;
-let reconnectAttempts = 0;
-let reconnectTimer = null;
-const MAX_RECONNECT_ATTEMPTS = 5;
+// liveSessionModule (constructed further down) owns liveSession/liveStatus/
+// speakerMuted now.
+let liveSessionModule;
+function getLiveSession() {
+  return liveSessionModule.getLiveSession();
+}
+function getLiveStatus() {
+  return liveSessionModule.getLiveStatus();
+}
 
 // ===== Listening mode (add-listening-mode) =====
 // Main is the sole owner of this state (design.md D11): the tray item and
@@ -207,9 +198,10 @@ function waitForLiveClose() {
 // `onclose` will fire to do it.
 function closeLiveSessionDeliberately() {
   ListenMode.deliberateReconnect = true;
-  if (liveSession) {
+  const session = getLiveSession();
+  if (session) {
     try {
-      liveSession.close();
+      session.close();
     } catch {
       /* ignore close races */
     }
@@ -223,7 +215,7 @@ function closeLiveSessionDeliberately() {
 // boundary since `liveSession` may be reassigned between boundaries.
 function makeBoundarySession() {
   return {
-    sendActivityEnd: () => liveSession?.sendRealtimeInput({ activityEnd: {} }),
+    sendActivityEnd: () => getLiveSession()?.sendRealtimeInput({ activityEnd: {} }),
     onTurnComplete,
     onFreshResumptionHandle,
     disconnect: closeLiveSessionDeliberately,
@@ -251,43 +243,10 @@ function driveTurnAndWaitForCompletion(text, timeoutMs = 8000) {
       clearTimeout(timer);
       resolve(true);
     });
-    liveSession?.sendClientContent({ turns: [{ role: "user", parts: [{ text }] }], turnComplete: true });
+    getLiveSession()?.sendClientContent({ turns: [{ role: "user", parts: [{ text }] }], turnComplete: true });
   });
 }
 
-// Defers the SYSTEM_EVENT_SESSION_START greeting until the renderer's boot
-// animation reports iris:boot-done, so Iris never talks over it (design.md
-// D6). Reset on every non-reconnect wake; a fallback timer greets anyway if
-// boot-done is somehow never signaled.
-const GreetGate = {
-  done: true,
-  timer: null,
-  arm() {
-    this.done = false;
-    if (this.timer) clearTimeout(this.timer);
-    this.timer = setTimeout(() => this.fire(), 8000);
-  },
-  fire() {
-    if (this.done) return;
-    this.done = true;
-    if (this.timer) clearTimeout(this.timer);
-    this.timer = null;
-    sendWelcomeGreeting();
-  },
-};
-
-
-function logPoBillingPathOnce() {
-  const billing = poBillingStatus();
-  if (billing.ok) {
-    console.log("[IRIS][po-auth] PO session will bill against the Claude subscription (CLAUDE_CODE_OAUTH_TOKEN set).");
-  } else {
-    console.warn(
-      "[IRIS][po-auth] No CLAUDE_CODE_OAUTH_TOKEN found. PO turns will fail until you run `claude setup-token` " +
-        "and set CLAUDE_CODE_OAUTH_TOKEN (see .env.example). DEV is unaffected.",
-    );
-  }
-}
 
 const rendererBridge = createRendererBridge({ getMainWindow: () => getMainWindow() });
 const {
@@ -478,7 +437,7 @@ const {
 } = sessionStoreModule;
 
 const announcements = createAnnouncements({
-  getLiveSession: () => liveSession,
+  getLiveSession: () => getLiveSession(),
   isListenModeSuppressing: () => ListenMode.engaged || ListenMode.transitioning,
   emitEvent,
   agentLabels: AGENT_LABELS,
@@ -529,7 +488,7 @@ const userConfig = createUserConfig({
   getIsPackaged: () => app.isPackaged,
   emitEvent,
   emitToRenderer,
-  getLiveSession: () => liveSession,
+  getLiveSession: () => getLiveSession(),
   runQueue,
 });
 const {
@@ -832,298 +791,6 @@ const geminiPrompts = createGeminiPrompts({
   fenceUntrustedText,
 });
 
-function buildLiveConfigForMode(mode, resumeHandle) {
-  return buildLiveConfig({
-    mode,
-    resumeHandle,
-    tools: geminiTools.buildLiveTools(),
-    systemInstruction: mode === "listen" ? geminiPrompts.buildListenSystemInstructionText() : geminiPrompts.buildSystemInstructionText(),
-    voice: process.env.GEMINI_LIVE_VOICE || "Zephyr",
-  });
-}
-
-function sendWelcomeGreeting() {
-  (async () => {
-    let reachable = false;
-    try {
-      const status = await checkClaudeStatus();
-      reachable = Boolean(status.reachable);
-    } catch {
-      reachable = false;
-    }
-    if (!liveSession) return;
-
-    const claudeLine = reachable
-      ? "Claude is online and all channels are connected, so we're good to go."
-      : "I'm still bringing Claude online, channels are connecting now.";
-
-    const greeting =
-      `SYSTEM_EVENT_SESSION_START: The session just started. Proactively greet ${userDisplayName()} out loud right now in a warm, concise way (1-2 sentences). ` +
-      `Say something like: Hi ${userDisplayName()}, welcome back. ${claudeLine} Then ask what they have in mind. ` +
-      "Speak this greeting immediately without waiting for the user to talk first.";
-
-    liveSession.sendRealtimeInput({ text: greeting });
-  })();
-}
-
-async function startLive() {
-  if (liveSession) return liveStatus;
-  userStopped = false;
-  resumptionHandle = null;
-  reconnectAttempts = 0;
-  if (reconnectTimer) {
-    clearTimeout(reconnectTimer);
-    reconnectTimer = null;
-  }
-  await connectLive({ isReconnect: false, mode: "converse" });
-  return { running: true, pid: process.pid };
-}
-
-async function connectLive({ isReconnect, mode = "converse" }) {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    emitEvent({ type: "fatal", message: "GEMINI_API_KEY is not set." });
-    throw new Error("GEMINI_API_KEY is not set");
-  }
-
-  // Re-probed on every (re)connect, not just at boot — see design.md decision
-  // 1. Live tool declarations are fixed per session, so this is the only point
-  // where a just-installed Claude CLI can actually take effect.
-  await probePipelineAvailability();
-
-  const model = process.env.GEMINI_LIVE_MODEL || "models/gemini-3.1-flash-live-preview";
-  ai = new GoogleGenAI({ apiKey });
-  emitEvent({ type: "sidecar_status", status: { running: true, model, mode: "webrtc-aec" } });
-  emitEvent({ type: "gemini_status", status: "connecting", model });
-
-  liveSession = await ai.live.connect({
-    model,
-    config: buildLiveConfigForMode(mode, resumptionHandle),
-    callbacks: {
-      onopen() {
-        reconnectAttempts = 0;
-        liveStatus = { running: true, pid: process.pid };
-        emitEvent({ type: "sidecar_status", status: { running: true, pid: process.pid, model, mode: "webrtc-aec" } });
-        emitEvent({ type: "gemini_status", status: "connected", model });
-        emitEvent({ type: "audio_state", state: "listening" });
-        updateTrayMenu();
-        // The resumed session keeps its context; greeting again mid-conversation
-        // every ~10 minutes would be jarring. Every listening-mode reconnect
-        // (enter/exit/rotation) also passes isReconnect:true for the same
-        // reason (design.md Decision 12) — toggling never re-greets.
-        if (!isReconnect) GreetGate.arm();
-      },
-      onmessage(message) {
-        handleLiveMessage(message);
-      },
-      onerror(error) {
-        emitEvent({ type: "fatal", message: "Gemini Live error", error: error?.message || String(error) });
-      },
-      onclose(event) {
-        console.error("[IRIS][close] code=", event?.code, "reason=", event?.reason || "(none)");
-        flushTranscripts();
-        liveSession = null;
-        notifyLiveClosed();
-
-        // A deliberate transition (entering/exiting/rotating listening mode)
-        // closed this socket itself — skip the failure-reconnect path and
-        // the offline teardown entirely (design.md Decision 12); the
-        // sequence that called closeLiveSessionDeliberately() drives the
-        // reconnect explicitly.
-        if (ListenMode.deliberateReconnect) {
-          ListenMode.deliberateReconnect = false;
-          return;
-        }
-
-        if (userStopped) {
-          liveStatus = { running: false, pid: null };
-          emitEvent({ type: "gemini_status", status: "offline" });
-          emitEvent({ type: "audio_state", state: "idle" });
-          emitEvent({ type: "sidecar_status", status: liveStatus, reason: event?.reason || "closed" });
-          updateTrayMenu();
-          return;
-        }
-
-        // An unexpected disconnect (machine slept, network dropped, server
-        // terminated the connection) while listening mode was engaged or
-        // mid-transition ends the mode rather than riding across the
-        // reconnect (spec "An unexpected disconnect ends listening mode"):
-        // reconnecting in listen configuration without a fresh
-        // activityStart would silently discard every subsequent byte, and
-        // reconnecting in converse configuration while still "engaged"
-        // would leave the ear icon lit over a session that has stopped
-        // listening. The failure-reconnect path below always targets
-        // converse, so either way the mode must end here first.
-        if (ListenMode.engaged || ListenMode.transitioning) {
-          clearListenRotationTimer();
-          ListenMode.transitioning = false;
-          ListenMode.boundaryInFlight = false;
-          setListenEngaged(false);
-          if (ListenMode.segmentRecord.trim()) {
-            ListenMode.synthesizeOnNextConverseConnect = true;
-          } else {
-            ListenMode.segmentRecord = "";
-          }
-        }
-
-        scheduleReconnect(event?.reason || "connection closed");
-      },
-    },
-  });
-  // Send AFTER connect resolves: onopen can fire before liveSession is
-  // assigned, so draining inside onopen would no-op (mirrors previewVoice).
-  // Skipped on a listen-config connect — the backlog is delivered on the
-  // first connect that is not into listening mode (session-announcements
-  // MODIFIED delta).
-  if (mode !== "listen") {
-    drainPendingAnnouncements();
-    // Recovery synthesis after an unexpected disconnect ended the mode
-    // (design.md Decision 10 / tasks.md 4.7) — fires at most once, only
-    // once conversation is actually back up.
-    if (ListenMode.synthesizeOnNextConverseConnect) {
-      ListenMode.synthesizeOnNextConverseConnect = false;
-      const segment = ListenMode.segmentRecord;
-      ListenMode.segmentRecord = "";
-      liveSession?.sendClientContent({
-        turns: [{ role: "user", parts: [{ text: geminiPrompts.buildListenExitSynthesisPrompt(segment) }] }],
-        turnComplete: true,
-      });
-    }
-  }
-}
-
-function scheduleReconnect(reason) {
-  if (reconnectTimer) return;
-  reconnectAttempts += 1;
-  if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
-    liveStatus = { running: false, pid: null };
-    emitEvent({
-      type: "fatal",
-      message: `Gemini Live reconnect failed after ${MAX_RECONNECT_ATTEMPTS} attempts.`,
-      error: reason,
-    });
-    emitEvent({ type: "gemini_status", status: "offline" });
-    emitEvent({ type: "audio_state", state: "idle" });
-    emitEvent({ type: "sidecar_status", status: liveStatus, reason });
-    return;
-  }
-  // Repeated failures suggest a stale resumption handle — drop it and let the
-  // remaining attempts open a fresh session (context lost, but Iris stays up).
-  if (reconnectAttempts >= 3) resumptionHandle = null;
-  const delay = Math.min(500 * 2 ** (reconnectAttempts - 1), 8000);
-  console.log(`[IRIS][reconnect] attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS} in ${delay}ms (${reason})`);
-  emitEvent({ type: "gemini_status", status: "connecting" });
-  reconnectTimer = setTimeout(() => {
-    reconnectTimer = null;
-    // Always converse: this is the failure path, and listening mode has
-    // already been ended (if it was engaged) by the onclose branch above
-    // before scheduleReconnect was ever called.
-    connectLive({ isReconnect: true, mode: "converse" }).catch((error) => {
-      liveSession = null;
-      scheduleReconnect(error?.message || String(error));
-    });
-  }, delay);
-}
-
-async function handleToolCall(toolCall) {
-  const functionResponses = [];
-  for (const call of toolCall.functionCalls || []) {
-    emitEvent({ type: "tool_call", name: call.name, args: call.args || {} });
-    try {
-      const result = await executeClaudeTool(call.name, call.args || {});
-      functionResponses.push({ id: call.id, name: call.name, response: { result } });
-    } catch (error) {
-      functionResponses.push({
-        id: call.id,
-        name: call.name,
-        response: { status: "error", error: error.message },
-      });
-    }
-  }
-  if (functionResponses.length && liveSession) {
-    liveSession.sendToolResponse({ functionResponses });
-  }
-}
-
-function handleLiveMessage(message) {
-  if (message.sessionResumptionUpdate) {
-    const { resumable, newHandle } = message.sessionResumptionUpdate;
-    if (resumable && newHandle) {
-      resumptionHandle = newHandle;
-      notifyFreshResumptionHandle(newHandle);
-    }
-  }
-
-  if (message.goAway) {
-    // Server warns the connection is about to be dropped (connection lifetime
-    // limit). Rotate immediately rather than betting the rest of the chunk on
-    // an unmeasured goAway.timeLeft (design.md Decision 3) if listening mode
-    // is engaged and idle; otherwise onclose fires shortly after and the
-    // ordinary reconnect handles it.
-    console.log("[IRIS][goAway] timeLeft=", message.goAway.timeLeft || "(unknown)");
-    if (ListenMode.engaged && !ListenMode.transitioning) {
-      runListenRotation().catch((error) => {
-        emitEvent({ type: "log", level: "warn", message: `Listening-mode rotation (goAway) failed: ${error.message}` });
-      });
-    }
-  }
-
-  if (message.toolCall) {
-    // A boundary turn cannot start background work (spec "A boundary turn
-    // cannot start background work") — the listening config already ships
-    // an empty tool set, so this only guards a stray call arriving folded
-    // into the same batch as the boundary's turnComplete.
-    if (!ListenMode.boundaryInFlight) {
-      handleToolCall(message.toolCall).catch((error) => {
-        emitEvent({ type: "fatal", message: "Tool call failed", error: error.message });
-      });
-    }
-  }
-
-  const content = message.serverContent;
-  if (!content) return;
-
-  if (content.interrupted) {
-    flushTranscripts();
-    emitToRenderer("live:interrupt", {});
-    emitEvent({ type: "audio_state", state: "listening" });
-    return;
-  }
-
-  if (content.inputTranscription?.text) {
-    appendUserTranscript(content.inputTranscription.text);
-    // Segment record: the recovery path for the current chunk (design.md
-    // Decision 7). Accumulated whenever the mode is engaged, including
-    // across a rotation's boundary — never written to disk or the vault.
-    if (ListenMode.engaged) ListenMode.segmentRecord += content.inputTranscription.text;
-  }
-
-  // Every boundary turn (rotation or exit alike) is neither heard nor shown
-  // (spec "Every boundary turn is neither heard nor shown") — suppressed
-  // here, in main, before any part of it reaches the renderer. Reusing the
-  // renderer's speaker-mute suppression would be too late: this loop is what
-  // appends to modelTranscriptBuffer and emits "speaking", both before the
-  // renderer sees anything.
-  if (!ListenMode.boundaryInFlight) {
-    if (content.outputTranscription?.text) appendModelTranscript(content.outputTranscription.text);
-
-    for (const part of content.modelTurn?.parts || []) {
-      if (part.text) appendModelTranscript(part.text);
-      const inlineData = part.inlineData;
-      if (!inlineData?.data) continue;
-      const mimeType = inlineData.mimeType || "audio/pcm;rate=24000";
-      if (!mimeType.startsWith("audio/")) continue;
-      emitToRenderer("live:audio", { data: inlineData.data, mimeType });
-      emitEvent({ type: "audio_state", state: "speaking" });
-    }
-  }
-
-  if (content.turnComplete) {
-    flushTranscripts();
-    emitEvent({ type: "audio_state", state: "listening" });
-    notifyTurnComplete();
-  }
-}
 
 // ===== Listening mode sequences (add-listening-mode) =====
 // Each of enter/exit/rotation is a deliberate reconnect (design.md Decision
@@ -1134,13 +801,13 @@ function handleLiveMessage(message) {
 // rotation.
 
 async function enterListenMode() {
-  if (!liveStatus.running || ListenMode.transitioning || ListenMode.engaged) return;
+  if (!getLiveStatus().running || ListenMode.transitioning || ListenMode.engaged) return;
   ListenMode.transitioning = true;
   try {
     const closed = waitForLiveClose();
     closeLiveSessionDeliberately();
     await closed;
-    if (userStopped) return;
+    if (getUserStopped()) return;
 
     try {
       await connectLive({ isReconnect: true, mode: "listen" });
@@ -1156,7 +823,7 @@ async function enterListenMode() {
       }
       return;
     }
-    if (userStopped) return;
+    if (getUserStopped()) return;
 
     ListenMode.segmentRecord = "";
     const confirmed = await driveTurnAndWaitForCompletion(geminiPrompts.buildListenEntryConfirmationPrompt());
@@ -1167,12 +834,12 @@ async function enterListenMode() {
         message: "Listening-mode entry confirmation did not complete within the bounded wait; opening the activity anyway.",
       });
     }
-    if (userStopped) return;
+    if (getUserStopped()) return;
 
     // Opened only now, after the confirmation turn has completed, so the
     // confirmation cannot consume the user's opening words (spec "The
     // confirmation does not swallow the user's first words").
-    liveSession?.sendRealtimeInput({ activityStart: {} });
+    getLiveSession()?.sendRealtimeInput({ activityStart: {} });
     setListenEngaged(true);
     armListenRotationTimer();
   } finally {
@@ -1193,7 +860,7 @@ async function exitListenMode() {
     });
     ListenMode.boundaryInFlight = false;
     await closed;
-    if (userStopped) return;
+    if (getUserStopped()) return;
 
     try {
       await connectLive({ isReconnect: true, mode: "converse" });
@@ -1202,7 +869,7 @@ async function exitListenMode() {
       scheduleReconnect(error?.message || String(error));
       return;
     }
-    if (userStopped) return;
+    if (getUserStopped()) return;
 
     // The synthesis is driven only now, after the converse reconnect — never
     // at the boundary, where the listening instruction is still in force and
@@ -1212,7 +879,7 @@ async function exitListenMode() {
     setListenEngaged(false);
     const segment = ListenMode.segmentRecord;
     ListenMode.segmentRecord = "";
-    liveSession?.sendClientContent({
+    getLiveSession()?.sendClientContent({
       turns: [{ role: "user", parts: [{ text: geminiPrompts.buildListenExitSynthesisPrompt(segment) }] }],
       turnComplete: true,
     });
@@ -1234,7 +901,7 @@ async function runListenRotation() {
     });
     ListenMode.boundaryInFlight = false;
     await closed;
-    if (userStopped) return;
+    if (getUserStopped()) return;
 
     try {
       await connectLive({ isReconnect: true, mode: "listen" });
@@ -1248,9 +915,9 @@ async function runListenRotation() {
       scheduleReconnect(error?.message || String(error));
       return;
     }
-    if (userStopped) return;
+    if (getUserStopped()) return;
 
-    liveSession?.sendRealtimeInput({ activityStart: {} });
+    getLiveSession()?.sendRealtimeInput({ activityStart: {} });
     armListenRotationTimer();
   } finally {
     ListenMode.transitioning = false;
@@ -1261,7 +928,7 @@ async function runListenRotation() {
 // calls directly — no `emitToRenderer` dispatch, so the mode stays reachable
 // with no window open (design.md Decision 11).
 function toggleListenMode() {
-  if (!liveStatus.running) return; // no-op while asleep (spec "Toggling while asleep does nothing")
+  if (!getLiveStatus().running) return; // no-op while asleep (spec "Toggling while asleep does nothing")
   if (ListenMode.transitioning) return; // spec "A toggle during a transition is ignored"
   if (ListenMode.engaged) {
     exitListenMode().catch((error) => {
@@ -1274,53 +941,59 @@ function toggleListenMode() {
   }
 }
 
-async function stopLive() {
-  // Sleep and app quit both route through here. Neither runs the exit
-  // boundary (spec "A failed transition leaves a coherent state" / tasks.md
-  // 4.6): the resumption handle does not outlive the process, quit runs
-  // under a bounded teardown deadline, and at sleep the renderer's audio
-  // pipeline is torn down before this fires — no synthesis could be heard.
-  resetListenModeSilently();
-  userStopped = true;
-  resumptionHandle = null;
-  reconnectAttempts = 0;
-  if (reconnectTimer) {
-    clearTimeout(reconnectTimer);
-    reconnectTimer = null;
-  }
-  if (liveSession) {
-    try { liveSession.close(); } catch { /* ignore close races */ }
-  }
-  liveSession = null;
-  liveStatus = { running: false, pid: null };
-  emitToRenderer("live:interrupt", {});
-  emitEvent({ type: "gemini_status", status: "offline" });
-  emitEvent({ type: "audio_state", state: "idle" });
-  emitEvent({ type: "sidecar_status", status: liveStatus });
-  updateTrayMenu();
-  return liveStatus;
-}
+const liveMessages = createLiveMessages({
+  getLiveSession: () => liveSessionModule.getLiveSession(),
+  setResumptionHandle: (handle) => liveSessionModule.setResumptionHandle(handle),
+  emitEvent,
+  emitToRenderer,
+  flushTranscripts,
+  appendUserTranscript,
+  appendModelTranscript,
+  executeClaudeTool,
+  submitClaudeTask,
+  listenMode: ListenMode,
+  notifyFreshResumptionHandle,
+  notifyTurnComplete,
+  runListenRotation,
+});
+const { handleLiveMessage, sendAudioChunk, sendCommand } = liveMessages;
 
-function sendAudioChunk(arrayBuffer) {
-  if (!liveSession || !arrayBuffer) return;
-  const buffer = Buffer.from(new Uint8Array(arrayBuffer));
-  if (!buffer.byteLength) return;
-  liveSession.sendRealtimeInput({
-    audio: { data: buffer.toString("base64"), mimeType: "audio/pcm;rate=16000" },
-  });
-}
-
-function sendCommand(command) {
-  if (command?.type === "text" && command.text) {
-    if (!liveSession) throw new Error("Gemini Live is not running");
-    liveSession.sendRealtimeInput({ text: command.text });
-  }
-  if (command?.type === "submit_claude_task" && command.task) {
-    submitClaudeTask({ task: command.task, agent: command.agent }).catch((error) => {
-      emitEvent({ type: "claude_task_update", status: "error", task: command.task, error: error.message });
-    });
-  }
-}
+liveSessionModule = createLiveSession({
+  emitEvent,
+  emitToRenderer,
+  flushTranscripts,
+  drainPendingAnnouncements,
+  checkClaudeStatus,
+  probePipelineAvailability,
+  userDisplayName,
+  submitClaudeTask,
+  // Deferred: windowModule (constructed further down this wiring block,
+  // after liveSessionModule) owns updateTrayMenu. Only called once the app
+  // is running, well after windowModule is assigned.
+  updateTrayMenu: () => windowModule.updateTrayMenu(),
+  buildLiveTools: () => geminiTools.buildLiveTools(),
+  buildListenSystemInstructionText: () => geminiPrompts.buildListenSystemInstructionText(),
+  buildSystemInstructionText: () => geminiPrompts.buildSystemInstructionText(),
+  buildListenExitSynthesisPrompt: (segment) => geminiPrompts.buildListenExitSynthesisPrompt(segment),
+  listenMode: ListenMode,
+  clearListenRotationTimer,
+  setListenEngaged,
+  notifyLiveClosed,
+  resetListenModeSilently,
+  handleLiveMessage,
+});
+const {
+  GreetGate,
+  getSpeakerMuted,
+  setSpeakerMuted,
+  getUserStopped,
+  logPoBillingPathOnce,
+  startLive,
+  connectLive,
+  scheduleReconnect,
+  stopLive,
+} = liveSessionModule;
+logPoBillingPathOnce();
 
 // rendererSecurity (installed inside app.whenReady() below) owns
 // APP_DEV_URL/isAppOwnDocument now; assigned before createWindow() is ever
@@ -1336,8 +1009,8 @@ windowModule = createWindowModule({
   emitToRenderer,
   stopVaultGraphWatch: () => notesVaultGraph.stop(),
   probeSecondBrainAvailability: () => probeSecondBrainAvailability(),
-  getLiveStatus: () => liveStatus,
-  getSpeakerMuted: () => speakerMuted,
+  getLiveStatus: () => getLiveStatus(),
+  getSpeakerMuted: () => getSpeakerMuted(),
   isListenModeEngaged: () => ListenMode.engaged,
   toggleListenMode: () => toggleListenMode(),
 });
@@ -1389,7 +1062,7 @@ app.whenReady().then(() => {
 
   ipcMain.handle("sidecar:start", () => startLive());
   ipcMain.handle("sidecar:stop", () => stopLive());
-  ipcMain.handle("sidecar:status", () => liveStatus);
+  ipcMain.handle("sidecar:status", () => getLiveStatus());
   // Listening mode's narrow bridge (design.md Decision 11): a toggle
   // request, and a query for boot/reload — no report-back channel. State
   // pushes to the renderer one-way over "listen-mode:state" from
@@ -1574,7 +1247,7 @@ app.whenReady().then(() => {
   });
   ipcMain.on("live:audio", (_event, chunk) => sendAudioChunk(chunk));
   ipcMain.on("iris:speaker-mute-state", (_event, muted) => {
-    speakerMuted = Boolean(muted);
+    setSpeakerMuted(muted);
     updateTrayMenu();
   });
   createWindow();
