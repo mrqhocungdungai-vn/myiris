@@ -26,7 +26,7 @@ const ELECTRON_IMPORT_RE = /^import\s+[^;]*from\s+["']electron["']|^const\s+.*=\
 // unexpected exclusion (a module that stops matching `*.mjs` under
 // electron/, or a text-match false negative) fails the count assertion
 // below instead of silently shrinking coverage.
-const EXPECTED_ELECTRON_DEPENDENT = ["main.mjs"];
+const EXPECTED_ELECTRON_DEPENDENT = ["main.mjs", "renderer-security.mjs"];
 
 // preload.cjs uses `require("electron")` (CommonJS) and is not matched by
 // the `*.mjs` glob at all — this test covers .mjs modules only. It is not a

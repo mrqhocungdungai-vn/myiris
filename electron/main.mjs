@@ -1,7 +1,7 @@
 import electron from "electron";
 import { GoogleGenAI } from "@google/genai";
 import fs from "node:fs";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
@@ -35,8 +35,9 @@ import { createAnnouncements } from "./announcements.mjs";
 import { createRunDispatch } from "./run-dispatch.mjs";
 import { createRunStream } from "./run-stream.mjs";
 import { createRunExec } from "./run-exec.mjs";
+import { installRendererSecurity } from "./renderer-security.mjs";
 
-const { app, BrowserWindow, ipcMain, session, nativeImage, Menu, dialog, Tray, screen, globalShortcut, shell } = electron;
+const { app, BrowserWindow, ipcMain, nativeImage, Menu, dialog, Tray, screen, globalShortcut } = electron;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
@@ -1312,18 +1313,10 @@ function sendCommand(command) {
   }
 }
 
-// D9/D10 (harden-security-boundaries): the single source of truth for "is
-// this URL the app's own document" — used both to contain navigation and to
-// scope device permissions. Exact match, not a `file://` wildcard: a
-// wildcard would match any local file (e.g. one dropped onto the window),
-// which still carries `preload.cjs` and therefore `window.iris` into
-// whatever content it navigates to.
-const APP_DEV_URL = process.env.VITE_DEV_SERVER_URL ?? "http://127.0.0.1:5173";
-const APP_PACKAGED_URL = pathToFileURL(path.join(repoRoot, "dist", "index.html")).href;
-
-function isAppOwnDocument(url) {
-  return url === APP_DEV_URL || url.startsWith(`${APP_DEV_URL}/`) || url === APP_PACKAGED_URL;
-}
+// rendererSecurity (installed inside app.whenReady() below) owns
+// APP_DEV_URL/isAppOwnDocument now; assigned before createWindow() is ever
+// called, which is the only thing here that reads it.
+let rendererSecurity;
 
 function createWindow() {
   // Frameless + transparent from birth so the same window can morph into the
@@ -1357,7 +1350,7 @@ function createWindow() {
   });
   const useProd = app.isPackaged || process.env.IRIS_START_PROD === "1";
   if (useProd) mainWindow.loadFile(path.join(repoRoot, "dist", "index.html"));
-  else mainWindow.loadURL(APP_DEV_URL);
+  else mainWindow.loadURL(rendererSecurity.appDevUrl);
   // harden-wake-word-detection D6: the application menu ships with no View
   // role and nothing else calls openDevTools(), so the renderer console —
   // where IRIS_WAKE_DEBUG's score diagnostics land — is otherwise unreachable
@@ -1557,42 +1550,14 @@ app.whenReady().then(() => {
   // `false` default before the toggle has ever been checked.
   probeSecondBrainAvailability();
 
-  // D9 (harden-security-boundaries): app-wide navigation containment,
-  // replacing the old per-window will-navigate/setWindowOpenHandler pair
-  // (second-brain-galaxy-view D9/M1) so every web contents the app ever
-  // creates is covered, not just the first window. The galaxy renders
-  // genuinely untrusted note content (wiki-ingest pulls web articles/PDFs
-  // into the vault) and react-markdown turns `[text](https://…)` into a real
-  // `<a>` — without this, clicking one would top-level-navigate the window
-  // carrying `preload.cjs` to the remote page. window.open is denied as an
-  // in-app window and handed to the OS browser instead, which also restores
-  // the three panel links (src/App.tsx, SetupPanel.tsx) that a bare `deny`
-  // left silently non-functional.
-  app.on("web-contents-created", (_event, contents) => {
-    contents.setWindowOpenHandler(({ url }) => {
-      shell.openExternal(url).catch(() => {});
-      return { action: "deny" };
-    });
-    contents.on("will-navigate", (event, url) => {
-      if (isAppOwnDocument(url)) return;
-      event.preventDefault();
-      shell.openExternal(url).catch(() => {});
-    });
-  });
-
-  // D10 (harden-security-boundaries): grant media/audio/video only to the
-  // app's own document. Latent on its own (only the app's document loads
-  // today), but combined with a navigation gap this would otherwise hand the
-  // microphone/camera to whatever content got navigated to — this removes
-  // that compounding factor regardless of whether D9 also holds.
-  session.defaultSession.setPermissionRequestHandler((_wc, permission, callback, details) => {
-    const isOwnDocument = isAppOwnDocument(details?.requestingUrl || "");
-    // "audioCapture"/"videoCapture" are not in the installed Electron type's
-    // permission union for this handler (only "media" is) — see the change's
-    // recorded findings. Cast rather than drop the checks: behavior-neutral.
-    const perm = /** @type {string} */ (permission);
-    callback(isOwnDocument && (perm === "media" || perm === "audioCapture" || perm === "videoCapture"));
-  });
+  // Renderer content security (renderer-content-security capability, design.md
+  // D9/D10 of harden-security-boundaries): navigation containment and
+  // device-permission scoping. MUST run before createWindow() below —
+  // reversing this ordering fails silently: a "web-contents-created" handler
+  // registered after a window is created never fires for that window,
+  // leaving the app's only window with no navigation containment and no
+  // error, no failing test, no log line (split-main-process-modules D7).
+  rendererSecurity = installRendererSecurity({ repoRoot });
 
   ipcMain.handle("sidecar:start", () => startLive());
   ipcMain.handle("sidecar:stop", () => stopLive());
