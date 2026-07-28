@@ -97,7 +97,18 @@ export function createWindowModule({
     // role and nothing else calls openDevTools(), so the renderer console —
     // where IRIS_WAKE_DEBUG's score diagnostics land — is otherwise unreachable
     // by menu or accelerator in both dev and packaged builds.
-    if (envFlag("IRIS_WAKE_DEBUG", false)) mainWindow.webContents.openDevTools();
+    if (envFlag("IRIS_WAKE_DEBUG", false)) {
+      mainWindow.webContents.openDevTools();
+      // Lets scripts/check-wake-e2e.mjs (fix-vendored-runtime-path-resolution
+      // design D8) assert on renderer console output without a DOM dependency.
+      // Electron 42 passes this listener a single details object — {message,
+      // level, lineNumber, sourceId} — not the widely-documented 5-arg (event,
+      // level, message, line, sourceId) form; that form yields `undefined`
+      // here and surfaces as a script timeout with a misleading cause.
+      mainWindow.webContents.on("console-message", (details) => {
+        console.log(`[renderer] ${details.message}`);
+      });
+    }
     // Navigation containment and the external-link handoff now live on
     // app.on("web-contents-created") in renderer-security.mjs, covering every
     // web contents the app ever creates instead of just this one window.

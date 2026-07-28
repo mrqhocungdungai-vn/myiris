@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { FilesetResolver, GestureRecognizer } from "@mediapipe/tasks-vision";
 import { semanticEquals } from "../lib/hand";
+import { resolveVendoredAssetUrl } from "../lib/asset-url";
 
 export type HandPoint = { x: number; y: number };
 export type HandLandmark = { x: number; y: number };
@@ -35,8 +36,20 @@ export type HandState = {
 // (renderer-content-security: no runtime-fetched script/WASM glue) — the JS
 // glue is copied straight from the installed @mediapipe/tasks-vision version,
 // so it can't drift from package.json the way a hand-copied CDN URL could.
-const WASM_URL = `${import.meta.env.BASE_URL}runtime/mediapipe`;
-const MODEL_URL = `${import.meta.env.BASE_URL}runtime/mediapipe/gesture_recognizer.task`;
+//
+// Pre-resolved against document.baseURI (design D4/D7), matching
+// useWakeWord's onnxruntime-web path: MediaPipe loads its glue via a
+// `<script src>`, which already resolves against the document, so this isn't
+// fixing a break here — it's making every vendored runtime obey one rule
+// rather than relying on a loading-mechanism detail that isn't visible at
+// this call site. Output-identical to the previous relative strings in both
+// environments (verified by task 3.2).
+const WASM_URL = resolveVendoredAssetUrl("runtime/mediapipe", import.meta.env.BASE_URL, document.baseURI);
+const MODEL_URL = resolveVendoredAssetUrl(
+  "runtime/mediapipe/gesture_recognizer.task",
+  import.meta.env.BASE_URL,
+  document.baseURI,
+);
 
 // Camera coordinates rarely use the full 0..1 range in practice. Expand the
 // useful center region to the full screen so reaching UI edges doesn't require

@@ -110,6 +110,24 @@ handlers — see "Known gaps".
 - **Hard boundaries.** No test may boot Electron, spawn `claude`, require
   `GEMINI_API_KEY`/`CLAUDE_CODE_OAUTH_TOKEN`, or touch the network.
 
+## The wake-word end-to-end check
+
+`scripts/check-wake-e2e.mjs` boots the production build (`IRIS_START_PROD=1`)
+against a synthesized "Hey Iris" clip via Chromium's fake-audio-capture flags
+and asserts `[wakeword] fired` appears in the renderer console, forwarded by
+`electron/window.mjs`'s `console-message` listener under `IRIS_WAKE_DEBUG`.
+It rebuilds automatically if `dist/` is stale relative to `src/`, and caches
+its generated audio fixture under `scripts/.wake-e2e-cache/` (gitignored).
+
+Deliberately **not** wired into `npm test` — it boots Electron, which the
+test-harness spec forbids there. Run it by hand:
+
+```bash
+node scripts/check-wake-e2e.mjs
+```
+
+macOS only (uses `say`/`afconvert`), matching the rest of the app.
+
 ## Known gaps
 
 Recorded rather than silently left implicit (add-electron-test-signal;
