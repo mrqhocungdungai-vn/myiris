@@ -88,9 +88,15 @@ Two halves, because the obvious one alone misses real failures:
   the Electron-free targets (same native-loader mechanism as the supply
   side).
 
-`electron/main.mjs` requires Electron and cannot be imported by any test, so
-it is covered on the demand side only — its own behavior (the composition
-wiring, not just its import statements) stays uncovered; see "Known gaps".
+`electron/main.mjs`, `ipc.mjs`, `window.mjs`, and `renderer-security.mjs`
+require Electron and cannot be imported by any test, so they're covered on
+the demand side only. Since split-main-process-modules, the actual
+composition wiring these four used to hold inline lives in Electron-free
+`wiring.mjs`/`wiring-capabilities.mjs`/`wiring-live.mjs` — each has its own
+`.test.mjs` with every collaborator mocked, so the wiring logic itself is
+covered. What remains genuinely untested is `main.mjs`'s own thin
+`app.whenReady()` startup-sequence ordering, `shutdownTeardown`, and the quit
+handlers — see "Known gaps".
 
 ## Conventions (summary of the living spec)
 
@@ -106,19 +112,26 @@ wiring, not just its import statements) stays uncovered; see "Known gaps".
 
 ## Known gaps
 
-Recorded rather than silently left implicit (add-electron-test-signal):
+Recorded rather than silently left implicit (add-electron-test-signal;
+re-measured post-split-main-process-modules):
 
-- **Three typecheck flags are priced but deferred.** Measured against the
-  76-error floor in `tsconfig.electron.json`: `useUnknownInCatchVariables`
-  +26 errors, `strictNullChecks` +91, `noImplicitAny` +719.
-  `strictNullChecks` is the highest-value of the three despite not being the
-  largest — null-safety (a window that is gone, a session mid-reconnect) is
-  the classic Electron main-process failure mode, and `main.mjs` is already
-  full of `?.` guards suggesting the author knew it mattered.
-- **One behavioral finding surfaced by clearing the 76 errors, deliberately
-  not fixed as part of that change.** `main.mjs`'s
-  `session.defaultSession.setPermissionRequestHandler` compares the
-  `permission` argument against the literals `"audioCapture"` and
+- **Three typecheck flags are priced but deferred.** Re-measured against the
+  now-clean 0-error floor in `tsconfig.electron.json` (`electron/` grew by
+  ~20 modules since the original measurement, so these prices moved):
+  `useUnknownInCatchVariables` +26 errors (unchanged), `strictNullChecks` +88
+  (was +91), `noImplicitAny` +792 (was +719 — the larger module count costs
+  more here, as expected for a flag that's mostly annotation grind).
+  `strictNullChecks` is still the highest-value of the three despite not
+  being the largest — null-safety (a window that is gone, a session
+  mid-reconnect) is the classic Electron main-process failure mode. Its
+  errors now concentrate in `session-store.mjs` (37) and `run-dispatch.mjs`
+  (7), not `live-session.mjs`/`window.mjs` as originally measured pre-split —
+  the split redistributed where the null-unsafe code actually lives, so a
+  future attempt should re-check concentration rather than trust this note.
+- **One behavioral finding surfaced by clearing the original 76 errors,
+  deliberately not fixed as part of that change.**
+  `electron/renderer-security.mjs`'s `setPermissionRequestHandler` compares
+  the `permission` argument against the literals `"audioCapture"` and
   `"videoCapture"` in addition to `"media"`. The installed Electron version's
   type declarations say only `"media"` is ever passed to this specific
   handler — the other two are stale, from an older belief about the
@@ -127,19 +140,25 @@ Recorded rather than silently left implicit (add-electron-test-signal):
   branches, not under-permissive ones — only `"media"` ever actually grants
   access), but worth a look if the security boundary around media
   permissions is revisited.
-- **No vitest Electron-stub harness.** `main.mjs`'s own behavior (the
-  composition wiring, not just its import statements) has no automated
-  coverage — a stub convincing enough to boot it is a harness, not a shim,
-  and building it against the pre-split 4297-line file means building it
-  twice. Deferred to after the `main.mjs` split (design.md D5 of
-  add-electron-test-signal), when `main.mjs` becomes a much smaller
-  composition root.
+- **No vitest Electron-stub harness — now cheaper, and worth reconsidering.**
+  split-main-process-modules moved the composition wiring `main.mjs` used to
+  hold inline into Electron-free `wiring.mjs`/`wiring-capabilities.mjs`/
+  `wiring-live.mjs`, each with its own mocked-collaborator `.test.mjs` — so
+  the wiring logic itself now has coverage. What's left uncovered is
+  `main.mjs` itself (~240 lines: imports, one `createWiring()` call, the
+  `app.whenReady()` startup-sequence order, `shutdownTeardown`, quit
+  handlers) and `ipc.mjs` (a flat ~187-line registration list) — both small
+  enough now that a stub convincing enough to boot them is a much smaller
+  build than it would have been against the pre-split 4297-line file. Still
+  deferred, but the cost side of this tradeoff dropped sharply; a future
+  change should re-evaluate rather than assume it's still not worth it.
 - **Files over the 250–450 line convention** (see Conventions in
   [CLAUDE.md](../CLAUDE.md)): `src/App.tsx` (1738 lines),
   `src/components/SetupPanel.tsx` (1023), `src/components/VaultGalaxy.tsx`
-  (561), `electron/canvas-mcp.mjs` (557). Enforcement is convention-only by
-  deliberate decision, so these are flagged here rather than silently
-  accepted.
+  (561), `electron/canvas-mcp.mjs` (557, a recorded pre-existing exception —
+  its split is an explicit non-goal of split-main-process-modules, tracked as
+  a follow-up). Enforcement is convention-only by deliberate decision, so
+  these are flagged here rather than silently accepted.
 
 ## Troubleshooting
 

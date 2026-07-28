@@ -55,10 +55,27 @@ verify a change. There is no linter. Details and test conventions:
 
 ## File map
 
-Two-process Electron app. The Gemini↔Claude bridge is the heart of the system and
-lives almost entirely in `electron/main.mjs` (4297 lines).
+Two-process Electron app. The Gemini↔Claude bridge used to live almost entirely
+in `electron/main.mjs`; it's now ~20 single-responsibility modules under
+`electron/`, with Electron API access confined to four of them (`main.mjs`,
+`ipc.mjs`, `window.mjs`, `renderer-security.mjs`) — every other module is
+Electron-free and importable in a plain vitest file with no harness. See the
+`main-process-structure` capability spec for the full discipline.
 
-- **`electron/main.mjs`** — Gemini Live session (`@google/genai`), Gemini's tool declarations, spawning/streaming headless Claude runs, sessions/roles, all audio IPC. Also the Glass HUD window-shape morph (`enterHud`/`exitHud`/`toggleHud`), the Tray, listening mode's enter/exit/rotation sequences, and the `IRIS_HUD_HOTKEY`/`IRIS_LISTEN_HOTKEY` global shortcuts.
+- **`electron/main.mjs`** (~240 lines) — the composition root: imports every module, wires dependency injection via `wiring.mjs`, and runs the `app.whenReady()` startup sequence, `shutdownTeardown`, and quit handlers. No domain logic.
+- **`electron/wiring.mjs`** (+ **`wiring-capabilities.mjs`**, **`wiring-live.mjs`**) — the composition root's dependency-injection wiring, split across three files purely because the block exceeded the 450-line file-size convention once every module existed. `wiring-capabilities.mjs` wires the canvas/second-brain capabilities, run-exec, and the Gemini tool/prompt modules; `wiring-live.mjs` wires the Live session, listening mode, and window/HUD/tray (a genuine three-way mutual dependency).
+- **`electron/ipc.mjs`** — every `ipcMain.handle`/`on` registration (the renderer↔main channel surface), diffable against `preload.cjs`. Marshals arguments and delegates only.
+- **`electron/window.mjs`** — the main window, the Glass HUD shape-morph (`enterHud`/`exitHud`/`toggleHud`), and the Tray.
+- **`electron/renderer-security.mjs`** — navigation containment and device-permission scoping (`renderer-content-security` capability); installed before the first window is created.
+- **`electron/live-session.mjs`** (+ **`live-messages.mjs`**) — the Gemini Live session (`@google/genai`): connect/reconnect lifecycle in the former, server-message/tool-call handling in the latter.
+- **`electron/listen-mode.mjs`** — listening mode's enter/exit/rotation sequences and engagement state; drives `live-session.mjs` via named transitions, never raw field writes.
+- **`electron/gemini-tools.mjs`** / **`gemini-prompts.mjs`** — Gemini's function-declaration schemas and system-instruction prose; both compose contributions from registered capabilities rather than hardcoding them.
+- **`electron/session-store.mjs`** — workstreams, the agent roster, and per-role model selection.
+- **`electron/run-dispatch.mjs`** (+ **`run-stream.mjs`**, **`run-exec.mjs`**) — the pre-dispatch review gate and tool-execution surface; run activity/tool-step streaming and the PO live-question relay; spawning/driving DEV and PO runs.
+- **`electron/announcements.mjs`** — voice announcements to the Live session, buffered while offline.
+- **`electron/pipeline-probes.mjs`** / **`pipeline-install.mjs`** — Claude/OpenSpec availability probing and agent/skill installation.
+- **`electron/user-config.mjs`** — env/user config, the prompt-review-mode flag, and API-key/token handling.
+- **`electron/capabilities/canvas.mjs`** / **`capabilities/second-brain.mjs`** — the canvas-claude-mcp and personal-knowledge-notes/second-brain capabilities, each owning its own state, IPC handlers, teardown, and Gemini prompt fragment end to end (`electron/capabilities/` is where a new capability's main-process code should live).
 - **`electron/live-config.mjs`** — `buildLiveConfig()`, extracted so the Live session config (converse vs. listening) is testable without booting Electron.
 - **`electron/listen-boundary.mjs`** — the measured chunk-boundary sequence (`runBoundary()`) listening mode's rotations and exit run through; takes an injected session-like driver so it's testable without a live connection.
 - **`electron/po-session.mjs`** — the stateful PO module: Agent SDK session lifecycle, streaming user-message channel, and the `canUseTool` callback intercepting `AskUserQuestion`. Isolated so DEV's one-shot path never has to know it exists.
