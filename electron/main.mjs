@@ -8,7 +8,6 @@ import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import {
   poBillingStatus,
-  poQuestionTimeoutMs,
   getOrCreatePoSession,
   deliverPoTurn,
   closeAllPoSessions,
@@ -18,10 +17,7 @@ import {
   cancelPoTurn,
 } from "./po-session.mjs";
 import { computeWorkerEnv } from "./worker-env.mjs";
-import { parseClaudeStreamMessage } from "./claude-stream.mjs";
-import { createRunQueue, RUN_STATUS, EMIT_STATUS, TERMINAL_STATUSES, toUpdateEvent } from "./run-queue.mjs";
-import { createTrailingThrottle } from "./coalesce.mjs";
-import { resolveApprovedTask } from "./task-review.mjs";
+import { createRunQueue, RUN_STATUS, EMIT_STATUS, toUpdateEvent } from "./run-queue.mjs";
 import { shouldRefuseLaunch } from "./platform.mjs";
 import { createCanvasStore } from "./canvas-store.mjs";
 import { createCanvasMcp, buildMcpServerRecord } from "./canvas-mcp.mjs";
@@ -37,14 +33,13 @@ import {
   loadEnvFile,
   envFlag,
   envNumber,
-  sleepDelayMs,
-  activityEmitIntervalMs,
   shutdownDeadlineMs,
-  promptReviewTimeoutMs,
 } from "./user-config.mjs";
 import { createRendererBridge } from "./renderer-bridge.mjs";
 import { createSessionStore } from "./session-store.mjs";
 import { createAnnouncements } from "./announcements.mjs";
+import { createRunDispatch } from "./run-dispatch.mjs";
+import { createRunStream } from "./run-stream.mjs";
 
 const { app, BrowserWindow, ipcMain, session, nativeImage, Menu, dialog, Tray, screen, globalShortcut, shell } = electron;
 
@@ -277,70 +272,6 @@ const GreetGate = {
   },
 };
 
-// At most one PO turn (or DEV run) is ever mid-execution system-wide — Claude
-// runs strictly one at a time (see runQueue below) — so at most one
-// AskUserQuestion can be pending across the whole app. This object owns that
-// single slot and the "raised → answered/expired/abandoned, exactly once"
-// invariant: every settlement path (answer, expire, abandon) funnels through
-// one settle() so nothing can resolve the same question twice or hang it
-// forever — see openspec/changes/architecture-deepening-refactors/design.md
-// decision 2 (an earlier bare-global version already caused exactly that bug).
-const PendingQuestion = {
-  current: null, // { workstreamId, questions, resolve, timer }
-
-  raise(workstreamId, questions, { timeoutMs }) {
-    // The active run is legitimately blocked on a human now, not idle — the
-    // idle watchdog (run-queue.mjs) must not count this wait against its
-    // bound, or it would kill precisely the turns behaving correctly. See
-    // openspec/changes/add-run-idle-watchdog/design.md D3.
-    runQueue.suspend();
-    return new Promise((resolve) => {
-      const timer = setTimeout(() => this.expire(), timeoutMs);
-      this.current = { workstreamId, questions, resolve, timer };
-      emitPoQuestionEvent(workstreamId, questions, "pending");
-    });
-  },
-
-  settle(status, resolvedValue) {
-    if (!this.current) return;
-    const { workstreamId, questions, resolve, timer } = this.current;
-    clearTimeout(timer);
-    this.current = null;
-    // Resume here, in the one funnel every settlement path (answer, expire,
-    // abandon) goes through — not at the individual call sites — so no
-    // future settlement path can miss it (design D3).
-    runQueue.resume();
-    emitPoQuestionEvent(workstreamId, questions, status);
-    resolve(resolvedValue);
-  },
-
-  answer(answers) {
-    this.settle("answered", { behavior: "allow", answers });
-  },
-
-  expire() {
-    if (!this.current) return;
-    emitEvent({
-      type: "log",
-      level: "warn",
-      message: "The PO's question went unanswered — applying the recommended option for each.",
-    });
-    this.settle("timed_out", { behavior: "allow", answers: defaultPoAnswers(this.current.questions) });
-  },
-
-  // A deliberate reset denies the question rather than answering it with a
-  // fabricated default — the asking role must not continue and act on a
-  // decision the user never made (e.g. writing into the abandoned cwd). This
-  // is the opposite of expire() above, which legitimately applies the
-  // default for a question left unanswered past the configured wait.
-  abandon(workstreamId) {
-    if (!this.current || this.current.workstreamId !== workstreamId) return;
-    this.settle("abandoned", {
-      behavior: "deny",
-      message: "The session was reset; this question was abandoned.",
-    });
-  },
-};
 
 function logPoBillingPathOnce() {
   const billing = poBillingStatus();
@@ -498,7 +429,10 @@ const runQueue = createRunQueue({
     // the activity log (design.md D3 of coalesce-activity-updates). Runs
     // unconditionally: only a started run could have armed the throttle,
     // but the started_at gate below is for the announcement, not this.
-    activityThrottle.cancel();
+    // Deferred through runStream (constructed further down this wiring
+    // block) rather than a direct reference — same late-binding reason as
+    // startRun/killChild/emit above.
+    runStream.cancelActivityThrottle();
     // A run that never started (rejected at a gate before dispatch, e.g. a
     // missing agent) has no result worth speaking — the exact rule
     // run-queue.mjs's queued-cancel path already applies ("a queued run
@@ -635,88 +569,51 @@ const {
   previewVoice,
 } = userConfig;
 
-function rememberClaudeSessionId(run, claudeSessionId) {
-  if (!claudeSessionId) return;
-  run.claude_session_id = claudeSessionId;
-  const workstream = findWorkstream(run.workstream_id);
-  if (!workstream) return;
-  const key = agentKey(run.agent);
-  const changed =
-    workstream.agent_sessions[key] !== claudeSessionId ||
-    workstream.last_agent_used !== (run.agent ?? null);
-  workstream.agent_sessions[key] = claudeSessionId;
-  workstream.last_agent_used = run.agent ?? null;
-  workstream.last_used_at = Date.now() / 1000;
-  workstream.last_task = run.task.slice(0, 100);
-  persistSessionStore();
-  if (changed) emitSessions();
-}
+const runStream = createRunStream({
+  runQueue,
+  emitEvent,
+  notifyIris,
+  findWorkstream,
+  agentKey,
+  persistSessionStore,
+  emitSessions,
+});
+const {
+  PendingQuestion,
+  rememberClaudeSessionId,
+  pushActivity,
+  pushToolStart,
+  pushToolEnd,
+  handleClaudeStreamEvent,
+  askUserQuestionViaVoice,
+  resolvePendingPoQuestion,
+} = runStream;
 
-// Single global slot (see runQueue above) ⇒ at most one run's activity
-// throttle is ever live, so one module-level throttle handle suffices
-// (design.md D3 of coalesce-activity-updates). Only the renderer emit is
-// throttled; the buffer push, cap, and heartbeat below stay per-line (D2).
-const activityThrottle = createTrailingThrottle(
-  (run) => emitEvent(toUpdateEvent(run, RUN_STATUS.RUNNING, { output: run.activity.join("\n") })),
-  activityEmitIntervalMs(),
-);
-
-function pushActivity(run, line) {
-  const clean = String(line || "").trim();
-  if (!clean) return;
-  run.activity.push(clean.length > 220 ? `${clean.slice(0, 220)}…` : clean);
-  if (run.activity.length > 80) run.activity.splice(0, run.activity.length - 80);
-  activityThrottle.schedule(run);
-  runQueue.heartbeat();
-}
-
-// Live per-task step timeline: additive fields on the SAME claude_task_update
-// projection (no new event type), keyed by Claude's own tool_use id so
-// start/end pairing survives duplicate tool names within one run. See
-// openspec/changes/two-hand-gestures-and-orb design.md D2.
-function pushToolStart(run, toolId, toolName, detail) {
-  if (!toolId) return;
-  if (!run.toolStartedAt) run.toolStartedAt = new Map();
-  run.toolStartedAt.set(toolId, Date.now());
-  emitEvent(
-    toUpdateEvent(run, RUN_STATUS.RUNNING, { phase: "tool_start", tool: toolName, tool_id: toolId, detail }),
-  );
-  runQueue.heartbeat();
-}
-
-function pushToolEnd(run, toolId, isError) {
-  if (!toolId) return;
-  const startedAt = run.toolStartedAt?.get(toolId);
-  const duration = startedAt ? (Date.now() - startedAt) / 1000 : undefined;
-  run.toolStartedAt?.delete(toolId);
-  emitEvent(
-    toUpdateEvent(run, RUN_STATUS.RUNNING, { phase: "tool_end", tool_id: toolId, error: isError, duration }),
-  );
-  // A tool_result (per claude-stream.mjs) fires only this callback, never
-  // onActivity — resetting on activity alone would stretch the measured idle
-  // window to tool duration *plus* the model's next-message thinking time,
-  // instead of the actual silence (design.md D6 / tasks.md 4.1).
-  runQueue.heartbeat();
-}
-
-function handleClaudeStreamEvent(run, line) {
-  let event;
-  try {
-    event = JSON.parse(line);
-  } catch {
-    return;
-  }
-  parseClaudeStreamMessage(event, {
-    onSessionId: (sessionId) => rememberClaudeSessionId(run, sessionId),
-    onActivity: (text) => pushActivity(run, text),
-    onToolStart: (toolId, toolName, detail) => pushToolStart(run, toolId, toolName, detail),
-    onToolEnd: (toolId, isError) => pushToolEnd(run, toolId, isError),
-    onResult: (result) => {
-      run.result = result;
-      rememberClaudeSessionId(run, result.session_id);
-    },
-  });
-}
+const runDispatch = createRunDispatch({
+  runQueue,
+  emitEvent,
+  emitToRenderer,
+  notifyIris,
+  findWorkstream,
+  activeWorkstream,
+  createWorkstream,
+  setAgentModel,
+  agentRoster: AGENT_ROSTER,
+  agentLabels: AGENT_LABELS,
+  modelChoices: MODEL_CHOICES,
+  getPromptReviewMode,
+  getPipelineAvailable,
+  checkClaudeStatus,
+  workspaceInfo,
+  getUiContextSnapshot,
+  resolvePendingPoQuestion,
+});
+const {
+  PendingReview,
+  submitClaudeTask,
+  resolvePromptReview,
+  executeClaudeTool,
+} = runDispatch;
 
 function runProjectDir(run) {
   const projectDir = findWorkstream(run.workstream_id)?.cwd;
@@ -1243,434 +1140,6 @@ async function startPoRun(run) {
     });
 }
 
-// Parks a Gemini-authored brief for Approve/Edit/Cancel before any Claude
-// tokens are spent (prompt-review-gate spec). Mirrors PendingQuestion's
-// settle-once + timeout + abandon shape above, but deliberately does NOT call
-// runQueue.suspend/resume: a parked review holds no execution slot, and
-// pausing the queue's idle bound would wrongly disable the watchdog on
-// whatever unrelated run (typically DEV) currently holds it (design.md D2).
-const PendingReview = {
-  current: null, // { workstream_id, task, urgency, agent, timer }
-
-  raise(parked, { timeoutMs }) {
-    this.clear(); // at most one pending review — a new submit supersedes silently
-    const timer = setTimeout(() => this.expire(), timeoutMs);
-    timer.unref?.();
-    this.current = { ...parked, timer };
-    emitTaskReviewEvent(this.current, "pending");
-  },
-
-  // Tears down the pending review and, if `status` is given, emits the UI
-  // sidecar event for it. Returns the parked brief (sans timer) so the caller
-  // can act on it, or null if nothing was pending.
-  clear(status) {
-    if (!this.current) return null;
-    const { timer, ...parked } = this.current;
-    clearTimeout(timer);
-    this.current = null;
-    if (status) emitTaskReviewEvent(parked, status);
-    return parked;
-  },
-
-  expire() {
-    const parked = this.clear("timed_out");
-    if (parked) notifyTaskReviewResolved("timed_out", parked, "The review timed out and was not sent to Claude.");
-  },
-
-  // Deliberate reset denial, mirroring PendingQuestion.abandon — the parked
-  // workstream is going away, so its brief must never become approvable
-  // afterwards (design.md D4: this is what keeps approve's parked workstream
-  // always valid).
-  abandon(workstreamId) {
-    if (!this.current || this.current.workstream_id !== workstreamId) return;
-    const parked = this.clear("abandoned");
-    if (parked) {
-      notifyTaskReviewResolved("abandoned", parked, "The session changed, so the parked brief was discarded and not sent.");
-    }
-  },
-};
-
-// The event type stays `task_review` for renderer/IPC — carries the brief
-// text so the deck banner can prefill its editable textarea (not a console
-// log, so this does not violate the "never log the brief" rule below).
-function emitTaskReviewEvent(parked, status) {
-  emitEvent({
-    type: "task_review",
-    workstream_id: parked.workstream_id,
-    status,
-    task: parked.task,
-    urgency: parked.urgency,
-    agent: parked.agent,
-  });
-}
-
-// Voice narration on park (D6): a short summary, not the whole brief, plus
-// "the full brief is on screen" — and explicitly forbids querying run status,
-// since a parked review has no run_id yet.
-function notifyTaskReviewParked(parked) {
-  notifyIris([
-    "SYSTEM_EVENT_TASK_REVIEW_PARKED",
-    `agent: ${parked.agent ?? "none"}`,
-    "instructions_to_iris:",
-    "- Review mode is on: the brief you just submitted was parked, not sent to Claude — zero tokens spent so far.",
-    "- Speak a SHORT 1-2 sentence summary of the brief you just wrote (do not read it verbatim), say the full brief is on screen, then wait. Do not say it started or is queued.",
-    "- Do NOT call get_claude_task_status for this — there is no run yet.",
-    "- The user may approve (optionally after editing), or cancel — from the screen, or by telling you so you can call respond_to_task_review. If they resolve it from the screen, you will receive SYSTEM_EVENT_TASK_REVIEW_RESOLVED instead.",
-  ]);
-}
-
-// Injected on any resolution the voice layer did NOT itself initiate — a
-// UI-driven approve/cancel, a timeout, or a reset-abandon (D6, review #5).
-// respond_to_task_review's own synchronous tool return already tells Gemini
-// the outcome when IT resolves the review, so that path never also calls this
-// (see respondToTaskReview below) — this would be a redundant, confusing
-// double-narration otherwise.
-function notifyTaskReviewResolved(outcome, parked, detail) {
-  notifyIris([
-    "SYSTEM_EVENT_TASK_REVIEW_RESOLVED",
-    `outcome: ${outcome}`,
-    "instructions_to_iris:",
-    detail ? `- ${detail}` : `- The parked brief was resolved (${outcome}).`,
-    "- This did not come from your own respond_to_task_review call — the user acted from the screen, or it timed out/was abandoned. Announce it naturally; do not re-send the brief yourself.",
-  ]);
-}
-
-// D1: buildRun resolves the workstream/role and produces the run object;
-// dispatch submits it and shapes the result. Auto mode below calls
-// dispatch(buildRun(...)) inline — byte-identical to the pre-gate behavior.
-function buildRun({ task, urgency = "normal", agent, workstream }) {
-  const cleanTask = String(task).trim();
-  // The role is captured at enqueue time: a queued/parked task keeps the
-  // agent it was submitted under even if the user flips the pipeline picker
-  // afterwards. Gemini may name a role explicitly; anything not in the
-  // roster is ignored.
-  const requestedAgent = agent ? String(agent).trim().toLowerCase() : null;
-  if (requestedAgent && !AGENT_ROSTER.includes(requestedAgent)) {
-    emitEvent({ type: "log", level: "warn", message: `Ignoring unknown agent "${agent}" — using the session's active agent.` });
-  }
-  const runAgent = AGENT_ROSTER.includes(requestedAgent) ? requestedAgent : workstream.active_agent ?? null;
-  return {
-    run_id: crypto.randomUUID(),
-    workstream_id: workstream.id,
-    session_label: workstream.label,
-    task: cleanTask,
-    urgency,
-    agent: runAgent,
-    status: RUN_STATUS.QUEUED,
-    output: "",
-    activity: [],
-    queued_at: Date.now() / 1000,
-    child: null,
-  };
-}
-
-function dispatch(run) {
-  const runAgent = run.agent;
-  const agentLabel = runAgent ? `${AGENT_LABELS[runAgent]} agent` : "Claude";
-  const workstream = findWorkstream(run.workstream_id);
-  const projectFolder = workstream?.cwd && fs.existsSync(workstream.cwd) ? workstream.cwd : null;
-  const whereNote = projectFolder
-    ? `Working in project folder ${projectFolder}.`
-    : "No project folder is selected — working in the default workspace.";
-
-  const outcome = runQueue.submit(run);
-  if (outcome.status === "queued") {
-    return {
-      status: "queued",
-      run_id: run.run_id,
-      position: outcome.position,
-      project_folder: projectFolder,
-      message: `Claude is still finishing the current task. This one is queued at position ${outcome.position} for the ${agentLabel} and will start automatically. ${whereNote}`,
-    };
-  }
-  if (TERMINAL_STATUSES.includes(outcome.status)) {
-    // The run was rejected synchronously during start (e.g. the DEV gate
-    // finding no open change with tasks) — never say "started" for a run
-    // that has already failed. onFinalized is gated on started_at (see
-    // run-queue.mjs), so this is the only channel this rejection reaches
-    // Gemini through.
-    return {
-      status: outcome.status,
-      run_id: run.run_id,
-      agent: runAgent,
-      project_folder: projectFolder,
-      message: `${runAgent ? `Claude's ${agentLabel}` : "Claude"} did not start the task: ${outcome.output} ${whereNote}`,
-    };
-  }
-  return {
-    status: "started",
-    run_id: run.run_id,
-    agent: runAgent,
-    project_folder: projectFolder,
-    message: `${runAgent ? `Claude's ${agentLabel} has started the task.` : "Claude has started the task."} ${whereNote}`,
-  };
-}
-
-/** @param {{ task?: string, urgency?: string, agent?: string }} [params] */
-async function submitClaudeTask({ task, urgency = "normal", agent } = {}) {
-  if (!task || !String(task).trim()) {
-    return { status: "error", error: "Task is required." };
-  }
-  const workstream = activeWorkstream();
-
-  // Review gate (prompt-review-gate spec): park instead of dispatching.
-  // Zero tokens spent — no run, no run_id — until the review is approved.
-  if (getPromptReviewMode()) {
-    const parked = {
-      workstream_id: workstream.id,
-      task: String(task).trim(),
-      urgency,
-      agent: agent ? String(agent).trim().toLowerCase() : null,
-    };
-    PendingReview.raise(parked, { timeoutMs: promptReviewTimeoutMs() });
-    notifyTaskReviewParked(parked);
-    return {
-      status: "parked_for_review",
-      workstream_id: workstream.id,
-      message: "The brief is parked for the user's review — nothing has been sent to Claude yet.",
-    };
-  }
-
-  return dispatch(buildRun({ task, urgency, agent, workstream }));
-}
-
-function cancelTaskReview({ notify }) {
-  const parked = PendingReview.clear("cancelled");
-  if (!parked) return { status: "error", error: "No task review is pending." };
-  if (notify) notifyTaskReviewResolved("cancelled", parked, "The brief was cancelled and was not sent to Claude.");
-  return { status: "ok" };
-}
-
-// Approve dispatches against the PARKED workstream_id, never a fresh
-// activeWorkstream() read — the user may have switched workstreams while the
-// review sat parked (design.md D4). editedTaskRaw is validated by the pure
-// helper below: undefined/null falls back to the parked task; an explicitly
-// empty edit is refused WITHOUT clearing the pending review, so the banner
-// stays up and the user can fix it.
-function approveTaskReview(editedTaskRaw, { notify }) {
-  const pending = PendingReview.current;
-  if (!pending) return { status: "error", error: "No task review is pending." };
-  let finalTask;
-  try {
-    finalTask = resolveApprovedTask(editedTaskRaw, pending.task);
-  } catch (error) {
-    return { status: "error", error: error.message };
-  }
-  const parked = PendingReview.clear("approved");
-  const workstream = findWorkstream(parked.workstream_id);
-  if (!workstream) {
-    const message = "That session no longer exists — the brief was not sent.";
-    if (notify) notifyTaskReviewResolved("error", parked, message);
-    return { status: "error", error: message };
-  }
-  const result = dispatch(buildRun({ task: finalTask, urgency: parked.urgency, agent: parked.agent, workstream }));
-  if (notify) notifyTaskReviewResolved(result.status, parked, result.message);
-  return result;
-}
-
-// Voice tool `respond_to_task_review` — its own synchronous tool return IS
-// Gemini's notification of the outcome, so this path never also injects
-// SYSTEM_EVENT_TASK_REVIEW_RESOLVED (reserved for channels Gemini did not
-// initiate). Editing is deck-only (D7): voice can only approve as-is or
-// cancel, never supply edited text.
-/** @param {{ decision?: string }} [params] */
-function respondToTaskReview({ decision } = {}) {
-  const clean = String(decision || "").trim().toLowerCase();
-  if (clean === "approve") return approveTaskReview(undefined, { notify: false });
-  if (clean === "cancel") return cancelTaskReview({ notify: false });
-  return { status: "error", error: `Unknown decision: ${decision}` };
-}
-
-// IPC path for the UI banner (deck Approve/Cancel + edit, HUD Approve/Cancel).
-// Gemini did not initiate this, so the resolution needs the SYSTEM_EVENT to
-// stay coherent (D6, review #5).
-/** @param {{ action?: string, editedTask?: string }} [params] */
-function resolvePromptReview({ action, editedTask } = {}) {
-  const clean = String(action || "").trim().toLowerCase();
-  if (clean === "approve") return approveTaskReview(editedTask, { notify: true });
-  if (clean === "cancel") return cancelTaskReview({ notify: true });
-  return { status: "error", error: `Unknown action: ${action}` };
-}
-
-/** @param {{ label?: string }} [params] */
-async function startNewClaudeSession({ label } = {}) {
-  const workstream = createWorkstream(label);
-  emitEvent({ type: "log", level: "info", message: `Claude: started a fresh session (${workstream.label}).` });
-  return {
-    status: "ok",
-    message: `Started a fresh Claude session named ${workstream.label}. New tasks begin with a clean slate; tasks already running are not affected.`,
-    session: { id: workstream.id, label: workstream.label },
-  };
-}
-
-async function getClaudeTaskStatus({ run_id }) {
-  const serialized = runQueue.serialize(run_id);
-  if (!serialized) return { status: "error", error: `Unknown run: ${run_id}` };
-  return serialized;
-}
-
-async function stopClaudeTask({ run_id }) {
-  const status = runQueue.stop(run_id);
-  if (status == null) return { status: "error", error: `Unknown run: ${run_id}` };
-  return { status, run_id };
-}
-
-// Voice path for switching a role's model — goes through the exact same
-// setAgentModel() choke point the UI popover uses, so the two can never
-// diverge. Always targets the active workstream (Gemini never invents ids).
-/** @param {{ role?: string, model?: string }} [params] */
-function setAgentModelTool({ role, model } = {}) {
-  const workstream = activeWorkstream();
-  const result = setAgentModel(workstream.id, role, model);
-  if (result.status === "error") return result;
-  const label = MODEL_CHOICES.find((choice) => choice.id === model)?.label ?? model;
-  return { status: "ok", message: `${AGENT_LABELS[role] ?? role}'s model is now ${label}.` };
-}
-
-// Voice-driven UI control (design.md D1/D2, spec voice-ui-control). Single
-// tool with an action enum — mirrors the {action, target_id?, query?} shape
-// forwarded verbatim to the renderer over iris:ui-action. Renamed from
-// upstream's Hermes vocabulary to Claude terms; no other change.
-const UI_ACTIONS = new Set([
-  "open_task",
-  "open_task_by_query",
-  "open_current_claude_result",
-  "open_latest_claude_result",
-  "open_claude_history",
-  "close_reader",
-  "close_history",
-  "close_all_overlays",
-  "show_task_steps",
-  "hide_task_steps",
-]);
-
-function getUiContext() {
-  return getUiContextSnapshot();
-}
-
-/** @param {{ action?: string, target_id?: string, query?: string }} [params] */
-function controlUi({ action, target_id = undefined, query = undefined } = {}) {
-  if (!UI_ACTIONS.has(action)) {
-    return { status: "error", error: `Unknown UI action: ${action}` };
-  }
-  emitToRenderer("iris:ui-action", { action, target_id, query });
-  return { status: "sent", action, target_id, query };
-}
-
-// Tools that only make sense when the pipeline is available — declared to
-// Gemini only when pipelineAvailable is true (see geminiTools.buildClaudeTools). This
-// guard is a defensive backstop, not the primary gate: Gemini should never
-// call one of these in chat-only mode since it was never given the
-// declaration, but a stray call (e.g. a race right after availability drops)
-// gets a clean error instead of throwing.
-const PIPELINE_ONLY_TOOLS = new Set([
-  "check_claude_status",
-  "submit_claude_task",
-  "get_claude_task_status",
-  "stop_claude_task",
-  "start_new_claude_session",
-  "get_workspace_info",
-  "answer_po_question",
-  "set_agent_model",
-  "respond_to_task_review",
-]);
-
-/** @param {string} name @param {any} [args] */
-async function executeClaudeTool(name, args = {}) {
-  if (PIPELINE_ONLY_TOOLS.has(name) && !getPipelineAvailable()) {
-    return { status: "error", error: "The Claude pipeline is not available on this machine — install the Claude CLI to enable it (see Settings)." };
-  }
-  switch (name) {
-    case "check_claude_status":
-      return checkClaudeStatus();
-    case "submit_claude_task":
-      return submitClaudeTask(args);
-    case "get_claude_task_status":
-      return getClaudeTaskStatus(args);
-    case "stop_claude_task":
-      return stopClaudeTask(args);
-    case "start_new_claude_session":
-      return startNewClaudeSession(args);
-    case "get_workspace_info":
-      return workspaceInfo();
-    case "answer_po_question":
-      return resolvePendingPoQuestion(args.answers);
-    case "set_agent_model":
-      return setAgentModelTool(args);
-    case "respond_to_task_review":
-      return respondToTaskReview(args);
-    case "get_ui_context":
-      return getUiContext();
-    case "control_ui":
-      return controlUi(args);
-    case "go_to_sleep":
-      // Give the goodbye a moment to play before the renderer tears down
-      // audio (its stop() flushes playback immediately).
-      setTimeout(() => emitToRenderer("iris:sleep", {}), sleepDelayMs());
-      return {
-        status: "sleeping",
-        instructions: `Say a one-line goodbye right now (nothing else, no new topics). Iris goes to sleep in about ${Math.round(sleepDelayMs() / 1000)} seconds.`,
-      };
-    default:
-      return { status: "error", error: `Unknown tool: ${name}` };
-  }
-}
-
-// The PO's recommended choice for each question, used both as the AskUserQuestion
-// convention (first option = recommended) and as the safe default on timeout/reset.
-function defaultPoAnswers(questions) {
-  const answers = {};
-  for (const q of questions) {
-    answers[q.question] = q.options?.[0]?.label ?? "";
-  }
-  return answers;
-}
-
-// The event type stays `po_question` for renderer/IPC back-compat.
-function emitPoQuestionEvent(workstreamId, questions, status) {
-  emitEvent({ type: "po_question", workstream_id: workstreamId, status, questions });
-}
-
-// canUseTool's onAskUserQuestion callback (electron/po-session.mjs): pauses
-// the PO's live turn, relays the question(s) to Gemini voice, and resolves
-// once an answer arrives — via the Gemini tool, the UI IPC channel, or
-// PendingQuestion's own timeout fallback. Only one run executes globally at a
-// time, so at most one question is ever pending. See the voice-decision-relay
-// spec.
-function askUserQuestionViaVoice(workstreamId, questions) {
-  const promise = PendingQuestion.raise(workstreamId, questions, { timeoutMs: poQuestionTimeoutMs() });
-
-  const lines = [
-    "SYSTEM_EVENT_PO_QUESTION",
-    "instructions_to_iris:",
-    "- The PO has paused to ask you something. Read each question aloud with its options, in order, and collect the user's answer for each.",
-    "- Once you have every answer, call answer_po_question with one entry per question (question text verbatim, and the option label the user chose).",
-    "- If asked for your recommendation, suggest the first-listed option, but submit whatever the user actually picks.",
-    "questions:",
-    ...questions.map(
-      (q, i) =>
-        `${i + 1}. ${q.question}\n${(q.options || [])
-          .map((opt, j) => `   ${j + 1}) ${opt.label} — ${opt.description}`)
-          .join("\n")}`,
-    ),
-  ].join("\n");
-  notifyIris(lines);
-
-  return promise;
-}
-
-
-// Voice (Gemini tool) and the UI (IPC) both call this; whichever answers first
-// wins — the second call is a no-op since PendingQuestion is already settled.
-function resolvePendingPoQuestion(answers) {
-  if (!PendingQuestion.current) return { status: "error", error: "No PO question is pending." };
-  const map = {};
-  for (const entry of Array.isArray(answers) ? answers : []) {
-    if (entry?.question) map[entry.question] = entry.choice ?? "";
-  }
-  PendingQuestion.answer(map);
-  return { status: "ok" };
-}
 
 
 const geminiTools = createGeminiTools({
