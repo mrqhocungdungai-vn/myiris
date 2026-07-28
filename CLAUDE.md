@@ -26,6 +26,7 @@ that can pause mid-turn to ask a voice question; DEV is a **stateless** one-shot
 | Pinned exact identifiers (models, SDKs, assets) + full footgun rationale | [docs/REFERENCE.md](docs/REFERENCE.md) |
 | Using the pipeline as a user (setup, voice walkthrough, troubleshooting) | [docs/PIPELINE_GUIDE.md](docs/PIPELINE_GUIDE.md) |
 | Gesture/hand control (MediaPipe config, gesture→action mapping) | [docs/GESTURES.md](docs/GESTURES.md) |
+| Listening mode (chunked monologue capture, boundary sequence, control surfaces) | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#listening-mode) + `openspec/specs/listening-mode/spec.md` |
 | Env vars, packaging, setup from source | [README.md](README.md) |
 | **Authoritative behavior of any capability** | `openspec/specs/<capability>/spec.md` |
 
@@ -57,7 +58,9 @@ verify a change. There is no linter. Details and test conventions:
 Two-process Electron app. The Gemini↔Claude bridge is the heart of the system and
 lives almost entirely in `electron/main.mjs` (~1500 lines).
 
-- **`electron/main.mjs`** — Gemini Live session (`@google/genai`), Gemini's tool declarations, spawning/streaming headless Claude runs, sessions/roles, all audio IPC. Also the Glass HUD window-shape morph (`enterHud`/`exitHud`/`toggleHud`), the Tray, and the `IRIS_HUD_HOTKEY` global shortcut (`Alt+Space`).
+- **`electron/main.mjs`** — Gemini Live session (`@google/genai`), Gemini's tool declarations, spawning/streaming headless Claude runs, sessions/roles, all audio IPC. Also the Glass HUD window-shape morph (`enterHud`/`exitHud`/`toggleHud`), the Tray, listening mode's enter/exit/rotation sequences, and the `IRIS_HUD_HOTKEY`/`IRIS_LISTEN_HOTKEY` global shortcuts.
+- **`electron/live-config.mjs`** — `buildLiveConfig()`, extracted so the Live session config (converse vs. listening) is testable without booting Electron.
+- **`electron/listen-boundary.mjs`** — the measured chunk-boundary sequence (`runBoundary()`) listening mode's rotations and exit run through; takes an injected session-like driver so it's testable without a live connection.
 - **`electron/po-session.mjs`** — the stateful PO module: Agent SDK session lifecycle, streaming user-message channel, and the `canUseTool` callback intercepting `AskUserQuestion`. Isolated so DEV's one-shot path never has to know it exists.
 - **`electron/preload.cjs`** — the `window.iris` IPC bridge. Any new renderer↔main channel must be exposed here.
 - **`src/App.tsx`** (~1350 lines) — renderer: mic capture (WebRTC AEC → 16 kHz PCM), Gemini playback (24 kHz PCM), the "Orbital Deck" UI, keyboard shortcuts, gestures, and the `uiMode` (`deck` | `hud`) switch.

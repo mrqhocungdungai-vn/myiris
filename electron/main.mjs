@@ -29,6 +29,8 @@ import { createCanvasStore } from "./canvas-store.mjs";
 import { createCanvasMcp, buildMcpServerRecord } from "./canvas-mcp.mjs";
 import { isUserNote } from "./vault-graph-parse.mjs";
 import { createVaultGraph } from "./vault-graph.mjs";
+import { buildLiveConfig } from "./live-config.mjs";
+import { runBoundary } from "./listen-boundary.mjs";
 
 const { app, BrowserWindow, ipcMain, session, nativeImage, Menu, dialog, Tray, screen, globalShortcut, shell } = electron;
 
@@ -97,6 +99,183 @@ const pendingClaudeAnnouncements = [];
 // Drop-oldest cap: the newest state-change is the one worth speaking on
 // reconnect, and this stops a prolonged offline stretch from leaking memory.
 const MAX_PENDING_ANNOUNCEMENTS = 20;
+
+// ===== Listening mode (add-listening-mode) =====
+// Main is the sole owner of this state (design.md D11): the tray item and
+// the global hotkey act on it directly rather than dispatching to the
+// renderer, and the renderer only displays what main pushes — see the IPC
+// section further down. Ephemeral per session: reset to disengaged on any
+// transition to not-running (stopLive, or an unexpected onclose), and never
+// persisted to configuration.
+const ListenMode = {
+  engaged: false,
+  // Guards every entry point (renderer/tray/hotkey/rotation timer/goAway)
+  // against reentrancy while an enter/exit/rotation sequence is mid-flight —
+  // spec "Mode transitions are atomic". Also gates notifyIris's
+  // deliverability check, since the moment right after a deliberate
+  // reconnect but before the mode is marked engaged is still not a safe
+  // window to inject an announcement into.
+  transitioning: false,
+  rotationTimer: null,
+  // Set immediately before WE close the session ourselves (entering,
+  // exiting, or rotating) so `onclose` can tell a deliberate close from an
+  // unexpected one (design.md Decision 12) — consumed and cleared by that
+  // same onclose call.
+  deliberateReconnect: false,
+  // True for the lifetime of a boundary's forced turn — gates suppression
+  // in handleLiveMessage. Every boundary turn (rotation or exit alike) is
+  // neither heard nor shown (spec "Every boundary turn is neither heard nor
+  // shown").
+  boundaryInFlight: false,
+  // Each chunk's input transcription, kept only for the life of the
+  // listening session (spec "Segment records live in process memory only").
+  segmentRecord: "",
+  // Set when an unexpected disconnect ends the mode while a chunk may still
+  // be uncommitted — tells the next converse connect to speak a recovery
+  // synthesis once it is back up (design.md Decision 10 / tasks.md 4.7).
+  synthesizeOnNextConverseConnect: false,
+};
+
+function listenChunkMs() {
+  return envNumber("IRIS_LISTEN_CHUNK_MS", 8 * 60 * 1000, { min: 60 * 1000, max: 30 * 60 * 1000 });
+}
+
+// Pushes state one way, main -> renderer, and never the reverse (design.md
+// D11) — a renderer that reported this back would be a second writer for
+// state it does not own, overwriting the authoritative value on a reload
+// while a chunk was still open.
+function setListenEngaged(engaged) {
+  if (ListenMode.engaged === engaged) return;
+  ListenMode.engaged = engaged;
+  emitToRenderer("listen-mode:state", { engaged });
+  updateTrayMenu();
+}
+
+function clearListenRotationTimer() {
+  if (ListenMode.rotationTimer) {
+    clearTimeout(ListenMode.rotationTimer);
+    ListenMode.rotationTimer = null;
+  }
+}
+
+function armListenRotationTimer() {
+  clearListenRotationTimer();
+  ListenMode.rotationTimer = setTimeout(() => {
+    ListenMode.rotationTimer = null;
+    runListenRotation().catch((error) => {
+      emitEvent({ type: "log", level: "warn", message: `Listening-mode rotation failed: ${error.message}` });
+    });
+  }, listenChunkMs());
+}
+
+// Resets every piece of listening-mode state to disengaged without running
+// any boundary — used when committing would accomplish nothing observable:
+// sleep and app quit (tasks.md 4.6), where the resumption handle does not
+// outlive the process and no synthesis could be heard anyway.
+function resetListenModeSilently() {
+  clearListenRotationTimer();
+  ListenMode.transitioning = false;
+  ListenMode.boundaryInFlight = false;
+  ListenMode.deliberateReconnect = false;
+  ListenMode.segmentRecord = "";
+  ListenMode.synthesizeOnNextConverseConnect = false;
+  setListenEngaged(false);
+}
+
+// One-shot event bus feeding the boundary sequence (listen-boundary.mjs) and
+// the entry-confirmation wait: subscribing here rather than reading a cached
+// value is what makes handle-freshness structural (design.md Decision 5) — a
+// handle from before a boundary began was never pushed to a listener that
+// didn't exist yet, so it cannot satisfy that boundary's wait.
+let turnCompleteListeners = [];
+let freshHandleListeners = [];
+let liveCloseListeners = [];
+
+function notifyTurnComplete() {
+  const listeners = turnCompleteListeners;
+  turnCompleteListeners = [];
+  listeners.forEach((cb) => cb());
+}
+function onTurnComplete(cb) {
+  turnCompleteListeners.push(cb);
+  return () => {
+    turnCompleteListeners = turnCompleteListeners.filter((listener) => listener !== cb);
+  };
+}
+function notifyFreshResumptionHandle(handle) {
+  const listeners = freshHandleListeners;
+  freshHandleListeners = [];
+  listeners.forEach((cb) => cb(handle));
+}
+function onFreshResumptionHandle(cb) {
+  freshHandleListeners.push(cb);
+  return () => {
+    freshHandleListeners = freshHandleListeners.filter((listener) => listener !== cb);
+  };
+}
+function notifyLiveClosed() {
+  const listeners = liveCloseListeners;
+  liveCloseListeners = [];
+  listeners.forEach((cb) => cb());
+}
+function waitForLiveClose() {
+  return new Promise((resolve) => liveCloseListeners.push(resolve));
+}
+
+// Shared by every deliberate transition (enter/exit/rotation): marks the
+// close as ours so `onclose` skips the failure-reconnect path and the
+// offline teardown (design.md Decision 12), then closes — or, if the
+// session is already gone, resolves the close-wait directly since no
+// `onclose` will fire to do it.
+function closeLiveSessionDeliberately() {
+  ListenMode.deliberateReconnect = true;
+  if (liveSession) {
+    try {
+      liveSession.close();
+    } catch {
+      /* ignore close races */
+    }
+  } else {
+    notifyLiveClosed();
+  }
+}
+
+// The session-like driver `runBoundary` (listen-boundary.mjs) needs — a thin
+// adapter over the real liveSession and the event bus above. Built fresh per
+// boundary since `liveSession` may be reassigned between boundaries.
+function makeBoundarySession() {
+  return {
+    sendActivityEnd: () => liveSession?.sendRealtimeInput({ activityEnd: {} }),
+    onTurnComplete,
+    onFreshResumptionHandle,
+    disconnect: closeLiveSessionDeliberately,
+  };
+}
+
+// Drives one turn via sendClientContent (the measured-working way to drive a
+// turn under AAD-off — design.md Decision 4; NOT sendRealtimeInput({text}),
+// whose behavior in this configuration is unmeasured) and resolves once it
+// completes or a bounded wait elapses. Used for the entry confirmation,
+// which must finish before the first activity opens (spec "The confirmation
+// does not swallow the user's first words").
+function driveTurnAndWaitForCompletion(text, timeoutMs = 8000) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      unsubscribe();
+      resolve(false);
+    }, timeoutMs);
+    const unsubscribe = onTurnComplete(() => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(true);
+    });
+    liveSession?.sendClientContent({ turns: [{ role: "user", parts: [{ text }] }], turnComplete: true });
+  });
+}
 
 // Latest UI-state snapshot pushed by the renderer over iris:ui-context
 // (throttled — see App.tsx). Read by the get_ui_context Gemini tool so voice
@@ -717,9 +896,18 @@ function setAgentModel(workstreamId, role, model) {
 // immediately if the live session is connected, otherwise buffer (unless the
 // caller opts out) so a state change that lands mid-reconnect is delivered on
 // reconnect instead of silently lost.
+//
+// A session that is connected but in (or transitioning into/out of/across a
+// rotation of) listening mode is treated as NOT deliverable — same as
+// offline — per add-listening-mode's MODIFIED session-announcements delta:
+// injecting text here is not gated by activity detection, so it would either
+// interrupt the monologue or be silently discarded by the server. Guarding on
+// `transitioning` too, not just `engaged`, closes the brief window between a
+// deliberate reconnect landing and the mode actually being marked engaged.
 function notifyIris(lines, { bufferIfOffline = true } = {}) {
   const text = Array.isArray(lines) ? lines.join("\n") : lines;
-  if (liveSession) {
+  const deliverable = liveSession && !ListenMode.engaged && !ListenMode.transitioning;
+  if (deliverable) {
     liveSession.sendRealtimeInput({ text });
   } else if (bufferIfOffline) {
     pendingClaudeAnnouncements.push(text);
@@ -3015,40 +3203,74 @@ function buildSystemInstructionText() {
   return lines.join("\n");
 }
 
-function buildLiveConfig(resumeHandle) {
-  return {
-    responseModalities: ["AUDIO"],
-    mediaResolution: "MEDIA_RESOLUTION_MEDIUM",
-    speechConfig: {
-      voiceConfig: {
-        prebuiltVoiceConfig: {
-          voiceName: process.env.GEMINI_LIVE_VOICE || "Zephyr",
-        },
-      },
-    },
-    // Empty object still opts in to receiving resumption handles.
-    sessionResumption: resumeHandle ? { handle: resumeHandle } : {},
-    contextWindowCompression: {
-      triggerTokens: 104857,
-      slidingWindow: { targetTokens: 52428 },
-    },
-    inputAudioTranscription: {},
-    outputAudioTranscription: {},
-    tools: [
-      // Google Search grounding is a BILLED feature. On a free-tier Gemini key the
-      // Live API closes the session immediately with a 1011 "exceeded your current
-      // quota" error the moment this tool is present. Enable only with billing on:
-      //   IRIS_ENABLE_GOOGLE_SEARCH=true
-      // envFlag() (not a bare === "true" check) so this agrees with the
-      // SetupPanel toggle's own read of the same flag via getFullConfig() —
-      // see setup-panel's "Toggle state matches runtime behavior" requirement.
-      ...(envFlag("IRIS_ENABLE_GOOGLE_SEARCH", false) ? [{ googleSearch: {} }] : []),
-      ...buildClaudeTools(),
-    ],
-    systemInstruction: {
-      parts: [{ text: buildSystemInstructionText() }],
-    },
-  };
+// Listening mode's system instruction (add-listening-mode design.md Decision
+// 6/8.2). Deliberately NOT an extension of buildSystemInstructionText: the
+// listening config's tool set is empty (see buildLiveConfigForMode below), so
+// the pipeline/routing/UI-control instructions above would describe
+// capabilities Iris cannot use right now. The one-word boundary reply this
+// asks for is a cost optimisation only — silence during the chunk itself is
+// structural (no turn can complete while an activity is open), never a
+// property of this text. See the "Suppression does not depend on the prompt"
+// requirement in specs/listening-mode/spec.md.
+function buildListenSystemInstructionText() {
+  return [
+    `You are Iris, the realtime voice front-end for ${userDisplayName()}.`,
+    "LISTENING MODE is engaged: the user is thinking out loud or presenting for an extended stretch and does not want to be interrupted, no matter how long they pause between sentences. You have no tools available right now, and nothing you say reaches the user until the mode ends.",
+    'From time to time the app forces a checkpoint turn as the session quietly rotates in the background. When that happens, reply with exactly one word — "ok" — and nothing else. A longer reply only costs tokens; it never becomes audible, because the app withholds every checkpoint reply regardless of what it says.',
+    "Do not speak unless explicitly asked to.",
+  ].join("\n");
+}
+
+// Tools shared by both live-config modes (buildLiveConfig empties them again
+// for "listen" — see live-config.mjs). Google Search grounding is a BILLED
+// feature: on a free-tier Gemini key the Live API closes the session
+// immediately with a 1011 "exceeded your current quota" error the moment
+// this tool is present. Enable only with billing on: IRIS_ENABLE_GOOGLE_SEARCH=true.
+// envFlag() (not a bare === "true" check) so this agrees with the SetupPanel
+// toggle's own read of the same flag via getFullConfig() — see
+// setup-panel's "Toggle state matches runtime behavior" requirement.
+function buildLiveTools() {
+  return [...(envFlag("IRIS_ENABLE_GOOGLE_SEARCH", false) ? [{ googleSearch: {} }] : []), ...buildClaudeTools()];
+}
+
+function buildLiveConfigForMode(mode, resumeHandle) {
+  return buildLiveConfig({
+    mode,
+    resumeHandle,
+    tools: buildLiveTools(),
+    systemInstruction: mode === "listen" ? buildListenSystemInstructionText() : buildSystemInstructionText(),
+    voice: process.env.GEMINI_LIVE_VOICE || "Zephyr",
+  });
+}
+
+// Driven via sendClientContent right after the listen-config reconnect, and
+// awaited (driveTurnAndWaitForCompletion) before the first activity opens —
+// see design.md Decision 9. One short line only; the mechanism does not
+// depend on its exact wording.
+function buildListenEntryConfirmationPrompt() {
+  return (
+    "SYSTEM_EVENT_LISTEN_MODE_START: Listening mode was just turned on. Say ONE short sentence, right now, " +
+    "confirming you are listening and will summarize everything once the mode ends. Then say nothing else — " +
+    "no questions, no extra commentary."
+  );
+}
+
+// Driven via sendClientContent after the converse reconnect that ends
+// listening mode (design.md Decision 4) — never at the boundary itself,
+// where the listening instruction is still in force. `segmentRecord` is the
+// in-memory recovery path (design.md Decision 7): fenced like any other
+// third-party text, since spoken content is still untrusted input, before
+// being handed to the model to summarize.
+function buildListenExitSynthesisPrompt(segmentRecord) {
+  const trimmed = String(segmentRecord || "").trim();
+  const heard = trimmed
+    ? fenceUntrustedText(trimmed, "what the user said while listening mode was engaged (transcribed, not verbatim)")
+    : "(Nothing was captured — the mode ended before any speech was transcribed.)";
+  return [
+    "SYSTEM_EVENT_LISTEN_MODE_END: Listening mode just ended and ordinary conversation has resumed.",
+    "Speak a warm, concise synthesis of what the user said while listening mode was engaged — the key points, decisions, and any open questions they raised out loud. If nothing meaningful was captured, say so briefly instead of inventing content.",
+    heard,
+  ].join("\n");
 }
 
 function sendWelcomeGreeting() {
@@ -3084,11 +3306,11 @@ async function startLive() {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
   }
-  await connectLive({ isReconnect: false });
+  await connectLive({ isReconnect: false, mode: "converse" });
   return { running: true, pid: process.pid };
 }
 
-async function connectLive({ isReconnect }) {
+async function connectLive({ isReconnect, mode = "converse" }) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     emitEvent({ type: "fatal", message: "GEMINI_API_KEY is not set." });
@@ -3107,7 +3329,7 @@ async function connectLive({ isReconnect }) {
 
   liveSession = await ai.live.connect({
     model,
-    config: buildLiveConfig(resumptionHandle),
+    config: buildLiveConfigForMode(mode, resumptionHandle),
     callbacks: {
       onopen() {
         reconnectAttempts = 0;
@@ -3117,7 +3339,9 @@ async function connectLive({ isReconnect }) {
         emitEvent({ type: "audio_state", state: "listening" });
         updateTrayMenu();
         // The resumed session keeps its context; greeting again mid-conversation
-        // every ~10 minutes would be jarring.
+        // every ~10 minutes would be jarring. Every listening-mode reconnect
+        // (enter/exit/rotation) also passes isReconnect:true for the same
+        // reason (design.md Decision 12) — toggling never re-greets.
         if (!isReconnect) GreetGate.arm();
       },
       onmessage(message) {
@@ -3130,6 +3354,18 @@ async function connectLive({ isReconnect }) {
         console.error("[IRIS][close] code=", event?.code, "reason=", event?.reason || "(none)");
         flushTranscripts();
         liveSession = null;
+        notifyLiveClosed();
+
+        // A deliberate transition (entering/exiting/rotating listening mode)
+        // closed this socket itself — skip the failure-reconnect path and
+        // the offline teardown entirely (design.md Decision 12); the
+        // sequence that called closeLiveSessionDeliberately() drives the
+        // reconnect explicitly.
+        if (ListenMode.deliberateReconnect) {
+          ListenMode.deliberateReconnect = false;
+          return;
+        }
+
         if (userStopped) {
           liveStatus = { running: false, pid: null };
           emitEvent({ type: "gemini_status", status: "offline" });
@@ -3138,13 +3374,53 @@ async function connectLive({ isReconnect }) {
           updateTrayMenu();
           return;
         }
+
+        // An unexpected disconnect (machine slept, network dropped, server
+        // terminated the connection) while listening mode was engaged or
+        // mid-transition ends the mode rather than riding across the
+        // reconnect (spec "An unexpected disconnect ends listening mode"):
+        // reconnecting in listen configuration without a fresh
+        // activityStart would silently discard every subsequent byte, and
+        // reconnecting in converse configuration while still "engaged"
+        // would leave the ear icon lit over a session that has stopped
+        // listening. The failure-reconnect path below always targets
+        // converse, so either way the mode must end here first.
+        if (ListenMode.engaged || ListenMode.transitioning) {
+          clearListenRotationTimer();
+          ListenMode.transitioning = false;
+          ListenMode.boundaryInFlight = false;
+          setListenEngaged(false);
+          if (ListenMode.segmentRecord.trim()) {
+            ListenMode.synthesizeOnNextConverseConnect = true;
+          } else {
+            ListenMode.segmentRecord = "";
+          }
+        }
+
         scheduleReconnect(event?.reason || "connection closed");
       },
     },
   });
   // Send AFTER connect resolves: onopen can fire before liveSession is
   // assigned, so draining inside onopen would no-op (mirrors previewVoice).
-  drainPendingAnnouncements();
+  // Skipped on a listen-config connect — the backlog is delivered on the
+  // first connect that is not into listening mode (session-announcements
+  // MODIFIED delta).
+  if (mode !== "listen") {
+    drainPendingAnnouncements();
+    // Recovery synthesis after an unexpected disconnect ended the mode
+    // (design.md Decision 10 / tasks.md 4.7) — fires at most once, only
+    // once conversation is actually back up.
+    if (ListenMode.synthesizeOnNextConverseConnect) {
+      ListenMode.synthesizeOnNextConverseConnect = false;
+      const segment = ListenMode.segmentRecord;
+      ListenMode.segmentRecord = "";
+      liveSession?.sendClientContent({
+        turns: [{ role: "user", parts: [{ text: buildListenExitSynthesisPrompt(segment) }] }],
+        turnComplete: true,
+      });
+    }
+  }
 }
 
 function scheduleReconnect(reason) {
@@ -3170,7 +3446,10 @@ function scheduleReconnect(reason) {
   emitEvent({ type: "gemini_status", status: "connecting" });
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
-    connectLive({ isReconnect: true }).catch((error) => {
+    // Always converse: this is the failure path, and listening mode has
+    // already been ended (if it was engaged) by the onclose branch above
+    // before scheduleReconnect was ever called.
+    connectLive({ isReconnect: true, mode: "converse" }).catch((error) => {
       liveSession = null;
       scheduleReconnect(error?.message || String(error));
     });
@@ -3200,19 +3479,36 @@ async function handleToolCall(toolCall) {
 function handleLiveMessage(message) {
   if (message.sessionResumptionUpdate) {
     const { resumable, newHandle } = message.sessionResumptionUpdate;
-    if (resumable && newHandle) resumptionHandle = newHandle;
+    if (resumable && newHandle) {
+      resumptionHandle = newHandle;
+      notifyFreshResumptionHandle(newHandle);
+    }
   }
 
   if (message.goAway) {
     // Server warns the connection is about to be dropped (connection lifetime
-    // limit). onclose fires shortly after and reconnects with the handle.
+    // limit). Rotate immediately rather than betting the rest of the chunk on
+    // an unmeasured goAway.timeLeft (design.md Decision 3) if listening mode
+    // is engaged and idle; otherwise onclose fires shortly after and the
+    // ordinary reconnect handles it.
     console.log("[IRIS][goAway] timeLeft=", message.goAway.timeLeft || "(unknown)");
+    if (ListenMode.engaged && !ListenMode.transitioning) {
+      runListenRotation().catch((error) => {
+        emitEvent({ type: "log", level: "warn", message: `Listening-mode rotation (goAway) failed: ${error.message}` });
+      });
+    }
   }
 
   if (message.toolCall) {
-    handleToolCall(message.toolCall).catch((error) => {
-      emitEvent({ type: "fatal", message: "Tool call failed", error: error.message });
-    });
+    // A boundary turn cannot start background work (spec "A boundary turn
+    // cannot start background work") — the listening config already ships
+    // an empty tool set, so this only guards a stray call arriving folded
+    // into the same batch as the boundary's turnComplete.
+    if (!ListenMode.boundaryInFlight) {
+      handleToolCall(message.toolCall).catch((error) => {
+        emitEvent({ type: "fatal", message: "Tool call failed", error: error.message });
+      });
+    }
   }
 
   const content = message.serverContent;
@@ -3225,26 +3521,197 @@ function handleLiveMessage(message) {
     return;
   }
 
-  if (content.inputTranscription?.text) userTranscriptBuffer += content.inputTranscription.text;
-  if (content.outputTranscription?.text) modelTranscriptBuffer += content.outputTranscription.text;
+  if (content.inputTranscription?.text) {
+    userTranscriptBuffer += content.inputTranscription.text;
+    // Segment record: the recovery path for the current chunk (design.md
+    // Decision 7). Accumulated whenever the mode is engaged, including
+    // across a rotation's boundary — never written to disk or the vault.
+    if (ListenMode.engaged) ListenMode.segmentRecord += content.inputTranscription.text;
+  }
 
-  for (const part of content.modelTurn?.parts || []) {
-    if (part.text) modelTranscriptBuffer += part.text;
-    const inlineData = part.inlineData;
-    if (!inlineData?.data) continue;
-    const mimeType = inlineData.mimeType || "audio/pcm;rate=24000";
-    if (!mimeType.startsWith("audio/")) continue;
-    emitToRenderer("live:audio", { data: inlineData.data, mimeType });
-    emitEvent({ type: "audio_state", state: "speaking" });
+  // Every boundary turn (rotation or exit alike) is neither heard nor shown
+  // (spec "Every boundary turn is neither heard nor shown") — suppressed
+  // here, in main, before any part of it reaches the renderer. Reusing the
+  // renderer's speaker-mute suppression would be too late: this loop is what
+  // appends to modelTranscriptBuffer and emits "speaking", both before the
+  // renderer sees anything.
+  if (!ListenMode.boundaryInFlight) {
+    if (content.outputTranscription?.text) modelTranscriptBuffer += content.outputTranscription.text;
+
+    for (const part of content.modelTurn?.parts || []) {
+      if (part.text) modelTranscriptBuffer += part.text;
+      const inlineData = part.inlineData;
+      if (!inlineData?.data) continue;
+      const mimeType = inlineData.mimeType || "audio/pcm;rate=24000";
+      if (!mimeType.startsWith("audio/")) continue;
+      emitToRenderer("live:audio", { data: inlineData.data, mimeType });
+      emitEvent({ type: "audio_state", state: "speaking" });
+    }
   }
 
   if (content.turnComplete) {
     flushTranscripts();
     emitEvent({ type: "audio_state", state: "listening" });
+    notifyTurnComplete();
+  }
+}
+
+// ===== Listening mode sequences (add-listening-mode) =====
+// Each of enter/exit/rotation is a deliberate reconnect (design.md Decision
+// 12): close the current session ourselves, marking the close as ours so
+// `onclose` skips the failure-reconnect path, then reconnect carrying
+// whatever resumption handle is current — via `{ isReconnect: true }` so
+// `GreetGate` does not re-fire the welcome greeting on every toggle and
+// rotation.
+
+async function enterListenMode() {
+  if (!liveStatus.running || ListenMode.transitioning || ListenMode.engaged) return;
+  ListenMode.transitioning = true;
+  try {
+    const closed = waitForLiveClose();
+    closeLiveSessionDeliberately();
+    await closed;
+    if (userStopped) return;
+
+    try {
+      await connectLive({ isReconnect: true, mode: "listen" });
+    } catch (error) {
+      // A failed transition leaves a coherent state (spec "A failed
+      // transition leaves a coherent state") — never report engaged over a
+      // session that is not listening.
+      emitEvent({ type: "fatal", message: "Could not enter listening mode", error: error?.message || String(error) });
+      try {
+        await connectLive({ isReconnect: true, mode: "converse" });
+      } catch (fallbackError) {
+        scheduleReconnect(fallbackError?.message || String(fallbackError));
+      }
+      return;
+    }
+    if (userStopped) return;
+
+    ListenMode.segmentRecord = "";
+    const confirmed = await driveTurnAndWaitForCompletion(buildListenEntryConfirmationPrompt());
+    if (!confirmed) {
+      emitEvent({
+        type: "log",
+        level: "warn",
+        message: "Listening-mode entry confirmation did not complete within the bounded wait; opening the activity anyway.",
+      });
+    }
+    if (userStopped) return;
+
+    // Opened only now, after the confirmation turn has completed, so the
+    // confirmation cannot consume the user's opening words (spec "The
+    // confirmation does not swallow the user's first words").
+    liveSession?.sendRealtimeInput({ activityStart: {} });
+    setListenEngaged(true);
+    armListenRotationTimer();
+  } finally {
+    ListenMode.transitioning = false;
+  }
+}
+
+async function exitListenMode() {
+  if (!ListenMode.engaged || ListenMode.transitioning) return;
+  ListenMode.transitioning = true;
+  clearListenRotationTimer();
+  try {
+    ListenMode.boundaryInFlight = true;
+    const closed = waitForLiveClose();
+    await runBoundary(makeBoundarySession(), {
+      onMissing: (what) =>
+        emitEvent({ type: "log", level: "warn", message: `Listening-mode exit boundary missing ${what}; proceeding.` }),
+    });
+    ListenMode.boundaryInFlight = false;
+    await closed;
+    if (userStopped) return;
+
+    try {
+      await connectLive({ isReconnect: true, mode: "converse" });
+    } catch (error) {
+      setListenEngaged(false);
+      scheduleReconnect(error?.message || String(error));
+      return;
+    }
+    if (userStopped) return;
+
+    // The synthesis is driven only now, after the converse reconnect — never
+    // at the boundary, where the listening instruction is still in force and
+    // would collapse it to the same one-word acknowledgement a rotation gets
+    // (spec "Ending listening mode commits what was heard and Iris speaks
+    // its synthesis").
+    setListenEngaged(false);
+    const segment = ListenMode.segmentRecord;
+    ListenMode.segmentRecord = "";
+    liveSession?.sendClientContent({
+      turns: [{ role: "user", parts: [{ text: buildListenExitSynthesisPrompt(segment) }] }],
+      turnComplete: true,
+    });
+  } finally {
+    ListenMode.transitioning = false;
+  }
+}
+
+async function runListenRotation() {
+  if (!ListenMode.engaged || ListenMode.transitioning) return;
+  ListenMode.transitioning = true;
+  clearListenRotationTimer();
+  try {
+    ListenMode.boundaryInFlight = true;
+    const closed = waitForLiveClose();
+    await runBoundary(makeBoundarySession(), {
+      onMissing: (what) =>
+        emitEvent({ type: "log", level: "warn", message: `Listening-mode rotation boundary missing ${what}; proceeding.` }),
+    });
+    ListenMode.boundaryInFlight = false;
+    await closed;
+    if (userStopped) return;
+
+    try {
+      await connectLive({ isReconnect: true, mode: "listen" });
+    } catch (error) {
+      // The deliberate path itself broke down — fall back to the ordinary
+      // failure-reconnect (always converse) and treat this the same as an
+      // unexpected disconnect: the mode ends, with the segment record as
+      // the recovery path.
+      setListenEngaged(false);
+      if (ListenMode.segmentRecord.trim()) ListenMode.synthesizeOnNextConverseConnect = true;
+      scheduleReconnect(error?.message || String(error));
+      return;
+    }
+    if (userStopped) return;
+
+    liveSession?.sendRealtimeInput({ activityStart: {} });
+    armListenRotationTimer();
+  } finally {
+    ListenMode.transitioning = false;
+  }
+}
+
+// The single entry point every control surface (renderer, tray, hotkey)
+// calls directly — no `emitToRenderer` dispatch, so the mode stays reachable
+// with no window open (design.md Decision 11).
+function toggleListenMode() {
+  if (!liveStatus.running) return; // no-op while asleep (spec "Toggling while asleep does nothing")
+  if (ListenMode.transitioning) return; // spec "A toggle during a transition is ignored"
+  if (ListenMode.engaged) {
+    exitListenMode().catch((error) => {
+      emitEvent({ type: "log", level: "warn", message: `Ending listening mode failed: ${error.message}` });
+    });
+  } else {
+    enterListenMode().catch((error) => {
+      emitEvent({ type: "log", level: "warn", message: `Entering listening mode failed: ${error.message}` });
+    });
   }
 }
 
 async function stopLive() {
+  // Sleep and app quit both route through here. Neither runs the exit
+  // boundary (spec "A failed transition leaves a coherent state" / tasks.md
+  // 4.6): the resumption handle does not outlive the process, quit runs
+  // under a bounded teardown deadline, and at sleep the renderer's audio
+  // pipeline is torn down before this fires — no synthesis could be heard.
+  resetListenModeSilently();
   userStopped = true;
   resumptionHandle = null;
   reconnectAttempts = 0;
@@ -3432,6 +3899,14 @@ function updateTrayMenu() {
         enabled: liveStatus.running,
         click: () => emitToRenderer("iris:mute-toggle", {}),
       },
+      {
+        // Main owns this state directly (design.md Decision 11) — calls
+        // toggleListenMode() itself rather than dispatching to the
+        // renderer, so this still works with no window open.
+        label: ListenMode.engaged ? "End listening mode" : "Start listening mode",
+        enabled: liveStatus.running,
+        click: () => toggleListenMode(),
+      },
       { label: uiMode === "hud" ? "Exit Glass HUD" : "Enter Glass HUD", click: () => toggleHud() },
       { type: "separator" },
       {
@@ -3465,6 +3940,10 @@ function hudHotkey() {
 
 function muteHotkey() {
   return process.env.IRIS_MUTE_HOTKEY || "Alt+M";
+}
+
+function listenHotkey() {
+  return process.env.IRIS_LISTEN_HOTKEY || "Alt+L";
 }
 
 function installAppMenu() {
@@ -3555,6 +4034,12 @@ app.whenReady().then(() => {
   ipcMain.handle("sidecar:start", () => startLive());
   ipcMain.handle("sidecar:stop", () => stopLive());
   ipcMain.handle("sidecar:status", () => liveStatus);
+  // Listening mode's narrow bridge (design.md Decision 11): a toggle
+  // request, and a query for boot/reload — no report-back channel. State
+  // pushes to the renderer one-way over "listen-mode:state" from
+  // setListenEngaged, never the reverse.
+  ipcMain.on("listen-mode:toggle-request", () => toggleListenMode());
+  ipcMain.handle("listen-mode:query", () => ({ engaged: ListenMode.engaged }));
   ipcMain.handle("sidecar:command", (_event, command) => sendCommand(command));
   ipcMain.handle("sessions:get", () => sessionsSnapshot());
   ipcMain.handle("sessions:select", (_event, id) => selectWorkstream(String(id || "")));
@@ -3748,6 +4233,16 @@ app.whenReady().then(() => {
   });
   if (!muteRegistered) {
     emitEvent({ type: "log", level: "error", message: `Could not register mute hotkey ${muteHotkey()}.` });
+  }
+  // Calls main's toggle directly, not emitToRenderer (design.md Decision
+  // 11) — a modifier+key accelerator, not a media key, so no Accessibility
+  // or Input Monitoring grant is involved. No unregistration code needed:
+  // will-quit already calls globalShortcut.unregisterAll().
+  const listenRegistered = globalShortcut.register(listenHotkey(), () => {
+    toggleListenMode();
+  });
+  if (!listenRegistered) {
+    emitEvent({ type: "log", level: "error", message: `Could not register listening-mode hotkey ${listenHotkey()}.` });
   }
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

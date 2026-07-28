@@ -147,7 +147,7 @@ Files:
 - `src/deck.css`
 - `src/ReactorCore.tsx`
 - `src/BootSequence.tsx`
-- `src/useHandControl.ts` (MediaPipe hand/gesture hook)
+- `src/hooks/useHandControl.ts` (MediaPipe hand/gesture hook)
 
 Responsibilities:
 
@@ -170,3 +170,16 @@ Routing behavior:
 - Multi-step work or background task: **Claude**.
 - Claude completion: **Gemini proactively announces result**.
 - PO pauses mid-task with a question (`SYSTEM_EVENT_PO_QUESTION`): **Gemini reads it aloud immediately and answers via `answer_po_question`** once the user responds — distinct from the end-of-run "Decisions needed" relay, which still applies to DEV and to PO's lower-stakes calls.
+
+## Listening mode
+
+A toggle (ear icon, tray item, `IRIS_LISTEN_HOTKEY`) that puts the Gemini Live session into a listen-only configuration: Iris hears and retains everything but is structurally incapable of taking a turn the user did not ask for. See `openspec/specs/listening-mode/spec.md` for the full authoritative behavior; this section is the practical summary plus the constraints that will trip up anyone touching the code.
+
+- **Mechanism**: the same Live session, reconnected with `realtimeInputConfig.automaticActivityDetection.disabled: true`, `turnCoverage: "TURN_INCLUDES_ALL_INPUT"`, and an empty tool set (`electron/live-config.mjs`, `mode: "listen"`). Silence is a property of this config, not a system-prompt instruction.
+- **Chunking**: the Live connection lasts ~10 minutes, shorter than the monologues this mode is for, so a listening session rotates on its own timer (`IRIS_LISTEN_CHUNK_MS`, default 8 minutes) and immediately on the server's `goAway`. Each rotation is a **boundary** (`electron/listen-boundary.mjs`): close the activity, wait for the turn it forces to complete, wait for a **fresh** resumption handle, then reconnect. Boundary turns are suppressed in `main.mjs`'s `handleLiveMessage` — never heard, never shown as a transcript line, and any tool call they trigger is ignored.
+- **Ending the mode**: a final boundary (suppressed like any rotation), then a reconnect into ordinary conversation, and only then does Iris speak a synthesis of everything it heard — drawn from an in-memory segment record that exists only for the life of the listening session and is never written to disk or the notes vault.
+- **Three measured constraints** a future change here will otherwise trip over:
+  1. Audio streamed outside an explicitly opened activity (`activityStart`) is discarded entirely — there is no "accumulate quietly, answer when asked" shortcut.
+  2. Closing the session without first sending `activityEnd` loses the whole current chunk — there is no way to commit context except through a boundary.
+  3. No resumption checkpoint is issued while an activity is open. A boundary must wait for a checkpoint issued **after** its own `activityEnd`, not merely check that some handle exists — a stale handle from before the boundary began is instantly non-null and will satisfy a naive check while reproducing total context loss.
+- **User-visible surprises**: voice sleep and voice-triggered delegation don't work while engaged (both need a model turn, and none can complete mid-chunk); a PO question raised while engaged times out to its default, unheard; the mode ends itself if the machine sleeps long enough to drop the connection; and there is no signal if microphone capture silently dies, since silence is the whole point of the mode.

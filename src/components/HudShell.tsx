@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type CSSProperties, type RefObject } from "react";
 import {
   ChevronDown,
+  Ear,
+  EarOff,
   Hand,
   Maximize2,
   MessageSquare,
@@ -98,6 +100,8 @@ export default function HudShell({
   onToggleMute,
   outputMuted,
   onToggleOutputMute,
+  listenModeEngaged,
+  onToggleListenMode,
   onWake,
   onSleep,
   onExitHud,
@@ -153,6 +157,10 @@ export default function HudShell({
   onToggleMute: () => void;
   outputMuted: boolean;
   onToggleOutputMute: () => void;
+  // Listening mode's only affordance (add-listening-mode design.md D11):
+  // pure display of main-owned state, toggled by request only.
+  listenModeEngaged: boolean;
+  onToggleListenMode: () => void;
   onWake: () => void;
   onSleep: () => void;
   onExitHud: () => void;
@@ -366,6 +374,13 @@ export default function HudShell({
                 title={outputMuted ? "Unmute speaker" : "Mute speaker"}
               >
                 {outputMuted ? <VolumeX size={14} /> : <Volume2 size={14} />}
+              </button>
+              <button
+                className={`hud-btn ${listenModeEngaged ? "" : "muted"}`}
+                onClick={onToggleListenMode}
+                title={listenModeEngaged ? "End listening mode" : "Start listening mode"}
+              >
+                {listenModeEngaged ? <Ear size={14} /> : <EarOff size={14} />}
               </button>
               <button className="hud-btn danger" onClick={onSleep} title="Sleep">
                 <Power size={14} />

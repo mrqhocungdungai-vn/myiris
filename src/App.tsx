@@ -163,6 +163,11 @@ export default function App() {
   const galaxyPositionsRef = useRef<Map<string, GalaxyNode>>(new Map());
   const [openNote, setOpenNote] = useState<{ id: string; title: string; markdown: string } | null>(null);
 
+  // Listening mode (add-listening-mode design.md D11): main is the sole
+  // owner of this state — this is pure display, seeded from a query on
+  // mount/reload and updated only by main's push. Never asserted back.
+  const [listenModeEngaged, setListenModeEngaged] = useState(false);
+
   // Orb micro-expressions + sound cues.
   const [orbThinking, setOrbThinking] = useState(false);
   const [wakeKey, setWakeKey] = useState(0);
@@ -489,6 +494,21 @@ export default function App() {
     if (!hasBridge) return;
     window.iris.reportSpeakerMute(audio.outputMuted);
   }, [hasBridge, audio.outputMuted]);
+
+  // Listening mode: query on mount/reload (so a window opened or reloaded
+  // while the mode is engaged shows the true state — design.md D11) and
+  // subscribe to main's one-way push for every subsequent change. There is
+  // deliberately no report-back call anywhere in this effect.
+  useEffect(() => {
+    if (!hasBridge) return;
+    window.iris.getListenModeState().then(({ engaged }) => setListenModeEngaged(engaged));
+    return window.iris.onListenModeState(({ engaged }) => setListenModeEngaged(engaged));
+  }, [hasBridge]);
+
+  function toggleListenMode() {
+    if (!hasBridge) return;
+    window.iris.requestListenModeToggle();
+  }
 
   useEffect(() => {
     document.documentElement.classList.toggle("hud-mode", uiMode === "hud");
@@ -1479,6 +1499,8 @@ export default function App() {
           onToggleMute={audio.toggleMute}
           outputMuted={audio.outputMuted}
           onToggleOutputMute={() => audio.toggleOutputMute()}
+          listenModeEngaged={listenModeEngaged}
+          onToggleListenMode={toggleListenMode}
           onWake={start}
           onSleep={stop}
           onExitHud={exitHud}
@@ -1583,6 +1605,8 @@ export default function App() {
             onToggleMute={audio.toggleMute}
             outputMuted={audio.outputMuted}
             onToggleOutputMute={() => audio.toggleOutputMute()}
+            listenModeEngaged={listenModeEngaged}
+            onToggleListenMode={toggleListenMode}
             onSleep={stop}
           />
 

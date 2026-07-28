@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties, type RefObject } from "react";
-import { Mic, MicOff, Power, Volume2, VolumeX } from "lucide-react";
+import { Ear, EarOff, Mic, MicOff, Power, Volume2, VolumeX } from "lucide-react";
 import ReactorCore from "./ReactorCore";
 import type { HandoffTone, ReactorState } from "../types";
 
@@ -85,6 +85,8 @@ export default function CenterStage({
   onToggleMute,
   outputMuted,
   onToggleOutputMute,
+  listenModeEngaged,
+  onToggleListenMode,
   onSleep,
 }: {
   reactorState: ReactorState;
@@ -113,6 +115,10 @@ export default function CenterStage({
   onToggleMute: () => void;
   outputMuted: boolean;
   onToggleOutputMute: () => void;
+  // Listening mode's only affordance (add-listening-mode design.md D11):
+  // pure display of main-owned state, toggled by request only.
+  listenModeEngaged: boolean;
+  onToggleListenMode: () => void;
   onSleep: () => void;
 }) {
   return (
@@ -159,6 +165,13 @@ export default function CenterStage({
             title={outputMuted ? "Unmute speaker" : "Mute speaker"}
           >
             {outputMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}
+          </button>
+          <button
+            className={`t-btn small ${listenModeEngaged ? "" : "muted"}`}
+            onClick={onToggleListenMode}
+            title={listenModeEngaged ? "End listening mode" : "Start listening mode"}
+          >
+            {listenModeEngaged ? <Ear size={18} /> : <EarOff size={18} />}
           </button>
           <button className="t-btn small danger" onClick={onSleep} title="Sleep (S)">
             <Power size={18} />

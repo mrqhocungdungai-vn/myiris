@@ -63,6 +63,16 @@ contextBridge.exposeInMainWorld("iris", {
     return () => ipcRenderer.removeListener("iris:mute-toggle", handler);
   },
   reportSpeakerMute: (muted) => ipcRenderer.send("iris:speaker-mute-state", Boolean(muted)),
+  // Listening mode (add-listening-mode design.md D11): a toggle request and
+  // a boot/reload query — no report-back channel. Main pushes state changes
+  // one-way over "listen-mode:state"; the renderer never asserts the value.
+  requestListenModeToggle: () => ipcRenderer.send("listen-mode:toggle-request"),
+  getListenModeState: () => ipcRenderer.invoke("listen-mode:query"),
+  onListenModeState: (callback) => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on("listen-mode:state", handler);
+    return () => ipcRenderer.removeListener("listen-mode:state", handler);
+  },
   getConfig: () => ipcRenderer.invoke("config:get"),
   saveConfig: (updates) => ipcRenderer.invoke("config:save", updates),
   savePoToken: (token) => ipcRenderer.invoke("config:save-po-token", { token }),
