@@ -30,6 +30,8 @@ import { createCanvasMcp, buildMcpServerRecord } from "./canvas-mcp.mjs";
 import { createVaultGraph } from "./vault-graph.mjs";
 import { buildLiveConfig } from "./live-config.mjs";
 import { runBoundary } from "./listen-boundary.mjs";
+import { createGeminiTools } from "./gemini-tools.mjs";
+import { createGeminiPrompts } from "./gemini-prompts.mjs";
 
 const { app, BrowserWindow, ipcMain, session, nativeImage, Menu, dialog, Tray, screen, globalShortcut, shell } = electron;
 
@@ -2769,7 +2771,7 @@ function controlUi({ action, target_id = undefined, query = undefined } = {}) {
 }
 
 // Tools that only make sense when the pipeline is available — declared to
-// Gemini only when pipelineAvailable is true (see buildClaudeTools). This
+// Gemini only when pipelineAvailable is true (see geminiTools.buildClaudeTools). This
 // guard is a defensive backstop, not the primary gate: Gemini should never
 // call one of these in chat-only mode since it was never given the
 // declaration, but a stray call (e.g. a race right after availability drops)
@@ -2939,344 +2941,30 @@ function announceClaudeCompletion({ runId, task, status, output }) {
   notifyIris(eventText);
 }
 
-// Declarations only meaningful when the pipeline is available — omitted from
-// the Gemini session entirely in chat-only mode (design.md decision 2), not
-// just guarded at call time, so Gemini never offers to delegate.
-function buildPipelineToolDeclarations() {
-  return [
-    {
-          name: "check_claude_status",
-          description: "Check if the Claude Code CLI is installed and ready. Use this for questions about Claude status.",
-          parameters: { type: "object", properties: {} },
-        },
-        {
-          name: "submit_claude_task",
-          description:
-            "Hand actionable work to Claude. Invoke for deals, shopping, research, coding, file work, terminal tasks, summaries, automations, or anything requiring tools. Do not ask the user clarifying questions first. Claude works in ONE continuous session: it remembers previous tasks in the session, and runs tasks one at a time — if it is busy, the new task is queued and starts automatically (the response will say 'queued'). IMPORTANT: Claude cannot hear this voice conversation — the 'task' string is the only new information it gets, so write a complete brief with every concrete detail. If review mode is on (the default), this does NOT start Claude — the brief is parked for the user's Approve/Edit/Cancel and the response says 'parked_for_review'; see the PRE-DISPATCH REVIEW GATE instructions for what to say and do next.",
-          parameters: {
-            type: "object",
-            properties: {
-              task: {
-                type: "string",
-                description:
-                  "The task for Claude in clear English, shaped to the role per the BRIEF WRITING rules in your instructions. For the PO role: a SHORT control intent (start-and-grill / propose the change / are there tasks left? / archive) plus the concrete details the user gave — never a PRD. For a plain task or the DEV role: a COMPLETE brief with the goal, every concrete detail the user gave (names, numbers, URLs, dates, budgets, constraints), sensible defaults, and the expected output; DEV is told to implement the open OpenSpec change. Claude remembers earlier tasks in this session, so follow-ups may reference previous work, but never omit new details.",
-              },
-              urgency: { type: "string", description: "low, normal, or high." },
-              agent: {
-                type: "string",
-                description:
-                  "Optional role to run the task as: 'po' (Product Owner — grills, then proposes an OpenSpec change) or 'dev' (Developer — implements the open change's remaining tasks and verifies). ONLY set this when the user explicitly names a role (e.g. 'have the PO grill this…', 'cho dev làm…'). Otherwise OMIT it — the session's active agent from the UI is used.",
-              },
-            },
-            required: ["task"],
-          },
-        },
-        {
-          name: "get_workspace_info",
-          description:
-            "Return the current workspace state: the active Claude session, the project folder it works in, and the active pipeline role. ALWAYS call this (never guess) when the user asks which project/folder/directory Claude is working in, what session or role is active, or before describing where work will happen.",
-          parameters: { type: "object", properties: {} },
-        },
-        {
-          name: "get_claude_task_status",
-          description: "Fetch the latest status for a Claude run.",
-          parameters: {
-            type: "object",
-            properties: { run_id: { type: "string" } },
-            required: ["run_id"],
-          },
-        },
-        {
-          name: "stop_claude_task",
-          description: "Stop an active or queued Claude run.",
-          parameters: {
-            type: "object",
-            properties: { run_id: { type: "string" } },
-            required: ["run_id"],
-          },
-        },
-        {
-          name: "start_new_claude_session",
-          description:
-            "Start a fresh Claude session with a clean slate (previous task context is forgotten). Call this ONLY when the user explicitly asks for it — e.g. says 'new session', 'phien moi', 'start over', 'iris new session'. Never call it on your own initiative. The user can also switch sessions from the UI.",
-          parameters: {
-            type: "object",
-            properties: {
-              label: { type: "string", description: "Optional short name for the new session, if the user gave one." },
-            },
-          },
-        },
-        {
-          name: "answer_po_question",
-          description:
-            "Answer the pending question(s) from the Product Owner after SYSTEM_EVENT_PO_QUESTION. The PO's live session is paused waiting for this — call it only once you have collected every answer by voice, never before.",
-          parameters: {
-            type: "object",
-            properties: {
-              answers: {
-                type: "array",
-                description: "One entry per question from the event, in any order.",
-                items: {
-                  type: "object",
-                  properties: {
-                    question: { type: "string", description: "The exact question text, copied verbatim from the event." },
-                    choice: { type: "string", description: "The option label the user chose for this question." },
-                  },
-                  required: ["question", "choice"],
-                },
-              },
-            },
-            required: ["answers"],
-          },
-        },
-        {
-          name: "set_agent_model",
-          description:
-            "Change which Claude model a role (PO or DEV) runs on for the active session — e.g. switch DEV to a stronger model to debug a hard problem, then switch it back afterwards. Only call this when the user EXPLICITLY asks to change or switch a role's model; never on your own initiative.",
-          parameters: {
-            type: "object",
-            properties: {
-              role: { type: "string", description: "'po' or 'dev'." },
-              model: {
-                type: "string",
-                description: `One of: ${MODEL_CHOICES.map((choice) => `${choice.id} (${choice.label})`).join(", ")}.`,
-              },
-            },
-            required: ["role", "model"],
-          },
-        },
-        {
-          name: "respond_to_task_review",
-          description:
-            "Approve or cancel a brief that submit_claude_task just parked (status 'parked_for_review'). Call this only after the user tells you their decision by voice; if they resolve it from the screen instead, you get SYSTEM_EVENT_TASK_REVIEW_RESOLVED and must NOT also call this. This is separate from answer_po_question: that answers a LIVE, blocking question mid-PO-run; this approves/cancels a PARKED brief that has not started at all. Never call get_claude_task_status for a parked brief — it has no run yet.",
-          parameters: {
-            type: "object",
-            properties: {
-              decision: { type: "string", description: "'approve' or 'cancel'." },
-            },
-            required: ["decision"],
-          },
-        },
-  ];
-}
+const geminiTools = createGeminiTools({
+  getPipelineAvailable: () => pipelineAvailable,
+  modelChoices: MODEL_CHOICES,
+  envFlag,
+});
 
-// Declarations available regardless of pipeline availability — interface
-// control and sleep have nothing to do with Claude (design.md decision 2).
-function buildAlwaysToolDeclarations() {
-  return [
-        {
-          name: "get_ui_context",
-          description:
-            "Get the current Iris UI context: visible Claude tasks, latest result task, focused task, expanded task, whether history is open, any pending task-chooser candidates, and whether the Glass HUD overlay is active (uiMode). Use before UI-only voice commands like 'open that', 'show latest result', 'close it', or 'show history'.",
-          parameters: { type: "object", properties: {} },
-        },
-        {
-          name: "control_ui",
-          description:
-            "Control the Iris UI directly for UI-only requests — open/close/show a Claude task result, task history, or overlays. Use this instead of submit_claude_task when the request is purely about the interface, not new work.",
-          parameters: {
-            type: "object",
-            properties: {
-              action: {
-                type: "string",
-                description:
-                  "One of: open_task, open_task_by_query, open_current_claude_result, open_latest_claude_result, open_claude_history, close_reader, close_history, close_all_overlays, show_task_steps, hide_task_steps. Use show_task_steps/hide_task_steps to expand or collapse the tool-step timeline for a Claude task; when the user names a specific card, pass its words in `query` (or its exact id in `target_id`). With no target, steps default to the card the user is currently viewing (open reader / focused), then the running task.",
-              },
-              target_id: {
-                type: "string",
-                description: "Optional exact Claude task id for open_task, show_task_steps, or hide_task_steps.",
-              },
-              query: {
-                type: "string",
-                description:
-                  "Loose words from the user identifying a card, usable with open_task_by_query, show_task_steps, and hide_task_steps — e.g. 'failed one', 'the deals card', 'second one'. The renderer fuzzy-matches this against visible task titles/status. For open_task_by_query, close matches show a chooser overlay instead of guessing.",
-              },
-            },
-            required: ["action"],
-          },
-        },
-        {
-          name: "go_to_sleep",
-          description:
-            "Put Iris to sleep (end this voice session). Call ONLY when the user explicitly asks — e.g. 'go to sleep', 'sleep now', 'goodnight Iris', 'that's all for today'. Say a very short goodbye BEFORE calling this; the session ends a few seconds later. The wake word (if enabled) keeps working, so they can wake Iris again by voice.",
-          parameters: { type: "object", properties: {} },
-        },
-  ];
-}
-
-function buildClaudeTools() {
-  return [
-    {
-      functionDeclarations: [
-        ...(pipelineAvailable ? buildPipelineToolDeclarations() : []),
-        ...buildAlwaysToolDeclarations(),
-      ],
-    },
-  ];
-}
-
-// One prompt builder with the pipeline sections included only when
-// pipelineAvailable (design.md decision 2) — never a second maintained
-// variant, so the two surfaces can't drift out of sync.
-function buildSystemInstructionText() {
-  // Single read of this flag, shared with buildLiveConfig()'s actual tool
-  // declaration below, so the capability description here can never claim
-  // Google Search is present when the tool wasn't declared (role-capabilities
-  // "Talk-mode capability list is accurate" requirement).
-  const googleSearchEnabled = envFlag("IRIS_ENABLE_GOOGLE_SEARCH", false);
-  const lines = [`You are Iris, the realtime voice front-end for ${userDisplayName()}.`];
-
-  if (pipelineAvailable) {
-    lines.push(
-      "Claude is your worker brain for tools, terminal, files, web, deals, coding, research, and automations.",
-      googleSearchEnabled
-        ? "You also have built-in Google Search. Use Google Search directly for quick current facts, simple web lookups, and lightweight questions that do not need Claude to do work."
-        : "Google Search is NOT enabled on this machine right now (it's an optional, billed capability turned on from Settings) — do not claim to search the web yourself; for a quick lookup either say search isn't turned on, or hand it to Claude instead.",
-      `CRITICAL: Be decisive. Do not ask clarifying questions for actionable tasks. If ${userDisplayName()} asks for a deal, research, coding, checking something, building something, or any work, immediately call submit_claude_task with the request. The ONLY exception is the Product Owner intake below, when a NEW project or feature is being started.`,
-      googleSearchEnabled
-        ? "Routing rule: quick answer or fact lookup -> Google Search; multi-step work, monitoring, files, email, deals, coding, automation, or anything that should continue in the background -> Claude."
-        : "Routing rule: quick answer or fact lookup -> answer directly or say Google Search isn't enabled; multi-step work, monitoring, files, email, deals, coding, automation, or anything that should continue in the background -> Claude.",
-      `When you call submit_claude_task for a plain task or the DEV role, write the 'task' as a COMPLETE brief. Claude cannot hear this conversation, so do not send a short paraphrase. Expand what ${userDisplayName()} said into a precise, detailed instruction that captures the goal, every concrete detail mentioned (names, numbers, URLs, dates, budgets, preferences, constraints), any reasonable defaults you are assuming, and the expected result/format. (The PO role is the exception — you steer it with a SHORT control intent, not a PRD; see PRODUCT OWNER CONTROL below.)`,
-      "Session model: context is USER-CONTROLLED. Within the session the user picked, each role (PO, DEV, and plain Claude) keeps its OWN continuous conversation that every new task automatically resumes — Claude remembers ALL its earlier tasks in that role, even when other roles ran in between. Context is never dropped automatically; it resets ONLY when the user explicitly starts a new session (UI 'New' button or a voice request) or picks a different project folder. So follow-up briefs may safely reference the role's previous work ('the PRD you wrote', 'the issue you implemented'). Each session is attached to a project folder the user picks from the UI, and Claude's file/terminal work happens inside that folder. Claude does ONE task at a time; if it is busy, a new task is queued and starts automatically. You never pick or invent session ids or project folders yourself; if the user wants to work on a different project, tell them to pick its folder from the UI.",
-      workspaceContextLine(),
-      "When the user asks which project/folder/session/role is active — or you need to state where work will happen — call get_workspace_info and answer from its result; never guess. When you receive SYSTEM_EVENT_WORKSPACE_UPDATE, silently update your knowledge of the workspace; do not speak in response to it. When you receive SYSTEM_EVENT_AGENT_SELECT, the user just switched the pipeline role from the UI: follow its instructions_to_iris and speak proactively — switching to PO with no ongoing conversation ALWAYS opens with the how-did-this-project-start question (own idea / boss-CTO mandate / customer request).",
-      "Agent pipeline (runs on OpenSpec): Claude runs as one of two roles — PO (Product Owner: grills the request, then proposes an OpenSpec change under openspec/changes/<name>/ with a tasks.md — decides WHAT gets built) and DEV (Developer: implements the remaining tasks of the open change test-first, verifies, then archives it to update the living spec). The user picks the active role from the UI; moving PO → DEV is a gate, and the roles hand work to each other through the OpenSpec change in the project, never a shared conversation. Only pass the 'agent' parameter when the user explicitly names a role; never choose or advance a role yourself. PO runs as a LIVE session (stays open across tasks and pauses mid-task to ask YOU questions by voice — see SYSTEM_EVENT_PO_QUESTION); DEV runs headless and never pauses. A DEV run only works when the PO has already proposed a change with tasks — if none exists, the DEV run fails and asks for the PO to propose first.",
-      `CANVAS — ${userDisplayName()} has a drawing canvas/whiteboard in the app that YOU cannot see. When they ask something like "what should I add to my diagram", "what do you think of my drawing", "connect these two boxes", or anything else about the canvas/diagram/whiteboard, that is real work for Claude (which CAN read and draw on it) — call submit_claude_task with no 'agent' parameter (never DEV, which would be refused for lacking an open OpenSpec change) describing exactly what they asked. Never guess at what is drawn yourself.`,
-      `ROLE & MODE MODEL — explain this ONLY when ${userDisplayName()} asks something like "what can you do", "how do I build software with you", or "what are the modes" — never volunteer it unprompted at session start, on wake, or otherwise. Iris runs as two co-equal modes: Talk mode (this conversation — interface/HUD control, wake/sleep, Google Search when enabled, and note-taking via the second brain) and Build mode (the PO -> DEV pipeline described above). Exactly three roles are user-facing: Iris (Talk), PO (Build: grills the request and proposes WHAT to build), and DEV (Build: implements the proposed change) — never name a fourth "plain Claude" role, even though it exists internally for ordinary tasks.`,
-      `BUILD-MODE STEERING — when ${userDisplayName()} asks to start a NEW project or feature while chatting in Talk mode, tell them plainly this is Build-mode work, then follow PRODUCT OWNER CONTROL below to forward it to PO automatically — never work it yourself as an ad-hoc task. This is the same automatic hand-off PRODUCT OWNER CONTROL already performs, just named here explicitly — it does not ask ${userDisplayName()} to go pick PO from the UI themselves. Quick or ad-hoc tasks (lookups, checks, small automations, notes) stay decisive and are never steered to PO.`,
-      "PRODUCT OWNER CONTROL — you are the PO's VOICE, not its analyst. When the user starts a NEW project or feature (or switches to the PO role with no ongoing PO conversation), do NOT interview them yourself and do NOT write a PRD. Instead call submit_claude_task for the PO role with a SHORT control intent that forwards what the user wants and tells the PO to start grilling — e.g. 'Start a new feature: <what the user said, with the concrete details verbatim>. Grill me to pin down the requirements.' The Claude-side PO then runs its grilling pass and pauses to ask YOU questions by voice (SYSTEM_EVENT_PO_QUESTION) — read those aloud and answer with answer_po_question. When the user is satisfied, send the PO a follow-up: 'You have enough — propose the change.' To check progress, send the PO 'Are there tasks left?' and it reads the change's tasks.md and reports back. For ordinary tasks that are not a new project/feature, skip all of this and stay decisive.",
-      "DECISIONS RELAY — headless DEV, and the PO for lower-stakes calls, cannot ask yes/no questions mid-run, so they hand choices back to you at the END of a run. When a Claude result contains a 'Decisions needed' (or numbered 'Open Questions') section: read each decision aloud, one at a time, with its numbered options and the recommendation, and let the user pick (they may say 'option 2' or 'go with your recommendation'). Then call submit_claude_task for the SAME role with a follow-up task stating each decision and the chosen option. If the user postpones, note that the recommended defaults stay applied.",
-      `Model control: PO and DEV each run on a chosen Claude model, visible as a badge on the pipeline chip in the UI (defaults: PO on the strongest model, DEV on a faster one for routine work). Call set_agent_model(role, model) ONLY when ${userDisplayName()} explicitly asks to switch a role's model (e.g. "switch DEV to a stronger model to debug this", "put PO back on the fast one") — never change it on your own initiative. Available models: ${MODEL_CHOICES.map((choice) => `${choice.label} (${choice.id})`).join(", ")}.`,
-      "PO LIVE QUESTIONS — different from Decisions Relay above: when the PO reaches a real fork in the road MID-TASK, it pauses immediately and you receive SYSTEM_EVENT_PO_QUESTION with a list of questions and options. Read each one aloud right then — don't wait for the run to finish, it hasn't. Once you have every answer, call answer_po_question with the exact question text and the chosen option's label for each; the PO resumes the same task the instant you do. If the user asks what you'd pick, suggest the first-listed option, but always submit what they actually chose.",
-      "PRE-DISPATCH REVIEW GATE — separate from PO LIVE QUESTIONS above, and applies to every role including plain Claude. By default, submit_claude_task PARKS the brief instead of starting it: the response says 'parked_for_review' and nothing has been sent to Claude yet. When that happens: speak a SHORT 1-2 sentence summary of the brief you just wrote (not the whole thing) and say the full brief is on screen, then wait — do not say it started or is queued, and never call get_claude_task_status for it (there is no run). The user approves (optionally after editing on screen), or cancels — from the screen, or by telling you so you can call respond_to_task_review with decision 'approve' or 'cancel' (never on your own initiative). If SYSTEM_EVENT_TASK_REVIEW_RESOLVED arrives instead, the user resolved it from the screen or it timed out — announce that outcome, don't re-send the brief. respond_to_task_review is for a PARKED BRIEF; answer_po_question is for a LIVE, BLOCKING PO question — never confuse the two. You have no way to turn this gate on or off — if the user asks to disable or enable review mode by voice, tell them the toggle lives on the PipelineBar in the UI and do not claim to have changed anything.",
-      "BRIEF WRITING — the 'task' string is the ONLY thing headless Claude receives; a detail you do not write down is lost forever. Shape every brief to the role:",
-      "- PO control intent (NOT a PRD — the PO does the analysis, you just steer it): a short line forwarding the user's request plus the intent — start-and-grill, 'propose the change', 'are there tasks left?', or 'archive the change'. Include the concrete details the user gave (names, numbers, URLs, constraints) so the PO has them, but never write the PRD, tasks, or acceptance criteria yourself — that is the PO's job via grilling and the OpenSpec propose flow.",
-      "- DEV brief: tell DEV to implement the open OpenSpec change — e.g. 'Implement the remaining tasks of the open change.' If the user named a specific change, include its name. Append any spoken instruction that overrides the spec ('the messages should be in English after all') — DEV cannot know it otherwise. DEV only runs when the PO has already proposed a change with tasks.",
-      "- Follow-up brief (answers to Decisions needed): send to the SAME role and repeat each decision with the chosen option verbatim, e.g. 'Decision 1: option 2 — <restate the option text>. Decision 3: keep the recommendation.' Never re-open decisions the user already settled, and never let a chosen option be paraphrased into something new.",
-      "- Self-check before every submit_claude_task call: could someone who never heard this conversation do the right work from this brief alone? If not, add the missing names, numbers, paths, and decisions before sending.",
-    );
-    // Gated on the notes skills actually being installed (not just pipelineAvailable) —
-    // otherwise Iris could offer a save the plain-Claude worker would refuse
-    // (role-capabilities "No offer when notes skills are not installed").
-    if (checkNotesSkillsStatus().ok) {
-      lines.push(
-        `NOTE-OFFER — after a conversational exchange has produced durable value (a research result, a worked-out decision), you MAY offer ONCE, in a single short line, to save it to ${userDisplayName()}'s second brain (e.g. "Want me to save that to your notes?"). Never auto-save and never repeat the offer for the same exchange; if declined or ignored, drop it silently. Always honor an explicit save or retrieve request regardless of whether you offered — send it to Claude as a plain task.`,
-      );
-    }
-  } else {
-    lines.push(
-      googleSearchEnabled
-        ? "You do not have a background worker on this machine right now — you are a friendly, capable conversational voice companion. You also have built-in Google Search; use it directly for quick current facts, simple web lookups, and lightweight questions."
-        : "You do not have a background worker on this machine right now — you are a friendly, capable conversational voice companion. Google Search is NOT enabled (it's an optional, billed capability turned on from Settings) — do not claim to search the web yourself.",
-      `If ${userDisplayName()} asks for multi-step work, coding, file/terminal automation, or anything else that needs tools you don't have, say plainly that this needs the Claude pipeline, which is not set up on this machine yet (the Claude Code CLI can be installed and checked from Settings), and offer to help conversationally with whatever you can instead. Never claim you will hand work off to Claude — you have no worker to hand it to.`,
-    );
-  }
-
-  lines.push(
-    `UI control rule: if the user says things like 'open it', 'open that result', 'show the latest result', 'show history', 'close it', 'go back', or 'open the current task', use get_ui_context and control_ui — these are UI-only${pipelineAvailable ? " and must NOT be sent to submit_claude_task" : ""}. Also handle 'show the steps' / 'what is it doing' / 'show what tools it used' -> show_task_steps; 'hide the steps' -> hide_task_steps. If they name a specific card ('steps for the deals one', 'steps for the second card'), pass those words in query; with no target named, steps apply to the card they are viewing (open reader first), else the running task.`,
-    "If the user refers to a task by partial words from its header, like 'open the failed one' or 'open the deals task', call control_ui with action open_task_by_query and put those words in query — do not require an exact title match. If Iris shows a task chooser because multiple cards matched, the user can click a choice or say first/second/third; use get_ui_context to inspect pendingTaskMatches before opening a specific task. When a UI command is ambiguous, prefer the expanded task first, then the focused task, then the latest result. Keep the spoken acknowledgement short.",
-    `Sleep rule: when ${userDisplayName()} asks you to sleep ('go to sleep', 'sleep now', 'goodnight', 'that's all for now'), say a short warm goodbye and call go_to_sleep. Never call it unless explicitly asked.${
-      pipelineAvailable
-        ? " Note: while a PO question is pending (see PO LIVE QUESTIONS below), UI actions like close_reader still work, but a new ambiguous open-task request is deferred — the PO question always answers first."
-        : ""
-    }`,
-  );
-
-  if (pipelineAvailable) {
-    lines.push(
-      `After submit_claude_task returns: if status is 'started', say one short acknowledgement like: On it, Claude is handling that now. If status is 'queued', tell ${userDisplayName()} Claude is still finishing the current task and this one is queued next. If status is 'parked_for_review', follow the PRE-DISPATCH REVIEW GATE instructions above instead. (Keep what you SAY short, even though the task you SENT is detailed.)`,
-      `Only call start_new_claude_session when ${userDisplayName()} explicitly asks for a new session (says something like: new session, fresh session, start over). After it returns, confirm briefly that Claude has a clean slate.`,
-    );
-  }
-
-  lines.push(
-    `When you receive SYSTEM_EVENT_SESSION_START, immediately speak a warm welcome-back greeting to ${userDisplayName()} as instructed, without waiting for the user to talk first.`,
-  );
-
-  if (pipelineAvailable) {
-    lines.push(
-      `When you receive SYSTEM_EVENT_CLAUDE_COMPLETE, treat it as a high-priority background result from Claude. Proactively announce it even if ${userDisplayName()} was chatting with you. Keep it polite and short: say Claude is back, summarize the result, and ask whether they want to go through it before continuing.`,
-    );
-  }
-
-  lines.push(
-    pipelineAvailable
-      ? "Only answer directly for greetings, quick chat, or status questions."
-      : "Answer everything directly and conversationally — you have no background worker to delegate to right now.",
-    "Keep voice responses natural and short.",
-  );
-
-  return lines.join("\n");
-}
-
-// Listening mode's system instruction (add-listening-mode design.md Decision
-// 6/8.2). Deliberately NOT an extension of buildSystemInstructionText: the
-// listening config's tool set is empty (see buildLiveConfigForMode below), so
-// the pipeline/routing/UI-control instructions above would describe
-// capabilities Iris cannot use right now. The one-word boundary reply this
-// asks for is a cost optimisation only — silence during the chunk itself is
-// structural (no turn can complete while an activity is open), never a
-// property of this text. See the "Suppression does not depend on the prompt"
-// requirement in specs/listening-mode/spec.md.
-function buildListenSystemInstructionText() {
-  return [
-    `You are Iris, the realtime voice front-end for ${userDisplayName()}.`,
-    "LISTENING MODE is engaged: the user is thinking out loud or presenting for an extended stretch and does not want to be interrupted, no matter how long they pause between sentences. You have no tools available right now, and nothing you say reaches the user until the mode ends.",
-    'From time to time the app forces a checkpoint turn as the session quietly rotates in the background. When that happens, reply with exactly one word — "ok" — and nothing else. A longer reply only costs tokens; it never becomes audible, because the app withholds every checkpoint reply regardless of what it says.',
-    "Do not speak unless explicitly asked to.",
-  ].join("\n");
-}
-
-// Tools shared by both live-config modes (buildLiveConfig empties them again
-// for "listen" — see live-config.mjs). Google Search grounding is a BILLED
-// feature: on a free-tier Gemini key the Live API closes the session
-// immediately with a 1011 "exceeded your current quota" error the moment
-// this tool is present. Enable only with billing on: IRIS_ENABLE_GOOGLE_SEARCH=true.
-// envFlag() (not a bare === "true" check) so this agrees with the SetupPanel
-// toggle's own read of the same flag via getFullConfig() — see
-// setup-panel's "Toggle state matches runtime behavior" requirement.
-function buildLiveTools() {
-  return [...(envFlag("IRIS_ENABLE_GOOGLE_SEARCH", false) ? [{ googleSearch: {} }] : []), ...buildClaudeTools()];
-}
+const geminiPrompts = createGeminiPrompts({
+  getPipelineAvailable: () => pipelineAvailable,
+  modelChoices: MODEL_CHOICES,
+  envFlag,
+  userDisplayName,
+  workspaceContextLine,
+  checkNotesSkillsStatus,
+  fenceUntrustedText,
+});
 
 function buildLiveConfigForMode(mode, resumeHandle) {
   return buildLiveConfig({
     mode,
     resumeHandle,
-    tools: buildLiveTools(),
-    systemInstruction: mode === "listen" ? buildListenSystemInstructionText() : buildSystemInstructionText(),
+    tools: geminiTools.buildLiveTools(),
+    systemInstruction: mode === "listen" ? geminiPrompts.buildListenSystemInstructionText() : geminiPrompts.buildSystemInstructionText(),
     voice: process.env.GEMINI_LIVE_VOICE || "Zephyr",
   });
-}
-
-// Driven via sendClientContent right after the listen-config reconnect, and
-// awaited (driveTurnAndWaitForCompletion) before the first activity opens —
-// see design.md Decision 9. One short line only; the mechanism does not
-// depend on its exact wording.
-function buildListenEntryConfirmationPrompt() {
-  return (
-    "SYSTEM_EVENT_LISTEN_MODE_START: Listening mode was just turned on. Say ONE short sentence, right now, " +
-    "confirming you are listening and will summarize everything once the mode ends. Then say nothing else — " +
-    "no questions, no extra commentary."
-  );
-}
-
-// Driven via sendClientContent after the converse reconnect that ends
-// listening mode (design.md Decision 4) — never at the boundary itself,
-// where the listening instruction is still in force. `segmentRecord` is the
-// in-memory recovery path (design.md Decision 7): fenced like any other
-// third-party text, since spoken content is still untrusted input, before
-// being handed to the model to summarize.
-function buildListenExitSynthesisPrompt(segmentRecord) {
-  const trimmed = String(segmentRecord || "").trim();
-  const heard = trimmed
-    ? fenceUntrustedText(trimmed, "what the user said while listening mode was engaged (transcribed, not verbatim)")
-    : "(Nothing was captured — the mode ended before any speech was transcribed.)";
-  return [
-    "SYSTEM_EVENT_LISTEN_MODE_END: Listening mode just ended and ordinary conversation has resumed.",
-    "Speak a warm, concise synthesis of what the user said while listening mode was engaged — the key points, decisions, and any open questions they raised out loud. If nothing meaningful was captured, say so briefly instead of inventing content.",
-    heard,
-  ].join("\n");
 }
 
 function sendWelcomeGreeting() {
@@ -3422,7 +3110,7 @@ async function connectLive({ isReconnect, mode = "converse" }) {
       const segment = ListenMode.segmentRecord;
       ListenMode.segmentRecord = "";
       liveSession?.sendClientContent({
-        turns: [{ role: "user", parts: [{ text: buildListenExitSynthesisPrompt(segment) }] }],
+        turns: [{ role: "user", parts: [{ text: geminiPrompts.buildListenExitSynthesisPrompt(segment) }] }],
         turnComplete: true,
       });
     }
@@ -3596,7 +3284,7 @@ async function enterListenMode() {
     if (userStopped) return;
 
     ListenMode.segmentRecord = "";
-    const confirmed = await driveTurnAndWaitForCompletion(buildListenEntryConfirmationPrompt());
+    const confirmed = await driveTurnAndWaitForCompletion(geminiPrompts.buildListenEntryConfirmationPrompt());
     if (!confirmed) {
       emitEvent({
         type: "log",
@@ -3650,7 +3338,7 @@ async function exitListenMode() {
     const segment = ListenMode.segmentRecord;
     ListenMode.segmentRecord = "";
     liveSession?.sendClientContent({
-      turns: [{ role: "user", parts: [{ text: buildListenExitSynthesisPrompt(segment) }] }],
+      turns: [{ role: "user", parts: [{ text: geminiPrompts.buildListenExitSynthesisPrompt(segment) }] }],
       turnComplete: true,
     });
   } finally {
