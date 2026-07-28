@@ -44,6 +44,7 @@ import {
   shutdownDeadlineMs,
   promptReviewTimeoutMs,
 } from "./user-config.mjs";
+import { createRendererBridge } from "./renderer-bridge.mjs";
 
 const { app, BrowserWindow, ipcMain, session, nativeImage, Menu, dialog, Tray, screen, globalShortcut, shell } = electron;
 
@@ -68,8 +69,6 @@ let liveStatus = { running: false, pid: null };
 // iris:speaker-mute-state — main never mutates audio, it only tracks this to
 // keep the tray label accurate (see openspec/changes/speaker-mute design D4).
 let speakerMuted = false;
-let userTranscriptBuffer = "";
-let modelTranscriptBuffer = "";
 // Gemini Live closes each WebSocket connection after ~10 minutes. With
 // sessionResumption enabled the server hands us refresh handles; on close we
 // reconnect with the latest handle so the conversation continues seamlessly
@@ -261,20 +260,6 @@ function driveTurnAndWaitForCompletion(text, timeoutMs = 8000) {
   });
 }
 
-// Latest UI-state snapshot pushed by the renderer over iris:ui-context
-// (throttled — see App.tsx). Read by the get_ui_context Gemini tool so voice
-// commands like "open that" or "show history" can resolve without blocking on
-// a renderer round-trip (design.md D1).
-let irisUiContext = {
-  tasks: [],
-  expandedTaskId: null,
-  focusedTaskId: null,
-  latestResultTaskId: null,
-  pendingTaskMatches: [],
-  showHistory: false,
-  uiMode: "deck",
-};
-
 // Defers the SYSTEM_EVENT_SESSION_START greeting until the renderer's boot
 // animation reports iris:boot-done, so Iris never talks over it (design.md
 // D6). Reset on every non-reconnect wake; a fallback timer greets anyway if
@@ -373,32 +358,16 @@ function logPoBillingPathOnce() {
   }
 }
 
-function emitToRenderer(channel, payload) {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  mainWindow.webContents.send(channel, payload);
-}
-
-function emitEvent(event) {
-  // DIAGNOSTIC: surface all events to the dev terminal (the renderer's log
-  // list is not rendered, so fatal/connection errors were otherwise invisible).
-  if (event?.type === "fatal") {
-    console.error("[IRIS][fatal]", event.message || "", event.error || "");
-  } else if (event?.type === "gemini_status" || event?.type === "sidecar_status") {
-    console.log(`[IRIS][${event.type}]`, JSON.stringify(event.status ?? event));
-  }
-  emitToRenderer("sidecar:event", { timestamp: Date.now() / 1000, ...event });
-}
-
-function flushTranscripts() {
-  if (userTranscriptBuffer.trim()) {
-    emitEvent({ type: "transcript", speaker: "you", text: userTranscriptBuffer.trim() });
-  }
-  if (modelTranscriptBuffer.trim()) {
-    emitEvent({ type: "transcript", speaker: "gemini", text: modelTranscriptBuffer.trim() });
-  }
-  userTranscriptBuffer = "";
-  modelTranscriptBuffer = "";
-}
+const rendererBridge = createRendererBridge({ getMainWindow: () => mainWindow });
+const {
+  emitToRenderer,
+  emitEvent,
+  flushTranscripts,
+  appendUserTranscript,
+  appendModelTranscript,
+  getUiContext: getUiContextSnapshot,
+  setUiContext: setUiContextSnapshot,
+} = rendererBridge;
 
 // Background work is handled by Claude Code running headless (claude -p). Each task
 // spawns one non-interactive claude process streaming NDJSON progress events.
@@ -1991,7 +1960,7 @@ const UI_ACTIONS = new Set([
 ]);
 
 function getUiContext() {
-  return irisUiContext;
+  return getUiContextSnapshot();
 }
 
 /** @param {{ action?: string, target_id?: string, query?: string }} [params] */
@@ -2449,7 +2418,7 @@ function handleLiveMessage(message) {
   }
 
   if (content.inputTranscription?.text) {
-    userTranscriptBuffer += content.inputTranscription.text;
+    appendUserTranscript(content.inputTranscription.text);
     // Segment record: the recovery path for the current chunk (design.md
     // Decision 7). Accumulated whenever the mode is engaged, including
     // across a rotation's boundary — never written to disk or the vault.
@@ -2463,10 +2432,10 @@ function handleLiveMessage(message) {
   // appends to modelTranscriptBuffer and emits "speaking", both before the
   // renderer sees anything.
   if (!ListenMode.boundaryInFlight) {
-    if (content.outputTranscription?.text) modelTranscriptBuffer += content.outputTranscription.text;
+    if (content.outputTranscription?.text) appendModelTranscript(content.outputTranscription.text);
 
     for (const part of content.modelTurn?.parts || []) {
-      if (part.text) modelTranscriptBuffer += part.text;
+      if (part.text) appendModelTranscript(part.text);
       const inlineData = part.inlineData;
       if (!inlineData?.data) continue;
       const mimeType = inlineData.mimeType || "audio/pcm;rate=24000";
@@ -3142,7 +3111,7 @@ app.whenReady().then(() => {
   ipcMain.on("iris:boot-done", () => GreetGate.fire());
   ipcMain.on("iris:ui-context", (_event, context) => {
     if (context && typeof context === "object") {
-      irisUiContext = context;
+      setUiContextSnapshot(context);
     }
   });
   ipcMain.on("live:audio", (_event, chunk) => sendAudioChunk(chunk));
