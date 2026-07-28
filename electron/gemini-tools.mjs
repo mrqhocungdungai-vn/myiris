@@ -3,15 +3,33 @@
 // (split-main-process-modules): stateless and Electron-free, so every value
 // that varies at runtime is injected rather than read from a module-level
 // binding.
+//
+// Capability contract (design.md D10): a capability under
+// electron/capabilities/ (e.g. canvas, second-brain) contributes to the
+// core modules by exporting a factory that returns an object with these
+// optional fields — every field is optional, and a capability with nothing
+// to say for a given field simply omits it:
+//   {
+//     toolDeclarations?: Array<object>,        // Gemini function declarations
+//     promptFragment?: () => string,           // one prose paragraph, or ""
+//     ipcHandlers?: Array<{ channel, kind: "handle"|"on", fn }>,
+//     probe?: () => { ok: boolean, ... },       // availability probe
+//     teardown?: () => void | Promise<void>,    // shutdown hook
+//   }
+// gemini-tools.mjs concatenates each capability's toolDeclarations into the
+// function-declarations array; gemini-prompts.mjs splices each capability's
+// promptFragment() into the system instruction. Core modules never hardcode
+// a capability-specific declaration or prose string.
 
 /**
  * @param {{
  *   getPipelineAvailable: () => boolean,
  *   modelChoices: Array<{ id: string, label: string }>,
  *   envFlag: (name: string, fallback?: boolean) => boolean,
+ *   capabilities?: Array<{ toolDeclarations?: any[] }>,
  * }} deps
  */
-export function createGeminiTools({ getPipelineAvailable, modelChoices, envFlag }) {
+export function createGeminiTools({ getPipelineAvailable, modelChoices, envFlag, capabilities = [] }) {
   function buildPipelineToolDeclarations() {
     return [
       {
@@ -180,6 +198,7 @@ export function createGeminiTools({ getPipelineAvailable, modelChoices, envFlag 
         functionDeclarations: [
           ...(getPipelineAvailable() ? buildPipelineToolDeclarations() : []),
           ...buildAlwaysToolDeclarations(),
+          ...capabilities.flatMap((cap) => cap.toolDeclarations || []),
         ],
       },
     ];

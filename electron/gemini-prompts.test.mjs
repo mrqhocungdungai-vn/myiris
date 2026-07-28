@@ -8,6 +8,7 @@ function make({
   envFlag = () => false,
   notesOk = false,
   userName = "Alex",
+  capabilities = [],
 } = {}) {
   return createGeminiPrompts({
     getPipelineAvailable: () => pipelineAvailable,
@@ -17,6 +18,7 @@ function make({
     workspaceContextLine: () => "WORKSPACE_CONTEXT_LINE_STUB",
     checkNotesSkillsStatus: () => ({ ok: notesOk }),
     fenceUntrustedText: (text, label) => `<<${label}>>${text}<<end>>`,
+    capabilities,
   });
 }
 
@@ -62,5 +64,15 @@ describe("gemini-prompts", () => {
   it("entry confirmation prompt is a stable one-liner", () => {
     const prompt = make().buildListenEntryConfirmationPrompt();
     expect(prompt).toContain("SYSTEM_EVENT_LISTEN_MODE_START");
+  });
+
+  it("splicing an empty capability list changes nothing", () => {
+    expect(make({ capabilities: [] }).buildSystemInstructionText()).toEqual(make().buildSystemInstructionText());
+  });
+
+  it("splices a registered capability's prompt fragment into the instructions", () => {
+    const fakeCapability = { promptFragment: () => "FAKE_CAPABILITY_FRAGMENT" };
+    const text = make({ capabilities: [fakeCapability] }).buildSystemInstructionText();
+    expect(text).toContain("FAKE_CAPABILITY_FRAGMENT");
   });
 });

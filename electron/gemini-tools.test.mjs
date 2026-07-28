@@ -7,11 +7,13 @@ const modelChoices = [
 ];
 
 /** @param {{ pipelineAvailable?: boolean, envFlag?: (name: string, fallback?: boolean) => boolean }} [opts] */
-function make({ pipelineAvailable = true, envFlag = () => false } = {}) {
+/** @param {{ pipelineAvailable?: boolean, envFlag?: (name: string, fallback?: boolean) => boolean, capabilities?: Array<{ toolDeclarations?: any[] }> }} [opts] */
+function make({ pipelineAvailable = true, envFlag = () => false, capabilities = [] } = {}) {
   return createGeminiTools({
     getPipelineAvailable: () => pipelineAvailable,
     modelChoices,
     envFlag,
+    capabilities,
   });
 }
 
@@ -47,5 +49,18 @@ describe("gemini-tools", () => {
 
     const withoutSearch = make({ envFlag: () => false }).buildLiveTools();
     expect(withoutSearch.some((t) => t.googleSearch)).toBe(false);
+  });
+
+  it("composes capability tool declarations without changing output when none are registered", () => {
+    const withoutCapabilities = make().buildClaudeTools();
+    const withEmptyList = make({ capabilities: [] }).buildClaudeTools();
+    expect(withEmptyList).toEqual(withoutCapabilities);
+  });
+
+  it("concatenates a registered capability's tool declarations", () => {
+    const fakeCapability = { toolDeclarations: [{ name: "draw_shape", parameters: { type: "object", properties: {} } }] };
+    const tools = make({ capabilities: [fakeCapability] }).buildClaudeTools();
+    const names = tools[0].functionDeclarations.map((d) => d.name);
+    expect(names).toContain("draw_shape");
   });
 });

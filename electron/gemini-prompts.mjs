@@ -4,6 +4,12 @@
 // that varies at runtime is injected rather than read from a module-level
 // binding.
 
+// Capability contract: see gemini-tools.mjs's header comment (design.md D10).
+// This module splices each registered capability's promptFragment() into the
+// system instruction rather than concatenating (unlike tool declarations,
+// prose position is meaningful) — with no capability registered yet, the
+// splice point below is a no-op.
+
 /**
  * @param {{
  *   getPipelineAvailable: () => boolean,
@@ -13,6 +19,7 @@
  *   workspaceContextLine: () => string,
  *   checkNotesSkillsStatus: () => { ok: boolean },
  *   fenceUntrustedText: (text: string, label: string) => string,
+ *   capabilities?: Array<{ promptFragment?: () => string }>,
  * }} deps
  */
 export function createGeminiPrompts({
@@ -23,6 +30,7 @@ export function createGeminiPrompts({
   workspaceContextLine,
   checkNotesSkillsStatus,
   fenceUntrustedText,
+  capabilities = [],
 }) {
   // One prompt builder with the pipeline sections included only when
   // pipelineAvailable (design.md decision 2) — never a second maintained
@@ -80,6 +88,14 @@ export function createGeminiPrompts({
           : "You do not have a background worker on this machine right now — you are a friendly, capable conversational voice companion. Google Search is NOT enabled (it's an optional, billed capability turned on from Settings) — do not claim to search the web yourself.",
         `If ${userDisplayName()} asks for multi-step work, coding, file/terminal automation, or anything else that needs tools you don't have, say plainly that this needs the Claude pipeline, which is not set up on this machine yet (the Claude Code CLI can be installed and checked from Settings), and offer to help conversationally with whatever you can instead. Never claim you will hand work off to Claude — you have no worker to hand it to.`,
       );
+    }
+
+    // Capability composition seam (design.md D10): each registered
+    // capability's promptFragment, if it has one. No-op today — no
+    // capability is registered until the capability tier lands (group 5).
+    for (const cap of capabilities) {
+      const fragment = cap.promptFragment?.();
+      if (fragment) lines.push(fragment);
     }
 
     lines.push(
