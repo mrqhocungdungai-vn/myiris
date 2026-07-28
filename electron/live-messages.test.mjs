@@ -1,6 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
 import { createLiveMessages } from "./live-messages.mjs";
 
+// Mirrors the real ListenMode object's named transitions (main.mjs, task 4.5)
+// so tests exercise the same accessor shape live-messages.mjs actually calls.
 function makeListenMode(overrides = {}) {
   return {
     engaged: false,
@@ -8,6 +10,12 @@ function makeListenMode(overrides = {}) {
     boundaryInFlight: false,
     segmentRecord: "",
     ...overrides,
+    isEngaged() { return this.engaged; },
+    isTransitioning() { return this.transitioning; },
+    isBoundaryInFlight() { return this.boundaryInFlight; },
+    appendToSegment(text) {
+      this.segmentRecord += text;
+    },
   };
 }
 

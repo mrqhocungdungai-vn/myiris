@@ -242,8 +242,7 @@ export function createLiveSession({
           // the offline teardown entirely (design.md Decision 12); the
           // sequence that called closeLiveSessionDeliberately() drives the
           // reconnect explicitly.
-          if (listenMode.deliberateReconnect) {
-            listenMode.deliberateReconnect = false;
+          if (listenMode.consumeDeliberateReconnect()) {
             return;
           }
 
@@ -266,16 +265,10 @@ export function createLiveSession({
           // would leave the ear icon lit over a session that has stopped
           // listening. The failure-reconnect path below always targets
           // converse, so either way the mode must end here first.
-          if (listenMode.engaged || listenMode.transitioning) {
+          if (listenMode.isEngaged() || listenMode.isTransitioning()) {
             clearListenRotationTimer();
-            listenMode.transitioning = false;
-            listenMode.boundaryInFlight = false;
+            listenMode.settleBoundary();
             setListenEngaged(false);
-            if (listenMode.segmentRecord.trim()) {
-              listenMode.synthesizeOnNextConverseConnect = true;
-            } else {
-              listenMode.segmentRecord = "";
-            }
           }
 
           scheduleReconnect(event?.reason || "connection closed");
@@ -292,10 +285,8 @@ export function createLiveSession({
       // Recovery synthesis after an unexpected disconnect ended the mode
       // (design.md Decision 10 / tasks.md 4.7) — fires at most once, only
       // once conversation is actually back up.
-      if (listenMode.synthesizeOnNextConverseConnect) {
-        listenMode.synthesizeOnNextConverseConnect = false;
-        const segment = listenMode.segmentRecord;
-        listenMode.segmentRecord = "";
+      const segment = listenMode.consumeSynthesisSegment();
+      if (segment !== null) {
         liveSession?.sendClientContent({
           turns: [{ role: "user", parts: [{ text: buildListenExitSynthesisPrompt(segment) }] }],
           turnComplete: true,

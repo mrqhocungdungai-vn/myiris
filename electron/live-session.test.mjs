@@ -21,6 +21,9 @@ function fakeGoogleGenAIImpl(connectImpl) {
   };
 }
 
+// Mirrors the real ListenMode object's named transitions (main.mjs, task 4.5)
+// so tests exercise the same accessor/transition shape live-session.mjs
+// actually calls, not raw field access.
 function makeListenMode(overrides = {}) {
   return {
     engaged: false,
@@ -30,6 +33,36 @@ function makeListenMode(overrides = {}) {
     segmentRecord: "",
     synthesizeOnNextConverseConnect: false,
     ...overrides,
+    isEngaged() { return this.engaged; },
+    isTransitioning() { return this.transitioning; },
+    isBoundaryInFlight() { return this.boundaryInFlight; },
+    consumeDeliberateReconnect() {
+      if (!this.deliberateReconnect) return false;
+      this.deliberateReconnect = false;
+      return true;
+    },
+    captureSegmentForSynthesis() {
+      if (this.segmentRecord.trim()) {
+        this.synthesizeOnNextConverseConnect = true;
+      } else {
+        this.segmentRecord = "";
+      }
+    },
+    settleBoundary() {
+      this.transitioning = false;
+      this.boundaryInFlight = false;
+      this.captureSegmentForSynthesis();
+    },
+    consumeSynthesisSegment() {
+      if (!this.synthesizeOnNextConverseConnect) return null;
+      this.synthesizeOnNextConverseConnect = false;
+      const segment = this.segmentRecord;
+      this.segmentRecord = "";
+      return segment;
+    },
+    appendToSegment(text) {
+      this.segmentRecord += text;
+    },
   };
 }
 
@@ -174,10 +207,9 @@ describe("live-session: scheduleReconnect (via connectLive's onclose)", () => {
   });
 });
 
-describe("live-session: ListenMode field interaction (verbatim per task 4.4)", () => {
-  it("does not run the failure-reconnect path on a deliberate reconnect", async () => {
-    const listenMode = makeListenMode({ deliberateReconnect: true });
-    const live = make({ listenMode });
+describe("live-session: ListenMode named transitions (task 4.5)", () => {
+  /** @returns {Promise<any>} */
+  async function connectAndCapture(live) {
     /** @type {any} */
     let callbacks;
     const GoogleGenAI = await getMockedGoogleGenAI();
@@ -188,8 +220,65 @@ describe("live-session: ListenMode field interaction (verbatim per task 4.4)", (
       }),
     );
     await live.connectLive({ isReconnect: true, mode: "converse" });
-    callbacks.onclose({ code: 1000, reason: "deliberate" });
+    return () => callbacks;
+  }
+
+  it("consumeDeliberateReconnect: a deliberate close skips the failure-reconnect path", async () => {
+    const listenMode = makeListenMode({ deliberateReconnect: true });
+    const live = make({ listenMode });
+    const getCallbacks = await connectAndCapture(live);
+    getCallbacks().onclose({ code: 1000, reason: "deliberate" });
+    // Consumed: false afterwards, and settled exactly once (the field itself
+    // reflects the transition's effect, whether read as a field or a method).
     expect(listenMode.deliberateReconnect).toBe(false);
+  });
+
+  it("settleBoundary + captureSegmentForSynthesis: an unexpected disconnect while engaged keeps a non-empty segment for recovery", async () => {
+    const listenMode = makeListenMode({ engaged: true, segmentRecord: "we should ship Friday" });
+    const live = make({ listenMode });
+    const getCallbacks = await connectAndCapture(live);
+    getCallbacks().onclose({ code: 1006, reason: "network drop" });
+    expect(listenMode.transitioning).toBe(false);
+    expect(listenMode.boundaryInFlight).toBe(false);
+    expect(listenMode.synthesizeOnNextConverseConnect).toBe(true);
+    expect(listenMode.segmentRecord).toBe("we should ship Friday");
+  });
+
+  it("settleBoundary + captureSegmentForSynthesis: an unexpected disconnect with nothing captured clears the segment instead", async () => {
+    const listenMode = makeListenMode({ engaged: true, segmentRecord: "   " });
+    const live = make({ listenMode });
+    const getCallbacks = await connectAndCapture(live);
+    getCallbacks().onclose({ code: 1006, reason: "network drop" });
+    expect(listenMode.synthesizeOnNextConverseConnect).toBe(false);
+    expect(listenMode.segmentRecord).toBe("");
+  });
+
+  it("consumeSynthesisSegment: a pending recovery segment is delivered on the next converse connect, then cleared", async () => {
+    const listenMode = makeListenMode({ synthesizeOnNextConverseConnect: true, segmentRecord: "the recovered chunk" });
+    const buildListenExitSynthesisPrompt = vi.fn((segment) => `synthesis: ${segment}`);
+    const live = make({ listenMode, buildListenExitSynthesisPrompt });
+    const sendClientContent = vi.fn();
+    const GoogleGenAI = await getMockedGoogleGenAI();
+    GoogleGenAI.mockImplementationOnce(
+      fakeGoogleGenAIImpl(async () => ({ sendRealtimeInput: vi.fn(), sendClientContent })),
+    );
+    await live.connectLive({ isReconnect: true, mode: "converse" });
+    expect(buildListenExitSynthesisPrompt).toHaveBeenCalledWith("the recovered chunk");
+    expect(sendClientContent).toHaveBeenCalled();
+    expect(listenMode.synthesizeOnNextConverseConnect).toBe(false);
+    expect(listenMode.segmentRecord).toBe("");
+  });
+
+  it("consumeSynthesisSegment: does nothing when no recovery segment is pending", async () => {
+    const listenMode = makeListenMode();
+    const live = make({ listenMode });
+    const sendClientContent = vi.fn();
+    const GoogleGenAI = await getMockedGoogleGenAI();
+    GoogleGenAI.mockImplementationOnce(
+      fakeGoogleGenAIImpl(async () => ({ sendRealtimeInput: vi.fn(), sendClientContent })),
+    );
+    await live.connectLive({ isReconnect: false, mode: "converse" });
+    expect(sendClientContent).not.toHaveBeenCalled();
   });
 });
 

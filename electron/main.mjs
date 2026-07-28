@@ -103,6 +103,67 @@ const ListenMode = {
   // be uncommitted — tells the next converse connect to speak a recovery
   // synthesis once it is back up (design.md Decision 10 / tasks.md 4.7).
   synthesizeOnNextConverseConnect: false,
+
+  // Named transitions (split-main-process-modules task 4.5, design.md D11):
+  // live-session.mjs/live-messages.mjs call these instead of writing this
+  // object's fields directly — the one deepening in this change that is not
+  // a behavior-preserving-by-construction move. Reads stay reads, through
+  // the boolean accessors below.
+  isEngaged() {
+    return this.engaged;
+  },
+  isTransitioning() {
+    return this.transitioning;
+  },
+  isBoundaryInFlight() {
+    return this.boundaryInFlight;
+  },
+
+  // Consumes a deliberate-reconnect marker a listening-mode sequence set
+  // before closing the socket itself — true means the just-observed close
+  // was ours, not a failure, and the caller should skip the failure path.
+  consumeDeliberateReconnect() {
+    if (!this.deliberateReconnect) return false;
+    this.deliberateReconnect = false;
+    return true;
+  },
+
+  // If the current chunk captured anything, mark it for the recovery
+  // synthesis the next converse connect delivers; otherwise there is
+  // nothing to recover, so drop it.
+  captureSegmentForSynthesis() {
+    if (this.segmentRecord.trim()) {
+      this.synthesizeOnNextConverseConnect = true;
+    } else {
+      this.segmentRecord = "";
+    }
+  },
+
+  // Ends an in-progress transition/boundary abruptly — an unexpected
+  // disconnect while listening mode was engaged or mid-transition — and
+  // decides whether the current segment survives for recovery synthesis.
+  settleBoundary() {
+    this.transitioning = false;
+    this.boundaryInFlight = false;
+    this.captureSegmentForSynthesis();
+  },
+
+  // Consumes the pending recovery-synthesis segment, if any: returns the
+  // captured text and clears both fields, or returns null if none is
+  // pending.
+  consumeSynthesisSegment() {
+    if (!this.synthesizeOnNextConverseConnect) return null;
+    this.synthesizeOnNextConverseConnect = false;
+    const segment = this.segmentRecord;
+    this.segmentRecord = "";
+    return segment;
+  },
+
+  // Appends transcribed input to the current chunk's in-memory recovery
+  // record — accumulated whenever the mode is engaged.
+  appendToSegment(text) {
+    this.segmentRecord += text;
+  },
 };
 
 function listenChunkMs() {

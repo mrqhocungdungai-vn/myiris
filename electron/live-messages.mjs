@@ -80,7 +80,7 @@ export function createLiveMessages({
       // is engaged and idle; otherwise onclose fires shortly after and the
       // ordinary reconnect handles it.
       console.log("[IRIS][goAway] timeLeft=", message.goAway.timeLeft || "(unknown)");
-      if (listenMode.engaged && !listenMode.transitioning) {
+      if (listenMode.isEngaged() && !listenMode.isTransitioning()) {
         runListenRotation().catch((error) => {
           emitEvent({ type: "log", level: "warn", message: `Listening-mode rotation (goAway) failed: ${error.message}` });
         });
@@ -92,7 +92,7 @@ export function createLiveMessages({
       // cannot start background work") — the listening config already ships
       // an empty tool set, so this only guards a stray call arriving folded
       // into the same batch as the boundary's turnComplete.
-      if (!listenMode.boundaryInFlight) {
+      if (!listenMode.isBoundaryInFlight()) {
         handleToolCall(message.toolCall).catch((error) => {
           emitEvent({ type: "fatal", message: "Tool call failed", error: error.message });
         });
@@ -114,7 +114,7 @@ export function createLiveMessages({
       // Segment record: the recovery path for the current chunk (design.md
       // Decision 7). Accumulated whenever the mode is engaged, including
       // across a rotation's boundary — never written to disk or the vault.
-      if (listenMode.engaged) listenMode.segmentRecord += content.inputTranscription.text;
+      if (listenMode.isEngaged()) listenMode.appendToSegment(content.inputTranscription.text);
     }
 
     // Every boundary turn (rotation or exit alike) is neither heard nor shown
@@ -123,7 +123,7 @@ export function createLiveMessages({
     // renderer's speaker-mute suppression would be too late: this loop is what
     // appends to modelTranscriptBuffer and emits "speaking", both before the
     // renderer sees anything.
-    if (!listenMode.boundaryInFlight) {
+    if (!listenMode.isBoundaryInFlight()) {
       if (content.outputTranscription?.text) appendModelTranscript(content.outputTranscription.text);
 
       for (const part of content.modelTurn?.parts || []) {
