@@ -8,11 +8,15 @@
 // Diffable against electron/preload.cjs's window.iris surface (design.md
 // D3): every channel name here should have a matching preload call, and
 // vice versa.
+//
+// Capability composition (design.md D10): core channels are registered
+// directly below; each registered capability's own ipcHandlers (see the
+// capability contract in gemini-tools.mjs's header comment) are then
+// registered by iteration, never by name — so a capability-specific channel
+// is never hardcoded here.
 import electron from "electron";
-import fs from "node:fs";
-import path from "node:path";
 
-const { ipcMain, dialog } = electron;
+const { ipcMain } = electron;
 
 /**
  * @param {{
@@ -51,13 +55,7 @@ const { ipcMain, dialog } = electron;
  *   checkClaudeHealth: () => any,
  *   getPipelineAvailable: () => boolean,
  *   setUiContextSnapshot: (context: any) => void,
- *   markCanvasEngaged: () => void,
- *   maybeStartCanvasMcp: () => void,
- *   resolveCanvasImageRequest: (id: any, image: any) => void,
- *   canvasStore: { getScene: () => any, setScene: (scene: any) => void },
- *   probeSecondBrainAvailability: () => boolean,
- *   notesVaultGraph: { start: () => void, stop: () => void, getGraph: () => Promise<any>, resolveNotePath: (id: string) => string | null },
- *   notesVaultDir: string,
+ *   capabilities?: Array<{ ipcHandlers?: Array<{ channel: string, kind: "handle"|"on", fn: Function }> }>,
  * }} deps
  */
 export function registerIpc(deps) {
@@ -97,13 +95,7 @@ export function registerIpc(deps) {
     checkClaudeHealth,
     getPipelineAvailable,
     setUiContextSnapshot,
-    markCanvasEngaged,
-    maybeStartCanvasMcp,
-    resolveCanvasImageRequest,
-    canvasStore,
-    probeSecondBrainAvailability,
-    notesVaultGraph,
-    notesVaultDir,
+    capabilities = [],
   } = deps;
 
   ipcMain.handle("sidecar:start", () => startLive());
@@ -155,116 +147,6 @@ export function registerIpc(deps) {
       win.setIgnoreMouseEvents(!on, { forward: true });
     }
   });
-  // Drawing panel activation (hud-drawing-canvas design.md D4): the HUD
-  // window is transparent/frameless/always-on-top, which on macOS commonly
-  // does not receive key events without an explicit focus() — needed for
-  // excalidraw's text tool, Delete, and tool shortcuts.
-  ipcMain.on("canvas:activate", () => {
-    getMainWindow()?.focus();
-    // First-open signal for canvas-claude-mcp's sticky canvasEngaged gate
-    // (design.md D6) — a no-op on every subsequent open/close of the panel.
-    markCanvasEngaged();
-    maybeStartCanvasMcp();
-  });
-  // Reply half of the main→renderer image-export request (design.md D3);
-  // resolves the pending promise requestCanvasImage() created, if it hasn't
-  // already been cleaned up by its own timeout.
-  ipcMain.on("canvas:image-result", (_event, payload) => {
-    resolveCanvasImageRequest(payload?.id, payload?.image);
-  });
-  // Scene-access seam (design.md D5): the in-memory cache updates
-  // immediately on every push so `canvas:get-scene` is never behind the
-  // debounced disk write; that debounced write is the only async part.
-  ipcMain.on("canvas:scene", (_event, scene) => {
-    if (scene && typeof scene === "object") canvasStore.setScene(scene);
-  });
-  ipcMain.handle("canvas:get-scene", () => canvasStore.getScene());
-  // Native file-dialog fallback (design.md D5a) for when the renderer's File
-  // System Access path is unavailable under file:// — feeds excalidraw's
-  // own loadFromBlob / serializeAsJSON / exportToBlob on the renderer side.
-  ipcMain.handle("canvas:native-open-file", async () => {
-    const result = await dialog.showOpenDialog(getMainWindow(), {
-      title: "Open drawing",
-      filters: [{ name: "Excalidraw", extensions: ["excalidraw"] }],
-      properties: ["openFile"],
-    });
-    if (result.canceled || !result.filePaths[0]) return { canceled: true };
-    const content = fs.readFileSync(result.filePaths[0], "utf8");
-    return { canceled: false, content };
-  });
-  ipcMain.handle("canvas:native-save-file", async (_event, payload) => {
-    const result = await dialog.showSaveDialog(getMainWindow(), {
-      title: "Save drawing",
-      defaultPath: payload?.suggestedName || "drawing.excalidraw",
-      filters: [{ name: "Excalidraw", extensions: ["excalidraw"] }],
-    });
-    if (result.canceled || !result.filePath) return { canceled: true };
-    fs.writeFileSync(result.filePath, String(payload?.content ?? ""), "utf8");
-    return { canceled: false, filePath: result.filePath };
-  });
-  ipcMain.handle("canvas:native-export-image", async (_event, payload) => {
-    const format = payload?.format === "svg" ? "svg" : "png";
-    const result = await dialog.showSaveDialog(getMainWindow(), {
-      title: "Export image",
-      defaultPath: payload?.suggestedName || `drawing.${format}`,
-      filters: [{ name: format.toUpperCase(), extensions: [format] }],
-    });
-    if (result.canceled || !result.filePath) return { canceled: true };
-    // SVG exports as raw markup text; PNG as a base64 payload (no data: URL prefix).
-    if (format === "svg") fs.writeFileSync(result.filePath, String(payload?.data ?? ""), "utf8");
-    else fs.writeFileSync(result.filePath, String(payload?.data ?? ""), "base64");
-    return { canceled: false, filePath: result.filePath };
-  });
-  // Second-brain galaxy view (second-brain-galaxy-view design.md D3/D7/D8):
-  // renderer's boot-time/HUD-open availability pull — the live push half of
-  // this rides the existing sidecar:event stream (secondbrain_availability),
-  // not a new dedicated channel (design.md D7, L2).
-  ipcMain.handle("secondbrain:availability", () => ({ available: probeSecondBrainAvailability() }));
-  // Always a fresh scan (design.md D3) — re-checks availability inline so a
-  // vault that vanished between the toggle showing and being clicked is
-  // caught here too, not just on the next HUD-open re-check.
-  ipcMain.handle("secondbrain:get-graph", async () => {
-    const available = probeSecondBrainAvailability();
-    if (!available) return { graph: { nodes: [], links: [] }, available };
-    const graph = await notesVaultGraph.getGraph();
-    return { graph, available };
-  });
-  // Start/stop the watcher exactly on galaxy toggle-on/off (design.md D3
-  // M-2) — an always-on recursive watcher would rebuild constantly during
-  // normal note-capture use for a view that's off by default. start() is
-  // idempotent; stop() is safe to call even if never started.
-  ipcMain.on("secondbrain:activate", () => {
-    notesVaultGraph.start();
-  });
-  ipcMain.on("secondbrain:deactivate", () => {
-    notesVaultGraph.stop();
-  });
-  // Read-by-node-id only, resolved against the single graph cache — never a
-  // renderer-supplied filesystem path (design.md D8/L-1). Type/bound-check
-  // the arg since an XSS-in-renderer could pass anything (L1), then assert
-  // the resolved path (after following symlinks) is inside the vault
-  // (H3) before reading — refuses a note symlinked outside the vault
-  // (e.g. `secret.md -> ~/.ssh/id_rsa`).
-  ipcMain.handle("secondbrain:read-note", (_event, id) => {
-    if (typeof id !== "string" || id.length === 0 || id.length > 512) return { ok: false };
-    const notePath = notesVaultGraph.resolveNotePath(id);
-    if (!notePath) return { ok: false }; // ghost node, unknown id, or since-removed file
-    let realNotePath;
-    let realVaultDir;
-    try {
-      realNotePath = fs.realpathSync(notePath);
-      realVaultDir = fs.realpathSync(notesVaultDir);
-    } catch {
-      return { ok: false };
-    }
-    const withinVault = realNotePath === realVaultDir || realNotePath.startsWith(realVaultDir + path.sep);
-    if (!withinVault) return { ok: false };
-    try {
-      return { ok: true, content: fs.readFileSync(realNotePath, "utf8") };
-    } catch {
-      return { ok: false };
-    }
-  });
   ipcMain.on("win:control", (_event, action) => {
     const win = getMainWindow();
     if (!win) return;
@@ -293,4 +175,13 @@ export function registerIpc(deps) {
     setSpeakerMuted(muted);
     updateTrayMenu();
   });
+
+  // Capability composition (design.md D10): each registered capability's own
+  // channels, registered by iteration — never by name, so a capability's
+  // channel set never needs a matching edit here.
+  for (const cap of capabilities) {
+    for (const { channel, kind, fn } of cap.ipcHandlers || []) {
+      ipcMain[kind](channel, /** @type {any} */ (fn));
+    }
+  }
 }

@@ -17,7 +17,6 @@
  *   envFlag: (name: string, fallback?: boolean) => boolean,
  *   userDisplayName: () => string,
  *   workspaceContextLine: () => string,
- *   checkNotesSkillsStatus: () => { ok: boolean },
  *   fenceUntrustedText: (text: string, label: string) => string,
  *   capabilities?: Array<{ promptFragment?: () => string }>,
  * }} deps
@@ -28,7 +27,6 @@ export function createGeminiPrompts({
   envFlag,
   userDisplayName,
   workspaceContextLine,
-  checkNotesSkillsStatus,
   fenceUntrustedText,
   capabilities = [],
 }) {
@@ -59,7 +57,6 @@ export function createGeminiPrompts({
         workspaceContextLine(),
         "When the user asks which project/folder/session/role is active — or you need to state where work will happen — call get_workspace_info and answer from its result; never guess. When you receive SYSTEM_EVENT_WORKSPACE_UPDATE, silently update your knowledge of the workspace; do not speak in response to it. When you receive SYSTEM_EVENT_AGENT_SELECT, the user just switched the pipeline role from the UI: follow its instructions_to_iris and speak proactively — switching to PO with no ongoing conversation ALWAYS opens with the how-did-this-project-start question (own idea / boss-CTO mandate / customer request).",
         "Agent pipeline (runs on OpenSpec): Claude runs as one of two roles — PO (Product Owner: grills the request, then proposes an OpenSpec change under openspec/changes/<name>/ with a tasks.md — decides WHAT gets built) and DEV (Developer: implements the remaining tasks of the open change test-first, verifies, then archives it to update the living spec). The user picks the active role from the UI; moving PO → DEV is a gate, and the roles hand work to each other through the OpenSpec change in the project, never a shared conversation. Only pass the 'agent' parameter when the user explicitly names a role; never choose or advance a role yourself. PO runs as a LIVE session (stays open across tasks and pauses mid-task to ask YOU questions by voice — see SYSTEM_EVENT_PO_QUESTION); DEV runs headless and never pauses. A DEV run only works when the PO has already proposed a change with tasks — if none exists, the DEV run fails and asks for the PO to propose first.",
-        `CANVAS — ${userDisplayName()} has a drawing canvas/whiteboard in the app that YOU cannot see. When they ask something like "what should I add to my diagram", "what do you think of my drawing", "connect these two boxes", or anything else about the canvas/diagram/whiteboard, that is real work for Claude (which CAN read and draw on it) — call submit_claude_task with no 'agent' parameter (never DEV, which would be refused for lacking an open OpenSpec change) describing exactly what they asked. Never guess at what is drawn yourself.`,
         `ROLE & MODE MODEL — explain this ONLY when ${userDisplayName()} asks something like "what can you do", "how do I build software with you", or "what are the modes" — never volunteer it unprompted at session start, on wake, or otherwise. Iris runs as two co-equal modes: Talk mode (this conversation — interface/HUD control, wake/sleep, Google Search when enabled, and note-taking via the second brain) and Build mode (the PO -> DEV pipeline described above). Exactly three roles are user-facing: Iris (Talk), PO (Build: grills the request and proposes WHAT to build), and DEV (Build: implements the proposed change) — never name a fourth "plain Claude" role, even though it exists internally for ordinary tasks.`,
         `BUILD-MODE STEERING — when ${userDisplayName()} asks to start a NEW project or feature while chatting in Talk mode, tell them plainly this is Build-mode work, then follow PRODUCT OWNER CONTROL below to forward it to PO automatically — never work it yourself as an ad-hoc task. This is the same automatic hand-off PRODUCT OWNER CONTROL already performs, just named here explicitly — it does not ask ${userDisplayName()} to go pick PO from the UI themselves. Quick or ad-hoc tasks (lookups, checks, small automations, notes) stay decisive and are never steered to PO.`,
         "PRODUCT OWNER CONTROL — you are the PO's VOICE, not its analyst. When the user starts a NEW project or feature (or switches to the PO role with no ongoing PO conversation), do NOT interview them yourself and do NOT write a PRD. Instead call submit_claude_task for the PO role with a SHORT control intent that forwards what the user wants and tells the PO to start grilling — e.g. 'Start a new feature: <what the user said, with the concrete details verbatim>. Grill me to pin down the requirements.' The Claude-side PO then runs its grilling pass and pauses to ask YOU questions by voice (SYSTEM_EVENT_PO_QUESTION) — read those aloud and answer with answer_po_question. When the user is satisfied, send the PO a follow-up: 'You have enough — propose the change.' To check progress, send the PO 'Are there tasks left?' and it reads the change's tasks.md and reports back. For ordinary tasks that are not a new project/feature, skip all of this and stay decisive.",
@@ -73,14 +70,6 @@ export function createGeminiPrompts({
         "- Follow-up brief (answers to Decisions needed): send to the SAME role and repeat each decision with the chosen option verbatim, e.g. 'Decision 1: option 2 — <restate the option text>. Decision 3: keep the recommendation.' Never re-open decisions the user already settled, and never let a chosen option be paraphrased into something new.",
         "- Self-check before every submit_claude_task call: could someone who never heard this conversation do the right work from this brief alone? If not, add the missing names, numbers, paths, and decisions before sending.",
       );
-      // Gated on the notes skills actually being installed (not just pipelineAvailable) —
-      // otherwise Iris could offer a save the plain-Claude worker would refuse
-      // (role-capabilities "No offer when notes skills are not installed").
-      if (checkNotesSkillsStatus().ok) {
-        lines.push(
-          `NOTE-OFFER — after a conversational exchange has produced durable value (a research result, a worked-out decision), you MAY offer ONCE, in a single short line, to save it to ${userDisplayName()}'s second brain (e.g. "Want me to save that to your notes?"). Never auto-save and never repeat the offer for the same exchange; if declined or ignored, drop it silently. Always honor an explicit save or retrieve request regardless of whether you offered — send it to Claude as a plain task.`,
-        );
-      }
     } else {
       lines.push(
         googleSearchEnabled

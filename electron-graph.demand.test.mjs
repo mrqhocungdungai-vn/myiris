@@ -15,14 +15,15 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const electronDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "electron");
 
-// Every file under electron/ that could hold import statements — including
-// test files (their imports can be wrong too) and .cjs (preload.cjs, whose
-// only require() is the bare "electron" specifier — nothing relative to
-// resolve, but it's still parsed so a future relative require wouldn't be
-// silently uncovered).
+// Every file under electron/ (recursively — design.md D10/task 5.5, so
+// electron/capabilities/ isn't silently dropped) that could hold import
+// statements — including test files (their imports can be wrong too) and
+// .cjs (preload.cjs, whose only require() is the bare "electron" specifier —
+// nothing relative to resolve, but it's still parsed so a future relative
+// require wouldn't be silently uncovered).
 function listElectronFiles() {
   return fs
-    .readdirSync(electronDir)
+    .readdirSync(electronDir, { recursive: true })
     .filter((name) => name.endsWith(".mjs") || name.endsWith(".cjs"))
     .sort();
 }
@@ -100,7 +101,11 @@ const relativeEdges = [];
 for (const [name, { statements }] of parsedByFile) {
   for (const stmt of statements) {
     if (!isRelative(stmt.specifier)) continue;
-    const targetAbsPath = path.resolve(electronDir, stmt.specifier);
+    // Resolved against the importer's own directory, not electronDir's root
+    // — required once discovery went recursive (task 5.5): a capability
+    // module's "../foo.mjs" is one directory below electron/, not relative
+    // to electron/ itself.
+    const targetAbsPath = path.resolve(path.dirname(path.join(electronDir, name)), stmt.specifier);
     relativeEdges.push({ importer: name, specifier: stmt.specifier, targetAbsPath, defaultImport: stmt.defaultImport, named: stmt.named });
   }
 }
@@ -140,12 +145,15 @@ describe("electron/ import graph — demand side (static)", () => {
     // set and non-trivially covered, rather than silently excluded. The
     // exact name count is deliberately not hardcoded here: it shifts as
     // main.mjs changes (group 2's own noUnusedLocals fix removed one import
-    // mid-change — see design.md task 4.2), so asserting a fixed number
-    // would go stale by design.
+    // mid-change — see design.md task 4.2; the wiring.mjs extraction later
+    // dropped main.mjs's own direct sibling-import count sharply, by design
+    // — most construction it used to do directly now happens inside
+    // wiring.mjs, itself covered by the checks above since it's
+    // Electron-free), so asserting a fixed number would go stale by design.
     const mainEdges = relativeEdges.filter((e) => e.importer === "main.mjs");
     const allNames = mainEdges.flatMap((e) => e.named);
-    expect(mainEdges.length).toBeGreaterThan(10);
-    expect(allNames.length).toBeGreaterThan(20);
+    expect(mainEdges.length).toBeGreaterThan(3);
+    expect(allNames.length).toBeGreaterThan(5);
   });
 
   it("covers sibling-to-sibling edges main.mjs cannot reveal", () => {

@@ -34,9 +34,12 @@ const EXPECTED_ELECTRON_DEPENDENT = ["ipc.mjs", "main.mjs", "renderer-security.m
 // registration list with no logic of the kind this test's failure modes
 // (bad import, circular import) apply to.
 
+// Recursive discovery (design.md D10/task 5.5) so electron/capabilities/
+// isn't silently dropped out of coverage — the capability tier's own
+// modules live one directory deeper than everything else under electron/.
 function discoverCandidates() {
   const allMjs = fs
-    .readdirSync(electronDir)
+    .readdirSync(electronDir, { recursive: true })
     .filter((name) => name.endsWith(".mjs") && !name.endsWith(".test.mjs"));
 
   const electronDependent = [];

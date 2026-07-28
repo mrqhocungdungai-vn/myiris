@@ -1,0 +1,163 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+vi.mock("../canvas-store.mjs", () => ({
+  createCanvasStore: vi.fn(() => ({
+    getScene: vi.fn(() => ({ elements: [] })),
+    setScene: vi.fn(),
+    flush: vi.fn(() => Promise.resolve()),
+  })),
+}));
+
+vi.mock("../canvas-mcp.mjs", () => ({
+  createCanvasMcp: vi.fn(() => ({
+    start: vi.fn(() => Promise.resolve()),
+    stop: vi.fn(() => Promise.resolve()),
+    getInfo: vi.fn(() => ({ url: "http://127.0.0.1:1/mcp", token: "tok" })),
+  })),
+  buildMcpServerRecord: vi.fn((info) => ({ type: "http", url: info.url, headers: { Authorization: `Bearer ${info.token}` }, alwaysLoad: true })),
+}));
+
+import { createCanvasStore as createCanvasStoreReal } from "../canvas-store.mjs";
+import { createCanvasMcp as createCanvasMcpReal } from "../canvas-mcp.mjs";
+import { createCanvasCapability } from "./canvas.mjs";
+
+// Cast to the vi.fn() mock shape — the real modules' JSDoc types don't
+// carry `.mock`, but vi.mock() above replaces them with mocks at runtime.
+/** @type {any} */
+const createCanvasStore = createCanvasStoreReal;
+/** @type {any} */
+const createCanvasMcp = createCanvasMcpReal;
+
+function make(overrides = {}) {
+  return createCanvasCapability({
+    canvasStoreFile: "/fake/canvas.json",
+    emitToRenderer: vi.fn(),
+    emitEvent: vi.fn(),
+    getMainWindow: vi.fn(() => null),
+    getPipelineAvailable: vi.fn(() => true),
+    userDisplayName: vi.fn(() => "Alex"),
+    dialog: { showOpenDialog: vi.fn(), showSaveDialog: vi.fn() },
+    ...overrides,
+  });
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
+describe("canvas capability: canvasEngaged gate", () => {
+  it("maybeStartCanvasMcp does nothing until canvas:activate marks it engaged", () => {
+    const cap = make();
+    const mcpInstance = createCanvasMcp.mock.results[0].value;
+    cap.maybeStartCanvasMcp();
+    expect(mcpInstance.start).not.toHaveBeenCalled();
+
+    const activateHandler = cap.ipcHandlers.find((h) => h.channel === "canvas:activate").fn;
+    activateHandler();
+    expect(mcpInstance.start).toHaveBeenCalled();
+  });
+
+  it("maybeStartCanvasMcp does nothing when the pipeline is unavailable, even once engaged", () => {
+    const cap = make({ getPipelineAvailable: vi.fn(() => false) });
+    const mcpInstance = createCanvasMcp.mock.results[0].value;
+    const activateHandler = cap.ipcHandlers.find((h) => h.channel === "canvas:activate").fn;
+    activateHandler();
+    expect(mcpInstance.start).not.toHaveBeenCalled();
+  });
+
+  it("ensureCanvasMcpForRun returns null when not engaged", async () => {
+    const cap = make();
+    expect(await cap.ensureCanvasMcpForRun()).toBeNull();
+  });
+
+  it("ensureCanvasMcpForRun returns an McpHttpServerConfig record once engaged and available", async () => {
+    const cap = make();
+    cap.ipcHandlers.find((h) => h.channel === "canvas:activate").fn();
+    const record = await cap.ensureCanvasMcpForRun();
+    expect(record).toEqual({
+      type: "http",
+      url: "http://127.0.0.1:1/mcp",
+      headers: { Authorization: "Bearer tok" },
+      alwaysLoad: true,
+    });
+  });
+});
+
+describe("canvas capability: promptFragment", () => {
+  it("is gated on pipeline availability, mirroring the pre-split behavior", () => {
+    expect(make({ getPipelineAvailable: () => false }).promptFragment()).toBe("");
+    expect(make({ getPipelineAvailable: () => true }).promptFragment()).toContain("CANVAS");
+  });
+
+  it("mentions submit_claude_task and never DEV", () => {
+    const fragment = make().promptFragment();
+    expect(fragment).toContain("submit_claude_task");
+    expect(fragment).toContain("never DEV");
+  });
+});
+
+describe("canvas capability: ipcHandlers", () => {
+  it("registers exactly the 7 canvas:* channels with the correct handle/on split", () => {
+    const cap = make();
+    const byChannel = Object.fromEntries(cap.ipcHandlers.map((h) => [h.channel, h.kind]));
+    expect(byChannel).toEqual({
+      "canvas:activate": "on",
+      "canvas:image-result": "on",
+      "canvas:scene": "on",
+      "canvas:get-scene": "handle",
+      "canvas:native-open-file": "handle",
+      "canvas:native-save-file": "handle",
+      "canvas:native-export-image": "handle",
+    });
+  });
+
+  it("canvas:scene writes an object payload to the store but ignores a non-object one", () => {
+    const cap = make();
+    const storeInstance = createCanvasStore.mock.results[0].value;
+    const sceneHandler = cap.ipcHandlers.find((h) => h.channel === "canvas:scene").fn;
+    sceneHandler(null, { elements: [] });
+    expect(storeInstance.setScene).toHaveBeenCalledWith({ elements: [] });
+    storeInstance.setScene.mockClear();
+    sceneHandler(null, "not-an-object");
+    expect(storeInstance.setScene).not.toHaveBeenCalled();
+  });
+
+  it("canvas:get-scene reads through to the store", () => {
+    const cap = make();
+    const storeInstance = createCanvasStore.mock.results[0].value;
+    const getSceneHandler = cap.ipcHandlers.find((h) => h.channel === "canvas:get-scene").fn;
+    expect(getSceneHandler()).toEqual({ elements: [] });
+    expect(storeInstance.getScene).toHaveBeenCalled();
+  });
+
+  it("canvas:image-result is a safe no-op for an id with no pending resolver", () => {
+    // requestCanvasImage (which registers a pending resolver) isn't on the
+    // returned interface — it's only reachable via canvas-mcp's
+    // requestImage callback, which the mocked createCanvasMcp never
+    // invokes — so this covers the "reply arrives late/unmatched" branch
+    // directly instead.
+    const cap = make();
+    const imageResultHandler = cap.ipcHandlers.find((h) => h.channel === "canvas:image-result").fn;
+    expect(() => imageResultHandler(null, { id: "unknown-id", image: "data:..." })).not.toThrow();
+  });
+
+  it("canvas:native-open-file returns canceled:true when the dialog is canceled", async () => {
+    const dialog = { showOpenDialog: vi.fn(() => Promise.resolve({ canceled: true, filePaths: [] })), showSaveDialog: vi.fn() };
+    const cap = make({ dialog });
+    const handler = cap.ipcHandlers.find((h) => h.channel === "canvas:native-open-file").fn;
+    expect(await handler()).toEqual({ canceled: true });
+  });
+});
+
+describe("canvas capability: teardown", () => {
+  it("flushes the store and stops the MCP server, swallowing errors from either", async () => {
+    const cap = make();
+    const storeInstance = createCanvasStore.mock.results[0].value;
+    const mcpInstance = createCanvasMcp.mock.results[0].value;
+    storeInstance.flush.mockImplementation(() => Promise.reject(new Error("disk full")));
+    mcpInstance.stop.mockImplementation(() => Promise.reject(new Error("already down")));
+    await expect(cap.teardown()).resolves.toBeUndefined();
+    expect(storeInstance.flush).toHaveBeenCalled();
+    expect(mcpInstance.stop).toHaveBeenCalled();
+  });
+});

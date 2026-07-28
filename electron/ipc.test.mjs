@@ -9,10 +9,6 @@ vi.mock("electron", () => {
         handle: vi.fn((channel, fn) => handleCalls.set(channel, fn)),
         on: vi.fn((channel, fn) => onCalls.set(channel, fn)),
       },
-      dialog: {
-        showOpenDialog: vi.fn(),
-        showSaveDialog: vi.fn(),
-      },
       __test: { handleCalls, onCalls },
     },
   };
@@ -24,8 +20,11 @@ import { registerIpc } from "./ipc.mjs";
 /** @type {any} */
 const electron = electronReal;
 
-// Mirrors the baseline recorded in openspec/changes/split-main-process-modules/baseline.md
-// (task 1.2) — the acceptance evidence that the IPC surface is unchanged.
+// Mirrors the CORE subset of the baseline recorded in
+// openspec/changes/split-main-process-modules/baseline.md (task 1.2) — the
+// 12 canvas:*/secondbrain:* channels moved to the capability modules
+// (task 5.1/5.2) and are registered here only via the capabilities-iteration
+// composition, covered separately below.
 const EXPECTED_HANDLE = [
   "sidecar:start",
   "sidecar:stop",
@@ -47,13 +46,6 @@ const EXPECTED_HANDLE = [
   "prompt:set-review-mode",
   "context-supplement:send",
   "hud:toggle",
-  "canvas:get-scene",
-  "canvas:native-open-file",
-  "canvas:native-save-file",
-  "canvas:native-export-image",
-  "secondbrain:availability",
-  "secondbrain:get-graph",
-  "secondbrain:read-note",
   "config:get",
   "config:save",
   "config:save-po-token",
@@ -67,11 +59,6 @@ const EXPECTED_HANDLE = [
 const EXPECTED_ON = [
   "listen-mode:toggle-request",
   "hud:interactive",
-  "canvas:activate",
-  "canvas:image-result",
-  "canvas:scene",
-  "secondbrain:activate",
-  "secondbrain:deactivate",
   "win:control",
   "iris:boot-done",
   "iris:ui-context",
@@ -116,13 +103,6 @@ function makeDeps(overrides = {}) {
     checkClaudeHealth: vi.fn(),
     getPipelineAvailable: vi.fn(() => true),
     setUiContextSnapshot: vi.fn(),
-    markCanvasEngaged: vi.fn(),
-    maybeStartCanvasMcp: vi.fn(),
-    resolveCanvasImageRequest: vi.fn(),
-    canvasStore: { getScene: vi.fn(), setScene: vi.fn() },
-    probeSecondBrainAvailability: vi.fn(() => true),
-    notesVaultGraph: { start: vi.fn(), stop: vi.fn(), getGraph: vi.fn(), resolveNotePath: vi.fn() },
-    notesVaultDir: "/fake/vault",
     ...overrides,
   };
 }
@@ -133,12 +113,12 @@ beforeEach(() => {
 });
 
 describe("ipc: registration surface", () => {
-  it("registers exactly the expected handle channels and no others", () => {
+  it("registers exactly the expected core handle channels and no others", () => {
     registerIpc(makeDeps());
     expect([...electron.__test.handleCalls.keys()].sort()).toEqual(EXPECTED_HANDLE);
   });
 
-  it("registers exactly the expected on (fire-and-forget) channels and no others", () => {
+  it("registers exactly the expected core on (fire-and-forget) channels and no others", () => {
     registerIpc(makeDeps());
     expect([...electron.__test.onCalls.keys()].sort()).toEqual(EXPECTED_ON);
   });
@@ -172,22 +152,6 @@ describe("ipc: handlers marshal and delegate", () => {
     expect(electron.__test.handleCalls.get("listen-mode:query")()).toEqual({ engaged: true });
   });
 
-  it("canvas:activate focuses the window, marks canvas engaged, and tries to start the MCP", () => {
-    const deps = makeDeps();
-    registerIpc(deps);
-    electron.__test.onCalls.get("canvas:activate")();
-    expect(deps.getMainWindow).toHaveBeenCalled();
-    expect(deps.markCanvasEngaged).toHaveBeenCalled();
-    expect(deps.maybeStartCanvasMcp).toHaveBeenCalled();
-  });
-
-  it("canvas:image-result resolves via the injected resolver, not a locally-held map", () => {
-    const deps = makeDeps();
-    registerIpc(deps);
-    electron.__test.onCalls.get("canvas:image-result")(null, { id: "abc", image: "data:..." });
-    expect(deps.resolveCanvasImageRequest).toHaveBeenCalledWith("abc", "data:...");
-  });
-
   it("hud:toggle toggles, refreshes the tray, and reports the new mode", () => {
     const deps = makeDeps({ getUiMode: vi.fn(() => "hud") });
     registerIpc(deps);
@@ -195,22 +159,6 @@ describe("ipc: handlers marshal and delegate", () => {
     expect(deps.toggleHud).toHaveBeenCalled();
     expect(deps.updateTrayMenu).toHaveBeenCalled();
     expect(result).toEqual({ mode: "hud" });
-  });
-
-  it("secondbrain:get-graph returns an empty graph without reading the vault when unavailable", async () => {
-    const deps = makeDeps({ probeSecondBrainAvailability: vi.fn(() => false) });
-    registerIpc(deps);
-    const result = await electron.__test.handleCalls.get("secondbrain:get-graph")();
-    expect(result).toEqual({ graph: { nodes: [], links: [] }, available: false });
-    expect(deps.notesVaultGraph.getGraph).not.toHaveBeenCalled();
-  });
-
-  it("secondbrain:read-note rejects a malformed id without touching the graph", () => {
-    const deps = makeDeps();
-    registerIpc(deps);
-    expect(electron.__test.handleCalls.get("secondbrain:read-note")(null, "")).toEqual({ ok: false });
-    expect(electron.__test.handleCalls.get("secondbrain:read-note")(null, 42)).toEqual({ ok: false });
-    expect(deps.notesVaultGraph.resolveNotePath).not.toHaveBeenCalled();
   });
 
   it("win:control closes or minimizes the injected window", () => {
@@ -229,5 +177,42 @@ describe("ipc: handlers marshal and delegate", () => {
     electron.__test.onCalls.get("iris:speaker-mute-state")(null, true);
     expect(deps.setSpeakerMuted).toHaveBeenCalledWith(true);
     expect(deps.updateTrayMenu).toHaveBeenCalled();
+  });
+});
+
+describe("ipc: capability composition (design.md D10)", () => {
+  it("registers a capability's ipcHandlers by iteration, using its declared kind", () => {
+    const fooHandle = vi.fn(() => "foo-result");
+    const barOn = vi.fn();
+    const capabilities = [
+      {
+        ipcHandlers: [
+          { channel: "capability:foo", kind: "handle", fn: fooHandle },
+          { channel: "capability:bar", kind: "on", fn: barOn },
+        ],
+      },
+    ];
+    registerIpc(makeDeps({ capabilities }));
+    expect(electron.__test.handleCalls.get("capability:foo")()).toBe("foo-result");
+    electron.__test.onCalls.get("capability:bar")();
+    expect(barOn).toHaveBeenCalled();
+  });
+
+  it("registers channels from multiple capabilities without collision", () => {
+    const capabilities = [
+      { ipcHandlers: [{ channel: "capability:a", kind: "handle", fn: vi.fn() }] },
+      { ipcHandlers: [{ channel: "capability:b", kind: "on", fn: vi.fn() }] },
+    ];
+    registerIpc(makeDeps({ capabilities }));
+    expect(electron.__test.handleCalls.has("capability:a")).toBe(true);
+    expect(electron.__test.onCalls.has("capability:b")).toBe(true);
+  });
+
+  it("tolerates a capability with no ipcHandlers field", () => {
+    expect(() => registerIpc(makeDeps({ capabilities: [{}] }))).not.toThrow();
+  });
+
+  it("tolerates no capabilities being registered at all", () => {
+    expect(() => registerIpc(makeDeps())).not.toThrow();
   });
 });

@@ -6,7 +6,6 @@ const modelChoices = [{ id: "claude-fable-5", label: "Fable" }];
 function make({
   pipelineAvailable = true,
   envFlag = () => false,
-  notesOk = false,
   userName = "Alex",
   capabilities = [],
 } = {}) {
@@ -16,7 +15,6 @@ function make({
     envFlag,
     userDisplayName: () => userName,
     workspaceContextLine: () => "WORKSPACE_CONTEXT_LINE_STUB",
-    checkNotesSkillsStatus: () => ({ ok: notesOk }),
     fenceUntrustedText: (text, label) => `<<${label}>>${text}<<end>>`,
     capabilities,
   });
@@ -42,13 +40,6 @@ describe("gemini-prompts", () => {
     const converse = make({ pipelineAvailable: false }).buildSystemInstructionText();
     expect(converse).not.toContain("submit_claude_task");
     expect(converse).toContain("no background worker");
-  });
-
-  it("offers the note-save line only when notes skills are installed", () => {
-    const withNotes = make({ notesOk: true }).buildSystemInstructionText();
-    const withoutNotes = make({ notesOk: false }).buildSystemInstructionText();
-    expect(withNotes).toContain("NOTE-OFFER");
-    expect(withoutNotes).not.toContain("NOTE-OFFER");
   });
 
   it("fences captured speech in the exit synthesis prompt", () => {
