@@ -508,12 +508,21 @@ function killChild(child, signal) {
   }
 }
 
-// One task at a time, globally — see electron/run-queue.mjs. startClaudeRun and
-// announceClaudeCompletion are function declarations defined later in this file;
-// referencing them here is safe because they're hoisted before this line ever runs.
+// One task at a time, globally — see electron/run-queue.mjs. startClaudeRun,
+// killChild and emitEvent are today function declarations defined later in
+// this file, hoisted before this line ever runs — but the split
+// (split-main-process-modules design.md D6) will make each of them a `const`
+// destructured from a module constructed further down this same wiring
+// block (run-exec.mjs, renderer-bridge.mjs), which a direct reference here
+// would see before initialization. Every collaborator that will eventually
+// live in a later-constructed module is therefore called through a thunk —
+// deferred until runQueue actually dispatches a run, well after the whole
+// file has finished its top-to-bottom setup — rather than passed as a
+// direct reference. This is the single highest-risk step in the split
+// (design.md Risks: "ESM circular imports resolving to undefined").
 const runQueue = createRunQueue({
-  startRun: startClaudeRun,
-  killChild,
+  startRun: (run) => startClaudeRun(run),
+  killChild: (child, signal) => killChild(child, signal),
   // Routes stop() on an active PO turn (no child process to signal) by
   // workstream — a no-op if no live session exists for it. Never touches the
   // slot itself; the slot releases when startPoRun's settle handler finalizes
@@ -522,7 +531,7 @@ const runQueue = createRunQueue({
     const state = getPoSessionState(run.workstream_id);
     if (state) cancelPoTurn(state);
   },
-  emit: emitEvent,
+  emit: (event) => emitEvent(event),
   onFinalized: (run) => {
     // Discard any pending trailing activity emit so it cannot fire after
     // finalize's terminal update (the real result) and overwrite it with
