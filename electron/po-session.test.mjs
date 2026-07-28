@@ -24,7 +24,14 @@ function createFakeQuerySource() {
     }
   }
 
-  const query = {
+  // Deliberately minimal: only the async-iterator surface po-session.mjs's
+  // pump() drives plus return() for teardown. The real SDK Query interface
+  // has ~29 more control-request methods (setModel, interrupt, etc.); this
+  // fake omits them because po-session.mjs only ever calls them through
+  // `state.query?.method?.()` optional chaining, so an untested method being
+  // absent here is not a gap in what's being verified. Cast rather than
+  // stub every member.
+  const query = /** @type {any} */ ({
     [Symbol.asyncIterator]() {
       return this;
     },
@@ -54,7 +61,7 @@ function createFakeQuerySource() {
       wake();
       return { value, done: true };
     },
-  };
+  });
 
   return {
     query,
@@ -156,7 +163,9 @@ describe("po-session canvas MCP wiring", () => {
   it("passes mcpServers through to the SDK query() options at session creation", () => {
     const source = createFakeQuerySource();
     const workstream = makeWorkstream();
+    /** @type {any} */
     let capturedOptions;
+    /** @param {{ options?: any }} params */
     const queryFn = ({ options }) => {
       capturedOptions = options;
       return source.query;
@@ -171,7 +180,9 @@ describe("po-session canvas MCP wiring", () => {
   it("omits mcpServers entirely when the canvas MCP is not available", () => {
     const source = createFakeQuerySource();
     const workstream = makeWorkstream();
+    /** @type {any} */
     let capturedOptions;
+    /** @param {{ options?: any }} params */
     const queryFn = ({ options }) => {
       capturedOptions = options;
       return source.query;

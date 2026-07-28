@@ -270,8 +270,11 @@ export function applyAddElements(scene, skeletons) {
   const nextElements = elements.concat(added);
   const nextIdIndex = new Map(nextElements.map((e, i) => [e.id, i]));
   for (const el of added) {
-    if (el.startBinding) addBoundElement(nextElements, nextIdIndex, el.startBinding.elementId, el.id, el.type);
-    if (el.endBinding) addBoundElement(nextElements, nextIdIndex, el.endBinding.elementId, el.id, el.type);
+    // startBinding/endBinding exist only on the linear-element branch of
+    // buildElement's return union; the shape/text branch has neither.
+    const linearEl = /** @type {any} */ (el);
+    if (linearEl.startBinding) addBoundElement(nextElements, nextIdIndex, linearEl.startBinding.elementId, el.id, el.type);
+    if (linearEl.endBinding) addBoundElement(nextElements, nextIdIndex, linearEl.endBinding.elementId, el.id, el.type);
   }
 
   return { scene: { ...s, elements: nextElements }, results };
@@ -365,6 +368,7 @@ function registerTools(server, deps) {
     async ({ includeImage }) => {
       const scene = sceneOrEmpty(getScene());
       log?.("tool_call", { tool: "get_canvas", elements: scene.elements.length });
+      /** @type {Array<{ type: string, text: string } | { type: string, data: string, mimeType: string }>} */
       const content = [{ type: "text", text: JSON.stringify(scene) }];
       if (includeImage) {
         const image = await withTimeout(requestImage({ timeoutMs: DEFAULT_IMAGE_TIMEOUT_MS }), DEFAULT_IMAGE_TIMEOUT_MS);
@@ -438,6 +442,17 @@ function registerTools(server, deps) {
 // a no-op with no window and the renderer only listens while the panel is
 // mounted), and requestImage resolves { mimeType, data } or null (timeout /
 // panel unmounted) for get_canvas's optional image.
+/**
+ * @param {{
+ *   getScene: Function,
+ *   setScene: Function,
+ *   flush: Function,
+ *   broadcastApply: Function,
+ *   requestImage: Function,
+ *   log?: (event: string, detail?: object) => void,
+ *   port?: number,
+ * }} options
+ */
 export function createCanvasMcp({
   getScene,
   setScene,

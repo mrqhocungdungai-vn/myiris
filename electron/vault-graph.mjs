@@ -107,6 +107,9 @@ async function scanVault(dir) {
 // owned by the renderer, never by this module. Modeled as a factory (like
 // createCanvasStore) — closure state, no module-level singleton, so it is
 // unit-testable and main.mjs can hold exactly one instance.
+/**
+ * @param {{ dir?: string, debounceMs?: number }} options
+ */
 export function createVaultGraph({ dir, debounceMs = DEFAULT_DEBOUNCE_MS } = {}) {
   if (!dir) throw new Error("createVaultGraph requires a dir");
 

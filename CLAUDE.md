@@ -35,7 +35,7 @@ that can pause mid-turn to ask a voice question; DEV is a **stateless** one-shot
 ```bash
 npm ci                 # install deps
 npm run dev            # Vite + Electron with hot reload (dev)
-npm run build          # tsc --noEmit + vite build (typecheck gate)
+npm run build          # tsc --noEmit (src) + tsc -p tsconfig.electron.json (electron) + vite build
 npm test               # vitest run (behavioral gate)
 npm start              # build then launch Electron from dist/ (production-like)
 npm run start:prod     # launch prod build without rebuilding
@@ -56,14 +56,14 @@ verify a change. There is no linter. Details and test conventions:
 ## File map
 
 Two-process Electron app. The Gemini↔Claude bridge is the heart of the system and
-lives almost entirely in `electron/main.mjs` (~1500 lines).
+lives almost entirely in `electron/main.mjs` (4297 lines).
 
 - **`electron/main.mjs`** — Gemini Live session (`@google/genai`), Gemini's tool declarations, spawning/streaming headless Claude runs, sessions/roles, all audio IPC. Also the Glass HUD window-shape morph (`enterHud`/`exitHud`/`toggleHud`), the Tray, listening mode's enter/exit/rotation sequences, and the `IRIS_HUD_HOTKEY`/`IRIS_LISTEN_HOTKEY` global shortcuts.
 - **`electron/live-config.mjs`** — `buildLiveConfig()`, extracted so the Live session config (converse vs. listening) is testable without booting Electron.
 - **`electron/listen-boundary.mjs`** — the measured chunk-boundary sequence (`runBoundary()`) listening mode's rotations and exit run through; takes an injected session-like driver so it's testable without a live connection.
 - **`electron/po-session.mjs`** — the stateful PO module: Agent SDK session lifecycle, streaming user-message channel, and the `canUseTool` callback intercepting `AskUserQuestion`. Isolated so DEV's one-shot path never has to know it exists.
 - **`electron/preload.cjs`** — the `window.iris` IPC bridge. Any new renderer↔main channel must be exposed here.
-- **`src/App.tsx`** (~1350 lines) — renderer: mic capture (WebRTC AEC → 16 kHz PCM), Gemini playback (24 kHz PCM), the "Orbital Deck" UI, keyboard shortcuts, gestures, and the `uiMode` (`deck` | `hud`) switch.
+- **`src/App.tsx`** (1738 lines) — renderer: mic capture (WebRTC AEC → 16 kHz PCM), Gemini playback (24 kHz PCM), the "Orbital Deck" UI, keyboard shortcuts, gestures, and the `uiMode` (`deck` | `hud`) switch.
 - **`src/components/HudShell.tsx`** + **`src/styles/hud.css`** — the Glass HUD overlay; pointer-transparent except `.hud-hit` islands (App.tsx reports pointer-over-island via `hud:interactive`; main toggles `setIgnoreMouseEvents`).
 - **`src/hooks/useHandControl.ts`** — MediaPipe `GestureRecognizer` hook (on-device, starts only after wake).
 - **`src/ReactorCore.tsx`, `src/BootSequence.tsx`, `src/deck.css`, `src/App.css`** — UI/animation.
@@ -95,4 +95,6 @@ any of these.
 - Role workers get their environment by **subtraction, not `process.env` passed through** — `electron/worker-env.mjs`'s `computeWorkerEnv` is the shared helper both `startClaudeRun`'s DEV spawn and `computePoSessionEnv` route through, so the two paths can't drift. `GEMINI_API_KEY` is withheld from both roles (no role has a use for the voice credential); `CLAUDE_CODE_OAUTH_TOKEN` is additionally withheld from DEV, confirmed empirically to authenticate via its own `/login` session, never that env var.
 - The renderer executes only code shipped inside the app: a Content-Security-Policy (`vite.config.ts`'s `transformIndexHtml`) blocks remote script/WASM execution, the privileged window can't navigate off-origin, and device permissions are scoped to the app's own document. See the `renderer-content-security` capability spec.
 - `@anthropic-ai/claude-agent-sdk` is a real npm dependency (drives the same `claude` binary DEV spawns directly) — keep its version pinned like the other exact identifiers in [docs/REFERENCE.md](docs/REFERENCE.md).
+- `electron/` is typechecked by `tsconfig.electron.json` (a second `tsc -p` in `npm run build`), covering every `.mjs`/`.cjs` under it automatically — no per-file opt-in. Coverage is raised by enabling a compiler flag, not by annotating files; the three currently-deferred flags and their measured error-count cost: `useUnknownInCatchVariables` +26, `strictNullChecks` +91, `noImplicitAny` +719. Two-project typecheck setup and rationale: [docs/TESTING.md](docs/TESTING.md).
+- File-size convention: one responsibility per file, graspable in a few minutes, target 250–450 lines; `*.test.*` files are exempt (append-only case lists, not read start-to-end). Enforcement is convention-only by deliberate decision — no guard script — so don't mistake the absence of a check for an oversight.
 - Docs discipline: keep this file a router. New deep detail goes to `docs/` or a capability spec, with a one-line pointer here.

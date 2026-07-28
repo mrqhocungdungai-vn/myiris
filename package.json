@@ -18,7 +18,7 @@
   "scripts": {
     "postinstall": "node scripts/vendor-runtime-assets.mjs",
     "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on tcp:5173 && node scripts/run-electron.mjs\"",
-    "build": "node scripts/vendor-runtime-assets.mjs && tsc --noEmit && vite build && node scripts/check-three-dedupe.mjs",
+    "build": "node scripts/vendor-runtime-assets.mjs && tsc --noEmit && tsc -p tsconfig.electron.json && vite build && node scripts/check-three-dedupe.mjs",
     "test": "vitest run",
     "preview": "vite preview",
     "start": "npm run build && node scripts/run-electron.mjs --prod",

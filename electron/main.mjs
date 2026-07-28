@@ -27,7 +27,6 @@ import { resolveApprovedTask } from "./task-review.mjs";
 import { shouldRefuseLaunch } from "./platform.mjs";
 import { createCanvasStore } from "./canvas-store.mjs";
 import { createCanvasMcp, buildMcpServerRecord } from "./canvas-mcp.mjs";
-import { isUserNote } from "./vault-graph-parse.mjs";
 import { createVaultGraph } from "./vault-graph.mjs";
 import { buildLiveConfig } from "./live-config.mjs";
 import { runBoundary } from "./listen-boundary.mjs";
@@ -1545,13 +1544,13 @@ async function previewVoice(payload = {}) {
     const previewAi = new GoogleGenAI({ apiKey });
     previewSession = await previewAi.live.connect({
       model,
-      config: {
+      config: /** @type {import("@google/genai").LiveConnectConfig} */ ({
         responseModalities: ["AUDIO"],
         speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } },
         systemInstruction: {
           parts: [{ text: "You are a short voice sample. Say exactly the line you are asked to say, nothing more." }],
         },
-      },
+      }),
       callbacks: {
         onmessage(message) {
           const content = message.serverContent;
@@ -2025,7 +2024,7 @@ function startClaudeRun(run) {
 // any workstream's project cwd — plain-Claude runs only, never PO/DEV.
 const NOTES_VAULT_DIR = path.join(os.homedir(), "iris-second-brain");
 
-// isUserNote (imported above from vault-graph-parse.mjs) is the single
+// isUserNote (in vault-graph-parse.mjs) is the single
 // authoritative "what is a user note" predicate for this capability (design.md
 // D3/H-1 of second-brain-galaxy-view) — it excludes the LLM-Wiki system files
 // (index.md, log.md, wiki-config.md, wiki-schema.md) and plumbing folders
@@ -2618,6 +2617,7 @@ function dispatch(run) {
   };
 }
 
+/** @param {{ task?: string, urgency?: string, agent?: string }} [params] */
 async function submitClaudeTask({ task, urgency = "normal", agent } = {}) {
   if (!task || !String(task).trim()) {
     return { status: "error", error: "Task is required." };
@@ -2684,6 +2684,7 @@ function approveTaskReview(editedTaskRaw, { notify }) {
 // SYSTEM_EVENT_TASK_REVIEW_RESOLVED (reserved for channels Gemini did not
 // initiate). Editing is deck-only (D7): voice can only approve as-is or
 // cancel, never supply edited text.
+/** @param {{ decision?: string }} [params] */
 function respondToTaskReview({ decision } = {}) {
   const clean = String(decision || "").trim().toLowerCase();
   if (clean === "approve") return approveTaskReview(undefined, { notify: false });
@@ -2694,6 +2695,7 @@ function respondToTaskReview({ decision } = {}) {
 // IPC path for the UI banner (deck Approve/Cancel + edit, HUD Approve/Cancel).
 // Gemini did not initiate this, so the resolution needs the SYSTEM_EVENT to
 // stay coherent (D6, review #5).
+/** @param {{ action?: string, editedTask?: string }} [params] */
 function resolvePromptReview({ action, editedTask } = {}) {
   const clean = String(action || "").trim().toLowerCase();
   if (clean === "approve") return approveTaskReview(editedTask, { notify: true });
@@ -2701,6 +2703,7 @@ function resolvePromptReview({ action, editedTask } = {}) {
   return { status: "error", error: `Unknown action: ${action}` };
 }
 
+/** @param {{ label?: string }} [params] */
 async function startNewClaudeSession({ label } = {}) {
   const workstream = createWorkstream(label);
   emitEvent({ type: "log", level: "info", message: `Claude: started a fresh session (${workstream.label}).` });
@@ -2726,6 +2729,7 @@ async function stopClaudeTask({ run_id }) {
 // Voice path for switching a role's model — goes through the exact same
 // setAgentModel() choke point the UI popover uses, so the two can never
 // diverge. Always targets the active workstream (Gemini never invents ids).
+/** @param {{ role?: string, model?: string }} [params] */
 function setAgentModelTool({ role, model } = {}) {
   const workstream = activeWorkstream();
   const result = setAgentModel(workstream.id, role, model);
@@ -2755,6 +2759,7 @@ function getUiContext() {
   return irisUiContext;
 }
 
+/** @param {{ action?: string, target_id?: string, query?: string }} [params] */
 function controlUi({ action, target_id = undefined, query = undefined } = {}) {
   if (!UI_ACTIONS.has(action)) {
     return { status: "error", error: `Unknown UI action: ${action}` };
@@ -2781,6 +2786,7 @@ const PIPELINE_ONLY_TOOLS = new Set([
   "respond_to_task_review",
 ]);
 
+/** @param {string} name @param {any} [args] */
 async function executeClaudeTool(name, args = {}) {
   if (PIPELINE_ONLY_TOOLS.has(name) && !pipelineAvailable) {
     return { status: "error", error: "The Claude pipeline is not available on this machine — install the Claude CLI to enable it (see Settings)." };
@@ -4028,7 +4034,11 @@ app.whenReady().then(() => {
   // that compounding factor regardless of whether D9 also holds.
   session.defaultSession.setPermissionRequestHandler((_wc, permission, callback, details) => {
     const isOwnDocument = isAppOwnDocument(details?.requestingUrl || "");
-    callback(isOwnDocument && (permission === "media" || permission === "audioCapture" || permission === "videoCapture"));
+    // "audioCapture"/"videoCapture" are not in the installed Electron type's
+    // permission union for this handler (only "media" is) — see the change's
+    // recorded findings. Cast rather than drop the checks: behavior-neutral.
+    const perm = /** @type {string} */ (permission);
+    callback(isOwnDocument && (perm === "media" || perm === "audioCapture" || perm === "videoCapture"));
   });
 
   ipcMain.handle("sidecar:start", () => startLive());

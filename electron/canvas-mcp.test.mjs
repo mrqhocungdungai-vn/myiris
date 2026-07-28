@@ -240,8 +240,9 @@ describe("canvas MCP live server", () => {
     // `port` override exists solely so this test doesn't race an OS-assigned
     // port number).
     const blocker = http.createServer(() => {});
-    await new Promise((resolve) => blocker.listen(0, "127.0.0.1", resolve));
-    const { port } = blocker.address();
+    await new Promise((resolve) => blocker.listen(0, "127.0.0.1", () => resolve(undefined)));
+    const address = blocker.address();
+    const port = typeof address === "object" && address ? address.port : undefined;
 
     const { mcp: second } = makeMcp({ port });
     mcp = second;

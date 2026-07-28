@@ -78,7 +78,7 @@ describe("parseVaultFiles", () => {
   });
 
   it("skips wikilink-like text inside inline code spans", () => {
-    const { nodes, links } = parseVaultFiles([file("A.md", "Use `[[NotALink]]` syntax to link notes.")]);
+    const { links } = parseVaultFiles([file("A.md", "Use `[[NotALink]]` syntax to link notes.")]);
 
     expect(links).toEqual([]);
   });
