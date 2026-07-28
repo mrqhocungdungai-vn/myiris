@@ -36,8 +36,9 @@ import { createRunDispatch } from "./run-dispatch.mjs";
 import { createRunStream } from "./run-stream.mjs";
 import { createRunExec } from "./run-exec.mjs";
 import { installRendererSecurity } from "./renderer-security.mjs";
+import { createWindowModule } from "./window.mjs";
 
-const { app, BrowserWindow, ipcMain, nativeImage, Menu, dialog, Tray, screen, globalShortcut } = electron;
+const { app, BrowserWindow, ipcMain, nativeImage, dialog, globalShortcut } = electron;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
@@ -52,7 +53,14 @@ const appIcon = fs.existsSync(iconPath) ? nativeImage.createFromPath(iconPath) :
 loadEnvFile({ repoRoot });
 logPoBillingPathOnce();
 
-let mainWindow = null;
+// windowModule (constructed further down) owns mainWindow/uiMode/tray now.
+let windowModule;
+function getMainWindow() {
+  return windowModule.getMainWindow();
+}
+function getUiMode() {
+  return windowModule.getUiMode();
+}
 let liveSession = null;
 let ai = null;
 let liveStatus = { running: false, pid: null };
@@ -281,7 +289,7 @@ function logPoBillingPathOnce() {
   }
 }
 
-const rendererBridge = createRendererBridge({ getMainWindow: () => mainWindow });
+const rendererBridge = createRendererBridge({ getMainWindow: () => getMainWindow() });
 const {
   emitToRenderer,
   emitEvent,
@@ -315,7 +323,8 @@ const pendingCanvasImageRequests = new Map(); // id -> resolve
 const CANVAS_IMAGE_CLEANUP_MS = 8000;
 
 function requestCanvasImage() {
-  if (!mainWindow || mainWindow.isDestroyed()) return Promise.resolve(null);
+  const win = getMainWindow();
+  if (!win || win.isDestroyed()) return Promise.resolve(null);
   const id = crypto.randomUUID();
   return new Promise((resolve) => {
     pendingCanvasImageRequests.set(id, resolve);
@@ -448,7 +457,7 @@ const sessionStoreModule = createSessionStore({
   abandonPendingQuestion: (workstreamId) => PendingQuestion.abandon(workstreamId),
   abandonPendingReview: (workstreamId) => PendingReview.abandon(workstreamId),
   showOpenDialog: (window, options) => dialog.showOpenDialog(window, options),
-  getMainWindow: () => mainWindow,
+  getMainWindow: () => getMainWindow(),
 });
 const {
   agentRoster: AGENT_ROSTER,
@@ -1318,211 +1327,30 @@ function sendCommand(command) {
 // called, which is the only thing here that reads it.
 let rendererSecurity;
 
-function createWindow() {
-  // Frameless + transparent from birth so the same window can morph into the
-  // Glass HUD overlay — Electron cannot toggle `frame`/`transparent` after
-  // creation. The deck paints its own rounded background in CSS; TopBar's
-  // custom win-controls replace the native traffic lights this gives up.
-  mainWindow = new BrowserWindow({
-    width: 1180,
-    height: 860,
-    minWidth: 980,
-    minHeight: 800,
-    show: false,
-    frame: false,
-    transparent: true,
-    backgroundColor: "#00000000",
-    hasShadow: true,
-    fullscreenable: false,
-    ...(appIcon ? { icon: appIcon } : {}),
-    webPreferences: {
-      preload: path.join(repoRoot, "electron", "preload.cjs"),
-      contextIsolation: true,
-      nodeIntegration: false,
-      // OS-process-level renderer isolation, on top of contextIsolation.
-      // Land alongside the `electron` version pin (package.json) so its
-      // effect is verified against a fixed, known Electron version rather
-      // than a floating `latest` (harden-security-boundaries D9).
-      sandbox: true,
-      // Audio capture/playback and the HUD must keep running when occluded.
-      backgroundThrottling: false,
-    },
-  });
-  const useProd = app.isPackaged || process.env.IRIS_START_PROD === "1";
-  if (useProd) mainWindow.loadFile(path.join(repoRoot, "dist", "index.html"));
-  else mainWindow.loadURL(rendererSecurity.appDevUrl);
-  // harden-wake-word-detection D6: the application menu ships with no View
-  // role and nothing else calls openDevTools(), so the renderer console —
-  // where IRIS_WAKE_DEBUG's score diagnostics land — is otherwise unreachable
-  // by menu or accelerator in both dev and packaged builds.
-  if (envFlag("IRIS_WAKE_DEBUG", false)) mainWindow.webContents.openDevTools();
-  // Navigation containment and the external-link handoff now live on
-  // app.on("web-contents-created") below, covering every web contents the
-  // app ever creates instead of just this one window.
-  // A crashed renderer or a reload/navigation doesn't fire the window's
-  // "closed" event, so an active vault-graph fs.watch stream would
-  // otherwise orphan while a fresh renderer starts a second one
-  // (second-brain-galaxy-view design.md D3 M3).
-  mainWindow.webContents.on("render-process-gone", () => notesVaultGraph.stop());
-  mainWindow.webContents.on("did-start-navigation", (_event, _url, _isInPlace, isMainFrame) => {
-    if (isMainFrame) notesVaultGraph.stop();
-  });
-  // Avoid a translucent first-paint flash on the transparent window.
-  mainWindow.once("ready-to-show", () => mainWindow?.show());
-  mainWindow.on("closed", () => {
-    mainWindow = null;
-    uiMode = "deck";
-  });
-}
-
-// ===== Glass HUD =====
-// One window, two shapes. Deck: a normal rounded app window. HUD: the same
-// window stretched over the whole screen, transparent, always on top, and
-// click-through except where the renderer marks interactive elements — Iris
-// floats over everything while you keep working underneath.
-let uiMode = "deck";
-let deckBounds = null;
-
-function enterHud() {
-  if (!mainWindow || uiMode === "hud") return;
-  uiMode = "hud";
-  deckBounds = mainWindow.getBounds();
-  // Re-check vault existence on every HUD open (design.md D7 of
-  // second-brain-galaxy-view) — cheap existsSync, only emits on a real
-  // transition, so the "show second brain" toggle's visibility stays in
-  // sync even if the vault appeared/disappeared since the last HUD session.
-  probeSecondBrainAvailability();
-  // Let the renderer fade the deck out before the window jumps to full screen.
-  emitToRenderer("hud:mode", { mode: "hud" });
-  setTimeout(() => {
-    if (!mainWindow || uiMode !== "hud") return;
-    const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
-    mainWindow.setHasShadow(false);
-    mainWindow.setMinimumSize(1, 1);
-    mainWindow.setBounds(display.bounds);
-    mainWindow.setAlwaysOnTop(true, "screen-saver");
-    mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-    mainWindow.setIgnoreMouseEvents(true, { forward: true });
-    mainWindow.show();
-  }, 170);
-}
-
-function exitHud() {
-  if (!mainWindow || uiMode === "deck") return;
-  uiMode = "deck";
-  mainWindow.setIgnoreMouseEvents(false);
-  // Tell the renderer first (the deck mounts invisible and fades in), then
-  // restore the window while it's still transparent — no stretched flash.
-  emitToRenderer("hud:mode", { mode: "deck" });
-  setTimeout(() => {
-    if (!mainWindow || uiMode !== "deck") return;
-    mainWindow.setAlwaysOnTop(false);
-    mainWindow.setVisibleOnAllWorkspaces(false);
-    mainWindow.setHasShadow(true);
-    mainWindow.setMinimumSize(980, 800);
-    if (deckBounds) mainWindow.setBounds(deckBounds);
-    mainWindow.show();
-    mainWindow.focus();
-  }, 170);
-}
-
-function toggleHud() {
-  if (!mainWindow) {
-    createWindow();
-    return;
-  }
-  if (uiMode === "hud") exitHud();
-  else enterHud();
-}
-
-// ===== Tray (menu-bar presence) =====
-let tray = null;
-
-function updateTrayMenu() {
-  if (!tray) return;
-  tray.setContextMenu(
-    Menu.buildFromTemplate([
-      {
-        label: liveStatus.running ? "Sleep Iris" : "Wake Iris",
-        click: () => emitToRenderer(liveStatus.running ? "iris:sleep" : "iris:wake", {}),
-      },
-      {
-        label: speakerMuted ? "Unmute speaker" : "Mute speaker",
-        enabled: liveStatus.running,
-        click: () => emitToRenderer("iris:mute-toggle", {}),
-      },
-      {
-        // Main owns this state directly (design.md Decision 11) — calls
-        // toggleListenMode() itself rather than dispatching to the
-        // renderer, so this still works with no window open.
-        label: ListenMode.engaged ? "End listening mode" : "Start listening mode",
-        enabled: liveStatus.running,
-        click: () => toggleListenMode(),
-      },
-      { label: uiMode === "hud" ? "Exit Glass HUD" : "Enter Glass HUD", click: () => toggleHud() },
-      { type: "separator" },
-      {
-        label: "Show Deck",
-        click: () => {
-          if (!mainWindow) createWindow();
-          else {
-            exitHud();
-            mainWindow.show();
-            mainWindow.focus();
-          }
-        },
-      },
-      { type: "separator" },
-      { label: "Quit Iris", role: "quit" },
-    ]),
-  );
-}
-
-function createTray() {
-  const trayIconPath = path.join(repoRoot, "build", "trayTemplate.png");
-  if (!fs.existsSync(trayIconPath)) return;
-  tray = new Tray(trayIconPath);
-  tray.setToolTip("Iris");
-  updateTrayMenu();
-}
-
-function hudHotkey() {
-  return process.env.IRIS_HUD_HOTKEY || "Alt+Space";
-}
-
-function muteHotkey() {
-  return process.env.IRIS_MUTE_HOTKEY || "Alt+M";
-}
-
-function listenHotkey() {
-  return process.env.IRIS_LISTEN_HOTKEY || "Alt+L";
-}
-
-function installAppMenu() {
-  if (process.platform !== "darwin") return;
-  app.setAboutPanelOptions({
-    applicationName: "Iris",
-    applicationVersion: app.getVersion(),
-    ...(appIcon ? { iconPath } : {}),
-  });
-  const menu = Menu.buildFromTemplate([
-    {
-      label: "Iris",
-      submenu: [
-        { role: "about" },
-        { type: "separator" },
-        { role: "hide" },
-        { role: "hideOthers" },
-        { role: "unhide" },
-        { type: "separator" },
-        { role: "quit" },
-      ],
-    },
-    { role: "editMenu" },
-    { role: "windowMenu" },
-  ]);
-  Menu.setApplicationMenu(menu);
-}
+windowModule = createWindowModule({
+  repoRoot,
+  appIcon,
+  iconPath,
+  getAppDevUrl: () => rendererSecurity.appDevUrl,
+  envFlag,
+  emitToRenderer,
+  stopVaultGraphWatch: () => notesVaultGraph.stop(),
+  probeSecondBrainAvailability: () => probeSecondBrainAvailability(),
+  getLiveStatus: () => liveStatus,
+  getSpeakerMuted: () => speakerMuted,
+  isListenModeEngaged: () => ListenMode.engaged,
+  toggleListenMode: () => toggleListenMode(),
+});
+const {
+  createWindow,
+  toggleHud,
+  updateTrayMenu,
+  createTray,
+  hudHotkey,
+  muteHotkey,
+  listenHotkey,
+  installAppMenu,
+} = windowModule;
 
 app.whenReady().then(() => {
   if (shouldRefuseLaunch(process.platform, process.env)) {
@@ -1600,11 +1428,12 @@ app.whenReady().then(() => {
   ipcMain.handle("hud:toggle", () => {
     toggleHud();
     updateTrayMenu();
-    return { mode: uiMode };
+    return { mode: getUiMode() };
   });
   ipcMain.on("hud:interactive", (_event, on) => {
-    if (mainWindow && uiMode === "hud") {
-      mainWindow.setIgnoreMouseEvents(!on, { forward: true });
+    const win = getMainWindow();
+    if (win && getUiMode() === "hud") {
+      win.setIgnoreMouseEvents(!on, { forward: true });
     }
   });
   // Drawing panel activation (hud-drawing-canvas design.md D4): the HUD
@@ -1612,7 +1441,7 @@ app.whenReady().then(() => {
   // does not receive key events without an explicit focus() — needed for
   // excalidraw's text tool, Delete, and tool shortcuts.
   ipcMain.on("canvas:activate", () => {
-    if (mainWindow) mainWindow.focus();
+    getMainWindow()?.focus();
     // First-open signal for canvas-claude-mcp's sticky canvasEngaged gate
     // (design.md D6) — a no-op on every subsequent open/close of the panel.
     canvasEngaged = true;
@@ -1638,7 +1467,7 @@ app.whenReady().then(() => {
   // System Access path is unavailable under file:// — feeds excalidraw's
   // own loadFromBlob / serializeAsJSON / exportToBlob on the renderer side.
   ipcMain.handle("canvas:native-open-file", async () => {
-    const result = await dialog.showOpenDialog(mainWindow, {
+    const result = await dialog.showOpenDialog(getMainWindow(), {
       title: "Open drawing",
       filters: [{ name: "Excalidraw", extensions: ["excalidraw"] }],
       properties: ["openFile"],
@@ -1648,7 +1477,7 @@ app.whenReady().then(() => {
     return { canceled: false, content };
   });
   ipcMain.handle("canvas:native-save-file", async (_event, payload) => {
-    const result = await dialog.showSaveDialog(mainWindow, {
+    const result = await dialog.showSaveDialog(getMainWindow(), {
       title: "Save drawing",
       defaultPath: payload?.suggestedName || "drawing.excalidraw",
       filters: [{ name: "Excalidraw", extensions: ["excalidraw"] }],
@@ -1659,7 +1488,7 @@ app.whenReady().then(() => {
   });
   ipcMain.handle("canvas:native-export-image", async (_event, payload) => {
     const format = payload?.format === "svg" ? "svg" : "png";
-    const result = await dialog.showSaveDialog(mainWindow, {
+    const result = await dialog.showSaveDialog(getMainWindow(), {
       title: "Export image",
       defaultPath: payload?.suggestedName || `drawing.${format}`,
       filters: [{ name: format.toUpperCase(), extensions: [format] }],
@@ -1721,9 +1550,10 @@ app.whenReady().then(() => {
     }
   });
   ipcMain.on("win:control", (_event, action) => {
-    if (!mainWindow) return;
-    if (action === "close") mainWindow.close();
-    else if (action === "minimize") mainWindow.minimize();
+    const win = getMainWindow();
+    if (!win) return;
+    if (action === "close") win.close();
+    else if (action === "minimize") win.minimize();
   });
   ipcMain.handle("config:get", () => getFullConfig());
   ipcMain.handle("config:save", (_event, updates) => writeUserConfig(updates));
