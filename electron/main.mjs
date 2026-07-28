@@ -471,6 +471,8 @@ const sessionStoreModule = createSessionStore({
   announceAgentSelection: (workstream) => announceAgentSelection(workstream),
   abandonPendingQuestion: (workstreamId) => PendingQuestion.abandon(workstreamId),
   abandonPendingReview: (workstreamId) => PendingReview.abandon(workstreamId),
+  showOpenDialog: (window, options) => dialog.showOpenDialog(window, options),
+  getMainWindow: () => mainWindow,
 });
 const {
   agentRoster: AGENT_ROSTER,
@@ -485,7 +487,7 @@ const {
   createWorkstream,
   activeWorkstream,
   selectWorkstream,
-  setWorkstreamCwd,
+  chooseWorkstreamCwd,
   setWorkstreamAgent,
   setAgentModel,
 } = sessionStoreModule;
@@ -512,20 +514,6 @@ const {
   announceClaudeCompletion,
   sendContextSupplement,
 } = announcements;
-
-async function chooseWorkstreamCwd(id) {
-  const workstream = findWorkstream(id) || activeWorkstream();
-  const result = await dialog.showOpenDialog(mainWindow, {
-    title: "Choose the project folder Claude works in",
-    defaultPath: workstream.cwd || os.homedir(),
-    properties: ["openDirectory", "createDirectory"],
-  });
-  if (result.canceled || !result.filePaths[0]) {
-    return { status: "cancelled", ...sessionsSnapshot() };
-  }
-  return setWorkstreamCwd(workstream.id, result.filePaths[0]);
-}
-
 
 const pipelineProbes = createPipelineProbes({
   emitEvent,

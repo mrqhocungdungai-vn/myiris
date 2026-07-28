@@ -26,6 +26,8 @@ function make(overrides = {}) {
     announceAgentSelection: vi.fn(),
     abandonPendingQuestion: vi.fn(),
     abandonPendingReview: vi.fn(),
+    showOpenDialog: vi.fn(async () => ({ canceled: true, filePaths: [] })),
+    getMainWindow: () => null,
     ...overrides,
   });
 }
@@ -158,5 +160,44 @@ describe("session-store: workstream switching", () => {
     const workstream = store.createWorkstream("Proj");
     const result = store.setWorkstreamCwd(workstream.id, "/definitely/not/a/real/folder");
     expect(result.status).toBe("error");
+  });
+});
+
+describe("session-store: chooseWorkstreamCwd (orphan resolved, task 3.6)", () => {
+  it("applies the chosen folder via setWorkstreamCwd", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "iris-session-choose-"));
+    try {
+      const showOpenDialog = vi.fn(async () => ({ canceled: false, filePaths: [dir] }));
+      const store = make({ showOpenDialog, getMainWindow: () => "fake-window" });
+      const workstream = store.createWorkstream("Proj");
+      const result = await store.chooseWorkstreamCwd(workstream.id);
+      expect(result.status).toBe("ok");
+      expect(store.findWorkstream(workstream.id).cwd).toBe(dir);
+      expect(showOpenDialog).toHaveBeenCalledWith(
+        "fake-window",
+        expect.objectContaining({ properties: ["openDirectory", "createDirectory"] }),
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves the cwd unchanged when the dialog is cancelled", async () => {
+    const showOpenDialog = vi.fn(async () => ({ canceled: true, filePaths: [] }));
+    const store = make({ showOpenDialog });
+    const workstream = store.createWorkstream("Proj");
+    const result = await store.chooseWorkstreamCwd(workstream.id);
+    expect(result.status).toBe("cancelled");
+    expect(store.findWorkstream(workstream.id).cwd).toBeNull();
+  });
+
+  it("falls back to the active workstream when the given id is unknown", async () => {
+    /** @type {(window: any, options: any) => Promise<{ canceled: boolean, filePaths: string[] }>} */
+    const dialogFn = async (_window, _options) => ({ canceled: true, filePaths: [] });
+    const showOpenDialog = vi.fn(dialogFn);
+    const store = make({ showOpenDialog });
+    const active = store.activeWorkstream();
+    await store.chooseWorkstreamCwd("not-a-real-id");
+    expect(showOpenDialog.mock.calls[0]?.[1]?.defaultPath).toBe(active.cwd || os.homedir());
   });
 });

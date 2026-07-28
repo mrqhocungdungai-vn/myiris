@@ -44,6 +44,8 @@ const MODEL_ENV_VARS = { po: "IRIS_PO_MODEL", dev: "IRIS_DEV_MODEL" };
  *   announceAgentSelection: (workstream: any) => void,
  *   abandonPendingQuestion: (workstreamId: string) => void,
  *   abandonPendingReview: (workstreamId: string) => void,
+ *   showOpenDialog: (window: any, options: any) => Promise<{ canceled: boolean, filePaths: string[] }>,
+ *   getMainWindow: () => any,
  *   storeFile?: string,
  * }} deps
  */
@@ -54,6 +56,8 @@ export function createSessionStore({
   announceAgentSelection,
   abandonPendingQuestion,
   abandonPendingReview,
+  showOpenDialog,
+  getMainWindow,
   // Evaluated at call time, not module load — so os.homedir() reflects
   // whatever it resolves to when the store is actually constructed (real
   // homedir in production, a mocked temp dir in tests).
@@ -320,6 +324,25 @@ export function createSessionStore({
     return { status: "ok", ...sessionsSnapshot() };
   }
 
+  // Orphan resolved explicitly (split-main-process-modules task 3.6): by
+  // position in the original file this sat inside what would have been
+  // announcements.mjs, which the spec requires to be Electron-free — but its
+  // only job is choosing a workstream's project folder, so it belongs here
+  // with the dialog call injected, not carried along with the block it
+  // happened to sit in.
+  async function chooseWorkstreamCwd(id) {
+    const workstream = findWorkstream(id) || activeWorkstream();
+    const result = await showOpenDialog(getMainWindow(), {
+      title: "Choose the project folder Claude works in",
+      defaultPath: workstream.cwd || os.homedir(),
+      properties: ["openDirectory", "createDirectory"],
+    });
+    if (result.canceled || !result.filePaths[0]) {
+      return { status: "cancelled", ...sessionsSnapshot() };
+    }
+    return setWorkstreamCwd(workstream.id, result.filePaths[0]);
+  }
+
   // Selecting a role never touches stored sessions — each role keeps its own
   // continuous conversation, so flipping the picker back and forth costs nothing.
   function setWorkstreamAgent(id, agent) {
@@ -374,16 +397,17 @@ export function createSessionStore({
     findWorkstream,
     sessionsSnapshot,
     emitSessions,
-    // Exposed because two run-lifecycle call sites (still in main.mjs, moving
-    // to run-dispatch.mjs/run-exec.mjs in a later commit) mutate a workstream
-    // object returned by findWorkstream directly (recording a Claude session
-    // id, dropping a dead --resume id) and then need to flush that mutation —
-    // the same object reference this module holds internally.
+    // Exposed because a run-lifecycle call site (still in main.mjs, moving to
+    // run-exec.mjs in a later commit) mutates a workstream object returned by
+    // findWorkstream directly (dropping a dead --resume id) and then needs to
+    // flush that mutation — the same object reference this module holds
+    // internally.
     persistSessionStore,
     createWorkstream,
     activeWorkstream,
     selectWorkstream,
     setWorkstreamCwd,
+    chooseWorkstreamCwd,
     setWorkstreamAgent,
     setAgentModel,
   };
