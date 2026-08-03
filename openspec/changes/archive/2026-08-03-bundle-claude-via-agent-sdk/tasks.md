@@ -69,7 +69,7 @@
 - [x] 8.1 `CLAUDE.md`, `README.md`, `.env.example`, `docs/PIPELINE_INTERNALS.md`, `docs/REFERENCE.md`
 - [x] 8.2 This OpenSpec change (proposal / design / delta specs / tasks)
 - [x] 8.3 `docs/PIPELINE_GUIDE.md` + `docs/PIPELINE_GUIDE.vi.md` — setup walkthrough and troubleshooting rewritten for the bundled model
-- [ ] 8.4 Archive the change once reviewed, syncing the delta specs into `openspec/specs/`
+- [x] 8.4 Archive the change once reviewed, syncing the delta specs into `openspec/specs/`
 
 ## 8b. Regression fix: Settings panel crash
 
@@ -144,4 +144,9 @@ never revealed it — that hides binaries, not the credential store.
 - [x] 9.2 End-to-end DEV run through the real `createRunExec` against the real bundled binary
 - [x] 9.3 Settings panel opens without throwing (verified by evaluating its dereferences against the real payload)
 - [x] 9.4 Packaged build carries the plugin and loads it from Resources
-- [ ] 9.5 Launch the packaged `.app` on a machine that never had Claude Code installed
+- [x] 9.5 Launch the packaged `.app` on a machine that never had Claude Code installed
+      Verified by the maintainer on such a machine, not from this development
+      host — which is the point: 8e showed this host could not stand in for one.
+      `PATH=/nonexistent` hides binaries but not the credential store, so before
+      8e a run was authenticating from the host Claude Code's keychain entry,
+      and every "works with no host install" result was weaker than it read.

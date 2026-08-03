@@ -1,8 +1,6 @@
-## MODIFIED Requirements
+## ADDED Requirements
 
-### Requirement: Claude binary presence is the pipeline master switch
-
-**Renamed in effect to: a working bundled runtime AND a Claude credential are the pipeline master switch.**
+### Requirement: A working bundled runtime and a Claude credential are the pipeline master switch
 
 The app SHALL ship Claude Code inside the application bundle and SHALL NOT probe the host machine for an installed `claude` binary. Availability SHALL be determined by two conditions together: the bundled binary responds to a `--version` probe, AND at least one usable Claude credential is configured (`CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`). The probe SHALL run before the Gemini Live session is created, and SHALL re-run on a SetupPanel re-check, on every Gemini session (re)connect, and immediately after a credential is saved or removed.
 
@@ -10,7 +8,7 @@ When either condition fails, the app SHALL run in chat-only mode; when both hold
 
 The health payload SHALL report binary reachability and pipeline availability as separate fields, so a packaging failure is distinguishable from a missing credential.
 
-`IRIS_CLAUDE_BIN` SHALL remain available as a developer override of the bundled binary path, and SHALL be validated as an executable before use.
+There SHALL be no setting that points the app at a host-installed binary. Such an override would restore the coupling this capability removes, and would run a possibly-different binary under `bypassPermissions`.
 
 #### Scenario: No credential yields chat-only mode
 
@@ -27,6 +25,11 @@ The health payload SHALL report binary reachability and pipeline availability as
 - **WHEN** the app runs on a machine with no `claude` binary anywhere on `PATH`
 - **THEN** the probe still succeeds against the bundled binary and the pipeline is available as long as a credential is set
 
+#### Scenario: A host Claude login does not stand in for a credential
+
+- **WHEN** the app runs on a machine whose separately-installed Claude Code is logged in, but no credential is configured in the app
+- **THEN** the pipeline remains unavailable, because the app's runs do not read the host credential store and would not authenticate
+
 #### Scenario: Credential added mid-session
 
 - **WHEN** the app is running chat-only and the user saves a credential in the Setup panel
@@ -39,6 +42,12 @@ The health payload SHALL report binary reachability and pipeline availability as
 
 ## REMOVED Requirements
 
+### Requirement: Claude binary presence is the pipeline master switch
+
+**Reason**: the question it asked has only one answer now. Probing the host for a `claude` binary carried information only while that binary could be absent; once it ships inside the app the signal stops distinguishing anything — while the thing a user genuinely can lack, a credential, went unchecked. Replaced by the two-condition gate above.
+**Migration**: none for an already-configured user. A user with a host install but no credential moves from "pipeline on, every run fails" to honest chat-only mode.
+
 ### Requirement: `CLAUDE_CODE_OAUTH_TOKEN` does not affect the master switch
 
 **Reason**: inverted by this change. The token (or an API key) is now part of the availability gate, because the binary — previously the only signal — is always present once it ships with the app. Credential presence still additionally gates individual PO turns.
+**Migration**: none.

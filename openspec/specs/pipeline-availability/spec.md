@@ -1,33 +1,7 @@
 ## Purpose
 
 Detects whether the Claude PO → DEV pipeline can run on this machine (the `claude` binary resolving is the sole signal) and gates the Gemini tool declarations, system-prompt content, and pipeline UI on that single flag — so the community release runs as a pure chat companion out of the box and self-reveals the build pipeline once Claude Code is installed, with no separate config flag.
-
 ## Requirements
-
-### Requirement: Claude binary presence is the pipeline master switch
-
-The app SHALL determine pipeline availability by probing the resolved `claude` binary (existing resolution: `IRIS_CLAUDE_BIN` override, then PATH probing) with a `--version` check before the Gemini Live session is created, and SHALL re-probe on a SetupPanel re-check and on every Gemini session (re)connect. When the probe fails, the app SHALL run in chat-only mode; when it succeeds, the full PO → DEV pipeline surface SHALL be enabled. `CLAUDE_CODE_OAUTH_TOKEN` SHALL NOT affect this switch — it continues to gate only PO turns via the existing billing-status check.
-
-#### Scenario: No Claude installed yields chat-only mode
-
-- **WHEN** the app starts with `GEMINI_API_KEY` configured and no `claude` binary resolvable
-- **THEN** the app starts in chat-only mode and voice conversation works normally
-
-#### Scenario: Claude present enables the pipeline
-
-- **WHEN** the app starts and the `claude --version` probe succeeds
-- **THEN** the Claude tools are declared to Gemini, the pipeline UI is shown, and PO/DEV behave exactly as specified by the existing pipeline capabilities
-
-#### Scenario: Binary present but no OAuth token
-
-- **WHEN** the pipeline is enabled and the user starts a PO turn without `CLAUDE_CODE_OAUTH_TOKEN`
-- **THEN** the PO run fails with the existing actionable token error while DEV runs remain available
-
-#### Scenario: Claude installed mid-session
-
-- **WHEN** the app is running chat-only and the user installs the Claude CLI, then triggers a SetupPanel re-check
-- **THEN** the check reports the binary as present and offers the standard reconnect prompt, and after the Gemini session reconnects the pipeline surface is enabled
-
 ### Requirement: Chat-only mode declares no Claude tools and omits pipeline prompt content
 
 In chat-only mode the Gemini Live session SHALL be created without any Claude-delegation function declarations (`check_claude_status`, `submit_claude_task`, `get_claude_task_status`, `stop_claude_task`, `start_new_claude_session`, `get_workspace_info`, `answer_po_question`, `set_agent_model`, `respond_to_task_review`), and its system instruction SHALL contain no delegation, role, or workspace pipeline content. Interface-only tools (UI control) remain declared. The prompt SHALL be produced by one builder that includes the pipeline sections conditionally — not by a second maintained prompt variant. The prompt-review decision tool (`respond_to_task_review`) is a pipeline tool: it is meaningful only alongside `submit_claude_task`, so it is declared under the same `pipelineAvailable` gate and is absent in chat-only mode.
@@ -91,3 +65,44 @@ The SetupPanel SHALL report, as checks beside the existing Claude CLI and subscr
 
 - **WHEN** a machine has every bundled skill, command, and persona installed
 - **THEN** every prerequisite row reports present — the required list contains only skills that actually exist and are actually invoked by the personas
+
+### Requirement: A working bundled runtime and a Claude credential are the pipeline master switch
+
+The app SHALL ship Claude Code inside the application bundle and SHALL NOT probe the host machine for an installed `claude` binary. Availability SHALL be determined by two conditions together: the bundled binary responds to a `--version` probe, AND at least one usable Claude credential is configured (`CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`). The probe SHALL run before the Gemini Live session is created, and SHALL re-run on a SetupPanel re-check, on every Gemini session (re)connect, and immediately after a credential is saved or removed.
+
+When either condition fails, the app SHALL run in chat-only mode; when both hold, the full PO → DEV pipeline surface SHALL be enabled.
+
+The health payload SHALL report binary reachability and pipeline availability as separate fields, so a packaging failure is distinguishable from a missing credential.
+
+There SHALL be no setting that points the app at a host-installed binary. Such an override would restore the coupling this capability removes, and would run a possibly-different binary under `bypassPermissions`.
+
+#### Scenario: No credential yields chat-only mode
+
+- **WHEN** the app starts with `GEMINI_API_KEY` configured and no Claude credential set
+- **THEN** the app starts in chat-only mode, voice conversation works normally, and the health payload reports the binary as reachable but the pipeline as unavailable
+
+#### Scenario: Credential present enables the pipeline
+
+- **WHEN** the app starts with a Claude credential configured and the bundled `--version` probe succeeds
+- **THEN** the Claude tools are declared to Gemini, the pipeline UI is shown, and PO/DEV behave exactly as specified by the existing pipeline capabilities
+
+#### Scenario: No host Claude install is required
+
+- **WHEN** the app runs on a machine with no `claude` binary anywhere on `PATH`
+- **THEN** the probe still succeeds against the bundled binary and the pipeline is available as long as a credential is set
+
+#### Scenario: A host Claude login does not stand in for a credential
+
+- **WHEN** the app runs on a machine whose separately-installed Claude Code is logged in, but no credential is configured in the app
+- **THEN** the pipeline remains unavailable, because the app's runs do not read the host credential store and would not authenticate
+
+#### Scenario: Credential added mid-session
+
+- **WHEN** the app is running chat-only and the user saves a credential in the Setup panel
+- **THEN** availability is re-probed without a restart, the flag flips to available, and the change is pushed to the renderer
+
+#### Scenario: Bundled runtime is broken
+
+- **WHEN** the bundled binary cannot be resolved or is not executable (a packaging failure)
+- **THEN** the app runs chat-only and the health payload reports the binary as unreachable, distinctly from the missing-credential case
+

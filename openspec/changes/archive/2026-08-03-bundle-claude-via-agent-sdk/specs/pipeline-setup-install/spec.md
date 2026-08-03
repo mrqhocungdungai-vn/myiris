@@ -1,6 +1,6 @@
-## MODIFIED Requirements
+## ADDED Requirements
 
-### Requirement: Required third-party skills ship as bundled snapshots
+### Requirement: Third-party skills and commands ship as a bundled plugin
 
 The vendored third-party skills and `/opsx` commands SHALL ship inside the app as a **Claude Code plugin** (`resources/iris-plugin/`, with `.claude-plugin/plugin.json`, `skills/`, and `commands/`), and SHALL reach a run through the Agent SDK's `plugins` option rather than by being copied anywhere.
 
@@ -18,9 +18,7 @@ Attribution for the vendored sources SHALL be retained alongside the plugin.
 - **WHEN** the plugin directory is missing or incomplete
 - **THEN** the setup panel reports it as a damaged bundle to reinstall, and does not offer an install command that could not fix it
 
-### Requirement: One-click installer with two write policies
-
-**Replaced by: Iris installs nothing into the user's Claude Code, and offers to remove what older versions did.**
+### Requirement: Iris installs nothing into the user's Claude Code, and offers to remove what older versions did
 
 The app SHALL NOT write to the user's `~/.claude` — not skills, not commands, not agent personas, and not the session transcripts a run produces. It SHALL NOT read from it either: `settingSources` SHALL exclude the `user` scope, so a run neither depends on nor is perturbed by the user's own Claude Code configuration. The `project` scope SHALL remain enabled, so a run still picks up the settings of the repository it is working in.
 
@@ -69,3 +67,15 @@ For machines that ran an earlier Iris, the app SHALL be able to report exactly w
 
 - **WHEN** the setup panel opens on a machine that never ran an older Iris
 - **THEN** no cleanup is offered
+
+## REMOVED Requirements
+
+### Requirement: Required third-party skills ship as bundled snapshots
+
+**Reason**: the snapshots are unchanged, but "bundled" used to mean "shipped so the installer has something to copy onto the machine". They are now shipped as a Claude Code plugin handed to the SDK per run, so nothing is copied and the names the runtime exposes are namespaced (`iris:grilling`). Restated above.
+**Migration**: none. Copies an earlier version made under `~/.claude/skills` are inert and are offered for removal.
+
+### Requirement: One-click installer with two write policies
+
+**Reason**: there is nothing left to install. Both write policies existed to decide how to copy files into `~/.claude` — sync-overwrite for personas Iris owned, fill-only-if-missing for third-party skills so a user's own installs were never clobbered. Personas now go to the SDK by value and skills come from the bundled plugin, so the app writes nothing there at all, which is a stronger guarantee than either policy.
+**Migration**: the action in its place removes what older versions wrote, only on an explicit click, and only paths Iris itself installed.

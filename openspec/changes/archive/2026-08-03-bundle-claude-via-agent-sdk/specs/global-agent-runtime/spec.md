@@ -1,16 +1,4 @@
-# global-agent-runtime Specification
-
-## Purpose
-TBD - globally-installed PO and DEV agent/runtime capabilities so any workstream can use them without per-project capability setup.
-## Requirements
-### Requirement: cwd holds only project code and its OpenSpec
-
-A workstream `cwd` SHALL be used only for the project's own code and its `openspec/` directory; capability configuration (agents, skills, commands) SHALL NOT be required in the `cwd`.
-
-#### Scenario: Arbitrary project directory works as cwd
-
-- **WHEN** the user points a workstream at an arbitrary project directory
-- **THEN** the roles operate there using globally-installed capabilities, and only that project's `openspec/` is created or read locally
+## ADDED Requirements
 
 ### Requirement: Personas and capabilities ship with the app, not on the machine
 
@@ -45,3 +33,14 @@ The app SHALL be able to remove persona files that an earlier version installed 
 - **WHEN** a role run starts and its persona cannot be read from the bundle
 - **THEN** the run fails with an error naming the role, rather than silently falling back to plain Claude
 
+## REMOVED Requirements
+
+### Requirement: Agents and capabilities are installed globally
+
+**Reason**: replaced by shipping both inside the app. The requirement's premise was that a run could find a persona or a skill only if it had been copied to a global location on the machine. The SDK takes personas by value and skills from a plugin path, so there is nothing to install, no install step to skip, and no reason for the app to write into `~/.claude` at all.
+**Migration**: none required. Files an earlier version installed there are inert; the app reports them and removes them on an explicit click.
+
+### Requirement: Personas are sync-installed into ~/.claude/agents by the one-click installer
+
+**Reason**: obsolete. Personas are passed to the SDK by value, so there is nothing to install and nothing to keep in sync. The "Install agents" action and its IPC channel are removed; the run-time gate that failed a run when the persona file was missing is replaced by a bundle-integrity check. The retired-role cleanup this requirement also covered survives as the legacy-cleanup behavior above.
+**Migration**: none.
