@@ -117,6 +117,27 @@ The Agent SDK's `plugins` option removes the need for all of it.
 - [x] 8d.7 Remove `IRIS_CLAUDE_BIN` / `IRIS_OPENSPEC_BIN` — an override pointing at a host install would restore the coupling and run someone else's binary under bypassPermissions
 - [x] 8d.8 Verified: a real run loads 16 `iris:*` skills and 6 `/iris:opsx:*` commands from the bundle with `PATH=/nonexistent`, and `~/.claude/skills` is unchanged
 
+## 8e. Close the two leaks `settingSources` does not cover
+
+Audit against the SDK docs found that 8d.3 was necessary but not sufficient.
+`settingSources` gates user/project/local *settings*; it does not gate session
+transcripts, the always-read global `.claude.json`, or auto-memory. All of those
+resolve under `CLAUDE_CONFIG_DIR`, so runs were still writing into the user's
+`~/.claude` — measured: a 57 KB transcript per run in `~/.claude/projects/`.
+
+The same measurement exposed a second one: with no credential in the
+environment, a run authenticated from the *host* Claude Code's keychain entry.
+So the app silently depended on the user's own install, and `PATH=/nonexistent`
+never revealed it — that hides binaries, not the credential store.
+
+- [x] 8e.1 Pin `CLAUDE_CONFIG_DIR` to `~/.iris/claude-home` and set `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` in `computeClaudeWorkerEnv`, so one policy covers both roles
+- [x] 8e.2 Stable directory, not a temp one — a resumed session has to find the transcript an earlier run wrote
+- [x] 8e.3 No env override: the only value worth pointing it at is the `~/.claude` this protects. Tests inject via an option argument
+- [x] 8e.4 Fix the stale-resume hole this would otherwise trigger for every existing workstream — the SDK raises a dead resume id rather than reporting it, so `forgetStaleSession` now runs on both failure paths
+- [x] 8e.5 Extend the leftover cleanup to the transcript directory for Iris's own workspace, and *only* that one — directories keyed by a real project path hold the user's own sessions too
+- [x] 8e.6 Verified: a run through `computeClaudeWorkerEnv` leaves `~/.claude/projects`, `~/.claude` top level, and `~/.claude.json`'s mtime all unchanged, with the transcript in `~/.iris/claude-home/projects/`
+- [x] 8e.7 Verified the inverse: with the directory pinned and no credential in the environment, a run fails "Not logged in" instead of borrowing the host login
+
 ## 9. Verification
 
 - [x] 9.1 `npm run build && npm test && npm run lint` all green

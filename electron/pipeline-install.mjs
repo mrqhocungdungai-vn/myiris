@@ -125,9 +125,25 @@ export function createPipelineInstall({
   ];
   const LEGACY_COMMANDS = ["apply.md", "archive.md", "explore.md", "propose.md", "sync.md", "update.md"];
 
+  // Session transcripts an older Iris left in the user's ~/.claude/projects/,
+  // back when runs inherited the default CLAUDE_CONFIG_DIR. Claude Code keys
+  // those directories by working directory, so only ONE of them is safely
+  // attributable: Iris's own scratch workspace, which is not a directory a user
+  // opens Claude Code in. Transcripts for the user's actual projects are keyed
+  // by the project path and are indistinguishable from the user's own sessions
+  // for the same project — deleting those would destroy their history, so they
+  // are deliberately left alone even though Iris wrote some of them.
+  function legacyTranscriptDir() {
+    const workspace = path.join(os.homedir(), ".iris", "workspace");
+    const key = workspace.replace(/[/.]/g, "-");
+    return path.join(os.homedir(), ".claude", "projects", key);
+  }
+
   function legacyClaudeArtifacts() {
     const home = path.join(os.homedir(), ".claude");
     const found = [];
+    const transcripts = legacyTranscriptDir();
+    if (pathExists(transcripts)) found.push(transcripts);
     for (const agent of [...agentRoster, ...retiredAgents]) {
       const p = path.join(home, "agents", `${agentPrefix}${agent}.md`);
       if (pathExists(p)) found.push(p);

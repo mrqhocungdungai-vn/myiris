@@ -46,14 +46,16 @@ khi có một credential Claude — không có công tắc riêng để bật/t�
 
    Chỉ cần một trong hai là pipeline bật. Nếu điền cả hai, subscription token thắng.
 
-2. **Global skills** — vẫn trong **Settings → Claude pipeline**, bấm
-   **"Install missing"**. Nút này chép các skill cần thiết (`grilling`, `tdd`,
-   `code-review`, `diagnosing-bugs`, cùng 3 skill cốt lõi của OpenSpec) vào
-   `~/.claude/skills/` và các lệnh `/opsx` vào `~/.claude/commands/opsx/`.
-   Những thứ này bắt buộc phải nằm trên đĩa vì Claude Code nạp skill theo tên.
+Chỉ có vậy. Không còn bước thứ hai: các skill mà agent dùng (`grilling`, `tdd`,
+`code-review`, `diagnosing-bugs`, các skill OpenSpec) và các lệnh `/opsx` được
+đóng gói **bên trong app** và nạp theo từng lần chạy, nên không có gì bị chép ra
+máy bạn và cũng không thể cài dở dang. Settings hiển thị chúng thành một dòng
+**Bundled** duy nhất.
 
-   Nó chỉ cài phần còn thiếu — thứ gì bạn đã tự cài trước đó (qua `skills.sh`,
-   `openspec init`, hay cài tay) đều được giữ nguyên, không đè.
+Iris cũng lưu trạng thái Claude riêng ở `~/.iris/claude-home` thay vì `~/.claude`,
+nên các lần chạy của nó không trộn vào lịch sử, cấu hình hay memory Claude Code
+của bạn. Đổi lại, Iris **không dùng được** phiên đăng nhập Claude Code trên
+terminal của bạn — nó cần credential riêng, chính là thứ bạn vừa điền ở trên.
 
 Khi mọi dòng trong Settings đều xanh, đánh thức Iris và chuyển sang role PO từ pipeline bar (hoặc nói bằng giọng).
 
@@ -76,14 +78,21 @@ DEV không bao giờ dừng lại chờ — nếu gặp một quyết định s�
 
 ## 4. Phụ lục: dùng agent trực tiếp trong Claude Code
 
-Sau khi cài xong (bước 4 ở trên), các persona hoạt động như bất kỳ agent Claude Code nào khác — hữu ích nếu bạn muốn điều khiển chúng từ terminal thay vì bằng giọng nói:
+Persona và skill nằm bên trong Iris và được truyền vào mỗi lần chạy trong bộ nhớ,
+nên chúng **không** được đăng ký vào bản Claude Code bạn tự cài — đây là chủ ý,
+để Iris không đụng vào cấu hình của bạn. Vì vậy muốn chạy từ terminal thì phải
+chép ra, chứ không có lệnh chạy thẳng:
 
 ```bash
-claude --agent iris-po -p "Hỏi vặn yêu cầu tính năng này và đề xuất OpenSpec change tiếp theo"
-claude --agent iris-dev -p "Triển khai các task chưa hoàn thành của OpenSpec change hiện tại"
+# Persona: chép vào project bạn muốn dùng
+cp /Applications/Iris.app/Contents/Resources/personas/iris-*.md .claude/agents/
+
+# Skill và lệnh /opsx: trỏ Claude Code vào thư mục plugin của Iris
+claude --plugin-dir /Applications/Iris.app/Contents/Resources/iris-plugin
 ```
 
-Hoặc dùng tương tác ngay trong một phiên Claude Code ở project đã có `openspec/`: `/opsx:propose`, `/opsx:apply`, `/opsx:archive` hoạt động trực tiếp như slash command một khi các skill OpenSpec đã được cài.
+Bên trong app, các skill này có tên đầy đủ là `iris:grilling`, `iris:tdd`, … và
+các lệnh là `/iris:opsx:propose`, `/iris:opsx:apply`, `/iris:opsx:archive`.
 
 ## 5. Xử lý sự cố
 
@@ -93,5 +102,6 @@ Hoặc dùng tương tác ngay trong một phiên Claude Code ở project đã c
 | Settings báo không khởi chạy được binary Claude đi kèm | Bundle ứng dụng bị hỏng (lỗi đóng gói, không phải thứ bạn cài thêm được) | Cài lại Iris |
 | Run báo lỗi credential | Token/key bị từ chối hoặc hết hạn | Tạo lại token bằng lệnh `setup-token` mà panel hiển thị, hoặc thay API key |
 | Dòng "openspec CLI" vẫn đỏ | Bundle ứng dụng bị hỏng — OpenSpec đi kèm Iris | Cài lại Iris |
-| Dòng "Global skills" vẫn đỏ | Skill chưa được cài ở cấp user | Bấm "Install missing", hoặc chạy lệnh copy được cạnh dòng đó |
+| Dòng skills báo "Damaged" | Bundle app hỏng — skill đi kèm Iris | Cài lại Iris |
+| Claude Code trên terminal chạy được nhưng Iris thì không | Iris dùng thư mục trạng thái riêng, không thấy phiên đăng nhập terminal của bạn | Thêm credential ở Settings → Claude pipeline |
 | DEV báo lỗi "no open change with remaining tasks" | PO chưa đề xuất gì cả | Chuyển sang PO và yêu cầu nó hỏi vặn rồi đề xuất trước — DEV không bao giờ tự code khi chưa có spec |

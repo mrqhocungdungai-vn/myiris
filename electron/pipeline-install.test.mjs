@@ -119,6 +119,33 @@ describe("pipeline-install", () => {
     expect(make().legacyClaudeArtifactsStatus().count).toBe(0);
   });
 
+  it("offers to remove the transcript directory for Iris's own workspace", () => {
+    // Runs used to inherit the default CLAUDE_CONFIG_DIR, so every one of them
+    // wrote a transcript into the user's ~/.claude/projects/.
+    const dir = path.join(homeDir, ".claude", "projects", path.join(homeDir, ".iris", "workspace").replace(/[/.]/g, "-"));
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "session.jsonl"), "{}");
+
+    expect(make().legacyClaudeArtifactsStatus().count).toBe(1);
+    make().removeLegacyClaudeArtifacts();
+    expect(fs.existsSync(dir)).toBe(false);
+  });
+
+  it("never touches transcripts keyed by a real project directory", () => {
+    // Those are keyed by working directory, so Iris's runs and the user's own
+    // Claude Code sessions for the same project land in the SAME directory.
+    // Removing it to clean up after Iris would delete the user's history.
+    const mine = path.join(homeDir, ".claude", "projects", "-Users-someone-works-my-app");
+    fs.mkdirSync(mine, { recursive: true });
+    fs.writeFileSync(path.join(mine, "session.jsonl"), "{}");
+
+    const status = make().legacyClaudeArtifactsStatus();
+    make().removeLegacyClaudeArtifacts();
+
+    expect(status.count).toBe(0);
+    expect(fs.existsSync(path.join(mine, "session.jsonl"))).toBe(true);
+  });
+
   it("pathExists treats a broken symlink as present", () => {
     const target = path.join(homeDir, "missing-target");
     const link = path.join(homeDir, "broken-link");

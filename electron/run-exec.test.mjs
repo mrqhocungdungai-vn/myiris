@@ -216,6 +216,41 @@ describe("run-exec: startDevRun", () => {
     expect(persistSessionStore).toHaveBeenCalled();
   });
 
+  it("drops a dead resume id when the SDK throws it instead of reporting it", async () => {
+    // This is how a stale id actually arrives: an empty `error_during_execution`
+    // result, then a throw carrying the reason. Handling only the result path
+    // left the id in the store, so every later task in the workstream failed
+    // identically — a permanent break, and the shape a relocated
+    // CLAUDE_CONFIG_DIR produces once for every existing workstream.
+    const workstream = makeWorkstream({ agent_sessions: { dev: "sess-dead" } });
+    const persistSessionStore = vi.fn();
+    const queryImpl = /** @type {any} */ (async function* () {
+      yield resultMessage({ subtype: "error_during_execution", is_error: true, result: undefined });
+      throw new Error("No conversation found with session ID: sess-dead");
+    });
+    const exec = make({ queryImpl, persistSessionStore, findWorkstream: () => workstream });
+    await exec.startDevRun(makeRun({ agent: "dev" }));
+
+    expect(workstream.agent_sessions.dev).toBeUndefined();
+    expect(persistSessionStore).toHaveBeenCalled();
+  });
+
+  it("keeps a live resume id when the run fails for an unrelated reason", async () => {
+    // The guard is the error text, so an ordinary failure must not reset the
+    // workstream's context as a side effect.
+    const workstream = makeWorkstream({ agent_sessions: { dev: "sess-live" } });
+    const persistSessionStore = vi.fn();
+    const queryImpl = /** @type {any} */ (async function* () {
+      yield resultMessage({ subtype: "error", is_error: true, result: "disk full" });
+      throw new Error("disk full");
+    });
+    const exec = make({ queryImpl, persistSessionStore, findWorkstream: () => workstream });
+    await exec.startDevRun(makeRun({ agent: "dev" }));
+
+    expect(workstream.agent_sessions.dev).toBe("sess-live");
+    expect(persistSessionStore).not.toHaveBeenCalled();
+  });
+
   it("finalizes as ERROR when the query itself throws", async () => {
     const runQueue = { finalize: vi.fn() };
     const queryImpl = /** @type {any} */ (() => {

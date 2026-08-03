@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { computeWorkerEnv, computeClaudeWorkerEnv } from "./worker-env.mjs";
+import path from "node:path";
+import { computeWorkerEnv, computeClaudeWorkerEnv, irisClaudeHome } from "./worker-env.mjs";
 
 describe("computeWorkerEnv", () => {
   it("derives by subtraction, leaving the base environment untouched", () => {
@@ -69,5 +70,45 @@ describe("computeClaudeWorkerEnv", () => {
 
     expect(base.GEMINI_API_KEY).toBe("voice");
     expect(base.ANTHROPIC_API_KEY).toBe("sk-ant");
+  });
+});
+
+describe("computeClaudeWorkerEnv: keeping out of the user's ~/.claude", () => {
+  // settingSources does not cover these. Measured before the fix: one run wrote
+  // a 57 KB session transcript into ~/.claude/projects/. Everything that
+  // escapes settingSources lives under CLAUDE_CONFIG_DIR, so pinning the
+  // directory is what actually makes "Iris never writes to ~/.claude" true.
+  it("points the whole Claude state directory at Iris's own storage", () => {
+    const result = computeClaudeWorkerEnv({ HOME: "/home/x" }, { claudeHome: "/iris/home" });
+
+    expect(result.CLAUDE_CONFIG_DIR).toBe("/iris/home");
+  });
+
+  it("disables auto-memory, which writes unprompted under bypassPermissions", () => {
+    const result = computeClaudeWorkerEnv({}, { claudeHome: "/iris/home" });
+
+    expect(result.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe("1");
+  });
+
+  it("overrides an inherited CLAUDE_CONFIG_DIR rather than deferring to it", () => {
+    // The parent process's own value must not decide where worker state lands —
+    // otherwise a developer shell pointing at ~/.claude reintroduces the leak.
+    const result = computeClaudeWorkerEnv(
+      { CLAUDE_CONFIG_DIR: "/home/x/.claude" },
+      { claudeHome: "/iris/home" },
+    );
+
+    expect(result.CLAUDE_CONFIG_DIR).toBe("/iris/home");
+  });
+
+  it("defaults to a stable per-user directory, not a temp one", () => {
+    // Stable because `resume` has to find the transcript a previous run wrote;
+    // a temp directory would silently reset every workstream's context.
+    const first = irisClaudeHome(() => "/home/x");
+    const second = irisClaudeHome(() => "/home/x");
+
+    expect(first).toBe(path.join("/home/x", ".iris", "claude-home"));
+    expect(second).toBe(first);
+    expect(first).not.toContain(`${path.sep}.claude`);
   });
 });

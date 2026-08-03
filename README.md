@@ -84,9 +84,12 @@ Settings → **"Claude pipeline"**:
   console.anthropic.com, for users without a Claude plan.
 
 Either one enables the pipeline; the subscription token wins if both are set.
-The same panel also checks the global Claude Code skills the personas invoke and
-offers a one-click **"Install missing"** action (never overwriting anything you
-installed yourself). See the guide for the full walkthrough and troubleshooting.
+Nothing else has to be installed: the skills and `/opsx` commands the personas
+invoke ship inside the app and are loaded per run, and Iris keeps its own Claude
+state in `~/.iris/claude-home`, so it never reads or writes your own `~/.claude`.
+That isolation also means Iris can't use your terminal Claude Code login — the
+credential above is what it authenticates with. See the guide for the full
+walkthrough and troubleshooting.
 
 ## Roles & modes
 

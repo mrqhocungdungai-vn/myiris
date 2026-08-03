@@ -77,6 +77,21 @@ export function createRunExec({
     return claudeWorkdir();
   }
 
+  // A resume id can outlive the transcript it names — history deleted, project
+  // moved, or the state directory relocated. Dropping the dead id lets the next
+  // task in the workstream start a fresh session instead of failing the same
+  // way forever. Called from both failure paths because the SDK reports this
+  // one inconsistently: a result message carrying the reason on some runs, and
+  // an empty `error_during_execution` followed by a throw on others.
+  function forgetStaleSession(run, key, previousSession, detail) {
+    if (!previousSession) return;
+    if (!/no conversation|session.*not.*found|unknown session/i.test(String(detail))) return;
+    const ws = findWorkstream(run.workstream_id);
+    if (ws?.agent_sessions?.[key] !== previousSession) return;
+    delete ws.agent_sessions[key];
+    persistSessionStore();
+  }
+
   // Shared preamble (cwd, install check, scaffold) then dispatches to the
   // stateful PO module or the stateless DEV module — see design.md D1. This is
   // the `startRun` injected into electron/run-queue.mjs's createRunQueue(), which
@@ -265,6 +280,13 @@ export function createRunExec({
         runQueue.finalize(run.run_id, RUN_STATUS.CANCELLED, "Run was stopped before completion.");
         return;
       }
+      // A dead resume id arrives here, not on the result path: the SDK yields
+      // `error_during_execution` with an empty `result` and *then* throws with
+      // the reason. Without this the id is never dropped and every later task
+      // in the workstream fails the same way — which is what relocating
+      // CLAUDE_CONFIG_DIR would otherwise cause once, for every workstream
+      // holding an id recorded against the old location.
+      forgetStaleSession(run, key, previousSession, error.message);
       runQueue.finalize(run.run_id, RUN_STATUS.ERROR, `Failed to run claude: ${error.message}`);
       return;
     }
@@ -294,15 +316,7 @@ export function createRunExec({
     // The iterator ending with no result message at all means the transport died
     // without reporting — name that rather than emitting an empty failure.
     const detail = result?.result || (result ? `claude reported ${result.subtype}` : "claude ended without a result");
-    // A dead resume id (deleted history, moved project) would otherwise fail
-    // every subsequent task; dropping it lets the next run start fresh.
-    if (previousSession && /no conversation|session.*not.*found|unknown session/i.test(String(detail))) {
-      const ws = findWorkstream(run.workstream_id);
-      if (ws?.agent_sessions?.[key] === previousSession) {
-        delete ws.agent_sessions[key];
-        persistSessionStore();
-      }
-    }
+    forgetStaleSession(run, key, previousSession, detail);
     runQueue.finalize(run.run_id, RUN_STATUS.FAILED, String(detail));
   }
 

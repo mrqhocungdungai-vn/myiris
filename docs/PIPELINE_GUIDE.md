@@ -46,14 +46,16 @@ Claude credential is configured — there's no separate flag to flip.
 
    Either one enables the pipeline. If both are set, the subscription token wins.
 
-2. **Global skills** — still in **Settings → Claude pipeline**, click
-   **"Install missing"**. This copies the required skills (`grilling`, `tdd`,
-   `code-review`, `diagnosing-bugs`, plus the three core OpenSpec skills) into
-   `~/.claude/skills/` and the `/opsx` commands into `~/.claude/commands/opsx/`.
-   These have to live on disk because Claude Code loads skills by name.
+That is the whole setup. There is no second step: the skills the agents use
+(`grilling`, `tdd`, `code-review`, `diagnosing-bugs`, the OpenSpec workflow
+skills) and the `/opsx` commands ship **inside the app** and are loaded per run,
+so nothing is copied onto your machine and nothing can be left half-installed.
+Settings shows them as a single **Bundled** row.
 
-   It only fills in what's missing — anything you've already installed yourself
-   (via `skills.sh`, `openspec init`, or manually) is left untouched.
+Iris also keeps its own Claude state in `~/.iris/claude-home` rather than
+`~/.claude`, so its runs never mix into your own Claude Code history, settings,
+or memory. The flip side is that Iris cannot use your terminal Claude Code
+login — it needs its own credential, which is what you set above.
 
 Once every row in Settings is green, wake Iris and switch to the PO role from the pipeline bar (or ask by voice).
 
@@ -76,14 +78,21 @@ DEV never blocks — if it hits a real product decision, it applies its recommen
 
 ## 4. Appendix: using the agents directly in Claude Code
 
-Once installed (step 4 above), the personas work like any other Claude Code agent — useful if you want to drive them from a terminal instead of by voice:
+The personas and skills live inside Iris and are handed to each run in memory, so
+they are **not** registered with a Claude Code you have installed yourself — that
+is deliberate, so Iris never alters your setup. Driving them from a terminal is
+therefore a copy job, not a command you can just run:
 
 ```bash
-claude --agent iris-po -p "Grill this feature request and propose the next OpenSpec change"
-claude --agent iris-dev -p "Implement the remaining unchecked tasks for the current OpenSpec change"
+# Personas: copy into the project you want to use them in
+cp /Applications/Iris.app/Contents/Resources/personas/iris-*.md .claude/agents/
+
+# Skills and /opsx commands: point Claude Code at Iris's plugin directory
+claude --plugin-dir /Applications/Iris.app/Contents/Resources/iris-plugin
 ```
 
-Or interactively inside a Claude Code session in a project that has `openspec/`: `/opsx:propose`, `/opsx:apply`, `/opsx:archive` work directly as slash commands once the OpenSpec skills are installed.
+Inside the app the same skills are namespaced `iris:grilling`, `iris:tdd`, … and
+the commands are `/iris:opsx:propose`, `/iris:opsx:apply`, `/iris:opsx:archive`.
 
 ## 5. Troubleshooting
 
@@ -93,5 +102,6 @@ Or interactively inside a Claude Code session in a project that has `openspec/`:
 | Settings says the bundled Claude binary won't launch | Broken app bundle (a packaging fault, not something you can install around) | Reinstall Iris |
 | Runs fail with a credential error | Token or key rejected/expired | Re-mint the token with the `setup-token` command the panel shows, or replace the API key |
 | "openspec CLI" row stays red | Broken app bundle — OpenSpec ships with Iris | Reinstall Iris |
-| "Global skills" row stays red | Skills not installed at user level yet | Click "Install missing", or run the copyable command shown next to the row |
+| Skills row says "Damaged" | Broken app bundle — the skills ship with Iris | Reinstall Iris |
+| Runs work in your terminal Claude Code but not in Iris | Iris uses its own state dir and cannot see your terminal login | Add a credential in Settings → Claude pipeline |
 | DEV run fails with "no open change with remaining tasks" | PO hasn't proposed anything yet | Switch to PO and ask it to grill and propose first — DEV never free-codes without a spec |
