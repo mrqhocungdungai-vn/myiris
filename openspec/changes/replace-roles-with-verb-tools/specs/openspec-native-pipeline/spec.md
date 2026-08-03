@@ -1,0 +1,48 @@
+## MODIFIED Requirements
+
+### Requirement: DEV runs only on an open change with unchecked tasks
+
+The execution verb SHALL read the project at dispatch and behave according to what is there:
+
+- An open change with unchecked tasks SHALL be implemented through the OpenSpec apply workflow, with the OpenSpec workflow skills available.
+- No open change with unchecked tasks SHALL mean ordinary work, carried out directly, with the OpenSpec workflow skills **not** loaded and no process artifacts created.
+
+The execution verb SHALL NOT refuse a request because no change has been proposed. A user asking for a small piece of work is not asking for a software-development process, and refusing them is not a safety measure — it is a refusal to do the job.
+
+**This deliberately removes the gate that previously prevented implementation without a specification.** It is recorded here as a decision, not an omission. The protection that gate provided — an unattended run writing code against no agreed specification — now comes from the execution verb being reviewed before **every** dispatch. If that review is ever weakened, this decision SHALL be revisited with it.
+
+#### Scenario: Work with a specification follows the process
+
+- **WHEN** the execution verb is called in a project with an open change that has unchecked tasks
+- **THEN** the run implements those tasks through the OpenSpec apply workflow
+
+#### Scenario: Work without a specification is simply done
+
+- **WHEN** the execution verb is called in a project with no open change with unchecked tasks
+- **THEN** the run carries out the work directly, without loading the OpenSpec workflow skills and without creating process artifacts
+
+#### Scenario: A request is never refused for lacking a change
+
+- **WHEN** the execution verb is called and no change has been proposed
+- **THEN** the run proceeds as ordinary work rather than failing
+
+#### Scenario: The removed gate is replaced by review, not by nothing
+
+- **WHEN** the execution verb is dispatched, with or without an open change
+- **THEN** it is parked for the user's review before any work begins
+
+### Requirement: A change exists before DEV runs
+
+Work that goes through the software-development process SHALL still be specified before it is implemented: shaping produces a change with tasks, and the execution verb implements those tasks.
+
+What SHALL NOT be required is that the **user** enforces this ordering by naming a worker or operating a control. The ordering follows from the project's own state, which the execution verb reads at dispatch.
+
+#### Scenario: Process work is specified first
+
+- **WHEN** the user asks for a new feature and agrees to shape it
+- **THEN** a change with tasks is produced before implementation begins
+
+#### Scenario: The ordering is not the user's to enforce
+
+- **WHEN** the user asks to build something and then asks to get on with it
+- **THEN** the correct verb runs at each point without the user naming a worker or operating a control
