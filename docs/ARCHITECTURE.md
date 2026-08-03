@@ -28,7 +28,7 @@ flowchart TD
 
   GeminiLive -->|"Function call: submit_claude_task"| ClaudeTool["Claude Tool Bridge in Electron Main"]
 
-  ClaudeTool -->|"spawn claude -p task --output-format stream-json --resume session"| ClaudeCLI["Claude Code CLI (headless)"]
+  ClaudeTool -->|"Agent SDK query({ prompt, options })"| ClaudeCLI["Bundled Claude Code (headless)"]
   ClaudeCLI --> ClaudeAgent["Claude Agent Run (one continuous session)"]
 
   ClaudeAgent -->|"Uses terminal, files, web, MCP, skills"| ClaudeTools["Claude Code Tool Ecosystem"]
@@ -85,13 +85,9 @@ flowchart TD
 
 5. **Claude runs work in the background — one continuous session, one task at a time.**
 
-   When Gemini calls `submit_claude_task`, Electron main spawns a headless Claude Code run:
+   When Gemini calls `submit_claude_task`, Electron main starts a headless Claude Code run through the Agent SDK — `query({ prompt, options })` against the `claude` binary bundled inside the app, under `permissionMode: "bypassPermissions"`. There is no `claude -p` subprocess and no host CLI; see [PIPELINE_INTERNALS.md](PIPELINE_INTERNALS.md) for the full option surface.
 
-   ```text
-   claude -p "<task>" --output-format stream-json --verbose --permission-mode bypassPermissions
-   ```
-
-   The spawn returns a `run_id` immediately, so Gemini can keep talking while Claude works. Sessions are **user-controlled**: the Work Stream panel has a session picker and a **New** button, and the active session can also be reset by voice ("Iris, new session"). Every task resumes the active session (`--resume`), so Claude remembers earlier tasks and follow-ups build on previous work — Gemini cannot pick or invent session ids. Tasks run strictly **one at a time**: if Claude is busy, the new task is queued and starts automatically when the current one finishes. Sessions persist across app restarts (`~/.iris/claude-sessions.json`).
+   The call returns a `run_id` immediately, so Gemini can keep talking while Claude works. Sessions are **user-controlled**: the Work Stream panel has a session picker and a **New** button, and the active session can also be reset by voice ("Iris, new session"). Every task resumes the active session (the SDK's `resume`), so Claude remembers earlier tasks and follow-ups build on previous work — Gemini cannot pick or invent session ids. Tasks run strictly **one at a time**: if Claude is busy, the new task is queued and starts automatically when the current one finishes. Sessions persist across app restarts (`~/.iris/claude-sessions.json`).
 
 6. **The app streams Claude progress live.**
 
@@ -113,53 +109,54 @@ flowchart TD
 
 ## Main Components
 
-### Electron Main
+Two-process Electron app. The Gemini↔Claude bridge used to live almost entirely
+in `electron/main.mjs`; it's now ~40 single-responsibility modules under
+`electron/`, with Electron API access confined to four of them (`main.mjs`,
+`ipc.mjs`, `window.mjs`, `renderer-security.mjs`) — every other module is
+Electron-free and importable in a plain vitest file with no harness. See the
+`main-process-structure` capability spec for the full discipline.
 
-Files: `electron/main.mjs` (composition root) plus the ~20 modules it wires
-together via `wiring.mjs` — see CLAUDE.md's File map for the full list.
-
-Responsibilities, and where each now lives:
-
-- Loads `.env` (`electron/user-config.mjs`).
-- Creates the Gemini Live session (`electron/live-session.mjs`).
-- Defines Gemini tools (`electron/gemini-tools.mjs`).
-- Bridges Gemini tool calls to headless Claude Code runs, `claude -p` (`electron/run-exec.mjs`, `electron/run-dispatch.mjs`).
-- Sends/receives Gemini audio (`electron/live-messages.mjs`).
-- Tracks Claude runs and keeps per-session continuity via `--resume` (`electron/session-store.mjs`, `electron/run-stream.mjs`).
-- Announces Claude completion back into Gemini (`electron/announcements.mjs`).
+- **`electron/main.mjs`** (~240 lines) — the composition root: imports every module, wires dependency injection via `wiring.mjs`, and runs the `app.whenReady()` startup sequence, `shutdownTeardown`, and quit handlers. No domain logic.
+- **`electron/wiring.mjs`** (+ **`wiring-capabilities.mjs`**, **`wiring-live.mjs`**) — the composition root's dependency-injection wiring, split across three files purely because the block exceeded the 450-line file-size convention once every module existed. `wiring-capabilities.mjs` wires the canvas/second-brain capabilities, run-exec, and the Gemini tool/prompt modules; `wiring-live.mjs` wires the Live session, listening mode, and window/HUD/tray (a genuine three-way mutual dependency).
+- **`electron/ipc.mjs`** — every `ipcMain.handle`/`on` registration (the renderer↔main channel surface), diffable against `preload.cjs`. Marshals arguments and delegates only.
+- **`electron/window.mjs`** — the main window, the Glass HUD shape-morph (`enterHud`/`exitHud`/`toggleHud`), and the Tray.
+- **`electron/renderer-security.mjs`** — navigation containment and device-permission scoping (`renderer-content-security` capability); installed before the first window is created.
+- **`electron/live-session.mjs`** (+ **`live-messages.mjs`**) — the Gemini Live session (`@google/genai`): connect/reconnect lifecycle in the former, server-message/tool-call handling in the latter.
+- **`electron/listen-mode.mjs`** — listening mode's enter/exit/rotation sequences and engagement state; drives `live-session.mjs` via named transitions, never raw field writes.
+- **`electron/gemini-tools.mjs`** / **`gemini-prompts.mjs`** — Gemini's function-declaration schemas and system-instruction prose; both compose contributions from registered capabilities rather than hardcoding them.
+- **`electron/session-store.mjs`** — workstreams, the agent roster, and per-role model selection.
+- **`electron/run-dispatch.mjs`** (+ **`run-stream.mjs`**, **`run-exec.mjs`**) — the pre-dispatch review gate and tool-execution surface; run activity/tool-step streaming and the PO live-question relay; driving DEV and PO runs (both via the Agent SDK's `query()`).
+- **`electron/announcements.mjs`** — voice announcements to the Live session, buffered while offline.
+- **`electron/pipeline-probes.mjs`** / **`pipeline-install.mjs`** — Claude/OpenSpec availability probing (binary + credential) and skill installation.
+- **`electron/bundled-binaries.mjs`** — resolves the app's own `claude` and `openspec`, including the `app.asar` → `app.asar.unpacked` rewrite. The only module that knows asar exists.
+- **`electron/agent-definitions.mjs`** — parses `resources/personas/*.md` into the SDK's `AgentDefinition`, so personas are passed to `query()` by value instead of installed into `~/.claude/agents`.
+- **`resources/iris-plugin/`** — a Claude Code plugin (`.claude-plugin/plugin.json` + `skills/` + `commands/opsx/`) shipped with the app and passed to every run via the SDK's `plugins` option. Everything it provides is namespaced `iris:*` (`iris:grilling`, `/iris:opsx:apply`) — the personas reference those names.
+- **`electron/user-config.mjs`** — env/user config, the prompt-review-mode flag, and API-key/token handling.
+- **`electron/capabilities/canvas.mjs`** / **`capabilities/second-brain.mjs`** — the canvas-claude-mcp and personal-knowledge-notes/second-brain capabilities, each owning its own state, IPC handlers, teardown, and Gemini prompt fragment end to end (`electron/capabilities/` is where a new capability's main-process code should live).
+- **`electron/live-config.mjs`** — `buildLiveConfig()`, extracted so the Live session config (converse vs. listening) is testable without booting Electron.
+- **`electron/listen-boundary.mjs`** — the measured chunk-boundary sequence (`runBoundary()`) listening mode's rotations and exit run through; takes an injected session-like driver so it's testable without a live connection.
+- **`electron/role-prompt.mjs`** / **`run-budget.mjs`** / **`run-skills.mjs`** / **`run-hooks.mjs`** / **`run-output-format.mjs`** / **`run-sessions.mjs`** — the per-run policy modules both roles route through, in the same "one policy, so the two can't drift" shape as `worker-env.mjs`: the base system prompt, the turn/spend ceilings, the per-role skill list, the SDK hook callbacks (guard + tool boundary), the structured-decisions schema, and session liveness/naming. All Electron-free, no I/O.
+- **`electron/po-session.mjs`** — the stateful PO module: Agent SDK session lifecycle, streaming user-message channel, and the `canUseTool` callback intercepting `AskUserQuestion`. Isolated so DEV's one-shot path never has to know it exists.
+- **`electron/preload.cjs`** — the `window.iris` IPC bridge. Any new renderer↔main channel must be exposed here.
+- **`src/App.tsx`** (by far the largest file in the repo) — renderer: mic capture (WebRTC AEC → 16 kHz PCM), Gemini playback (24 kHz PCM), the "Orbital Deck" UI, keyboard shortcuts, gestures, and the `uiMode` (`deck` | `hud`) switch.
+- **`src/components/HudShell.tsx`** + **`src/styles/hud.css`** — the Glass HUD overlay; pointer-transparent except `.hud-hit` islands (App.tsx reports pointer-over-island via `hud:interactive`; main toggles `setIgnoreMouseEvents`).
+- **`src/hooks/useHandControl.ts`** — MediaPipe `GestureRecognizer` hook (on-device, starts only after wake).
+- **`src/components/ReactorCore.tsx`, `src/components/BootSequence.tsx`, `src/styles/`** — UI/animation. `src/styles/tokens.css`, `base.css`, `deck.css`, `fx.css`, `overlays.css`, `index.css` are adopted **upstream-verbatim and must stay byte-identical** so upstream ports diff cleanly; all Claude/Iris-specific styling goes in `src/styles/claude.css` (see the `deepspace-skin` capability spec).
+- **`scripts/run-electron.mjs`** — launcher; clears `ELECTRON_RUN_AS_NODE`, supports `--prod`.
 
 ### Electron Preload
 
-File: `electron/preload.cjs`
-
-Responsibilities:
-
-- Exposes safe IPC APIs to the renderer.
-- Sends microphone PCM chunks to Electron main.
-- Receives Gemini audio chunks and interruption events.
-- Receives app state events.
+`electron/preload.cjs` exposes the safe IPC surface to the renderer: microphone
+PCM chunks out, Gemini audio chunks and interruption events in, plus app-state
+events. Any new renderer↔main channel must be declared here — it is meant to be
+diffed against `electron/ipc.mjs`.
 
 ### React Renderer
 
-Files:
-
-- `src/App.tsx`
-- `src/App.css`
-- `src/deck.css`
-- `src/ReactorCore.tsx`
-- `src/BootSequence.tsx`
-- `src/hooks/useHandControl.ts` (MediaPipe hand/gesture hook)
-
-Responsibilities:
-
-- Renders the UI.
-- Captures microphone with WebRTC audio cleanup.
-- Downsamples mic audio to 16 kHz PCM.
-- Plays Gemini audio through `AudioContext`.
-- Shows Comms and Claude Tasks.
-- Renders the dark-only Orbital Deck layout.
-- Provides keyboard shortcuts.
-- Runs camera hand-gesture control after wake and simple reader open/close animation.
+Beyond the files above, the renderer captures the microphone with WebRTC audio
+cleanup, downsamples to 16 kHz PCM, plays Gemini audio through an `AudioContext`,
+renders the Comms and Claude Tasks panes and the dark-only Orbital Deck layout,
+provides the keyboard shortcuts, and runs camera hand-gesture control after wake.
 
 ## Gemini Tools
 
