@@ -43,9 +43,27 @@ npm run package:mac    # build + electron-builder --mac --dir (unpacked .app)
 npm run dist:mac       # build + full macOS distributable
 ```
 
-`npm run build` and `npm test` are two **independent** checks — run both to
-verify a change. There is no linter. Details and test conventions:
-[docs/TESTING.md](docs/TESTING.md).
+```bash
+npm run lint           # oxlint, zero-warning (whole-tree)
+npm run scan:secrets   # gitleaks over the staged changes
+```
+
+`npm run build` and `npm test` are **independent** checks — run both to verify a
+change. `lint` and `scan:secrets` are two more, deliberately kept out of `build`
+so a typecheck stays runnable on its own. All four are also bound to editing
+events by `.claude/settings.json`: per-file checks fire per edit, whole-tree
+checks at the end of a turn. `gitleaks` must be installed separately
+(`brew install gitleaks`) and the gates **fail closed** without it —
+`IRIS_SKIP_HOOKS=1` is the one-off bypass. Details and test conventions:
+[docs/TESTING.md](docs/TESTING.md); gate behavior: the `workflow-quality-gates`
+capability spec.
+
+**Build toolchain requires Node.js `>=24.0.0`**, enforced by `engines.node` +
+`.npmrc`'s `engine-strict=true` (`npm ci` fails `EBADENGINE` below it; `nvm use`
+reads `.nvmrc`). This is separate from the app's runtime prerequisites below — a
+packaged Iris ships Electron's own Node. Relatedly, `@types/node`'s major tracks
+the Node **Electron** embeds rather than this floor, guarded at build time by
+`scripts/check-types-node.mjs`; see [docs/REFERENCE.md](docs/REFERENCE.md).
 
 ## Runtime prerequisites
 
@@ -112,6 +130,6 @@ any of these.
 - Role workers get their environment by **subtraction, not `process.env` passed through** — `electron/worker-env.mjs`'s `computeWorkerEnv` is the shared helper both `startClaudeRun`'s DEV spawn and `computePoSessionEnv` route through, so the two paths can't drift. `GEMINI_API_KEY` is withheld from both roles (no role has a use for the voice credential); `CLAUDE_CODE_OAUTH_TOKEN` is additionally withheld from DEV, confirmed empirically to authenticate via its own `/login` session, never that env var.
 - The renderer executes only code shipped inside the app: a Content-Security-Policy (`vite.config.ts`'s `transformIndexHtml`) blocks remote script/WASM execution, the privileged window can't navigate off-origin, and device permissions are scoped to the app's own document. See the `renderer-content-security` capability spec.
 - `@anthropic-ai/claude-agent-sdk` is a real npm dependency (drives the same `claude` binary DEV spawns directly) — keep its version pinned like the other exact identifiers in [docs/REFERENCE.md](docs/REFERENCE.md).
-- `electron/` is typechecked by `tsconfig.electron.json` (a second `tsc -p` in `npm run build`), covering every `.mjs`/`.cjs` under it automatically — no per-file opt-in. Coverage is raised by enabling a compiler flag, not by annotating files; the three currently-deferred flags and their measured error-count cost: `useUnknownInCatchVariables` +26, `strictNullChecks` +91, `noImplicitAny` +719. Two-project typecheck setup and rationale: [docs/TESTING.md](docs/TESTING.md).
+- `electron/` is typechecked by `tsconfig.electron.json` (a second `tsc -p` in `npm run build`), covering every `.mjs`/`.cjs` under it automatically — no per-file opt-in. Coverage is raised by enabling a compiler flag, not by annotating files; the three currently-deferred flags and their measured error-count cost: `useUnknownInCatchVariables` +26, `strictNullChecks` +88, `noImplicitAny` +792. These counts move with `@types/node` and `lib` — they were re-measured against `@types/node@24.13.3` at `lib: ES2025`, so re-measure rather than trust them after either changes. Two-project typecheck setup and rationale: [docs/TESTING.md](docs/TESTING.md).
 - File-size convention: one responsibility per file, graspable in a few minutes, target 250–450 lines; `*.test.*` files are exempt (append-only case lists, not read start-to-end). Enforcement is convention-only by deliberate decision — no guard script — so don't mistake the absence of a check for an oversight.
 - Docs discipline: keep this file a router. New deep detail goes to `docs/` or a capability spec, with a one-line pointer here.

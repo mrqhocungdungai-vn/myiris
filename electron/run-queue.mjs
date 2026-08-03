@@ -288,7 +288,8 @@ export function createRunQueue({
   function serialize(runId) {
     const run = runs.get(runId);
     if (!run) return null;
-    const { child, result, ...rest } = run;
+    // Named only to keep them out of `rest` — omit-by-destructuring, not dead bindings.
+    const { child: _child, result: _result, ...rest } = run;
     return rest;
   }
 

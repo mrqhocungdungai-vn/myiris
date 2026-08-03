@@ -160,8 +160,20 @@ synchronous function calls): see **[docs/REFERENCE.md](docs/REFERENCE.md)**.
 
 ### Prerequisites
 
-- Node.js 20+ (LTS recommended).
+- Node.js **24 LTS or newer**. This is enforced, not advisory: `package.json`
+  declares `engines.node: ">=24.0.0"` and `.npmrc` sets `engine-strict=true`, so
+  `npm ci` fails outright with `EBADENGINE` on anything older. Run `nvm use` —
+  `.nvmrc` pins the line. For a deliberate one-off, `npm ci --engine-strict=false`
+  bypasses the check.
 - npm.
+- **`gitleaks`** (`brew install gitleaks` — 8.30.1 at time of writing), for the
+  secret-scanning gate. Unlike every other tool in the check chain, this one is
+  **not pinned by `package-lock.json`** — it is installed outside npm, so its
+  version can move without the lockfile recording it. The gate fails closed when
+  it is missing rather than skipping silently; `IRIS_SKIP_HOOKS=1` is the
+  deliberate one-off bypass. Do not try to "properly pin" it by installing the
+  `gitleaks` package from npm — that is an unrelated abandoned package, not this
+  tool. See [docs/REFERENCE.md](docs/REFERENCE.md).
 - A Gemini API key for the Live model (`GEMINI_API_KEY`).
 - macOS with microphone permission available. Iris refuses to launch on other platforms; set `IRIS_ALLOW_ANY_PLATFORM=1` to bypass this as a developer escape hatch.
 - *Optional, for the Claude pipeline:* Claude Code installed and authenticated (`claude --version` works) — see "Claude pipeline (PO → DEV)" above.

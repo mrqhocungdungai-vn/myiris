@@ -11,7 +11,7 @@ export const DEFAULT_DEBOUNCE_MS = 500;
 const SCAN_READ_CONCURRENCY = 8;
 
 async function runWithConcurrency(items, limit, worker) {
-  const results = new Array(items.length);
+  const results = Array.from({ length: items.length });
   let next = 0;
   async function runOne() {
     for (;;) {

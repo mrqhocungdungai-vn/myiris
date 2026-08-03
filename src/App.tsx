@@ -670,7 +670,7 @@ export default function App() {
   }, [transcript]);
 
   const working = useMemo(
-    () => tasks.some((task) => !TERMINAL.has(task.status.toLowerCase())) && tasks.length > 0,
+    () => tasks.some((task) => !TERMINAL.has(task.status.toLowerCase())),
     [tasks],
   );
 

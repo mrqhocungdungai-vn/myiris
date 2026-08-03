@@ -75,7 +75,6 @@ function make(overrides = {}) {
     checkClaudeStatus: vi.fn(async () => ({ reachable: true })),
     probePipelineAvailability: vi.fn(async () => ({})),
     userDisplayName: () => "Alex",
-    submitClaudeTask: vi.fn(),
     updateTrayMenu: vi.fn(),
     buildLiveTools: () => [],
     buildListenSystemInstructionText: () => "listen instructions",

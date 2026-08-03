@@ -1,0 +1,33 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+
+  // Rule selection is measured, not adopted wholesale. Counts below are findings
+  // over `src electron scripts` on the tree this config was written against.
+  // The governing requirement lives in the `workflow-quality-gates` capability.
+  //
+  // ENABLED. `correctness` is oxlint's default category (7 findings, all resolved
+  // before the gate was turned on). `import`, `promise` and `node` are enabled
+  // because each measured +0 findings: coverage against future defects at no
+  // present debt.
+  //
+  // EXCLUDED ON VOLUME -- adopting any of these turns a change into a refactor of
+  // unrelated code:
+  //     suspicious 95 | pedantic 481 | restriction 1102 | style 7137
+  //
+  // EXCLUDED ON RISK -- react: +14, and all 14 are react-hooks(exhaustive-deps)
+  // inside src/App.tsx (1738 lines of effects and refs). Mechanically adding the
+  // named dependencies is the standard way to satisfy that rule and a well-known
+  // way to introduce infinite re-render loops. Read the count alone and it looks
+  // like an afternoon's work; it is not. Each of the 14 needs reading on its own.
+  //
+  // EXCLUDED ON VALUE -- vitest: +7. expect-expect misfires on custom assertion
+  // helpers, and require-to-throw-message is style.
+
+  "plugins": ["unicorn", "typescript", "oxc", "import", "promise", "node"],
+
+  "categories": {
+    "correctness": "warn"
+  },
+
+  "ignorePatterns": ["dist", "dist-electron", "release", "public/runtime", "node_modules"]
+}

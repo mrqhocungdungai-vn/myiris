@@ -15,11 +15,16 @@
   },
   "type": "module",
   "main": "electron/main.mjs",
+  "engines": {
+    "node": ">=24.0.0"
+  },
   "scripts": {
     "postinstall": "node scripts/vendor-runtime-assets.mjs",
     "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on tcp:5173 && node scripts/run-electron.mjs\"",
-    "build": "node scripts/vendor-runtime-assets.mjs && tsc --noEmit && tsc -p tsconfig.electron.json && vite build && node scripts/check-three-dedupe.mjs",
+    "build": "node scripts/vendor-runtime-assets.mjs && tsc --noEmit && tsc -p tsconfig.electron.json && vite build && node scripts/check-three-dedupe.mjs && node scripts/check-types-node.mjs",
     "test": "vitest run",
+    "lint": "node scripts/lint.mjs",
+    "scan:secrets": "node scripts/scan-secrets.mjs --staged",
     "preview": "vite preview",
     "start": "npm run build && node scripts/run-electron.mjs --prod",
     "start:prod": "node scripts/run-electron.mjs --prod",
@@ -28,7 +33,6 @@
     "electron": "node scripts/run-electron.mjs"
   },
   "dependencies": {
-    "3d-force-graph": "1.80.0",
     "@anthropic-ai/claude-agent-sdk": "^0.3.210",
     "@excalidraw/excalidraw": "0.18.1",
     "@google/genai": "^2.10.0",
@@ -37,30 +41,32 @@
     "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.4.0",
     "@react-three/postprocessing": "^3.0.4",
-    "@vitejs/plugin-react": "latest",
+    "@vitejs/plugin-react": "6.0.3",
+    "3d-force-graph": "1.80.0",
     "fractional-indexing": "3.2.0",
     "gray-matter": "4.0.3",
-    "lucide-react": "latest",
+    "lucide-react": "1.21.0",
     "onnxruntime-web": "^1.27.0",
-    "react": "latest",
-    "react-dom": "latest",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
     "three": "^0.181.2",
-    "typescript": "latest",
-    "vite": "latest",
+    "typescript": "6.0.3",
+    "vite": "8.1.0",
     "zod": "4.4.3"
   },
   "devDependencies": {
-    "@types/node": "latest",
-    "@types/react": "latest",
-    "@types/react-dom": "latest",
-    "concurrently": "latest",
+    "@types/node": "24.13.3",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "concurrently": "10.0.3",
     "electron": "42.5.0",
     "electron-builder": "^26.15.3",
     "jsdom": "^29.1.1",
+    "oxlint": "1.76.0",
     "vitest": "4.1.10",
-    "wait-on": "latest"
+    "wait-on": "9.0.10"
   },
   "overrides": {
     "three": "$three"

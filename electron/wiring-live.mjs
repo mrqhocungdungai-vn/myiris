@@ -130,7 +130,6 @@ export function createLiveWiring({
     checkClaudeStatus,
     probePipelineAvailability,
     userDisplayName,
-    submitClaudeTask,
     // Deferred: windowModule (constructed further down this file, after
     // liveSessionModule) owns updateTrayMenu. Only called once the app is
     // running, well after windowModule is assigned.

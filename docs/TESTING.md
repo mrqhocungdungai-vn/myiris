@@ -2,28 +2,60 @@
 
 [← Back to README](../README.md)
 
-Iris has **two independent automated checks** and no linter. The authoritative
-conventions are a living spec — `openspec/specs/test-harness/spec.md`. Read it
-before adding tests; this page is the practical summary.
+Iris has **four independent automated checks**. Two living specs are
+authoritative: `openspec/specs/test-harness/spec.md` for the runner and
+testability conventions, and `openspec/specs/workflow-quality-gates/spec.md` for
+which check runs when. Read them before adding tests or gates; this page is the
+practical summary.
 
-## The two gates
+## The four gates
 
 | Command | What it is | Notes |
 | --- | --- | --- |
 | `npm run build` | Typecheck gate — `tsc --noEmit` (renderer, `src/`) + `tsc -p tsconfig.electron.json` (main process, `electron/`) + Vite build to `dist/` | Must **never** depend on the test runner, so a typecheck is always runnable on its own |
 | `npm test` | Behavioral gate — `vitest run` | vitest pinned at `4.1.10` |
+| `npm run lint` | Lint gate — `oxlint`, zero-warning | oxlint pinned at `1.76.0`; rules in `.oxlintrc.json` |
+| `npm run scan:secrets` | Secret gate — `gitleaks` over the staged changes | Requires `brew install gitleaks`; **not** lockfile-pinned |
 
-Run both to verify a change.
+Each is runnable on its own, and `build` deliberately runs neither of the last
+two — nothing here may make a typecheck depend on anything else.
 
-There is **no linter** configured (no eslint/prettier/biome dependency or
-config), despite a few stray `eslint-disable` comments in the source.
+## Where the gates are bound
+
+`.claude/settings.json` binds them to editing events. The split is by **what a
+check reads**, not what it costs:
+
+| Event | Runs | Measured |
+| --- | --- | --- |
+| `PostToolUse` (`Edit`/`Write`) | secret scan of the written file | 168ms |
+| `Stop` (end of turn) | lint, then the typecheck projects whose files changed | 92ms when nothing relevant changed, up to 5.4s |
+| `PreToolUse` (`Bash`) | secret scan of staged content, when the command is a `git commit` | 70ms |
+
+A **per-file** check reads only the file just written, so it is never wrong about
+work in progress. A **whole-tree** check reads relationships between files, so it
+is necessarily wrong partway through a multi-edit sequence — lint was briefly
+bound per-edit and blocked a refactor over an import the next edit consumed.
+Deferring costs no detection: the same condition is still caught at the end of
+the turn.
+
+Two behaviors worth knowing before they surprise you:
+
+- **The gates fail closed.** A missing `gitleaks` or `oxlint` blocks rather than
+  skips, and prints the install command. A security check that passes silently
+  when it did not run is worse than no check — the repo already paid for
+  warn-and-continue once, in the Node floor that drifted (see
+  [REFERENCE.md](REFERENCE.md)). `IRIS_SKIP_HOOKS=1` is the deliberate one-off
+  bypass and announces itself.
+- **The commit gate only sees commits made through Claude Code.** A `git commit`
+  typed in a terminal bypasses it. Closing that needs a real git hook, which is
+  deliberately out of scope.
 
 ## The Electron typecheck project
 
 `tsconfig.json` (renderer) is scoped to `"include": ["src"]` with
 `"allowJs": false`, so it never reads a line of `electron/`. A second,
 sibling project — `tsconfig.electron.json` — covers the whole main process
-instead: Node ESM (`module`/`moduleResolution: "NodeNext"`, `lib: ["ES2022"]`,
+instead: Node ESM (`module`/`moduleResolution: "NodeNext"`, `lib: ["ES2025"]`,
 no DOM), `allowJs`/`checkJs: true` so every `.mjs`/`.cjs` under `electron/` is
 checked with no per-file opt-in, and `strict: false` (the directory's
 measured green floor — `strict: true` costs 822 errors, almost all annotation

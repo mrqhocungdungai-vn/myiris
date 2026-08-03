@@ -182,6 +182,10 @@ export function createUserConfig({ repoRoot, getIsPackaged, emitEvent, emitToRen
   // variables — including keys outside ALLOWED_CONFIG_KEYS. No allowlisted key
   // has a legitimate multi-line value, so rejection costs nothing real.
   function assertConfigValueIsSafe(key, value) {
+    // Matching control characters is the entire point here: this is the .env
+    // injection guard described above, and the class must stay literal to reject
+    // exactly what parseEnvFile cannot survive. Hence the suppression below.
+    // oxlint-disable-next-line no-control-regex
     if (/[\x00-\x1f\x7f]/.test(String(value ?? ""))) {
       throw new Error(`Config value for ${key} contains a line break or control character and was rejected.`);
     }
