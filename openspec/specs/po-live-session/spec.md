@@ -71,41 +71,67 @@ The task queue SHALL treat the PO as a resident conversation whose turns are ser
 
 ### Requirement: PO session enables skills explicitly
 
-The stateful PO Agent SDK session SHALL enable skills explicitly (`skills: 'all'`) so the globally-installed skills load for the live session regardless of `cwd`, while keeping `settingSources` at its default (all sources) so global `user` settings still apply.
+The stateful PO Agent SDK session SHALL enable skills explicitly, as a caller-supplied list naming exactly the skills the PO role invokes, so they load for the live session regardless of `cwd`. The list SHALL NOT be "every skill the bundle ships": a run's capability surface is a property of what it was asked to do.
 
-#### Scenario: Global skills are available to the live PO session
+`settingSources` SHALL exclude the `user` scope. Iris ships the skills the personas invoke inside the app and must neither depend on, nor disturb, whatever the user has installed in their own Claude Code. The `project` scope SHALL be kept, so a session still picks up the settings of the repository it is working in.
+
+#### Scenario: The PO role's own skills are available to the live session
 
 - **WHEN** a PO turn runs in a workstream whose `cwd` has no project-local skill config
-- **THEN** the live PO session can invoke the globally-installed skills (e.g. `grilling`, the OpenSpec workflow skills)
+- **THEN** the live PO session can invoke the skills its role needs (grilling and the OpenSpec workflow skills), loaded from the app's own bundle
 
+#### Scenario: The live session cannot reach another role's skills
+
+- **WHEN** a PO turn runs
+- **THEN** skills belonging to unrelated workflows are not available to it
+
+#### Scenario: The user's own Claude Code is neither read nor required
+
+- **WHEN** a PO session is created on a machine with its own Claude Code install
+- **THEN** the session loads no settings from the user scope, and behaves identically on a machine that has never had Claude Code installed
 ### Requirement: PO turns are voice control prompts
 
-Iris's PO voice layer SHALL drive the live PO session with short control intents (grill, propose, task-status, archive) rather than hand-authored PRD/issue prompts; the Claude-side PO owns the process and produces the OpenSpec artifacts.
+Each PO turn SHALL be a short control intent from the voice layer, not a written specification — the voice layer steers, the PO does the analysis.
 
-#### Scenario: Voice controls the process, Claude executes it
+The PO SHALL be told, through a mechanism the runtime actually reads, that it is invoked from voice as a live continuous session, that it may pause at real decision points and wait for an answer, and that it should apply and record sensible defaults for lower-stakes calls. This instruction SHALL be produced by the same system-prompt policy that serves the headless role, so the two cannot drift apart, and SHALL differ from it only in the documented role-specific clause.
 
-- **WHEN** the user issues a control intent by voice (e.g. "grill", "propose the change", "are there tasks left?")
-- **THEN** the voice layer delivers that intent to the live PO session
-- **AND** the Claude-side PO performs the corresponding OpenSpec step, without the voice layer composing the spec content itself
+PO SHALL run on the same base system prompt as the headless role. It SHALL NOT fall back to the runtime's minimal default prompt while the headless role receives the full one — a difference that is invisible at the call site and changes how the role behaves.
+
+#### Scenario: A control intent drives a full PO turn
+
+- **WHEN** the voice layer sends a short control intent
+- **THEN** the PO performs the analysis itself and reports a concise result, without the voice layer having written a specification
+
+#### Scenario: The live-session instruction reaches the model
+
+- **WHEN** a PO session is created
+- **THEN** the live-session instruction is delivered through a mechanism the installed runtime reads, verified by a test on the options handed to the runtime
+
+#### Scenario: Both roles share a base prompt
+
+- **WHEN** a PO session and a headless run are configured
+- **THEN** their base system prompt is identical, differing only in the documented role-specific clause
 
 ### Requirement: An in-flight PO turn always settles
 
-A PO turn delivered into the live session SHALL reach a terminal outcome — never remain permanently unsettled — regardless of how the underlying SDK stream ends. This SHALL hold on all three endings: the stream completes normally, the session is torn down while the turn is in flight, and the stream throws. Because a settled turn is what releases the shared execution slot, an unsettled turn holds that slot against every subsequent run, so the settlement is not optional.
+A PO turn SHALL always reach a terminal outcome. A turn SHALL NOT be left waiting when its session ends, is torn down, or fails.
 
-#### Scenario: Turn settles when the stream ends without throwing
+Cancellation of a PO turn SHALL go through the same caller-facing path as cancellation of a headless run, so a caller does not need to know a run's lifetime in order to stop it. Where the runtime provides an interrupt for a turn already in progress, that SHALL be used rather than tearing down the transport, and any queued work that survives the interrupt SHALL be recorded rather than reported as cancelled.
 
-- **WHEN** the SDK stream backing an in-flight PO turn ends normally (no error thrown), as happens when the session's message channel is closed
-- **THEN** the turn settles rather than hanging, and the run holding the execution slot is finalized so the slot is released for the next run
+#### Scenario: A turn settles when its session ends
 
-#### Scenario: Turn settles when the session is torn down mid-turn
+- **WHEN** a PO session ends while a turn is in flight
+- **THEN** the turn settles with an outcome attributing why it ended
 
-- **WHEN** the user resets the session (New session, voice new-session, or picking a different project folder) while a PO turn is in flight, closing the live session
-- **THEN** the in-flight turn settles, the run is finalized, the slot is released, and a subsequent PO turn or DEV run starts without queueing behind the torn-down turn
+#### Scenario: Cancellation is lifetime-agnostic
 
-#### Scenario: Turn settles when the stream throws
+- **WHEN** a PO turn is cancelled
+- **THEN** it is cancelled through the same path used to cancel a headless run
 
-- **WHEN** the SDK stream backing an in-flight PO turn throws
-- **THEN** the turn settles with that error and the run is finalized
+#### Scenario: An interrupt reports what survived
+
+- **WHEN** a PO turn is interrupted and queued work survives
+- **THEN** that work is recorded and reported rather than described as cancelled
 
 ### Requirement: A settled PO turn attributes why it ended
 

@@ -66,7 +66,7 @@ vi.mock("./renderer-bridge.mjs", () => ({
 vi.mock("./session-store.mjs", () => ({
   createSessionStore: vi.fn(() => ({
     agentRoster: ["po", "dev"],
-    modelChoices: [{ id: "claude-fable-5", label: "Fable" }],
+    modelChoices: [{ id: "claude-opus-5", label: "Opus 5" }],
     getActiveId: vi.fn(),
     resolveAgentModel: vi.fn(),
     agentKey: vi.fn(),

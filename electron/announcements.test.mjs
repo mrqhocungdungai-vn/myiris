@@ -14,7 +14,7 @@ function make(overrides = {}) {
     agentKey: (agent) => agent ?? "default",
     findWorkstream: () => null,
     getActiveWorkstreamId: () => null,
-    runStatus: { CANCELLED: "cancelled" },
+    runStatus: { CANCELLED: "cancelled", LIMITED: "limited" },
     ...overrides,
   });
 }
@@ -128,9 +128,53 @@ describe("announcements: workspace info and completion", () => {
     expect(session.sendRealtimeInput).not.toHaveBeenCalled();
   });
 
+  it("tells the voice layer a ceiling termination is not a failure", () => {
+    const session = makeLiveSession();
+    const announcements = make({ getLiveSession: () => session });
+    announcements.announceClaudeCompletion({
+      runId: "r1",
+      task: "do thing",
+      status: "limited",
+      output: "The run stopped at its turn ceiling of 150 turns.",
+    });
+
+    const [{ text }] = session.sendRealtimeInput.mock.calls[0];
+    expect(text).toContain("did NOT fail");
+    expect(text).toContain("ceiling");
+  });
+
+  it("carries the recorded cost so voice never has to estimate one", () => {
+    const session = makeLiveSession();
+    const emitEvent = vi.fn();
+    const announcements = make({ getLiveSession: () => session, emitEvent });
+    announcements.announceClaudeCompletion({
+      runId: "r1",
+      task: "do thing",
+      status: "completed",
+      output: "done",
+      usage: { cost_usd: 0.7781, num_turns: 29 },
+    });
+
+    const [{ text }] = session.sendRealtimeInput.mock.calls[0];
+    expect(text).toContain("$0.78");
+    expect(text).toContain("29 turns");
+    expect(text).toContain("never estimate");
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "claude_completion", usage: { cost_usd: 0.7781, num_turns: 29 } }),
+    );
+  });
+
+  it("says nothing about cost when the run recorded none", () => {
+    const session = makeLiveSession();
+    const announcements = make({ getLiveSession: () => session });
+    announcements.announceClaudeCompletion({ runId: "r1", task: "do thing", status: "completed", output: "done" });
+
+    expect(session.sendRealtimeInput.mock.calls[0][0].text).not.toContain("what it cost");
+  });
+
   it("announceClaudeCompletion announces by voice for a non-cancelled terminal status", () => {
     const session = makeLiveSession();
-    const announcements = make({ getLiveSession: () => session, runStatus: { CANCELLED: "cancelled" } });
+    const announcements = make({ getLiveSession: () => session, runStatus: { CANCELLED: "cancelled", LIMITED: "limited" } });
     announcements.announceClaudeCompletion({ runId: "r1", task: "do thing", status: "completed", output: "done" });
     expect(session.sendRealtimeInput).toHaveBeenCalled();
     const [{ text }] = session.sendRealtimeInput.mock.calls[0];

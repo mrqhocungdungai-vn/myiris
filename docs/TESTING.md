@@ -96,6 +96,30 @@ above and `npm test`'s own summary line — a hand-typed enumeration goes stale
 the moment a test file is added, which is exactly what happened to this
 section before (add-electron-test-signal).
 
+## The SDK options test
+
+`electron/sdk-options.test.mjs` asserts the **exact `Options` object** each role
+hands to `query()` — the complete key set, field by field, not just the fields it
+expects to find.
+
+The asymmetry matters. An ordinary test that checks the options it cares about
+cannot catch the failure this one exists for: for months Iris passed
+`appendSystemPrompt` at the top level of `Options`, which is **not a declared
+field**. The SDK's normalizer destructures it away and never reads it, so PO's
+live-session instruction reached nothing while the code and its tests both
+claimed it was in force. Nothing failed. Asserting the complete key set is what
+turns an option that is added, renamed, or misspelled into a failing test rather
+than a silently degraded run.
+
+The last test in the file closes the loop against reality: it parses the
+installed `sdk.d.ts`, extracts the declared `Options` fields, and checks that
+every field Iris sets is one of them — with `appendSystemPrompt` asserted
+**absent** as the control. So an SDK upgrade that renames or drops a field is
+caught on the next `npm ci`, not in a user's run.
+
+Add a field to a role's options ⇒ add it to that role's key list in this file.
+That friction is the point.
+
 ## The import-graph test
 
 Two halves, because the obvious one alone misses real failures:

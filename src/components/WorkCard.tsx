@@ -9,6 +9,7 @@ import {
   stepDetail,
   stepHeadline,
   toolCategory,
+  usageSummary,
 } from "../lib/tasks";
 import { AGENT_COLORS, AGENT_LABELS, isAgentRole, modelLabel } from "../lib/agents";
 
@@ -82,6 +83,9 @@ export default function WorkCard({
   const active = !TERMINAL.has(status);
   const steps = task.steps ?? [];
   const runningStep = [...steps].reverse().find((step) => step.status === "running");
+  // What the run actually cost, from the runtime's own result message — shown
+  // only once it has landed, never estimated while the run is in flight.
+  const cost = usageSummary(task.usage);
 
   return (
     <article
@@ -93,6 +97,11 @@ export default function WorkCard({
       <div className="wcard-top">
         <span className={`badge ${status}`}>{task.status}</span>
         <AgentBadge agent={task.agent} model={task.model} />
+        {cost ? (
+          <span className="wcard-cost" title="What this run cost, as Claude reported it">
+            {cost}
+          </span>
+        ) : null}
         <code
           title={
             task.claudeSessionId

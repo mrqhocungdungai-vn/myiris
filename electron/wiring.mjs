@@ -9,7 +9,6 @@
 // their headers. Electron-free itself: `dialog` and the packaged-check are
 // received injected from main.mjs, one of the four modules allowed to
 // import Electron directly, like any other domain module.
-import { getPoSessionState, cancelPoTurn } from "./po-session.mjs";
 import { createRunQueue, RUN_STATUS } from "./run-queue.mjs";
 import { createPipelineProbes } from "./pipeline-probes.mjs";
 import { createPipelineInstall } from "./pipeline-install.mjs";
@@ -95,14 +94,12 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     // through its resident session, looked up by workstream. Never touches the
     // slot itself — the slot releases when the transport settles and finalizes
     // the run (design.md D1/D2).
-    cancelRun: (run) => {
-      if (run.cancel) {
-        run.cancel();
-        return;
-      }
-      const state = getPoSessionState(run.workstream_id);
-      if (state) cancelPoTurn(state);
-    },
+    // One path for both lifetimes: run-exec gives every run a `cancel`, whether
+    // it is a one-shot DEV query (abort its controller) or a PO turn inside a
+    // resident session (interrupt the turn, keep the session). Nothing here
+    // needs to know which. Never touches the slot itself — the slot releases
+    // when the transport settles and finalizes the run (design.md D1/D2).
+    cancelRun: (run) => run.cancel?.(),
     emit: (event) => emitEvent(event),
     onFinalized: (run) => {
       // Discard any pending trailing activity emit so it cannot fire after
@@ -124,6 +121,8 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
         task: run.task,
         status: run.status,
         output: String(run.output || "").slice(0, 2500),
+        usage: run.usage ?? null,
+        decisions: run.decisions ?? null,
       });
     },
   });
@@ -257,6 +256,7 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     notifyIris,
     findWorkstream,
     agentKey,
+    agentLabels: AGENT_LABELS,
     persistSessionStore,
     emitSessions,
   });

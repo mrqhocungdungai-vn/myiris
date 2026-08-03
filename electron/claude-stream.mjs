@@ -61,3 +61,28 @@ export function parseClaudeStreamMessage(
     onResult?.(message);
   }
 }
+
+// The cost and usage figures the SDK reports on every terminal result, lifted
+// into the shape a run record carries. Read in zero places before this change:
+// a voice-dispatched run executed on the user's credential and nothing recorded
+// what it spent.
+//
+// `model_usage` is kept alongside the single `cost_usd` figure rather than
+// instead of it, because a run that used subagents spends on more than one model
+// and a single top-level number attributes that incorrectly — both measured runs
+// in design.md D3 carried two models. Lives here, with the rest of the shared
+// message-shape knowledge, so DEV's stream projection and PO's resident session
+// read the same fields the same way.
+/**
+ * @param {any} result
+ * @returns {{ cost_usd: number|null, num_turns: number|null, usage: any, model_usage: any } | null}
+ */
+export function runUsageFrom(result) {
+  if (!result || typeof result !== "object") return null;
+  return {
+    cost_usd: typeof result.total_cost_usd === "number" ? result.total_cost_usd : null,
+    num_turns: typeof result.num_turns === "number" ? result.num_turns : null,
+    usage: result.usage ?? null,
+    model_usage: result.modelUsage ?? null,
+  };
+}

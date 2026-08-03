@@ -1,5 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
-import { createRendererBridge } from "./renderer-bridge.mjs";
+import {
+  createRendererBridge,
+  RECENT_UTTERANCE_LIMIT,
+  RECENT_UTTERANCE_MAX_AGE_MS,
+} from "./renderer-bridge.mjs";
 
 function makeWindow({ destroyed = false } = {}) {
   return {
@@ -69,5 +73,87 @@ describe("renderer-bridge", () => {
     expect(bridge.getUiContext().uiMode).toBe("deck");
     bridge.setUiContext({ uiMode: "hud", tasks: [] });
     expect(bridge.getUiContext()).toEqual({ uiMode: "hud", tasks: [] });
+  });
+});
+
+// D8/F15: Iris held a verbatim transcript of what the user said and used it only
+// to draw text on screen — the buffer was cleared by the display flush. It is
+// now retained, bounded, and readable. Nothing consumes it in this change.
+describe("the retained-utterance ring", () => {
+  /** @param {{ now?: () => number }} [options] */
+  function make({ now = () => 1_000_000 } = {}) {
+    const clock = now;
+    const sent = [];
+    const bridge = createRendererBridge({
+      getMainWindow: () => ({ isDestroyed: () => false, webContents: { send: (_c, p) => sent.push(p) } }),
+      now: clock,
+    });
+    return { bridge, sent };
+  }
+
+  it("keeps an utterance past the display flush that used to discard it", () => {
+    const { bridge } = make();
+    bridge.appendUserTranscript("book me a ");
+    bridge.appendUserTranscript("flight");
+    bridge.flushTranscripts();
+
+    expect(bridge.getRecentUtterances()).toEqual([{ text: "book me a flight", at: 1_000_000 }]);
+  });
+
+  it("records one entry per utterance, not per fragment", () => {
+    const { bridge } = make();
+    bridge.appendUserTranscript("first");
+    bridge.flushTranscripts();
+    bridge.appendUserTranscript("sec");
+    bridge.appendUserTranscript("ond");
+    bridge.flushTranscripts();
+
+    expect(bridge.getRecentUtterances().map((u) => u.text)).toEqual(["first", "second"]);
+  });
+
+  it("retains nothing for a flush with no user speech", () => {
+    const { bridge } = make();
+    bridge.appendModelTranscript("Iris talking");
+    bridge.appendUserTranscript("   ");
+    bridge.flushTranscripts();
+
+    expect(bridge.getRecentUtterances()).toEqual([]);
+  });
+
+  it("drops the oldest past the count cap", () => {
+    const { bridge } = make();
+    for (let i = 0; i < RECENT_UTTERANCE_LIMIT + 10; i += 1) {
+      bridge.appendUserTranscript(`utterance ${i}`);
+      bridge.flushTranscripts();
+    }
+
+    const kept = bridge.getRecentUtterances();
+    expect(kept).toHaveLength(RECENT_UTTERANCE_LIMIT);
+    expect(kept[0].text).toBe("utterance 10");
+    expect(kept.at(-1).text).toBe(`utterance ${RECENT_UTTERANCE_LIMIT + 9}`);
+  });
+
+  it("drops anything older than the age cap, even while idle", () => {
+    /** @type {number} */
+    let clock = 1_000_000;
+    const { bridge } = make({ now: () => clock });
+    bridge.appendUserTranscript("old news");
+    bridge.flushTranscripts();
+
+    clock += RECENT_UTTERANCE_MAX_AGE_MS - 1;
+    expect(bridge.getRecentUtterances()).toHaveLength(1);
+
+    // Nothing is spoken in between — the age bound must still apply on read.
+    clock += 2;
+    expect(bridge.getRecentUtterances()).toEqual([]);
+  });
+
+  it("hands out copies, so a caller cannot mutate the ring", () => {
+    const { bridge } = make();
+    bridge.appendUserTranscript("mine");
+    bridge.flushTranscripts();
+
+    bridge.getRecentUtterances()[0].text = "tampered";
+    expect(bridge.getRecentUtterances()[0].text).toBe("mine");
   });
 });

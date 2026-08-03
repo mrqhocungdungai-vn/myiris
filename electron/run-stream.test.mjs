@@ -145,3 +145,79 @@ describe("run-stream: activity and tool-step projection", () => {
     expect(() => stream.handleClaudeStreamMessage(run, "not a message")).not.toThrow();
   });
 });
+
+// F12: a question reached the user with its shape flattened — `header` and
+// `multiSelect` were dropped, and the answers map could only ever carry one
+// label per question, including on the timeout path.
+describe("AskUserQuestion survives the relay with its shape intact", () => {
+  const multi = {
+    question: "Which checks should run?",
+    header: "Checks",
+    multiSelect: true,
+    options: [
+      { label: "lint", description: "oxlint" },
+      { label: "tests", description: "vitest" },
+      { label: "typecheck", description: "tsc" },
+    ],
+  };
+  const single = {
+    question: "Which package manager?",
+    header: "Tooling",
+    options: [
+      { label: "npm", description: "the default" },
+      { label: "pnpm", description: "faster" },
+    ],
+  };
+
+  it("reads the header and the multi-select affordance aloud", () => {
+    const notifyIris = vi.fn();
+    const stream = make({ notifyIris });
+    stream.askUserQuestionViaVoice("ws1", [multi, single]);
+
+    const [text] = notifyIris.mock.calls[0];
+    expect(text).toContain("[Checks]");
+    expect(text).toContain("[Tooling]");
+    expect(text).toContain("multi_select");
+    expect(text).toContain("Never narrow it to one");
+  });
+
+  it("carries every chosen option back, comma-separated as the tool expects", async () => {
+    const stream = make();
+    /** @type {any} */
+    let delivered;
+    const pending = stream.askUserQuestionViaVoice("ws1", [multi]).then((value) => {
+      delivered = value;
+    });
+    stream.resolvePendingPoQuestion([{ question: multi.question, choice: ["lint", "typecheck"] }]);
+    await pending;
+
+    expect(delivered.answers[multi.question]).toBe("lint, typecheck");
+  });
+
+  it("accepts a single label unchanged", async () => {
+    const stream = make();
+    /** @type {any} */
+    let delivered;
+    const pending = stream.askUserQuestionViaVoice("ws1", [single]).then((value) => {
+      delivered = value;
+    });
+    stream.resolvePendingPoQuestion([{ question: single.question, choice: "pnpm" }]);
+    await pending;
+
+    expect(delivered.answers[single.question]).toBe("pnpm");
+  });
+
+  it("applies the recommended default on timeout, in the question's own shape", async () => {
+    const stream = make();
+    /** @type {any} */
+    let delivered;
+    const pending = stream.askUserQuestionViaVoice("ws1", [multi, single]).then((value) => {
+      delivered = value;
+    });
+    stream.PendingQuestion.expire();
+    await pending;
+
+    expect(delivered.answers[multi.question]).toBe("lint");
+    expect(delivered.answers[single.question]).toBe("npm");
+  });
+});

@@ -7,9 +7,67 @@
 // capability hooks, pipeline probes/install) is injected.
 import fs from "node:fs";
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import { poBillingStatus, getOrCreatePoSession, deliverPoTurn, setPoSessionModel, setPoSessionMcpServers } from "./po-session.mjs";
+import {
+  poBillingStatus,
+  getOrCreatePoSession,
+  deliverPoTurn,
+  cancelPoTurn,
+  setPoSessionModel,
+  setPoSessionMcpServers,
+} from "./po-session.mjs";
+import { buildSystemPrompt } from "./role-prompt.mjs";
+import { budgetWarnFraction, describeCeiling, isCeilingSubtype, resolveRunBudget } from "./run-budget.mjs";
+import { buildRunHooks, readInFlightCostUsd } from "./run-hooks.mjs";
+import { DECISION_OUTPUT_FORMAT, readRunOutput } from "./run-output-format.mjs";
+import { isSessionAlive } from "./run-sessions.mjs";
+import { skillsForRole } from "./run-skills.mjs";
 import { computeClaudeWorkerEnv } from "./worker-env.mjs";
 import { RUN_STATUS, EMIT_STATUS, toUpdateEvent } from "./run-queue.mjs";
+
+// A run that terminated because it could not produce valid structured output
+// after the SDK's own retries. Named as its own cause: the work it did may be
+// complete on disk, and telling the user "the run failed" would send them
+// looking for a problem that is not there.
+const STRUCTURED_OUTPUT_FAILURE =
+  "The run finished its work but could not format a valid summary after several attempts, so its report was " +
+  "lost. Check the project for what it actually changed before re-running — the work itself may be done.";
+
+// How many trailing stderr lines a failed run carries. Enough to show a stack or
+// a spawn error, small enough that a chatty subprocess cannot turn a failure
+// message into a wall of text.
+const STDERR_TAIL_LINES = 20;
+
+// The SDK hands stderr over in arbitrary chunks, not lines, so this keeps a
+// rolling line buffer rather than concatenating everything a run ever wrote.
+// Attached to a run only when it FAILS — on the success path these lines are
+// debug noise the user has no reason to read.
+function createStderrBuffer(limit = STDERR_TAIL_LINES) {
+  const lines = [];
+  let partial = "";
+  return {
+    collect(chunk) {
+      partial += String(chunk ?? "");
+      const parts = partial.split("\n");
+      partial = parts.pop() ?? "";
+      for (const line of parts) {
+        if (line.trim()) lines.push(line);
+      }
+      if (lines.length > limit) lines.splice(0, lines.length - limit);
+    },
+    tail() {
+      const all = partial.trim() ? [...lines, partial] : lines;
+      return all.slice(-limit).join("\n").trim();
+    },
+  };
+}
+
+// A failure message with the subprocess's own diagnostics behind it. Before
+// this, a transport failure reached the user as `Failed to run claude: <message>`
+// and nothing else.
+function withStderr(message, tail) {
+  const diagnostics = tail();
+  return diagnostics ? `${message}\n\n--- claude stderr (last ${STDERR_TAIL_LINES} lines) ---\n${diagnostics}` : message;
+}
 
 /**
  * @param {{
@@ -31,14 +89,13 @@ import { RUN_STATUS, EMIT_STATUS, toUpdateEvent } from "./run-queue.mjs";
  *   ensureNotesVaultReady: () => void,
  *   checkNotesSkillsStatus: () => { ok: boolean },
  *   notesVaultDir: string,
- *   noteCaptureHintRe: RegExp,
- *   vaultChangedSince: (sinceMs: number) => boolean,
  *   handleClaudeStreamMessage: (run: any, message: any) => void,
  *   pushActivity: (run: any, line: string) => void,
  *   rememberClaudeSessionId: (run: any, claudeSessionId: string | null) => void,
  *   pushToolStart: (run: any, toolId: string, toolName: string, detail: any) => void,
  *   pushToolEnd: (run: any, toolId: string, isError: boolean) => void,
  *   askUserQuestionViaVoice: (workstreamId: string, questions: any[]) => Promise<any>,
+ *   isSessionAliveImpl?: (sessionId: string, options?: { dir?: string }) => Promise<boolean>,
  *   queryImpl?: typeof query,
  * }} deps
  */
@@ -61,14 +118,13 @@ export function createRunExec({
   ensureNotesVaultReady,
   checkNotesSkillsStatus,
   notesVaultDir,
-  noteCaptureHintRe,
-  vaultChangedSince,
   handleClaudeStreamMessage,
   pushActivity,
   rememberClaudeSessionId,
   pushToolStart,
   pushToolEnd,
   askUserQuestionViaVoice,
+  isSessionAliveImpl = isSessionAlive,
   queryImpl = query,
 }) {
   function runProjectDir(run) {
@@ -79,13 +135,17 @@ export function createRunExec({
 
   // A resume id can outlive the transcript it names — history deleted, project
   // moved, or the state directory relocated. Dropping the dead id lets the next
-  // task in the workstream start a fresh session instead of failing the same
-  // way forever. Called from both failure paths because the SDK reports this
-  // one inconsistently: a result message carrying the reason on some runs, and
-  // an empty `error_during_execution` followed by a throw on others.
-  function forgetStaleSession(run, key, previousSession, detail) {
-    if (!previousSession) return;
-    if (!/no conversation|session.*not.*found|unknown session/i.test(String(detail))) return;
+  // task in the workstream start a fresh session instead of failing the same way
+  // forever.
+  //
+  // This used to be reached only *after* a run had already failed, by regex-
+  // matching the error string the SDK produced — and the SDK reported it
+  // inconsistently (a result message on some runs, an empty
+  // `error_during_execution` followed by a throw on others), so the guess had to
+  // be made from both paths. `getSessionInfo()` answers the same question
+  // directly and *before* the run starts, so a dead id now costs nothing rather
+  // than costing a run (run-sessions.mjs).
+  function forgetSession(run, key, previousSession) {
     const ws = findWorkstream(run.workstream_id);
     if (ws?.agent_sessions?.[key] !== previousSession) return;
     delete ws.agent_sessions[key];
@@ -170,33 +230,21 @@ export function createRunExec({
     const workstream = findWorkstream(run.workstream_id);
     run.model = run.agent ? resolveAgentModel(workstream, run.agent) : null;
 
-    // DEV (stateless module): never asks mid-run, always defaults. The PO
-    // (stateful module, see startPoRun) gets the opposite instruction — it is
-    // allowed to pause via AskUserQuestion — so the two must not share this string.
-    let systemPrompt =
-      "You are invoked from Iris voice. Work autonomously. Do not ask for clarification unless absolutely impossible. Use sensible defaults and report concise final results.";
-
-    // Personal-knowledge-notes capability: plain-Claude runs only (`!run.agent`)
-    // — PO and DEV must see this exact string unchanged (design.md D3/D5 of the
-    // llm-wiki change). Verified manually per task 2.3: when `run.agent` is set,
-    // this whole branch is skipped, so `systemPrompt` stays byte-identical to
-    // the base string above — there is no other place that mutates it.
+    // No prompt text is built here. DEV and plain Claude get their base prompt
+    // from the same policy PO does (role-prompt.mjs) — that module owns both the
+    // wording and the choice of SDK field, which is what stopped the two roles
+    // from drifting apart. The only thing decided at this call site is which
+    // role is being started and whether the notes vault applies.
+    //
+    // The vault clause is for plain-Claude runs only (`!run.agent`): PO and DEV
+    // must never see it (design.md D3/D5 of the llm-wiki change), and
+    // buildRoleInstructions ignores a notesVault passed for any other role.
+    let notesVault = null;
     if (!run.agent) {
       ensureNotesVaultReady();
-      if (checkNotesSkillsStatus().ok) {
-        systemPrompt +=
-          ` The personal-notes / LLM-Wiki vault root is fixed at ${notesVaultDir}, regardless of the current working directory — use the wiki skills there for any note-taking or second-brain request. wiki-config.md and wiki-schema.md already exist in that vault; never ask the user for the wiki root path or wait for a reply — proceed directly using this path.`;
-      } else {
-        // Vault creation and skill installation are independent actions on
-        // independent schedules — the vault can exist before "Install missing"
-        // is ever clicked. Without this branch the directive above would send
-        // Claude looking for wiki skills that aren't installed, and it would
-        // either invent an ungoverned note format or hallucinate the skill's
-        // behavior instead of refusing honestly.
-        systemPrompt +=
-          " The personal-notes / LLM-Wiki skills are not installed on this machine yet. If the user asks to capture, save, or retrieve a personal note or second-brain entry, tell them the notes capability needs to be installed first (Iris's setup panel, \"Install missing\") — do not attempt an ad-hoc note file in its place.";
-      }
+      notesVault = { dir: notesVaultDir, skillsInstalled: checkNotesSkillsStatus().ok };
     }
+    const systemPrompt = buildSystemPrompt(run.agent ? "dev" : "plain", { notesVault });
 
     // canvas-claude-mcp (design.md D6/5.2): Iris-scoped per-run wiring, never
     // written to ~/.claude. The SDK takes the server record directly, so the
@@ -213,11 +261,41 @@ export function createRunExec({
     // Cross-role context still crosses the PO → DEV gate via the handoff files in
     // the project, never via a shared conversation.
     const key = agentKey(run.agent);
-    const previousSession = workstream?.agent_sessions?.[key] ?? null;
+    const storedSession = workstream?.agent_sessions?.[key] ?? null;
+    // Checked before the run starts, not guessed from the error it would
+    // otherwise fail with. Only a positive "this session does not exist" drops
+    // the id — see run-sessions.mjs on why an inconclusive probe keeps it.
+    let previousSession = storedSession;
+    if (storedSession && !(await isSessionAliveImpl(storedSession, { dir: run.cwd }))) {
+      previousSession = null;
+      forgetSession(run, key, storedSession);
+      emitEvent({
+        type: "log",
+        level: "info",
+        message: "The stored Claude session for this role no longer exists — starting a fresh one.",
+      });
+    }
 
     const permissionMode = /** @type {import("@anthropic-ai/claude-agent-sdk").PermissionMode} */ (
       process.env.IRIS_CLAUDE_PERMISSION_MODE || "bypassPermissions"
     );
+    // Declared before the options object because three of its fields close over
+    // them: the ceilings, the stderr sink, and (for DEV) a canUseTool that has to
+    // be able to abort the run it is guarding.
+    const budget = resolveRunBudget(run.agent === "dev" ? "dev" : "plain");
+    const sessionTitle = [workstream?.label, run.agent ? agentLabels[run.agent] ?? run.agent : "Claude"]
+      .filter(Boolean)
+      .join(" · ");
+    const { collect: collectStderr, tail: stderrTail } = createStderrBuffer();
+    // The SDK's Query handle, needed by the PreToolUse hook for the in-flight
+    // spend figure. Assigned when the query is created, read only from inside a
+    // hook — which cannot fire before iteration begins.
+    /** @type {any} */
+    let handle = null;
+    // Replaces the detached process-group kill: aborting the controller tears
+    // down the SDK's own subprocess and everything it spawned, so run-queue no
+    // longer needs to know a subprocess exists at all.
+    const abortController = new AbortController();
     /** @type {import("@anthropic-ai/claude-agent-sdk").Options} */
     const options = {
       cwd: run.cwd,
@@ -226,12 +304,11 @@ export function createRunExec({
       // attached for that mode, so IRIS_CLAUDE_PERMISSION_MODE=acceptEdits|plan
       // genuinely restricts the worker rather than being quietly overridden.
       ...(permissionMode === "bypassPermissions" ? { allowDangerouslySkipPermissions: true } : {}),
-      // The typed equivalent of the old `--append-system-prompt` flag: Claude
-      // Code's own system prompt, plus Iris's instructions. Stated explicitly
-      // rather than relying on `appendSystemPrompt` (which the SDK still honours
-      // at runtime but does not declare on Options) so the base prompt is not
-      // left to a default that could change.
-      systemPrompt: { type: "preset", preset: "claude_code", append: systemPrompt },
+      // Built by role-prompt.mjs, the single policy both roles share. Measured
+      // caveat (design.md D1): on a run with `agent` set, the definition's
+      // prompt replaces the base, so the `claude_code` preset half is discarded
+      // and only the `append` half reaches the model. Plain-Claude runs get both.
+      systemPrompt,
       env: computeClaudeWorkerEnv(process.env),
       pathToClaudeCodeExecutable: claudeBinary(),
       // The skills and /opsx commands the personas invoke, from the app bundle.
@@ -242,7 +319,40 @@ export function createRunExec({
       // installed in their own Claude Code. "project" is kept so a run still
       // picks up the settings of the repository it is working in.
       settingSources: /** @type {Array<"project">} */ (["project"]),
-      skills: /** @type {"all"} */ ("all"),
+      // Not "all": a run sees only the skills its own work needs. The lists and
+      // the evidence behind each entry live in run-skills.mjs.
+      skills: skillsForRole(run.agent === "dev" ? "dev" : "plain"),
+      // The runaway guard. Without these a voice-dispatched run executes under
+      // bypassPermissions with no turn limit and no spend limit, on a credential
+      // the user may be paying per token for. Both produce their own result
+      // subtype, which is what lets a ceiling be reported as the different thing
+      // it is (see the finalization below).
+      maxTurns: budget.maxTurns,
+      maxBudgetUsd: budget.maxBudgetUsd,
+      stderr: collectStderr,
+      // The name the user chose, so a transcript is identifiable instead of
+      // carrying an auto-generated summary. This is the declared mechanism for a
+      // NEW session; a session that already exists is retitled through
+      // renameSession (run-sessions.mjs), which is what run-stream does when it
+      // first sees an id.
+      ...(sessionTitle ? { title: sessionTitle } : {}),
+      // The notes vault lives outside the project the run works in, so it has
+      // to be GRANTED, not described. It used to be named in a prose directive
+      // and then checked for afterwards — a prompt is not a writable root, and
+      // diffing a directory to guess whether the model complied is not a
+      // mechanism. Plain-Claude runs only, matching who gets the vault clause.
+      ...(notesVault ? { additionalDirectories: [notesVault.dir] } : {}),
+      // The guard (spend warning + destructive-command denylist) and the
+      // authoritative tool-end boundary. `handle` is assigned just below, before
+      // any hook can fire — a hook only runs once the query is iterating.
+      hooks: buildRunHooks({
+        budget,
+        warnFraction: budgetWarnFraction(),
+        costUsd: () => readInFlightCostUsd(handle),
+        onToolEnd: (toolId, isError) => pushToolEnd(run, toolId, isError),
+        onActivity: (line) => pushActivity(run, line),
+        emitEvent,
+      }),
     };
     if (run.agent) {
       // The persona is handed over by value rather than looked up by name in
@@ -251,14 +361,36 @@ export function createRunExec({
       options.agents = { [name]: resolveAgentDefinition(run.agent, run.cwd) };
       options.agent = name;
     }
+    if (run.agent) {
+      // Role runs only. Plain Claude answers arbitrary spoken requests, and
+      // forcing every one of those through a summary/decisions schema would
+      // reshape answers that have nothing to do with a build pipeline.
+      options.outputFormat = DECISION_OUTPUT_FORMAT;
+    }
+    if (run.agent === "dev") {
+      // "DEV never asks" was a prompt promise with nothing behind it. Measured
+      // (design.md D1c): `AskUserQuestion` is only exposed to the model when a
+      // `canUseTool` callback is present, and `disallowedTools` removes it even
+      // when one is — so this is the guarantee and the callback below is the
+      // backstop if a future change adds a callback for some other reason.
+      options.disallowedTools = ["AskUserQuestion"];
+      options.canUseTool = async (toolName, input) => {
+        if (toolName !== "AskUserQuestion") return { behavior: "allow", updatedInput: input };
+        // Nobody is listening on the headless path, so waiting here would hang
+        // the run and the single execution slot with it. Fail loudly instead:
+        // record the violation, then abort so the run settles now rather than
+        // continuing on an answer it invented.
+        run.askViolation =
+          "The DEV run tried to ask a question, but nothing is listening on the headless path. " +
+          "DEV must work autonomously; ask the PO to make the decision instead.";
+        abortController.abort();
+        return { behavior: "deny", message: run.askViolation };
+      };
+    }
     if (run.model) options.model = run.model;
     if (mcpRecord) options.mcpServers = { "iris-canvas": mcpRecord };
     if (previousSession) options.resume = previousSession;
 
-    // Replaces the detached process-group kill: aborting the controller tears
-    // down the SDK's own subprocess and everything it spawned, so run-queue no
-    // longer needs to know a subprocess exists at all.
-    const abortController = new AbortController();
     options.abortController = abortController;
     run.cancel = () => abortController.abort();
 
@@ -270,7 +402,8 @@ export function createRunExec({
     emitEvent(toUpdateEvent(run, EMIT_STATUS.STARTED, { urgency: run.urgency }));
 
     try {
-      for await (const message of queryImpl({ prompt: run.task, options })) {
+      handle = queryImpl({ prompt: run.task, options });
+      for await (const message of handle) {
         handleClaudeStreamMessage(run, message);
       }
     } catch (error) {
@@ -280,14 +413,24 @@ export function createRunExec({
         runQueue.finalize(run.run_id, RUN_STATUS.CANCELLED, "Run was stopped before completion.");
         return;
       }
+      // The other reason this path aborts: DEV reached for AskUserQuestion. The
+      // guard aborted deliberately, so report the violation rather than the
+      // generic transport error the abort produced.
+      if (run.askViolation) {
+        runQueue.finalize(run.run_id, RUN_STATUS.FAILED, run.askViolation);
+        return;
+      }
       // A dead resume id arrives here, not on the result path: the SDK yields
       // `error_during_execution` with an empty `result` and *then* throws with
       // the reason. Without this the id is never dropped and every later task
       // in the workstream fails the same way — which is what relocating
       // CLAUDE_CONFIG_DIR would otherwise cause once, for every workstream
       // holding an id recorded against the old location.
-      forgetStaleSession(run, key, previousSession, error.message);
-      runQueue.finalize(run.run_id, RUN_STATUS.ERROR, `Failed to run claude: ${error.message}`);
+      runQueue.finalize(
+        run.run_id,
+        RUN_STATUS.ERROR,
+        withStderr(`Failed to run claude: ${error.message}`, stderrTail),
+      );
       return;
     }
 
@@ -298,26 +441,43 @@ export function createRunExec({
 
     const result = run.result;
     if (result && !result.is_error && result.subtype === "success") {
-      let output = String(result.result ?? "");
-      // Backstop for the soft append-system-prompt vault directive (design.md
-      // Risks): the directive is a prompt, not a sandboxed writable root, so
-      // Claude could ignore it. Only checked for plain-Claude tasks that look
-      // like a note-capture request, so unrelated tasks (e.g. "translate
-      // this") never get a spurious caveat — and only when nothing under the
-      // vault changed, so a real save is never second-guessed.
-      if (!run.agent && noteCaptureHintRe.test(run.task) && !vaultChangedSince(run.started_at * 1000)) {
-        output +=
-          `\n\n[vault-check: no file changes detected under ${notesVaultDir} during this run — verify the note actually saved before confirming that to the user]`;
-      }
-      runQueue.finalize(run.run_id, RUN_STATUS.COMPLETED, output);
+      // Prefers structured output, falls back to prose. Also the guard against
+      // the JSON string in `result.result` reaching the user's ears — see
+      // run-output-format.mjs.
+      const read = readRunOutput(result);
+      run.decisions = read.decisions;
+      // The `[vault-check: …]` caveat that used to be appended here is gone:
+      // it existed only because the vault was granted by prose, so Iris had to
+      // diff the directory afterwards and guess whether the model had complied.
+      // `additionalDirectories` grants it for real, and a caveat derived from a
+      // filesystem diff was never evidence of anything anyway — a run can
+      // legitimately answer a note question without writing a file.
+      runQueue.finalize(run.run_id, RUN_STATUS.COMPLETED, read.text);
+      return;
+    }
+
+    // A ceiling is not a failure. The run did the work it had room for and then
+    // ran out of the allowance Iris starts every run with, which needs a
+    // different response from the user than something that broke — so it gets
+    // its own terminal status and a message naming the ceiling, its value, and
+    // how to raise it, instead of the generic `claude reported <subtype>` below.
+    if (isCeilingSubtype(result?.subtype)) {
+      runQueue.finalize(run.run_id, RUN_STATUS.LIMITED, describeCeiling(result.subtype, budget));
+      return;
+    }
+
+    // The run may have done all its real work and then failed only to format a
+    // summary. That is not "the run broke", so it does not get the generic
+    // failure message.
+    if (result?.subtype === "error_max_structured_output_retries") {
+      runQueue.finalize(run.run_id, RUN_STATUS.FAILED, STRUCTURED_OUTPUT_FAILURE);
       return;
     }
 
     // The iterator ending with no result message at all means the transport died
     // without reporting — name that rather than emitting an empty failure.
     const detail = result?.result || (result ? `claude reported ${result.subtype}` : "claude ended without a result");
-    forgetStaleSession(run, key, previousSession, detail);
-    runQueue.finalize(run.run_id, RUN_STATUS.FAILED, String(detail));
+    runQueue.finalize(run.run_id, RUN_STATUS.FAILED, withStderr(String(detail), stderrTail));
   }
 
   // The stateful module: delivers the turn into the workstream's resident Agent
@@ -354,6 +514,14 @@ export function createRunExec({
     run.claude_session_id = workstream.agent_sessions?.po ?? null;
     emitEvent(toUpdateEvent(run, EMIT_STATUS.STARTED, { urgency: run.urgency }));
 
+    // Same policy DEV routes through, so the two roles' ceilings cannot drift.
+    // A resident session applies them once per `query()` — across the session's
+    // whole lifetime, not per turn — so a long-lived PO session is measured
+    // cumulatively, which is the behaviour a runaway guard wants.
+    const budget = resolveRunBudget("po");
+    const { collect: collectStderr, tail: stderrTail } = createStderrBuffer();
+
+    /** @type {any} */
     let state;
     try {
       state = getOrCreatePoSession(workstream, {
@@ -366,11 +534,35 @@ export function createRunExec({
         onAskUserQuestion: (workstreamId, questions) => askUserQuestionViaVoice(workstreamId, questions),
         model: run.model,
         mcpServers,
+        budget,
+        stderr: collectStderr,
+        skills: skillsForRole("po"),
+        title: [workstream.label, agentLabels.po ?? "PO"].filter(Boolean).join(" · "),
+        // The session supplies the per-turn seams; the policy (thresholds,
+        // denylist, what a hook does) stays here so both roles share one.
+        // `run` is captured deliberately: hooks that fire between turns route
+        // through `state.currentTurn`, which is null then, so nothing lands on
+        // a stale run.
+        buildHooks: (seams) =>
+          buildRunHooks({
+            budget,
+            warnFraction: budgetWarnFraction(),
+            emitEvent,
+            ...seams,
+          }),
       });
     } catch (error) {
       runQueue.finalize(run.run_id, RUN_STATUS.ERROR, `Failed to start PO session: ${error.message}`);
       return;
     }
+
+    // Both roles now cancel through the same caller-facing handle: the queue
+    // calls run.cancel() and does not need to know whether it is stopping a
+    // one-shot query or a turn inside a resident session. DEV's aborts its
+    // controller; PO's interrupts its turn and leaves the session alive.
+    run.cancel = () => {
+      void cancelPoTurn(state);
+    };
 
     // The session may already be live on an older model (created before a
     // queued model change) — switch it via setModel() so the turn about to run
@@ -400,7 +592,23 @@ export function createRunExec({
           onToolEnd: (toolId, isError) => pushToolEnd(run, toolId, isError),
         }),
       )
-      .then((result) => runQueue.finalize(run.run_id, result.status, result.output))
+      .then((result) => {
+        // po-session.mjs reports the raw subtype and usage without interpreting
+        // either; the budget policy lives here, once, for both roles.
+        if (result.usage) run.usage = result.usage;
+        if (result.decisions) run.decisions = result.decisions;
+        if (isCeilingSubtype(result.subtype)) {
+          runQueue.finalize(run.run_id, RUN_STATUS.LIMITED, describeCeiling(result.subtype, budget));
+          return;
+        }
+        if (result.subtype === "error_max_structured_output_retries") {
+          runQueue.finalize(run.run_id, RUN_STATUS.FAILED, STRUCTURED_OUTPUT_FAILURE);
+          return;
+        }
+        const output =
+          result.status === RUN_STATUS.FAILED ? withStderr(result.output, stderrTail) : result.output;
+        runQueue.finalize(run.run_id, result.status, output);
+      })
       .catch((error) => {
         // The reason travels on the rejected error (see po-session.mjs pump's
         // finally), not on session state — the session may already be deleted
@@ -410,10 +618,24 @@ export function createRunExec({
           return;
         }
         if (error?.poEndReason?.kind === "cancelled") {
-          runQueue.finalize(run.run_id, RUN_STATUS.CANCELLED, "Run was stopped before completion.");
+          // Work that survived the interrupt will still run, so saying it was
+          // cancelled would be false. Report it rather than letting the user
+          // discover it when it finishes.
+          const survived = error.poEndReason.survived?.length ?? 0;
+          runQueue.finalize(
+            run.run_id,
+            RUN_STATUS.CANCELLED,
+            survived
+              ? `Run was stopped before completion. ${survived} queued message${survived === 1 ? "" : "s"} survived the interrupt and will still run.`
+              : "Run was stopped before completion.",
+          );
           return;
         }
-        runQueue.finalize(run.run_id, RUN_STATUS.ERROR, `PO session error: ${error.message}`);
+        runQueue.finalize(
+          run.run_id,
+          RUN_STATUS.ERROR,
+          withStderr(`PO session error: ${error.message}`, stderrTail),
+        );
       });
   }
 

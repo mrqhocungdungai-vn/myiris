@@ -34,7 +34,6 @@ const NOTES_SKILLS = ["wiki-config", "wiki-ingest", "wiki-query", "wiki-lint", "
 // existed); false positives are harmless (the caveat only fires when nothing
 // in the vault changed, so a request that never intended to write there
 // stays silent).
-const NOTE_CAPTURE_HINT_RE = /ghi ch[uú]|note (it |this )?down|jot down|save (a |this )?note|second[- ]brain/i;
 
 /**
  * @param {{
@@ -125,35 +124,6 @@ export function createSecondBrainCapability({
     } catch (error) {
       emitEvent({ type: "log", level: "warn", message: `Could not pre-seed notes vault config: ${error.message}` });
     }
-  }
-
-  // True if any file under the notes vault has an mtime at/after `sinceMs`.
-  // Cheap, best-effort backstop — not a guarantee (a write racing the scan, or
-  // one outside the vault entirely, can still be missed or misreported).
-  function vaultChangedSince(sinceMs) {
-    const stack = [NOTES_VAULT_DIR];
-    while (stack.length) {
-      const dir = stack.pop();
-      let entries;
-      try {
-        entries = fs.readdirSync(dir, { withFileTypes: true });
-      } catch {
-        continue;
-      }
-      for (const entry of entries) {
-        const full = path.join(dir, entry.name);
-        if (entry.isDirectory()) {
-          stack.push(full);
-          continue;
-        }
-        try {
-          if (fs.statSync(full).mtimeMs >= sinceMs) return true;
-        } catch {
-          // file removed mid-scan — ignore
-        }
-      }
-    }
-    return false;
   }
 
   // Second-brain galaxy view (second-brain-galaxy-view): reads the same
@@ -269,10 +239,8 @@ export function createSecondBrainCapability({
     // `{ toolDeclarations?: any[] }` composition target.
     toolDeclarations: [],
     notesVaultDir: NOTES_VAULT_DIR,
-    noteCaptureHintRe: NOTE_CAPTURE_HINT_RE,
     checkNotesSkillsStatus,
     ensureNotesVaultReady,
-    vaultChangedSince,
     probeSecondBrainAvailability,
     stopVaultGraphWatch: () => notesVaultGraph.stop(),
     promptFragment,

@@ -4,7 +4,11 @@
 // openspec/changes/po-live-session/design.md (D1) for why these are two
 // separate modules rather than one code path with a role flag.
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import { parseClaudeStreamMessage } from "./claude-stream.mjs";
+import { parseClaudeStreamMessage, runUsageFrom } from "./claude-stream.mjs";
+import { buildSystemPrompt } from "./role-prompt.mjs";
+import { readInFlightCostUsd } from "./run-hooks.mjs";
+import { DECISION_OUTPUT_FORMAT, readRunOutput } from "./run-output-format.mjs";
+import { skillsForRole } from "./run-skills.mjs";
 import { computeClaudeWorkerEnv } from "./worker-env.mjs";
 
 export const DEFAULT_PO_QUESTION_TIMEOUT_MS = 300000; // 5 minutes
@@ -128,10 +132,20 @@ function routeMessage(state, message) {
       state.currentTurn = null;
       if (!turn) return;
       if (result.session_id) turn.onSessionId?.(result.session_id);
+      // `subtype` and `usage` travel with every outcome so the caller can tell a
+      // ceiling termination from a failure and record what the turn cost. This
+      // module deliberately does not interpret either — run-exec.mjs owns the
+      // budget policy, and PO must not grow a second copy of it.
+      const common = { subtype: result.subtype, usage: runUsageFrom(result) };
       if (result.subtype === "success" && !result.is_error) {
-        turn.resolve({ status: "completed", output: String(result.result ?? "") });
+        // Structured output when the turn produced it, prose otherwise — and in
+        // the structured case `result.result` is the raw JSON string, which must
+        // never be what a turn resolves with.
+        const read = readRunOutput(result);
+        turn.resolve({ ...common, status: "completed", output: read.text, decisions: read.decisions });
       } else {
         turn.resolve({
+          ...common,
           status: "failed",
           output: String(result.result ?? result.subtype ?? "PO turn failed"),
         });
@@ -185,6 +199,11 @@ async function pump(state) {
  *   claudeExecutable?: string,
  *   model?: string,
  *   mcpServers?: Record<string, unknown>,
+ *   budget?: { maxTurns: number, maxBudgetUsd: number },
+ *   skills?: string[],
+ *   title?: string,
+ *   buildHooks?: (seams: { costUsd: () => Promise<number|null>, onToolEnd: (toolId: string, isError: boolean) => void, onActivity: (line: string) => void }) => any,
+ *   stderr?: (data: string) => void,
  *   query?: typeof query,
  * }} [options]
  */
@@ -200,6 +219,11 @@ export function getOrCreatePoSession(
     claudeExecutable,
     model,
     mcpServers,
+    budget,
+    stderr,
+    skills,
+    buildHooks,
+    title,
     query: queryFn = query,
   } = {},
 ) {
@@ -222,29 +246,73 @@ export function getOrCreatePoSession(
     // po-session.mjs never learns anything about canvas beyond this opaque
     // record; it stays canvas-ignorant.
     currentMcp: mcpServers ? true : null,
+    // The session-level hard stop, matching what DEV has always had. Not used
+    // to cancel a *turn* — that is interrupt()'s job, and aborting here would
+    // take the whole resident conversation down with it. This is closePoSession's
+    // backstop for a subprocess that will not unwind on its own.
+    abortController: new AbortController(),
   };
 
   const options = {
     agent,
     cwd,
+    abortController: state.abortController,
     permissionMode: /** @type {"bypassPermissions"} */ ("bypassPermissions"),
     allowDangerouslySkipPermissions: true,
-    // The skills PO invokes (grilling, the OpenSpec workflow skills, tdd,
-    // code-review) come from the plugin Iris ships, applied below — NOT from
+    // The skills PO invokes come from the plugin Iris ships — NOT from
     // ~/.claude. `settingSources` therefore excludes the `user` scope: Iris
     // brings its own skills and must neither depend on nor disturb whatever the
     // user has in their own Claude Code install. `project` is kept so a session
     // still picks up the settings of the repository it is working in.
     settingSources: /** @type {Array<"project">} */ (["project"]),
-    skills: /** @type {"all"} */ ("all"),
+    // Supplied by the caller rather than fixed at "all" here, so the list is a
+    // property of the run and not of this module (run-skills.mjs owns it). The
+    // fallback keeps a caller that passes nothing on PO's own list rather than
+    // silently widening back to every skill the bundle ships.
+    skills: skills ?? skillsForRole("po"),
     env: computePoSessionEnv(process.env),
     canUseTool: buildCanUseTool(state, onAskUserQuestion),
-    appendSystemPrompt:
-      "You are invoked from Iris voice as a LIVE, continuous session — you are not a one-shot run. " +
-      "Ask via AskUserQuestion at real decision points and wait for the answer; for lower-stakes calls, " +
-      "use sensible defaults and record them. Report concise final results in each turn.",
+    // The live-session instruction used to travel on a top-level
+    // `appendSystemPrompt`, which the SDK destructures away and never reads —
+    // so PO ran with no base prompt at all while DEV got a full one. Both roles
+    // now go through the one policy in role-prompt.mjs, on the one field the SDK
+    // actually honours. See design.md D1b.
+    systemPrompt: buildSystemPrompt("po"),
+    // Decisions come back as validated data rather than a markdown heading the
+    // voice layer has to find. Applies to the whole resident session, so every
+    // turn reports in this shape — which is why the schema keeps `summary` as
+    // its only required field (design.md D6).
+    outputFormat: DECISION_OUTPUT_FORMAT,
   };
   if (model) options.model = model;
+  // The ceilings come from the caller (run-exec.mjs → run-budget.mjs) rather
+  // than being read here, so both roles resolve their budget through one policy.
+  // A resident session applies them per `query()`, i.e. across the session's
+  // whole lifetime rather than per turn — see design.md D3.
+  if (budget) {
+    options.maxTurns = budget.maxTurns;
+    options.maxBudgetUsd = budget.maxBudgetUsd;
+  }
+  // Subprocess diagnostics. Without this the SDK discards stderr entirely and a
+  // transport failure reaches the user as one message with nothing behind it.
+  if (stderr) options.stderr = stderr;
+  // The workstream's own name, so PO's transcript is identifiable. Applies to a
+  // NEW session only — a resumed one keeps its persisted title, which is what
+  // renameSession exists for (run-sessions.mjs).
+  if (title) options.title = title;
+  // The same hooks DEV installs, bound to whichever turn is currently in flight
+  // rather than to a run record: this session outlives every individual turn, so
+  // closing over one would send a later turn's tool boundaries to the first
+  // turn's callbacks. Routed through `state.currentTurn` exactly as
+  // routeMessage's stream callbacks already are, so a hook firing between turns
+  // is a no-op instead of a crash.
+  if (buildHooks) {
+    options.hooks = buildHooks({
+      costUsd: () => readInFlightCostUsd(state.query),
+      onToolEnd: (toolId, isError) => state.currentTurn?.onToolEnd(toolId, isError),
+      onActivity: (line) => state.currentTurn?.onActivity(line),
+    });
+  }
   // Handed over by value: the persona lives in the app bundle, not in
   // ~/.claude/agents (see agent-definitions.mjs).
   if (agentDefinition) options.agents = { [agent]: agentDefinition };
@@ -313,18 +381,50 @@ export function getPoSessionState(workstreamId) {
   return state && !state.ended ? state : null;
 }
 
-// Ends the turn currently in progress on `state` via the same proven
-// teardown machinery closePoSession uses — set endReason BEFORE closing the
-// channel (so pump's `finally` always sees it once the `for await` exits),
-// close the channel, and return the SDK query. Differs from closePoSession
-// only in endReason.kind ("cancelled" vs "teardown") and in what it leaves
-// behind: the session is NOT removed from the in-memory `sessions` map here,
-// and the on-disk stored session id is untouched entirely — so the next PO
-// turn's getOrCreatePoSession resumes the same conversation. Only the
-// cancelled turn's in-flight work is discarded. See design.md D2.
-export function cancelPoTurn(state) {
+// Ends the turn currently in progress on `state`, leaving the session itself
+// alive: it is NOT removed from the in-memory `sessions` map, and the on-disk
+// stored session id is untouched, so the next PO turn resumes the same
+// conversation. Only the cancelled turn's in-flight work is discarded. Differs
+// from closePoSession in that and in endReason.kind ("cancelled" vs "teardown").
+//
+// Two mechanisms, preferring the one that keeps the live context: `interrupt()`
+// ends the turn without touching the transport, so the session's context window
+// survives. The channel-close teardown is the fallback for a CLI that does not
+// support it. See design.md D2 for why endReason is always set before the
+// channel closes on that path.
+export async function cancelPoTurn(state) {
   if (!state || state.ended) return;
   state.endReason = { kind: "cancelled" };
+
+  // Interrupt first, and keep the session alive if it works. `interrupt()` ends
+  // the turn in progress and leaves the resident conversation — and its context
+  // window — intact, which is the whole point of PO being a live session; tearing
+  // the transport down to stop one turn threw away everything the session knew.
+  //
+  // It also reports which queued work SURVIVED the interrupt. Iris must not tell
+  // the user something was cancelled when it is still going to run, so that list
+  // is recorded on the state for the caller to report.
+  try {
+    const receipt = await state.query?.interrupt?.();
+    const survived = Array.isArray(receipt?.still_queued) ? receipt.still_queued : [];
+    state.endReason = { kind: "cancelled", survived };
+    // The turn settles through pump's `finally` only when the stream ends. An
+    // interrupt does not end it, so settle the waiting turn here.
+    const turn = state.currentTurn;
+    state.currentTurn = null;
+    if (turn) {
+      const error = /** @type {any} */ (new Error("PO turn was interrupted"));
+      error.poEndReason = state.endReason;
+      turn.reject(error);
+    }
+    return;
+  } catch {
+    /* no interrupt support, or the turn was already past interrupting — fall through */
+  }
+
+  // The pre-interrupt path, unchanged, as the fallback: close the channel (which
+  // makes pump's `for await` exit and settle the turn) and end the query. See
+  // design.md D2 — endReason must be set BEFORE the channel closes, which it is.
   try {
     state.channel.close();
   } catch {
@@ -355,6 +455,15 @@ export function closePoSession(workstreamId) {
   } catch {
     /* subprocess already gone */
     return undefined;
+  } finally {
+    // The backstop for a subprocess that does not unwind when its stream is
+    // returned. Safe unconditionally: the session is being torn down either way,
+    // and aborting an already-finished query is a no-op.
+    try {
+      state.abortController?.abort();
+    } catch {
+      /* nothing left to abort */
+    }
   }
 }
 

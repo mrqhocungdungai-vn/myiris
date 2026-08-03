@@ -74,11 +74,16 @@ type PoQuestion = {
   question: string;
   header: string;
   options: PoQuestionOption[];
+  // When true the user may choose several options. Reducing such a question to
+  // one choice answers a different question than the role asked.
+  multiSelect?: boolean;
 };
 
 type PoQuestionAnswer = {
   question: string;
-  choice: string;
+  // One label, or several for a multi-select question. Main encodes it into the
+  // comma-separated string AskUserQuestion expects.
+  choice: string | string[];
 };
 
 type PromptReviewStatus = {

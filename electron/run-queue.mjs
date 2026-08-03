@@ -26,6 +26,8 @@
  * @property {string|null} [claude_session_id]
  * @property {(() => void)|null} [cancel] - set by the transport; ends it early
  * @property {Object} [result]
+ * @property {{ cost_usd: number|null, num_turns: number|null, usage: any, model_usage: any }|null} [usage] - what the run cost, off its result message
+ * @property {Array<{ question: string, recommendation?: string, options?: Array<{ label: string, description?: string }> }>} [decisions] - decisions the run deferred, from its structured output
  * @property {boolean} [finalized]
  */
 
@@ -37,6 +39,12 @@ export const RUN_STATUS = Object.freeze({
   FAILED: "failed",
   ERROR: "error",
   CANCELLED: "cancelled",
+  // A run that reached its turn or spend ceiling (run-budget.mjs). Deliberately
+  // its own terminal status rather than FAILED: a run that hit a limit and a run
+  // that broke need different responses from the user, and collapsing the two
+  // hides which happened. Everything that treats a run as over reads
+  // TERMINAL_STATUSES, so this participates automatically.
+  LIMITED: "limited",
 });
 
 // Superset of RUN_STATUS: adds the event-stream-only lifecycle markers that
@@ -52,6 +60,7 @@ export const TERMINAL_STATUSES = Object.freeze([
   RUN_STATUS.FAILED,
   RUN_STATUS.ERROR,
   RUN_STATUS.CANCELLED,
+  RUN_STATUS.LIMITED,
 ]);
 
 // The binding constraint is a sub-agent `Task` call: from the parent stream
@@ -93,6 +102,11 @@ export function toUpdateEvent(run, status, extra = {}) {
     agent: run.agent ?? null,
     model: run.model ?? null,
     claude_session_id: run.claude_session_id ?? null,
+    // What the run cost, once its result message has landed (null until then).
+    // Carried on the same projection as everything else rather than a second
+    // event type, so the deck and the voice layer read it the same way they read
+    // status — see the run-execution-queue spec.
+    usage: run.usage ?? null,
     ...extra,
   };
 }

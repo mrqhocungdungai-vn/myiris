@@ -10,7 +10,8 @@
 // see run-dispatch.mjs's header comment. run-dispatch.mjs takes this
 // module's resolvePendingPoQuestion as an injected dependency for its
 // answer_po_question tool case.
-import { parseClaudeStreamMessage } from "./claude-stream.mjs";
+import { parseClaudeStreamMessage, runUsageFrom } from "./claude-stream.mjs";
+import { nameSession } from "./run-sessions.mjs";
 import { poQuestionTimeoutMs } from "./po-session.mjs";
 import { RUN_STATUS, toUpdateEvent } from "./run-queue.mjs";
 import { createTrailingThrottle } from "./coalesce.mjs";
@@ -23,6 +24,7 @@ import { activityEmitIntervalMs } from "./user-config.mjs";
  *   notifyIris: (lines: string | string[], opts?: { bufferIfOffline?: boolean }) => void,
  *   findWorkstream: (id: string | null) => any,
  *   agentKey: (agent: string | null) => string,
+ *   agentLabels?: Record<string, string>,
  *   persistSessionStore: () => void,
  *   emitSessions: () => void,
  * }} deps
@@ -33,6 +35,7 @@ export function createRunStream({
   notifyIris,
   findWorkstream,
   agentKey,
+  agentLabels = {},
   persistSessionStore,
   emitSessions,
 }) {
@@ -115,7 +118,18 @@ export function createRunStream({
     workstream.last_used_at = Date.now() / 1000;
     workstream.last_task = run.task.slice(0, 100);
     persistSessionStore();
-    if (changed) emitSessions();
+    if (changed) {
+      emitSessions();
+      // Name the session after the workstream, once, when it is first seen.
+      // Every session Iris created used to carry an auto-generated title, so a
+      // user browsing their transcripts had no way to tell which project or
+      // which role a session belonged to. Fire-and-forget and never throws — a
+      // title is cosmetic and must not be able to disturb a run.
+      const label = [workstream.label, run.agent ? agentLabels[run.agent] ?? run.agent : "Claude"]
+        .filter(Boolean)
+        .join(" · ");
+      void nameSession(claudeSessionId, label, { dir: workstream.cwd });
+    }
   }
 
   // Single global slot (see runQueue) ⇒ at most one run's activity
@@ -185,17 +199,35 @@ export function createRunStream({
       onToolEnd: (toolId, isError) => pushToolEnd(run, toolId, isError),
       onResult: (result) => {
         run.result = result;
+        run.usage = runUsageFrom(result);
         rememberClaudeSessionId(run, result.session_id);
       },
     });
   }
 
+  // AskUserQuestion's `answers` map is question text -> ONE string, and a
+  // multi-select answer is that string with the chosen labels comma-separated
+  // (see the SDK's AskUserQuestionInput). Every answer path — voice, the UI, and
+  // the timeout default — encodes through here, so none of them can silently
+  // reduce a multi-select question to a single choice.
+  function encodeAnswer(choice) {
+    const labels = Array.isArray(choice) ? choice : [choice];
+    return labels
+      .map((label) => String(label ?? "").trim())
+      .filter(Boolean)
+      .join(", ");
+  }
+
   // The PO's recommended choice for each question, used both as the AskUserQuestion
   // convention (first option = recommended) and as the safe default on timeout/reset.
+  // Encoded in the shape the question asked for: a multi-select question's default
+  // travels as a list, so it carries however many options the recommendation names
+  // rather than being structurally capped at one.
   function defaultPoAnswers(questions) {
     const answers = {};
     for (const q of questions) {
-      answers[q.question] = q.options?.[0]?.label ?? "";
+      const recommended = q.options?.[0]?.label ?? "";
+      answers[q.question] = q.multiSelect ? encodeAnswer([recommended]) : encodeAnswer(recommended);
     }
     return answers;
   }
@@ -220,10 +252,15 @@ export function createRunStream({
       "- The PO has paused to ask you something. Read each question aloud with its options, in order, and collect the user's answer for each.",
       "- Once you have every answer, call answer_po_question with one entry per question (question text verbatim, and the option label the user chose).",
       "- If asked for your recommendation, suggest the first-listed option, but submit whatever the user actually picks.",
+      // `header` is the question's own short label. Relayed so Iris can
+      // introduce a question by its topic instead of launching into the full
+      // text, which is what the label is for.
+      "- Each question carries a short topic label — use it to introduce the question naturally, do not read it out as if it were part of the question.",
+      "- A question marked multi_select accepts SEVERAL options. Say so when you read it, let the user pick as many as they want, and submit every one of them comma-separated. Never narrow it to one.",
       "questions:",
       ...questions.map(
         (q, i) =>
-          `${i + 1}. ${q.question}\n${(q.options || [])
+          `${i + 1}. [${q.header || "decision"}]${q.multiSelect ? " (multi_select: the user may choose more than one)" : ""} ${q.question}\n${(q.options || [])
             .map((opt, j) => `   ${j + 1}) ${opt.label} — ${opt.description}`)
             .join("\n")}`,
       ),
@@ -239,7 +276,9 @@ export function createRunStream({
     if (!PendingQuestion.current) return { status: "error", error: "No PO question is pending." };
     const map = {};
     for (const entry of Array.isArray(answers) ? answers : []) {
-      if (entry?.question) map[entry.question] = entry.choice ?? "";
+      // `choice` may arrive as one label or as several (the UI sends an array
+      // for a multi-select question; Gemini sends them comma-separated).
+      if (entry?.question) map[entry.question] = encodeAnswer(entry.choices ?? entry.choice ?? "");
     }
     PendingQuestion.answer(map);
     return { status: "ok" };

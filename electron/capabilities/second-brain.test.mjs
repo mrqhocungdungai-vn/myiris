@@ -110,23 +110,6 @@ describe("second-brain capability: ensureNotesVaultReady", () => {
   });
 });
 
-describe("second-brain capability: vaultChangedSince", () => {
-  it("is false when nothing in the vault changed since the given time", () => {
-    const cap = make();
-    cap.ensureNotesVaultReady();
-    const future = Date.now() + 60_000;
-    expect(cap.vaultChangedSince(future)).toBe(false);
-  });
-
-  it("is true once a file at/after the cutoff exists, including in a subdirectory", () => {
-    const cap = make();
-    fs.mkdirSync(path.join(NOTES_VAULT_DIR, "sub"), { recursive: true });
-    const cutoff = Date.now() - 1000;
-    fs.writeFileSync(path.join(NOTES_VAULT_DIR, "sub", "note.md"), "hello", "utf8");
-    expect(cap.vaultChangedSince(cutoff)).toBe(true);
-  });
-});
-
 describe("second-brain capability: probeSecondBrainAvailability", () => {
   it("emits only on a real transition, not on every call", () => {
     const emitEvent = vi.fn();

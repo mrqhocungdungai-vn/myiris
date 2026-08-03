@@ -121,3 +121,66 @@ entry and walking up.
   today); `engines.node` agreeing is a coincidence that a future Electron bump
   would end. `npm run build` fails via `scripts/check-types-node.mjs` when they
   diverge. Behavior is specified in the `test-harness` capability.
+
+## Agent SDK `Options` — what Iris sets, and what it deliberately does not
+
+`Options` declares **63** fields. Iris sets **23**. The other 40 are listed here
+with a reason, so an audit starts from a decision rather than a blank, and so an
+omission is distinguishable from an oversight. The set Iris sets is asserted
+field-by-field by `electron/sdk-options.test.mjs`, which also checks every field
+name against the installed `sdk.d.ts` — the guard for the failure mode described
+below.
+
+**The failure this exists to prevent.** For months Iris passed
+`appendSystemPrompt` at the top level of `Options`. It is not a declared field:
+the SDK's normalizer destructures it into the rest object and never reads it, so
+PO's live-session instruction reached nothing while the code and its tests both
+claimed it was in force. Measured against the running SDK — a query with only
+`appendSystemPrompt` answers *"I don't have a codeword"*; the same text under
+`systemPrompt: { preset, append }` answers correctly. **An option the SDK does
+not read is worse than an absent one.**
+
+Two more measured facts worth keeping here, because both are invisible at the
+call site (full workings in the change's `design.md` D1):
+
+- **A run with `agent` set does not receive the `claude_code` preset.** The
+  main-thread `AgentDefinition`'s prompt replaces the base prompt; only
+  `systemPrompt`'s *append* half survives. Token-counted: `preset` alone adds
+  ~3 259 tokens, `agent` + `preset` adds **0**. Every PO and DEV run is in this
+  case — the persona body *is* their base prompt. Only plain-Claude runs get the
+  preset. There is no opt-in to inherit it alongside a definition.
+- **`AskUserQuestion` is only exposed when `canUseTool` is set**, and
+  `disallowedTools` removes it even then. That is why DEV cannot ask, and why PO
+  can.
+
+### Unused, with reasons
+
+| Option | Why not |
+| --- | --- |
+| `allowedTools` | `skills` is the single place skills are enabled; nothing else needs auto-allowing under `bypassPermissions`. |
+| `tools`, `toolAliases` | Iris restricts by exception (`disallowedTools`), not by allowlist — a whitelist would silently break a persona whenever Claude Code gains a tool. |
+| `continue` | Iris resumes by explicit session id per role and workstream; "most recent in this directory" is exactly the cross-role bleed the session model prevents. |
+| `fallbackModel` | A deliberately chosen model that silently downgrades would make the user believe they are debugging on a model they are not. Failing loudly is the intended behavior. |
+| `enableFileCheckpointing` | Evaluated and declined: `rewindFiles()` is a method on the **live** `Query`, and DEV — the role that edits code — is torn down when its run finalizes, so the undo it would enable cannot be reached. See `design.md` D9. |
+| `includePartialMessages` | Evaluated and declined: the voice layer speaks once at run end, and the deck's activity log is already coalesced behind a throttle, so partials would add volume and no latency win. See `design.md` D9. |
+| `effort` | Evaluated and declined **for now**: it moves both spend and quality, and this change sets every number from measurement. Largely covered today by the per-role model selector. See `design.md` D9. |
+| `taskBudget` | Alpha, and it changes model *behavior* (API-side pacing) rather than adding a ceiling. `maxTurns`/`maxBudgetUsd` are the guard. |
+| `thinking`, `maxThinkingTokens` | Same reason as `effort`, plus `maxThinkingTokens` is deprecated in favour of `thinking`. |
+| `sandbox` | Iris does **not** claim a `bypassPermissions` run is contained. The `PreToolUse` denylist is documented as a guard against accidents, not as containment; adopting `sandbox` is a security posture change, not option conformance. |
+| `persistSession` | Transcripts are what `resume` reads; disabling persistence would end cross-run context, which is the pipeline's core promise. |
+| `sessionStore`, `sessionStoreFlush`, `loadTimeoutMs` | Alpha external-transcript mirroring. Iris is a single-machine desktop app; there is nowhere to mirror to. |
+| `forkSession`, `sessionId`, `resumeSessionAt` | Iris has one linear conversation per role per workstream. Forking or rewinding to a mid-conversation point has no interface and no use case yet. |
+| `agentProgressSummaries` | Costs a periodic conversation fork per subagent to produce text for a progress UI Iris does not have; the step timeline already shows tool activity. |
+| `forwardSubagentText` | Would multiply stream volume to render a nested transcript the deck does not display. |
+| `toolConfig` | Its one use is `askUserQuestion.previewFormat`, and Iris relays questions **by voice** — a rendered HTML preview has nothing to render into. |
+| `strictMcpConfig` | Would be redundant: `settingSources` already excludes `user`, and the canvas MCP is passed in-process. Adopting it would also block a project's own `.mcp.json`, which a run legitimately works with. |
+| `includeHookEvents` | Iris registers hook callbacks directly; the mirrored `hook_started`/`hook_response` system messages would be duplicate telemetry. |
+| `betas` | No beta is needed; `context-1m` would change cost characteristics that the budgets were measured against. |
+| `onElicitation`, `onUserDialog`, `supportedDialogKinds` | Both are MCP/CLI dialog surfaces with no voice equivalent. Unhandled elicitations are auto-declined, which is the correct headless behavior. |
+| `permissionPromptToolName` | Mutually exclusive with `canUseTool`, which is how PO's question relay works. |
+| `planModeInstructions` | Only applies to `permissionMode: 'plan'`, which is an escape hatch (`IRIS_CLAUDE_PERMISSION_MODE`), not a supported mode. |
+| `promptSuggestions` | Predicts a *typed* next prompt. Iris has no prompt box — the user speaks. |
+| `settings`, `managedSettings` | Iris's policy is expressed in the options object itself, in code, under test. A second settings layer would put half of it somewhere unversioned. |
+| `executable`, `executableArgs` | The bundled Claude is a **native binary**, so no JS runtime is involved. |
+| `extraArgs`, `spawnClaudeCodeProcess` | Escape hatches for CLI flags and spawning the SDK does not model. Using either would move configuration out of the typed surface the options test guards. |
+| `debug`, `debugFile` | The `stderr` callback already captures diagnostics and attaches them to a failed run; a debug file nobody reads is a disk leak. |

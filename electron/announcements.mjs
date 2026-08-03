@@ -18,7 +18,7 @@ import crypto from "node:crypto";
  *   agentKey: (agent: string | null) => string,
  *   findWorkstream: (id: string | null) => any,
  *   getActiveWorkstreamId: () => string | null,
- *   runStatus: { CANCELLED: string },
+ *   runStatus: { CANCELLED: string, LIMITED: string },
  * }} deps
  */
 export function createAnnouncements({
@@ -196,7 +196,26 @@ export function createAnnouncements({
     return { status: "ok" };
   }
 
-  function announceClaudeCompletion({ runId, task, status, output }) {
+  // Structured decisions as a numbered, speakable list. Rendered here rather
+  // than left to the voice layer to derive, so what is read aloud does not
+  // depend on the model noticing a heading.
+  function renderDecisions(decisions) {
+    return decisions
+      .map((decision, index) => {
+        const lines = [`${index + 1}. ${decision.question}`];
+        for (const option of decision.options ?? []) {
+          lines.push(`   - ${option.label}${option.description ? ` — ${option.description}` : ""}`);
+        }
+        if (decision.recommendation) lines.push(`   recommended default applied: ${decision.recommendation}`);
+        return lines.join("\n");
+      })
+      .join("\n");
+  }
+
+  /**
+   * @param {{ runId: string, task: string, status: string, output: string, usage?: { cost_usd: number|null, num_turns: number|null }|null, decisions?: Array<{ question: string, recommendation?: string, options?: Array<{ label: string, description?: string }> }>|null }} params
+   */
+  function announceClaudeCompletion({ runId, task, status, output, usage, decisions }) {
     // The UI card is correct for any terminal status, so this always emits,
     // only the voice delivery below is conditional.
     emitEvent({
@@ -205,6 +224,8 @@ export function createAnnouncements({
       task,
       status,
       output,
+      usage: usage ?? null,
+      decisions: decisions ?? null,
     });
 
     // A run the user themselves stopped or tore down (session reset) is not
@@ -223,10 +244,38 @@ export function createAnnouncements({
       `- Proactively tell ${userDisplayName()} Claude has returned.`,
       "- If another conversation is in progress, politely pause it with a short bridge like: Quick update, Claude is back with a result.",
       "- Give a concise spoken summary in 1-3 sentences based on the result below.",
-      "- If the result contains a 'Decisions needed' section, read each decision aloud with its numbered options and the recommendation, collect the user's choice, then submit a follow-up task to the SAME role stating the chosen options.",
+      // Two paths, never both. When the run produced structured decisions they
+      // are rendered below as data, so the voice layer is not asked to go
+      // hunting for a markdown heading that is no longer there; the prose
+      // instruction is kept for runs that did not (a session resumed from before
+      // the schema existed, or plain Claude, which has no schema at all).
+      ...(decisions?.length
+        ? [
+            `- This run deferred ${decisions.length} decision${decisions.length === 1 ? "" : "s"} to the user, listed below as data. Read each one aloud with its options and the recommended default, collect the choice, then submit a follow-up task to the SAME role stating what was chosen.`,
+          ]
+        : [
+            "- If the result contains a 'Decisions needed' section, read each decision aloud with its numbered options and the recommendation, collect the user's choice, then submit a follow-up task to the SAME role stating the chosen options.",
+          ]),
       "- Ask whether he wants to go through the details before continuing the current conversation.",
       "- Do not say you personally did the work; Claude did.",
+      // A ceiling termination is not a failure, and describing it as one sends
+      // the user looking for a bug that is not there.
+      ...(status === runStatus.LIMITED
+        ? [
+            "- This run did NOT fail: it reached the turn or spend ceiling Iris puts on every run. Say so plainly, tell him which ceiling and its value (the result text below names both), and that the work it did complete still stands.",
+          ]
+        : []),
+      // Cost is recorded, not estimated — the figures below are what the
+      // runtime itself reported.
+      ...(usage?.cost_usd != null
+        ? [
+            `- If he asks what it cost or how long it took: this run was $${usage.cost_usd.toFixed(2)} over ${usage.num_turns ?? "an unrecorded number of"} turns. Do not volunteer this unless asked, and never estimate a figure of your own.`,
+          ]
+        : []),
       fenceUntrustedText(output || "(Claude returned no text output.)", "Claude's run result"),
+      // Fenced on the same terms as the result text: a decision's wording comes
+      // from the model, so it is content to read out, never directions to obey.
+      ...(decisions?.length ? [fenceUntrustedText(renderDecisions(decisions), "the decisions this run deferred")] : []),
     ].join("\n");
 
     notifyIris(eventText);

@@ -67,7 +67,12 @@ export function createGeminiTools({ getPipelineAvailable, modelChoices, envFlag,
       },
       {
         name: "get_claude_task_status",
-        description: "Fetch the latest status for a Claude run.",
+        description:
+          "Fetch the latest status for a Claude run. The reply also carries what the run cost under `usage` " +
+          "(`cost_usd`, `num_turns`, plus per-model detail) — use it to answer 'how much did that cost?' or " +
+          "'how long did that take?'. Report those figures verbatim; never estimate a cost yourself. `usage` is " +
+          "null until the run finishes. A run whose status is 'limited' did not fail: it reached its turn or " +
+          "spend ceiling, and its output says which one and how to raise it.",
         parameters: {
           type: "object",
           properties: { run_id: { type: "string" } },
@@ -108,7 +113,13 @@ export function createGeminiTools({ getPipelineAvailable, modelChoices, envFlag,
                 type: "object",
                 properties: {
                   question: { type: "string", description: "The exact question text, copied verbatim from the event." },
-                  choice: { type: "string", description: "The option label the user chose for this question." },
+                  choice: {
+                    type: "string",
+                    description:
+                      "The option label the user chose. For a question the event marked multi_select, give EVERY label " +
+                      "they chose, separated by commas — do not pick just one, that answers a different question " +
+                      "than the one the PO asked.",
+                  },
                 },
                 required: ["question", "choice"],
               },

@@ -52,11 +52,91 @@ earlier version and was removed for the community release; see
 
 ## Voice decision relay (PO only)
 
-- PO may call `AskUserQuestion` mid-turn (its persona and `appendSystemPrompt` say so explicitly — the opposite of DEV's "never ask"). The SDK's `canUseTool` callback in `po-session.mjs` intercepts it and awaits an answer from `askUserQuestionViaVoice` in `run-stream.mjs`.
+- PO may call `AskUserQuestion` mid-turn (its persona and its system prompt say so explicitly — the opposite of DEV's "never ask"). The SDK's `canUseTool` callback in `po-session.mjs` intercepts it and awaits an answer from `askUserQuestionViaVoice` in `run-stream.mjs`.
+- **The asymmetry is enforced, not just stated.** Measured: `AskUserQuestion` is only offered to the model when a `canUseTool` callback is present, and `disallowedTools` removes it even then. DEV sets `disallowedTools: ["AskUserQuestion"]` **and** a `canUseTool` that aborts the run with a diagnostic if it is ever reached, so a headless run can never wait for an answer nobody is listening for. The prompt is the explanation; the configuration is the guarantee.
+- A question is relayed **without losing its shape**: its `header` (short topic label) and `multiSelect` flag both reach the voice layer and the UI. `AskUserQuestion`'s `answers` map takes one string per question with multi-select answers **comma-separated**, and every answer path — voice, click, and the timeout default — encodes through the one `encodeAnswer` in `run-stream.mjs`, so none of them can silently reduce a multi-select question to a single choice.
 - `askUserQuestionViaVoice` emits `SYSTEM_EVENT_PO_QUESTION` (and a `po_question` sidecar event for the UI) and registers a single global `pendingPoQuestion` — at most one can ever be in flight, since `runQueue` allows only one PO turn/DEV run system-wide at a time.
 - Two paths can answer it: the Gemini tool `answer_po_question` (primary, voice) or `window.iris.answerPoQuestion` (secondary, UI click) via `ipcMain.handle("po:answer-question", ...)`. Whichever resolves first wins; `resolvePendingPoQuestion` is a no-op once already settled.
-- Unanswered after `IRIS_PO_QUESTION_TIMEOUT_MS` (default 300000ms/5min): resolves with the first-listed ("recommended") option per question. Session reset (see below) settles any pending question the same way before tearing down.
-- PO's tool-use permission mode stays `bypassPermissions` — only `AskUserQuestion` pauses; every other tool call auto-allows exactly as before. See design.md's "Verified against the installed SDK" note for the residual doc ambiguity this relies on.
+- Unanswered after `IRIS_PO_QUESTION_TIMEOUT_MS` (default 300000ms/5min): resolves with the first-listed ("recommended") option per question, encoded in the shape the question asked for. Session reset (see below) settles any pending question the same way before tearing down.
+- PO's tool-use permission mode stays `bypassPermissions` — only `AskUserQuestion` pauses; every other tool call auto-allows exactly as before. The SDK warns that `bypassPermissions` shadows `canUseTool`; measured, it fires for `AskUserQuestion` anyway, which is the asymmetry PO depends on.
+- **End-of-run decisions travel as data, not prose.** Role runs declare an `outputFormat` schema (`electron/run-output-format.mjs`) with a `summary` and an optional `decisions[]`. Note the trap this creates and `readRunOutput` defuses: once `outputFormat` is set, `result.result` becomes the raw **JSON string**, and that field is what finalizes a run and gets read aloud — so the speakable text must come from `structured_output.summary`. The prose `## Decisions needed` block stays as the fallback for one release (a session resumed from before the schema cannot produce structured output, and plain Claude declares no schema).
+
+## One system-prompt policy, one budget policy
+
+Both roles route through the same two modules, for the same reason
+`worker-env.mjs` exists: a policy each role implements at its own call site is a
+policy that will drift.
+
+- **`electron/role-prompt.mjs`** produces the base prompt for `po`, `dev`, and
+  plain Claude. No call site builds prompt text. The two roles differ by exactly
+  one documented clause (PO is a live session that may pause and ask; DEV is
+  headless and cannot), and a test asserts that stripping each role's clause
+  leaves two identical strings.
+  - It emits `systemPrompt: { type: "preset", preset: "claude_code", append }` —
+    **the only delivery mechanism the SDK reads.** PO previously carried its
+    live-session instruction on a top-level `appendSystemPrompt`, which is not a
+    declared field and was silently discarded, so PO ran with no base prompt at
+    all while DEV got a full one. See `docs/REFERENCE.md` for the measurement.
+  - Caveat that is invisible at the call site: on a run with `agent` set — every
+    PO and DEV run — the definition's prompt replaces the base, so the
+    `claude_code` preset half is dropped and only `append` survives. The persona
+    body *is* the base prompt for a role. Plain-Claude runs get both halves.
+- **`electron/run-budget.mjs`** gives every run a turn ceiling and a spend
+  ceiling (`maxTurns`, `maxBudgetUsd`), overridable by `IRIS_CLAUDE_MAX_TURNS` /
+  `IRIS_CLAUDE_MAX_BUDGET_USD`. Defaults come from measurement, not intuition: a
+  representative PO propose turn took **28 turns / $0.97**, a DEV implementation
+  run **29 turns / $0.78**, both on a small real project. Ceilings sit at ~4–6×
+  that, because **a cap that fires during ordinary work gets switched off**,
+  which is worse than no cap. Note what the measurement overturned: PO is *not*
+  the cheaper role.
+  - A run that hits a ceiling finalizes as its own terminal status, `limited` —
+    **not** `failed` — with a message naming which ceiling, its value, and the
+    env var that raises it. A run that hit a limit and a run that broke need
+    different responses from the user.
+  - Cost is **recorded, never estimated**: `total_cost_usd`, `usage`,
+    `modelUsage`, and `num_turns` are captured off the result message onto the
+    run, projected on `claude_task_update`, shown on the run card, and answerable
+    by voice through `get_claude_task_status`. `modelUsage` matters because a run
+    that used subagents spends on more than one model — both measured runs
+    carried two.
+
+## Hooks: the guard and the authoritative tool boundary
+
+`electron/run-hooks.mjs` installs the same five callbacks on both roles.
+`parseClaudeStreamMessage` deliberately **stays** — hooks are an additional,
+authoritative source, not a replacement, so `pushToolStart`/`pushToolEnd` keep
+their signatures and the deck is untouched.
+
+- **`PreToolUse` — the guard, and only the guard.** Two jobs, kept narrow so it
+  stays reviewable: a one-shot warning when the run crosses a fraction of its
+  spend ceiling (`IRIS_CLAUDE_BUDGET_WARN_FRACTION`, default 0.75), and a small
+  explicit denylist for obviously destructive commands (`rm -rf` rooted outside
+  the working directory, force-push, hard reset onto a remote). Relative deletes
+  are deliberately allowed — a run cleaning up its own build output is ordinary
+  work.
+  - **This is a guardrail against accidents, not a sandbox, and Iris must not
+    describe it as one anywhere.** `bypassPermissions` remains the intentional
+    default because no interactive approval exists on the headless path; a
+    determined or confused model can reach the same effect another way.
+  - The in-flight spend figure comes from the SDK's
+    `usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET()` — the only
+    live source there is, since everything else arrives once the run is over.
+    Verified working, but experimental by declaration, so it degrades to
+    **silence**: no figure means no warning, never an exception and never a
+    number Iris made up.
+- **`PostToolUse` / `PostToolUseFailure`** are the authoritative tool-end
+  boundary and error flag. The old inference read `is_error` off a `tool_result`
+  block, which cannot tell a tool that *failed* from one that completed and
+  returned an error-shaped payload.
+- **`PreCompact`** makes a compaction visible. It is otherwise a silent
+  multi-second pause that reads as a stall, and a user who thinks a run has hung
+  stops it.
+- **`Notification`** surfaces runtime state that would otherwise never reach the
+  user.
+
+Also captured per run: the subprocess's **stderr**, buffered to the last 20 lines
+and attached to a failed run's output. A transport failure used to reach the user
+as one message with nothing behind it.
 
 ## Sessions, workstreams, and context ownership
 
@@ -64,11 +144,17 @@ earlier version and was removed for the community release; see
 - Sessions never reset on their own — only on explicit user action (New button, voice "new session", or picking a different project folder; Claude scopes conversations per directory). Persisted to `~/.iris/claude-sessions.json`. Each of these actions also closes any resident PO session bound to the workstream/cwd being left (`closePoSession`) so no subprocess is orphaned.
 - Sessions are stored **per agent role**: PO and DEV each own their own continuous conversation within a workstream. The **only** context that crosses the PO → DEV gate is the **OpenSpec change** the PO writes to disk (`openspec/changes/<name>/`) — never a shared conversation.
 - Default Claude working dir is `~/.iris/workspace` (override `IRIS_CLAUDE_CWD`).
+- **A dead resume id is detected before the run, not after it fails.** `electron/run-sessions.mjs` asks `getSessionInfo()` up front; a session the runtime does not know about is dropped and the run starts fresh. This replaced a regex over the SDK's error string, which could only run *after* a run had already failed. It reports "dead" only on a positive answer — an inconclusive probe keeps the id, because discarding a live conversation is far worse than one failed run.
+- **Both helpers pin `CLAUDE_CONFIG_DIR` for the call and restore it after.** This is not incidental: measured with the variable unset, `listSessions()` returned **32 of the user's own Claude Code sessions** out of `~/.claude` — the exact boundary Iris must never cross — and would have found none of Iris's own.
+- Sessions are **named** after their workstream (`Label · DEV`), via `Options.title` for a new session and `renameSession()` for one that already exists. Every session Iris created used to carry an auto-generated title.
+- The notes vault is **granted**, not described: plain-Claude runs get it through `additionalDirectories`. The prose directive that used to stand in for a grant, and the post-hoc `[vault-check: …]` caveat derived from diffing the vault afterwards, are both gone.
+- **Cancellation is lifetime-agnostic.** Every run carries a `cancel`, so `runQueue.stop()` does not need to know whether it is stopping a one-shot DEV query (abort its controller) or a PO turn inside a resident session (`interrupt()` the turn, keep the session and its context window). An interrupt reports which queued work **survived** it, and Iris says so rather than claiming something was cancelled when it will still run.
 
 ## Skills, commands, and isolation from the user's Claude Code
 
 - The skills the personas invoke (`grilling`, `tdd`, `code-review`, `diagnosing-bugs`, the OpenSpec workflow skills, the LLM-Wiki skills) and the `/opsx` commands ship inside the app as a Claude Code **plugin** at `resources/iris-plugin/`, passed to every run through the SDK's `plugins` option (`{ type: "local", path, skipMcpDiscovery: true }`).
 - Everything the plugin provides is **namespaced by the plugin name**: skills are `iris:grilling`, `iris:openspec-propose`, …; commands are `/iris:opsx:apply`, `/iris:opsx:archive`, …. The persona prompts reference those exact names.
+- **A run sees only the skills its own work needs.** Both roles used to pass `skills: "all"`, so DEV could invoke `iris:grilling` and PO could reach the `wiki-*` suite. `electron/run-skills.mjs` now supplies an explicit list per role, each entry justified by a skill the persona or the plugin's own cross-references actually invokes. Measured, this is a real context filter, not a label: identical prompt, total input tokens — `"all"` (17 skills) 18 007, a two-skill list 16 056, `[]` 15 934. Plugin-qualified (`iris:grilling`) and bare (`grilling`) names behave identically; qualified is used so the list and the persona diff against each other by eye. Per the SDK's own wording this is **a context filter, not a sandbox**: unlisted skills are hidden from the model and rejected by the Skill tool, but their files stay readable via Read/Bash.
 - `settingSources` is `["project"]`: the user's **`~/.claude` is never read**, so Iris neither depends on nor is perturbed by whatever they have installed in their own Claude Code. The working repository's `.claude/` is still loaded, which is what makes a project-local `.claude/agents/iris-<role>.md` override work.
 - `skipMcpDiscovery` is set because Iris owns its own MCP wiring (the canvas server arrives via `mcpServers`); the plugin must not open connections of its own.
 - **`settingSources` is not sufficient on its own**, and this is the part that is easy to get wrong. A few filesystem inputs are read and written *regardless* of it: the session transcript of every run, the always-read global `.claude.json`, and auto-memory. They all resolve under `CLAUDE_CONFIG_DIR`. So `computeClaudeWorkerEnv` (`electron/worker-env.mjs`) pins that variable to **`~/.iris/claude-home`** for both roles and sets `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`. Measured before this existed: one DEV run against `~/.iris/workspace` left a 57 KB transcript in the user's `~/.claude/projects/`. The directory has to be **stable** (not a temp dir) because a resumed session must find the transcript an earlier run wrote; the CLI creates it, and its own `.claude.json` inside it, on first use.
@@ -83,7 +169,7 @@ earlier version and was removed for the community release; see
 - **DEV is gated on the spec.** `startClaudeRun` refuses a DEV run when `openChangesWithTasks(cwd)` is empty (no open change with unchecked `- [ ]` tasks) — DEV never free-codes without a proposed change.
 - The first role run in a fresh project makes it OpenSpec-ready via `ensureProjectScaffold` → `openspec init <cwd> --tools claude` (non-interactive; no-op if `openspec/` already exists). The `openspec` CLI ships with the app (`@fission-ai/openspec`): `openspecCommand()` returns a command spec that runs it through Electron's own Node (`ELECTRON_RUN_AS_NODE=1`), since it is a JS entry point rather than a native executable. If editing the pipeline, keep the persona files and this scaffold/gate logic in sync.
 - **No prerequisite installer.** `resources/iris-plugin/` vendors snapshots of the required third-party skills (mattpocock's `grilling`/`tdd`/`code-review`/`diagnosing-bugs`, plus the OpenSpec-generated skills + `/opsx` commands — see `resources/iris-plugin/ATTRIBUTION.md` for sources/versions/refresh steps) and ships them as a plugin, so there is nothing to install and no install step to skip. `checkSkillsStatus()` verifies the **bundle** is intact rather than checking the machine, and backs the SetupPanel's "Bundled / Damaged" row. What remains of the old installer is its inverse: `legacyClaudeArtifactsStatus()` / `removeLegacyClaudeArtifacts()` (IPC `pipeline:legacy-artifacts` / `pipeline:remove-legacy-artifacts`) report and, on an explicit click, remove what *older* Iris versions wrote into `~/.claude`.
-- **Per-role model choice.** Each workstream stores an `agent_models: { po?, dev? }` map beside `agent_sessions`. Resolution order: workstream choice → `IRIS_PO_MODEL`/`IRIS_DEV_MODEL` env → hardcoded default (PO=`claude-fable-5`, DEV=`claude-sonnet-5`); plain Claude never gets a model choice. Model is resolved at **run start**, not submit time, so a change made while a task is queued still applies. DEV gets it via SDK `options.model` on its one-shot `query()`; PO gets it via SDK `options.model` at session creation and `query.setModel()` on an already-live session (context preserved, no resume/respawn). No automatic fallback — an unavailable model fails the run loudly like any other error. Set from the UI (chip's model segment, separate click zone from the role-select label) or by voice (`set_agent_model` tool) — both funnel through the same `setAgentModel()` in `electron/session-store.mjs`. See `openspec/changes/per-role-model-selection/`.
+- **Per-role model choice.** Each workstream stores an `agent_models: { po?, dev? }` map beside `agent_sessions`. Resolution order: workstream choice → `IRIS_PO_MODEL`/`IRIS_DEV_MODEL` env → hardcoded default (PO=`claude-opus-5`, DEV=`claude-sonnet-5`); plain Claude never gets a model choice. Model is resolved at **run start**, not submit time, so a change made while a task is queued still applies. DEV gets it via SDK `options.model` on its one-shot `query()`; PO gets it via SDK `options.model` at session creation and `query.setModel()` on an already-live session (context preserved, no resume/respawn). No automatic fallback — an unavailable model fails the run loudly like any other error. Set from the UI (chip's model segment, separate click zone from the role-select label) or by voice (`set_agent_model` tool) — both funnel through the same `setAgentModel()` in `electron/session-store.mjs`. See `openspec/changes/per-role-model-selection/`.
 
 ## PO subscription auth (stateful module only)
 

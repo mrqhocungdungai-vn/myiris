@@ -1,5 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
 import { createRunExec } from "./run-exec.mjs";
+import { buildRoleInstructions, buildSystemPrompt } from "./role-prompt.mjs";
+import { resolveRunBudget } from "./run-budget.mjs";
+import { runUsageFrom } from "./claude-stream.mjs";
 
 // A stand-in for the SDK's `query()`: returns an async iterable over a fixed
 // list of messages, and records the options it was called with. No subprocess,
@@ -31,7 +34,9 @@ function resultMessage(overrides = {}) {
 // Mirrors what the real run-stream projection does with a result message, so a
 // test can drive the completion path without pulling in run-stream itself.
 function recordResult(run, message) {
-  if (message?.type === "result") run.result = message;
+  if (message?.type !== "result") return;
+  run.result = message;
+  run.usage = runUsageFrom(message);
 }
 
 function makeWorkstream(overrides = {}) {
@@ -65,14 +70,15 @@ function make(overrides = {}) {
     ensureNotesVaultReady: vi.fn(),
     checkNotesSkillsStatus: () => ({ ok: true }),
     notesVaultDir: "/tmp/notes-vault",
-    noteCaptureHintRe: /note/,
-    vaultChangedSince: () => false,
     handleClaudeStreamMessage: recordResult,
     pushActivity: vi.fn(),
     rememberClaudeSessionId: vi.fn(),
     pushToolStart: vi.fn(),
     pushToolEnd: vi.fn(),
     askUserQuestionViaVoice: vi.fn(),
+    // The real one reads the on-disk transcript store; tests say outright
+    // whether the stored id is still real.
+    isSessionAliveImpl: async () => true,
     queryImpl: fakeQuery([resultMessage()]),
     ...overrides,
   });
@@ -103,6 +109,52 @@ describe("run-exec: startDevRun", () => {
     expect(prompt).toBe("do a thing");
     expect(options.pathToClaudeCodeExecutable).toBe("/bundled/claude");
     expect(options.cwd).toBe("/tmp/project");
+  });
+
+  describe("the system prompt", () => {
+    // F1's failure mode: an option the SDK does not read looks identical at the
+    // call site to one it does. Nothing may reach query() on that field.
+    it("never hands query() an appendSystemPrompt", async () => {
+      const queryImpl = fakeQuery([resultMessage()]);
+      const exec = make({ queryImpl });
+      await exec.startDevRun(makeRun({ agent: "dev" }));
+
+      expect(queryImpl.calls[0].options.appendSystemPrompt).toBeUndefined();
+      expect(queryImpl.calls[0].options.systemPrompt).toEqual(buildSystemPrompt("dev"));
+    });
+
+    it("gives DEV the shared policy's prompt with no vault clause", async () => {
+      const queryImpl = fakeQuery([resultMessage()]);
+      const exec = make({ queryImpl });
+      await exec.startDevRun(makeRun({ agent: "dev" }));
+
+      const { append } = queryImpl.calls[0].options.systemPrompt;
+      expect(append).toBe(buildRoleInstructions("dev"));
+      expect(append).not.toContain("/tmp/notes-vault");
+    });
+
+    it("gives plain Claude the vault clause, and only when the skills are installed", async () => {
+      const installed = fakeQuery([resultMessage()]);
+      await make({ queryImpl: installed }).startDevRun(makeRun({ agent: null }));
+      expect(installed.calls[0].options.systemPrompt.append).toContain("/tmp/notes-vault");
+
+      const missing = fakeQuery([resultMessage()]);
+      await make({ queryImpl: missing, checkNotesSkillsStatus: () => ({ ok: false }) }).startDevRun(
+        makeRun({ agent: null }),
+      );
+      expect(missing.calls[0].options.systemPrompt.append).toContain("not installed on this machine yet");
+      expect(missing.calls[0].options.systemPrompt.append).not.toContain("/tmp/notes-vault");
+    });
+
+    it("only readies the notes vault for plain Claude", async () => {
+      const ensureNotesVaultReady = vi.fn();
+      const exec = make({ ensureNotesVaultReady });
+      await exec.startDevRun(makeRun({ agent: "dev" }));
+      expect(ensureNotesVaultReady).not.toHaveBeenCalled();
+
+      await exec.startDevRun(makeRun({ agent: null }));
+      expect(ensureNotesVaultReady).toHaveBeenCalled();
+    });
   });
 
   it("pairs bypassPermissions with the flag the SDK requires for it", async () => {
@@ -188,11 +240,109 @@ describe("run-exec: startDevRun", () => {
 
   it("finalizes as FAILED when the result reports an error subtype", async () => {
     const runQueue = { finalize: vi.fn() };
-    const queryImpl = fakeQuery([resultMessage({ subtype: "error_max_turns", is_error: true, result: "ran out" })]);
+    const queryImpl = fakeQuery([
+      resultMessage({ subtype: "error_during_execution", is_error: true, result: "it broke" }),
+    ]);
     const exec = make({ runQueue, queryImpl });
     await exec.startDevRun(makeRun());
 
-    expect(runQueue.finalize).toHaveBeenCalledWith("r1", "failed", "ran out");
+    expect(runQueue.finalize).toHaveBeenCalledWith("r1", "failed", "it broke");
+  });
+
+  describe("ceilings, cost, and diagnostics", () => {
+    it("starts every run with a turn and a spend ceiling", async () => {
+      const queryImpl = fakeQuery([resultMessage()]);
+      await make({ queryImpl }).startDevRun(makeRun({ agent: "dev" }));
+
+      const { options } = queryImpl.calls[0];
+      expect(options.maxTurns).toBe(resolveRunBudget("dev", {}).maxTurns);
+      expect(options.maxBudgetUsd).toBe(resolveRunBudget("dev", {}).maxBudgetUsd);
+    });
+
+    it("gives plain Claude the shorter plain-Claude ceiling, not DEV's", async () => {
+      const queryImpl = fakeQuery([resultMessage()]);
+      await make({ queryImpl }).startDevRun(makeRun({ agent: null }));
+
+      expect(queryImpl.calls[0].options.maxTurns).toBe(resolveRunBudget("plain", {}).maxTurns);
+    });
+
+    // The whole point of the distinct status: a run that hit a limit and a run
+    // that broke need different responses from the user.
+    for (const subtype of ["error_max_turns", "error_max_budget_usd"]) {
+      it(`finalizes ${subtype} as LIMITED, naming the ceiling and how to raise it`, async () => {
+        const runQueue = { finalize: vi.fn() };
+        const queryImpl = fakeQuery([resultMessage({ subtype, is_error: true, result: "" })]);
+        await make({ runQueue, queryImpl }).startDevRun(makeRun({ agent: "dev" }));
+
+        const [, status, output] = runQueue.finalize.mock.calls[0];
+        expect(status).toBe("limited");
+        expect(output).not.toContain("claude reported");
+        expect(output).toContain(subtype === "error_max_turns" ? "turn ceiling" : "spend ceiling");
+        expect(output).toContain(
+          subtype === "error_max_turns" ? "IRIS_CLAUDE_MAX_TURNS" : "IRIS_CLAUDE_MAX_BUDGET_USD",
+        );
+      });
+    }
+
+    it("keeps DEV structurally unable to ask, and fails loudly if it ever tries", async () => {
+      const runQueue = { finalize: vi.fn() };
+      const queryImpl = fakeQuery([resultMessage()]);
+      await make({ runQueue, queryImpl }).startDevRun(makeRun({ agent: "dev" }));
+
+      const { options } = queryImpl.calls[0];
+      expect(options.disallowedTools).toEqual(["AskUserQuestion"]);
+
+      // The backstop: reaching the callback denies, aborts, and reports the
+      // violation — it never waits for an answer nobody is listening for.
+      const decision = await options.canUseTool("AskUserQuestion", { questions: [] });
+      expect(decision.behavior).toBe("deny");
+      expect(decision.message).toContain("nothing is listening");
+      expect(options.abortController.signal.aborted).toBe(true);
+    });
+
+    it("leaves PO's question path alone — only DEV is locked out", async () => {
+      const queryImpl = fakeQuery([resultMessage()]);
+      await make({ queryImpl }).startDevRun(makeRun({ agent: null }));
+
+      expect(queryImpl.calls[0].options.disallowedTools).toBeUndefined();
+      expect(queryImpl.calls[0].options.canUseTool).toBeUndefined();
+    });
+
+    it("attaches the subprocess's stderr to a failure, and to nothing else", async () => {
+      const runQueue = { finalize: vi.fn() };
+      const queryImpl = fakeQuery([
+        () => queryImpl.calls[0].options.stderr("Error: ENOENT spawn claude\n  at boot\n"),
+        resultMessage({ subtype: "error_during_execution", is_error: true, result: "it broke" }),
+      ]);
+      await make({ runQueue, queryImpl }).startDevRun(makeRun());
+
+      const [, , output] = runQueue.finalize.mock.calls[0];
+      expect(output).toContain("it broke");
+      expect(output).toContain("ENOENT spawn claude");
+
+      const okQueue = { finalize: vi.fn() };
+      const okQuery = fakeQuery([
+        () => okQuery.calls[0].options.stderr("noisy debug line\n"),
+        resultMessage(),
+      ]);
+      await make({ runQueue: okQueue, queryImpl: okQuery }).startDevRun(makeRun());
+      expect(okQueue.finalize.mock.calls[0][2]).not.toContain("noisy debug line");
+    });
+
+    it("records what the run cost so the projection can carry it", async () => {
+      const run = /** @type {any} */ (makeRun());
+      const queryImpl = fakeQuery([
+        resultMessage({ total_cost_usd: 0.42, num_turns: 7, usage: { output_tokens: 10 }, modelUsage: { "claude-sonnet-5": {} } }),
+      ]);
+      await make({ queryImpl }).startDevRun(run);
+
+      expect(run.usage).toEqual({
+        cost_usd: 0.42,
+        num_turns: 7,
+        usage: { output_tokens: 10 },
+        model_usage: { "claude-sonnet-5": {} },
+      });
+    });
   });
 
   it("finalizes as FAILED, naming the cause, when the iterator ends with no result at all", async () => {
@@ -203,41 +353,39 @@ describe("run-exec: startDevRun", () => {
     expect(runQueue.finalize).toHaveBeenCalledWith("r1", "failed", "claude ended without a result");
   });
 
-  it("drops a dead resume id so the next run can start fresh", async () => {
+  it("drops a dead resume id before the run starts, so it costs nothing", async () => {
+    // This used to be discovered only AFTER a run had already failed, by regex-
+    // matching the SDK's error string. getSessionInfo answers it up front.
     const workstream = makeWorkstream({ agent_sessions: { dev: "sess-dead" } });
     const persistSessionStore = vi.fn();
-    const queryImpl = fakeQuery([
-      resultMessage({ subtype: "error", is_error: true, result: "No conversation found with session ID" }),
-    ]);
-    const exec = make({ queryImpl, persistSessionStore, findWorkstream: () => workstream });
+    const queryImpl = fakeQuery([resultMessage()]);
+    const exec = make({
+      queryImpl,
+      persistSessionStore,
+      findWorkstream: () => workstream,
+      isSessionAliveImpl: async () => false,
+    });
     await exec.startDevRun(makeRun({ agent: "dev" }));
 
     expect(workstream.agent_sessions.dev).toBeUndefined();
     expect(persistSessionStore).toHaveBeenCalled();
+    // And the run still goes ahead — as a fresh session, not a failure.
+    expect(queryImpl.calls[0].options.resume).toBeUndefined();
   });
 
-  it("drops a dead resume id when the SDK throws it instead of reporting it", async () => {
-    // This is how a stale id actually arrives: an empty `error_during_execution`
-    // result, then a throw carrying the reason. Handling only the result path
-    // left the id in the store, so every later task in the workstream failed
-    // identically — a permanent break, and the shape a relocated
-    // CLAUDE_CONFIG_DIR produces once for every existing workstream.
-    const workstream = makeWorkstream({ agent_sessions: { dev: "sess-dead" } });
-    const persistSessionStore = vi.fn();
-    const queryImpl = /** @type {any} */ (async function* () {
-      yield resultMessage({ subtype: "error_during_execution", is_error: true, result: undefined });
-      throw new Error("No conversation found with session ID: sess-dead");
-    });
-    const exec = make({ queryImpl, persistSessionStore, findWorkstream: () => workstream });
-    await exec.startDevRun(makeRun({ agent: "dev" }));
+  it("probes the stored id against the run's own project directory", async () => {
+    const workstream = makeWorkstream({ agent_sessions: { dev: "sess-abc" } });
+    const isSessionAliveImpl = vi.fn(async () => true);
+    await make({ findWorkstream: () => workstream, isSessionAliveImpl }).startDevRun(
+      makeRun({ agent: "dev", cwd: "/tmp/project" }),
+    );
 
-    expect(workstream.agent_sessions.dev).toBeUndefined();
-    expect(persistSessionStore).toHaveBeenCalled();
+    expect(isSessionAliveImpl).toHaveBeenCalledWith("sess-abc", { dir: "/tmp/project" });
   });
 
   it("keeps a live resume id when the run fails for an unrelated reason", async () => {
-    // The guard is the error text, so an ordinary failure must not reset the
-    // workstream's context as a side effect.
+    // An ordinary failure must not reset the workstream's context as a side
+    // effect — losing a conversation is far worse than one failed run.
     const workstream = makeWorkstream({ agent_sessions: { dev: "sess-live" } });
     const persistSessionStore = vi.fn();
     const queryImpl = /** @type {any} */ (async function* () {
@@ -347,5 +495,32 @@ describe("run-exec: startPoRun", () => {
     } finally {
       process.env = originalEnv;
     }
+  });
+});
+
+describe("run-exec: the notes vault is granted, not described", () => {
+  it("adds the vault as a working directory for plain Claude", async () => {
+    const queryImpl = fakeQuery([resultMessage()]);
+    await make({ queryImpl }).startDevRun(makeRun({ agent: null }));
+
+    expect(queryImpl.calls[0].options.additionalDirectories).toEqual(["/tmp/notes-vault"]);
+  });
+
+  it("grants a role run nothing beyond its project", async () => {
+    const queryImpl = fakeQuery([resultMessage()]);
+    await make({ queryImpl }).startDevRun(makeRun({ agent: "dev" }));
+
+    expect(queryImpl.calls[0].options.additionalDirectories).toBeUndefined();
+  });
+
+  // The `[vault-check: …]` caveat came from diffing the vault afterwards to
+  // guess whether a prose directive had been obeyed. A granted directory needs
+  // no such guess, and the guess was never evidence of anything.
+  it("no longer second-guesses the result by inspecting the vault", async () => {
+    const runQueue = { finalize: vi.fn() };
+    await make({ runQueue }).startDevRun(makeRun({ agent: null, task: "save a note about this" }));
+
+    expect(runQueue.finalize.mock.calls[0][2]).toBe("all done");
+    expect(runQueue.finalize.mock.calls[0][2]).not.toContain("vault-check");
   });
 });

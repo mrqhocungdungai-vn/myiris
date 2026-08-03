@@ -317,6 +317,47 @@
   border-top: 1px solid rgba(var(--violet-rgb), 0.16);
 }
 
+/* The question's own short label (AskUserQuestion's `header`), so the user sees
+   what a question is ABOUT before reading the question itself. */
+.po-question-header {
+  display: inline-block;
+  margin-bottom: 4px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: rgba(var(--violet-rgb), 0.18);
+  color: var(--violet-soft);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* A question that accepts several options must say so — otherwise the user
+   picks one and assumes they have answered it. */
+.po-question-multi {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+/* Multi-select cannot auto-submit on the last pick, so it needs an explicit
+   "I am done choosing". */
+.po-question-submit {
+  align-self: flex-start;
+  border: 1px solid rgba(var(--violet-rgb), 0.55);
+  background: rgba(var(--violet-rgb), 0.22);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 4px 12px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.po-question-submit:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 .po-question-text {
   margin: 0 0 6px;
   color: var(--text);
@@ -524,4 +565,21 @@
 .hud-review-stack .task-review-text,
 .hud-review-stack .task-review-hint {
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+
+/* A run that reached its turn or spend ceiling (electron/run-budget.mjs). Amber,
+   not coral: it is over but it did not fail, and the badge should not read as an
+   error. base.css is upstream-verbatim, so the status lives here with the rest
+   of the Claude-specific styling. */
+.badge.limited {
+  color: var(--amber);
+}
+
+/* What a run cost, beside its status badge. Reads as metadata, not as a result. */
+.wcard-cost {
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }

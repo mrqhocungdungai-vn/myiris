@@ -122,8 +122,6 @@ export function createCapabilitiesWiring({
     ensureNotesVaultReady: () => secondBrainCapability.ensureNotesVaultReady(),
     checkNotesSkillsStatus: () => secondBrainCapability.checkNotesSkillsStatus(),
     notesVaultDir: secondBrainCapability.notesVaultDir,
-    noteCaptureHintRe: secondBrainCapability.noteCaptureHintRe,
-    vaultChangedSince: (sinceMs) => secondBrainCapability.vaultChangedSince(sinceMs),
     handleClaudeStreamMessage,
     pushActivity,
     rememberClaudeSessionId,

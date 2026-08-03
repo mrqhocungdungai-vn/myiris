@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { createGeminiPrompts } from "./gemini-prompts.mjs";
 
-const modelChoices = [{ id: "claude-fable-5", label: "Fable" }];
+const modelChoices = [{ id: "claude-opus-5", label: "Opus 5" }];
 
 function make({
   pipelineAvailable = true,

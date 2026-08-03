@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { createGeminiTools } from "./gemini-tools.mjs";
 
 const modelChoices = [
-  { id: "claude-fable-5", label: "Fable" },
+  { id: "claude-opus-5", label: "Opus 5" },
   { id: "claude-sonnet-5", label: "Sonnet" },
 ];
 
@@ -39,7 +39,7 @@ describe("gemini-tools", () => {
   it("set_agent_model describes the injected model choices", () => {
     const declarations = make().buildPipelineToolDeclarations();
     const setAgentModel = declarations.find((d) => d.name === "set_agent_model");
-    expect(setAgentModel.parameters.properties.model.description).toContain("claude-fable-5");
+    expect(setAgentModel.parameters.properties.model.description).toContain("claude-opus-5");
     expect(setAgentModel.parameters.properties.model.description).toContain("claude-sonnet-5");
   });
 

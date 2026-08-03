@@ -188,8 +188,9 @@ export default function HudShell({
   // must stay answerable (voice, click, or dwell-click) while floating.
   poQuestion: {
     questions: PoQuestion[];
-    answers: Record<string, string>;
+    answers: Record<string, string[]>;
     onPick: (question: string, choice: string) => void;
+    onSubmit?: () => void;
   } | null;
   // A parked review (prompt-review-gate spec) stacks BENEATH a pending PO
   // question when both are live — the PO question blocks a token-burning
@@ -241,6 +242,7 @@ export default function HudShell({
               questions={poQuestion.questions}
               answers={poQuestion.answers}
               onPick={poQuestion.onPick}
+              onSubmit={poQuestion.onSubmit}
             />
           ) : null}
           {taskReview ? (

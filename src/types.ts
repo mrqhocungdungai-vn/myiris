@@ -12,6 +12,13 @@ export type TaskStep = {
   ts: number;
 };
 
+// What a run cost, as the runtime reported it — never an estimate Iris
+// constructs. Null until the run's result message lands.
+export type TaskUsage = {
+  costUsd: number | null;
+  numTurns: number | null;
+};
+
 export type TaskCard = {
   id: string;
   task: string;
@@ -21,6 +28,7 @@ export type TaskCard = {
   agent?: AgentRole | null;
   model?: string | null;
   claudeSessionId?: string | null;
+  usage?: TaskUsage | null;
   updatedAt: number;
   steps?: TaskStep[];
 };

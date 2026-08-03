@@ -1,6 +1,8 @@
-import type { TaskCard, TaskStep } from "../types";
+import type { TaskCard, TaskStep, TaskUsage } from "../types";
 
-export const TERMINAL = new Set(["completed", "failed", "cancelled", "canceled", "error"]);
+// "limited" is a run that reached its turn or spend ceiling — over, but not
+// failed (see electron/run-budget.mjs).
+export const TERMINAL = new Set(["completed", "failed", "cancelled", "canceled", "error", "limited"]);
 
 export function taskKeyFor(task: string): string {
   return `starting:${task.toLowerCase().trim()}`;
@@ -110,6 +112,34 @@ export function readString(value: unknown, fallback = ""): string {
 // replaces the activity log instead of falling back to it (BUG D).
 export function resolveMergedString(raw: unknown, existing: string | undefined): string {
   return typeof raw === "string" ? raw : (existing ?? "");
+}
+
+// The cost/turn figures off a claude_task_update. Returns null unless at least
+// one is actually present, so an update that carries no usage (every one before
+// the run's result lands) leaves an already-recorded figure alone rather than
+// blanking it.
+export function readTaskUsage(value: unknown): TaskUsage | null {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as Record<string, unknown>;
+  const costUsd = typeof raw.cost_usd === "number" ? raw.cost_usd : null;
+  const numTurns = typeof raw.num_turns === "number" ? raw.num_turns : null;
+  if (costUsd === null && numTurns === null) return null;
+  return { costUsd, numTurns };
+}
+
+// Never rounded to nothing: a real run that cost a fraction of a cent must not
+// read as "$0.00", which looks like "free" rather than "very cheap".
+export function formatCost(costUsd: number): string {
+  if (costUsd > 0 && costUsd < 0.01) return "<$0.01";
+  return `$${costUsd.toFixed(2)}`;
+}
+
+export function usageSummary(usage: TaskUsage | null | undefined): string {
+  if (!usage) return "";
+  const parts: string[] = [];
+  if (usage.costUsd !== null) parts.push(formatCost(usage.costUsd));
+  if (usage.numTurns !== null) parts.push(`${usage.numTurns} turn${usage.numTurns === 1 ? "" : "s"}`);
+  return parts.join(" · ");
 }
 
 export function readStatusObject(value: unknown): {

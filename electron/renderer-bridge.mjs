@@ -10,10 +10,46 @@
 // the capability tier (electron/capabilities/canvas.mjs) collects them; they
 // don't belong in a bridge every module depends on.
 
-/** @param {{ getMainWindow: () => any }} deps */
-export function createRendererBridge({ getMainWindow }) {
+// Bounds on the retained-utterance ring (design.md D8). A verbatim record of
+// everything spoken near the microphone is not something to accumulate, so it is
+// capped on BOTH axes: an idle session cannot let old speech linger, and a busy
+// one cannot grow the ring without limit.
+export const RECENT_UTTERANCE_LIMIT = 40;
+export const RECENT_UTTERANCE_MAX_AGE_MS = 10 * 60 * 1000; // 10 minutes
+
+/** @param {{ getMainWindow: () => any, now?: () => number }} deps */
+export function createRendererBridge({ getMainWindow, now = Date.now }) {
   let userTranscriptBuffer = "";
   let modelTranscriptBuffer = "";
+
+  // The user's own words, kept past the display flush that used to discard them.
+  //
+  // Iris holds a verbatim transcript of what the user said (Gemini Live's
+  // inputAudioTranscription) and, before this, used it only to draw text on
+  // screen — everything that reached Claude went through Gemini's paraphrase.
+  // This retains it so a caller can read what was actually said.
+  //
+  // Three constraints, stated here because they are the terms on which this
+  // exists at all:
+  //   - bounded by count AND age (see the constants above);
+  //   - never persisted to disk;
+  //   - UNTRUSTED INPUT. The microphone does not distinguish who is speaking
+  //     near it, and being the user's own speech is not an exemption. Anything
+  //     derived from this that reaches a model prompt must be fenced the same way
+  //     spoken content already is (announcements.mjs's fenceUntrustedText).
+  //
+  // Nothing consumes this yet — the consumer is the companion change
+  // (replace-roles-with-verb-tools).
+  /** @type {Array<{ text: string, at: number }>} */
+  let recentUtterances = [];
+
+  function pruneUtterances(at) {
+    const oldest = at - RECENT_UTTERANCE_MAX_AGE_MS;
+    recentUtterances = recentUtterances.filter((entry) => entry.at >= oldest);
+    if (recentUtterances.length > RECENT_UTTERANCE_LIMIT) {
+      recentUtterances = recentUtterances.slice(-RECENT_UTTERANCE_LIMIT);
+    }
+  }
 
   // Latest UI-state snapshot pushed by the renderer over iris:ui-context
   // (throttled — see App.tsx). Read by the get_ui_context Gemini tool so voice
@@ -48,7 +84,14 @@ export function createRendererBridge({ getMainWindow }) {
 
   function flushTranscripts() {
     if (userTranscriptBuffer.trim()) {
-      emitEvent({ type: "transcript", speaker: "you", text: userTranscriptBuffer.trim() });
+      const spoken = userTranscriptBuffer.trim();
+      emitEvent({ type: "transcript", speaker: "you", text: spoken });
+      // Retained here, at the flush, rather than per fragment: a flush is one
+      // complete utterance, whereas appendUserTranscript receives arbitrary
+      // partial chunks that would fragment the record.
+      const at = now();
+      recentUtterances.push({ text: spoken, at });
+      pruneUtterances(at);
     }
     if (modelTranscriptBuffer.trim()) {
       emitEvent({ type: "transcript", speaker: "gemini", text: modelTranscriptBuffer.trim() });
@@ -65,6 +108,16 @@ export function createRendererBridge({ getMainWindow }) {
     modelTranscriptBuffer += text;
   }
 
+  /**
+   * The retained utterances, newest last, already pruned by age. Returns copies
+   * so a caller cannot mutate the ring.
+   * @returns {Array<{ text: string, at: number }>}
+   */
+  function getRecentUtterances() {
+    pruneUtterances(now());
+    return recentUtterances.map((entry) => ({ ...entry }));
+  }
+
   function getUiContext() {
     return irisUiContext;
   }
@@ -79,6 +132,7 @@ export function createRendererBridge({ getMainWindow }) {
     flushTranscripts,
     appendUserTranscript,
     appendModelTranscript,
+    getRecentUtterances,
     getUiContext,
     setUiContext,
   };

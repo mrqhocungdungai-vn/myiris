@@ -10,8 +10,8 @@ Each workstream SHALL persist a chosen Claude model per pipeline role in an `age
 
 #### Scenario: Model persists across app restarts
 
-- **WHEN** the user sets DEV's model to Fable 5 in a workstream and restarts the app
-- **THEN** the workstream still reports Fable 5 as DEV's model, while other workstreams are unaffected
+- **WHEN** the user sets DEV's model to Opus 5 in a workstream and restarts the app
+- **THEN** the workstream still reports Opus 5 as DEV's model, while other workstreams are unaffected
 
 #### Scenario: Legacy workstream without agent_models
 
@@ -25,17 +25,17 @@ Each workstream SHALL persist a chosen Claude model per pipeline role in an `age
 
 ### Requirement: Model resolution order
 
-For each role, the effective model SHALL resolve in this order: the workstream's `agent_models` entry, then the environment variable (`IRIS_PO_MODEL` for PO, `IRIS_DEV_MODEL` for DEV), then the hardcoded default — `claude-fable-5` for PO and `claude-sonnet-5` for DEV. The selectable model list SHALL be a curated constant of four models: Fable 5 (`claude-fable-5`), Sonnet 5 (`claude-sonnet-5`), Opus 4.8 (`claude-opus-4-8`), and Haiku 4.5 (`claude-haiku-4-5-20251001`), each with a display label.
+For each role, the effective model SHALL resolve in this order: the workstream's `agent_models` entry, then the environment variable (`IRIS_PO_MODEL` for PO, `IRIS_DEV_MODEL` for DEV), then the hardcoded default — `claude-opus-5` for PO and `claude-sonnet-5` for DEV. The selectable model list SHALL be a curated constant of four models: Opus 5 (`claude-opus-5`), Sonnet 5 (`claude-sonnet-5`), Opus 4.8 (`claude-opus-4-8`), and Haiku 4.5 (`claude-haiku-4-5-20251001`), each with a display label.
 
 #### Scenario: Fresh workstream uses role defaults
 
 - **WHEN** a PO or DEV task runs in a workstream that has no `agent_models` entry and no `IRIS_PO_MODEL`/`IRIS_DEV_MODEL` env vars are set
-- **THEN** PO runs on `claude-fable-5` and DEV runs on `claude-sonnet-5`
+- **THEN** PO runs on `claude-opus-5` and DEV runs on `claude-sonnet-5`
 
 #### Scenario: Env var overrides the hardcoded default only
 
-- **WHEN** `IRIS_DEV_MODEL=claude-haiku-4-5-20251001` is set and the workstream's `agent_models.dev` is `claude-fable-5`
-- **THEN** DEV runs on `claude-fable-5` (the workstream choice outranks the env var)
+- **WHEN** `IRIS_DEV_MODEL=claude-haiku-4-5-20251001` is set and the workstream's `agent_models.dev` is `claude-opus-5`
+- **THEN** DEV runs on `claude-opus-5` (the workstream choice outranks the env var)
 
 ### Requirement: DEV runs receive the model at run start
 
@@ -43,8 +43,8 @@ DEV (and only DEV — not plain Claude) runs SHALL pass the resolved model to th
 
 #### Scenario: Queued DEV task picks up a model change
 
-- **WHEN** a DEV task is queued behind a running task and the user switches DEV's model from Sonnet 5 to Fable 5 before the queued task starts
-- **THEN** the queued task starts with the model set to `claude-fable-5`
+- **WHEN** a DEV task is queued behind a running task and the user switches DEV's model from Sonnet 5 to Opus 5 before the queued task starts
+- **THEN** the queued task starts with the model set to `claude-opus-5`
 
 #### Scenario: Plain Claude run is unaffected
 
@@ -108,5 +108,5 @@ Each run record SHALL store the model that was actually resolved when the run st
 
 #### Scenario: History distinguishes runs by model
 
-- **WHEN** one DEV run executed on Sonnet 5 and a later one on Fable 5
+- **WHEN** one DEV run executed on Sonnet 5 and a later one on Opus 5
 - **THEN** each task row in the Work Stream shows the model that run actually used, even after the role's current setting changed again

@@ -6,6 +6,7 @@ import {
   findTaskMatches,
   readString,
   readStatusObject,
+  readTaskUsage,
   resolveMergedString,
   taskKeyFor,
 } from "./lib/tasks";
@@ -130,7 +131,9 @@ export default function App() {
   } | null>(null);
   // Local picks for the CURRENT pendingPoQuestion — submitted as one batch
   // once every question has a pick, matching the voice path's batching.
-  const [poAnswers, setPoAnswers] = useState<Record<string, string>>({});
+  // Picks per question, as a LIST: a multi-select question may take several,
+  // and collapsing it to one answers a different question than the PO asked.
+  const [poAnswers, setPoAnswers] = useState<Record<string, string[]>>({});
   // A brief submit_claude_task just parked for Approve/Edit/Cancel
   // (prompt-review-gate spec) — cleared by the "task_review" sidecar event
   // once main resolves it (approved/cancelled/timed_out/abandoned), never
@@ -815,14 +818,33 @@ export default function App() {
   // main resolves whichever side (voice or UI) completes first.
   function pickPoAnswer(question: string, choice: string) {
     if (!hasBridge || !pendingPoQuestion) return;
-    const next = { ...poAnswers, [question]: choice };
+    const multi = pendingPoQuestion.questions.find((q) => q.question === question)?.multiSelect;
+    const current = poAnswers[question] ?? [];
+    // Multi-select toggles within a list; single-select replaces, as before.
+    const picks = multi
+      ? current.includes(choice)
+        ? current.filter((label) => label !== choice)
+        : [...current, choice]
+      : [choice];
+    const next = { ...poAnswers, [question]: picks };
     setPoAnswers(next);
-    const complete = pendingPoQuestion.questions.every((q) => next[q.question]);
-    if (!complete) return;
+
+    // A multi-select question cannot auto-submit on the last pick — the user
+    // has to be able to say when they are done choosing, which is what the
+    // banner's Send button is for.
+    if (pendingPoQuestion.questions.some((q) => q.multiSelect)) return;
+    if (!pendingPoQuestion.questions.every((q) => (next[q.question] ?? []).length > 0)) return;
+    submitPoAnswers(next);
+  }
+
+  function submitPoAnswers(picks: Record<string, string[]>) {
+    if (!hasBridge || !pendingPoQuestion) return;
+    if (!pendingPoQuestion.questions.every((q) => (picks[q.question] ?? []).length > 0)) return;
+    const questions = pendingPoQuestion.questions;
     setPendingPoQuestion(null);
     setPoAnswers({});
     window.iris.answerPoQuestion(
-      pendingPoQuestion.questions.map((q) => ({ question: q.question, choice: next[q.question] })),
+      questions.map((q) => ({ question: q.question, choice: picks[q.question] ?? [] })),
     );
   }
 
@@ -924,6 +946,10 @@ export default function App() {
       // leave the existing steps untouched.
       const phase = readString(event.phase);
       const toolId = readString(event.tool_id);
+      // What the run cost, off the runtime's own result message. Absent on
+      // every update before the run finishes, so it must never overwrite a
+      // figure already recorded.
+      const usage = readTaskUsage(event.usage);
 
       setTasks((current) => {
         const existing = current.find((item) => item.id === runId);
@@ -954,6 +980,7 @@ export default function App() {
           agent: agent ?? existing?.agent ?? null,
           model: model ?? existing?.model ?? null,
           claudeSessionId: readString(event.claude_session_id) || existing?.claudeSessionId || null,
+          usage: usage ?? existing?.usage ?? null,
           updatedAt: eventTime(event),
           steps,
         };
@@ -1516,7 +1543,12 @@ export default function App() {
           pipelineAvailable={pipelineAvailable}
           poQuestion={
             pendingPoQuestion
-              ? { questions: pendingPoQuestion.questions, answers: poAnswers, onPick: pickPoAnswer }
+              ? {
+                  questions: pendingPoQuestion.questions,
+                  answers: poAnswers,
+                  onPick: pickPoAnswer,
+                  onSubmit: () => submitPoAnswers(poAnswers),
+                }
               : null
           }
           taskReview={
@@ -1631,7 +1663,12 @@ export default function App() {
               />
               <ProjectBar project={activeProject} onChoose={chooseProjectFolder} />
               {pendingPoQuestion ? (
-                <PoQuestionBanner questions={pendingPoQuestion.questions} answers={poAnswers} onPick={pickPoAnswer} />
+                <PoQuestionBanner
+                  questions={pendingPoQuestion.questions}
+                  answers={poAnswers}
+                  onPick={pickPoAnswer}
+                  onSubmit={() => submitPoAnswers(poAnswers)}
+                />
               ) : null}
               {pendingReview ? (
                 <ReviewBanner review={pendingReview} onApprove={approveReview} onCancel={cancelReview} />

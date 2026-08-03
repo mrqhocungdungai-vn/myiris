@@ -27,13 +27,13 @@ const AGENT_ROSTER = ["po", "dev"];
 // for product thinking; DEV defaults to the cheaper/faster one for routine
 // implementation and can be raised to debug a hard issue.
 const MODEL_CHOICES = [
-  { id: "claude-fable-5", label: "Fable 5" },
+  { id: "claude-opus-5", label: "Opus 5" },
   { id: "claude-sonnet-5", label: "Sonnet 5" },
   { id: "claude-opus-4-8", label: "Opus 4.8" },
   { id: "claude-haiku-4-5-20251001", label: "Haiku 4.5" },
 ];
 const MODEL_IDS = new Set(MODEL_CHOICES.map((choice) => choice.id));
-const MODEL_DEFAULTS = { po: "claude-fable-5", dev: "claude-sonnet-5" };
+const MODEL_DEFAULTS = { po: "claude-opus-5", dev: "claude-sonnet-5" };
 const MODEL_ENV_VARS = { po: "IRIS_PO_MODEL", dev: "IRIS_DEV_MODEL" };
 
 /**

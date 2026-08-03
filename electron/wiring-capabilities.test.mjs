@@ -31,10 +31,8 @@ vi.mock("./capabilities/second-brain.mjs", () => ({
   createSecondBrainCapability: vi.fn(() => ({
     toolDeclarations: [],
     notesVaultDir: "/fake/vault",
-    noteCaptureHintRe: /note/i,
     checkNotesSkillsStatus: vi.fn(() => ({ ok: true })),
     ensureNotesVaultReady: vi.fn(),
-    vaultChangedSince: vi.fn(() => false),
     probeSecondBrainAvailability: vi.fn(() => false),
     stopVaultGraphWatch: vi.fn(),
     promptFragment: vi.fn(() => ""),
@@ -92,7 +90,7 @@ function makeDeps(overrides = {}) {
     pushToolStart: vi.fn(),
     pushToolEnd: vi.fn(),
     askUserQuestionViaVoice: vi.fn(),
-    modelChoices: [{ id: "claude-fable-5", label: "Fable" }],
+    modelChoices: [{ id: "claude-opus-5", label: "Opus 5" }],
     envFlag: vi.fn(() => false),
     workspaceContextLine: vi.fn(() => ""),
     fenceUntrustedText: vi.fn((text) => text),
@@ -131,7 +129,6 @@ describe("wiring-capabilities: createCapabilitiesWiring", () => {
     expect(secondBrainInstance.checkNotesSkillsStatus).toHaveBeenCalled();
 
     expect(runExecDeps.notesVaultDir).toBe("/fake/vault");
-    expect(runExecDeps.noteCaptureHintRe).toBeInstanceOf(RegExp);
   });
 
   it("returns run-exec's startClaudeRun directly", () => {
