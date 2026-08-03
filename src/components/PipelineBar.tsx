@@ -1,5 +1,5 @@
 import type { CSSProperties } from "react";
-import { ShieldCheck, ShieldOff, Users } from "lucide-react";
+import { ShieldCheck, ShieldOff } from "lucide-react";
 import { AGENT_COLORS, AGENT_LABELS, ALL_ROLES, MODEL_CHOICES, modelLabel } from "../lib/agents";
 
 // Review-gate mode toggle (prompt-review-gate spec): applies to every role
@@ -31,42 +31,22 @@ function ReviewModeToggle({ reviewMode, onToggle }: { reviewMode: boolean; onTog
 export default function PipelineBar({
   agents,
   activeAgent,
-  installingAgents,
   modelPopoverRole,
   reviewMode,
   onChooseAgent,
-  onInstallAgents,
   onToggleModelPopover,
   onSetRoleModel,
   onToggleReviewMode,
 }: {
   agents: AgentsSnapshot | null;
   activeAgent: AgentRole | null;
-  installingAgents: boolean;
   modelPopoverRole: AgentRole | null;
   reviewMode: boolean;
   onChooseAgent: (role: AgentRole | null) => void;
-  onInstallAgents: () => void;
   onToggleModelPopover: (role: AgentRole) => void;
   onSetRoleModel: (role: AgentRole, model: string) => void;
   onToggleReviewMode: (next: boolean) => void;
 }) {
-  if (agents && !agents.installed) {
-    return (
-      <div className="pipeline-bar">
-        <button
-          className="agent-install"
-          onClick={onInstallAgents}
-          disabled={installingAgents}
-          title="Install the PO / DEV agents into ~/.claude/agents"
-        >
-          <Users size={13} />
-          {installingAgents ? "Installing agents…" : "Install agents…"}
-        </button>
-        <ReviewModeToggle reviewMode={reviewMode} onToggle={onToggleReviewMode} />
-      </div>
-    );
-  }
 
   return (
     <div className="pipeline-bar">

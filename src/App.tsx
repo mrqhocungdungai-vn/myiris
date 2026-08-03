@@ -120,7 +120,6 @@ export default function App() {
   const [sessions, setSessions] = useState<ClaudeSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [agents, setAgents] = useState<AgentsSnapshot | null>(null);
-  const [installingAgents, setInstallingAgents] = useState(false);
   // Bumped whenever a run completes or sessions change so the gate ✓s re-scan.
   const [agentsTick, setAgentsTick] = useState(0);
   // The PO's live session is mid-question — set while status is "pending",
@@ -806,27 +805,6 @@ export default function App() {
     }
     setAgentsTick((tick) => tick + 1);
     pushLog("info", `${AGENT_LABELS[role]}'s model is now ${modelLabel(model)}.`);
-  }
-
-  async function installAgents() {
-    if (!hasBridge || installingAgents) return;
-    setInstallingAgents(true);
-    try {
-      const result = await window.iris.installAgents();
-      if (result.status === "error") {
-        pushLog("error", result.error ?? "Could not install the Iris agents.");
-      } else {
-        pushLog(
-          "info",
-          `Iris agents ready: ${result.installed.length} installed/updated, ${result.skipped.length} already current${
-            result.removed?.length ? `, ${result.removed.length} retired removed` : ""
-          }.`,
-        );
-      }
-      setAgentsTick((tick) => tick + 1);
-    } finally {
-      setInstallingAgents(false);
-    }
   }
 
   // Secondary answer path: lets a sighted user click an option directly
@@ -1644,11 +1622,9 @@ export default function App() {
               <PipelineBar
                 agents={agents}
                 activeAgent={activeAgent}
-                installingAgents={installingAgents}
                 modelPopoverRole={modelPopoverRole}
                 reviewMode={reviewMode}
                 onChooseAgent={chooseAgent}
-                onInstallAgents={installAgents}
                 onToggleModelPopover={(role) => setModelPopoverRole((current) => (current === role ? null : role))}
                 onSetRoleModel={setRoleModel}
                 onToggleReviewMode={toggleReviewMode}

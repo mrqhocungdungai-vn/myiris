@@ -1,14 +1,14 @@
-// Spawns and drives the two Claude worker shapes: DEV (a one-shot detached
-// `claude -p` subprocess) and PO (a resident Agent SDK session). Split out
-// of electron/main.mjs (split-main-process-modules): Electron-free — every
-// cross-module effect (the run queue, session store, run-stream projection,
-// notes-vault/canvas capability hooks, pipeline probes/install) is injected.
+// Drives the two Claude worker shapes, both now on the Agent SDK: DEV (a
+// one-shot `query()` per run) and PO (a resident `query()` session). Neither
+// touches a host-installed CLI — the binary ships with the app, see
+// bundled-binaries.mjs. Split out of electron/main.mjs
+// (split-main-process-modules): Electron-free — every cross-module effect (the
+// run queue, session store, run-stream projection, notes-vault/canvas
+// capability hooks, pipeline probes/install) is injected.
 import fs from "node:fs";
-import path from "node:path";
-import os from "node:os";
-import { spawn as nodeSpawn } from "node:child_process";
+import { query } from "@anthropic-ai/claude-agent-sdk";
 import { poBillingStatus, getOrCreatePoSession, deliverPoTurn, setPoSessionModel, setPoSessionMcpServers } from "./po-session.mjs";
-import { computeWorkerEnv } from "./worker-env.mjs";
+import { computeClaudeWorkerEnv } from "./worker-env.mjs";
 import { RUN_STATUS, EMIT_STATUS, toUpdateEvent } from "./run-queue.mjs";
 
 /**
@@ -23,7 +23,8 @@ import { RUN_STATUS, EMIT_STATUS, toUpdateEvent } from "./run-queue.mjs";
  *   agentPrefix: string,
  *   claudeWorkdir: () => string,
  *   claudeBinary: () => string,
- *   installedAgentFile: (agent: string, cwd: string | null) => string | null,
+ *   resolveAgentDefinition: (agent: string, cwd: string | null) => { description: string, prompt: string, model?: string },
+ *   irisPluginConfig: () => Array<{ type: "local", path: string, skipMcpDiscovery?: boolean }> | null,
  *   ensureProjectScaffold: (cwd: string) => { created: string[], error?: string },
  *   openChangesWithTasks: (cwd: string) => string[],
  *   ensureCanvasMcpForRun: () => Promise<any>,
@@ -32,13 +33,13 @@ import { RUN_STATUS, EMIT_STATUS, toUpdateEvent } from "./run-queue.mjs";
  *   notesVaultDir: string,
  *   noteCaptureHintRe: RegExp,
  *   vaultChangedSince: (sinceMs: number) => boolean,
- *   handleClaudeStreamEvent: (run: any, line: string) => void,
+ *   handleClaudeStreamMessage: (run: any, message: any) => void,
  *   pushActivity: (run: any, line: string) => void,
  *   rememberClaudeSessionId: (run: any, claudeSessionId: string | null) => void,
  *   pushToolStart: (run: any, toolId: string, toolName: string, detail: any) => void,
  *   pushToolEnd: (run: any, toolId: string, isError: boolean) => void,
  *   askUserQuestionViaVoice: (workstreamId: string, questions: any[]) => Promise<any>,
- *   spawnImpl?: typeof nodeSpawn,
+ *   queryImpl?: typeof query,
  * }} deps
  */
 export function createRunExec({
@@ -52,7 +53,8 @@ export function createRunExec({
   agentPrefix,
   claudeWorkdir,
   claudeBinary,
-  installedAgentFile,
+  resolveAgentDefinition,
+  irisPluginConfig,
   ensureProjectScaffold,
   openChangesWithTasks,
   ensureCanvasMcpForRun,
@@ -61,35 +63,14 @@ export function createRunExec({
   notesVaultDir,
   noteCaptureHintRe,
   vaultChangedSince,
-  handleClaudeStreamEvent,
+  handleClaudeStreamMessage,
   pushActivity,
   rememberClaudeSessionId,
   pushToolStart,
   pushToolEnd,
   askUserQuestionViaVoice,
-  spawnImpl = nodeSpawn,
+  queryImpl = query,
 }) {
-  // Group-aware kill for a DEV subprocess (spawned `detached: true`, so it is
-  // its own process-group leader on POSIX) — reaches descendant tool
-  // subprocesses (bash, MCP servers under bypassPermissions) that a plain
-  // child.kill() would orphan. Injected into createRunQueue in main.mjs so
-  // run-queue.mjs stays free of process-group/platform knowledge (design.md D1
-  // of bound-shutdown-teardown).
-  function killChild(child, signal) {
-    if (!child?.pid) {
-      child?.kill?.(signal);
-      return;
-    }
-    try {
-      process.kill(-child.pid, signal);
-    } catch {
-      // Group already gone (or was never formed) — fall back to the direct
-      // child, mirroring the escalation path's existing tolerance of a dead
-      // process.
-      child.kill(signal);
-    }
-  }
-
   function runProjectDir(run) {
     const projectDir = findWorkstream(run.workstream_id)?.cwd;
     if (projectDir && fs.existsSync(projectDir)) return projectDir;
@@ -107,14 +88,20 @@ export function createRunExec({
     run.cwd = runProjectDir(run);
 
     // A run submitted for a role must run AS that role — falling back to plain
-    // Claude would silently skip the gate the user thinks they are in.
-    if (run.agent && !installedAgentFile(run.agent, run.cwd)) {
-      runQueue.finalize(
-        run.run_id,
-        RUN_STATUS.FAILED,
-        `The ${agentLabels[run.agent] ?? run.agent} agent is not installed (missing ${agentPrefix}${run.agent}.md). Click "Install agents" in the Iris session bar, then retry.`,
-      );
-      return;
+    // Claude would silently skip the gate the user thinks they are in. The
+    // personas ship inside the app now, so the only way this fails is a broken
+    // bundle, not a missing install step the user could have skipped.
+    if (run.agent) {
+      try {
+        resolveAgentDefinition(run.agent, run.cwd);
+      } catch (error) {
+        runQueue.finalize(
+          run.run_id,
+          RUN_STATUS.FAILED,
+          `The ${agentLabels[run.agent] ?? run.agent} persona could not be loaded: ${error.message}`,
+        );
+        return;
+      }
     }
 
     // First role run in a fresh project: make it OpenSpec-ready (`openspec init`)
@@ -146,20 +133,19 @@ export function createRunExec({
       return;
     }
 
-    // Rollback switch for the stateful PO module (design.md Migration Plan):
-    // set IRIS_PO_LIVE_SESSION=0 to fall back to the pre-SDK behavior, where PO
-    // runs exactly like DEV (one-shot `claude -p --resume`, no live session, no
-    // mid-turn questions). No data migration needed — both paths read/write the
-    // same workstream.agent_sessions.po id.
-    if (run.agent === "po" && process.env.IRIS_PO_LIVE_SESSION !== "0") {
+    // PO is the stateful module: a resident session that can pause mid-turn to
+    // ask. The IRIS_PO_LIVE_SESSION rollback switch is gone — it fell back to a
+    // one-shot `claude -p --resume` subprocess path that no longer exists now
+    // that both roles run on the Agent SDK.
+    if (run.agent === "po") {
       startPoRun(run);
       return;
     }
     startDevRun(run);
   }
 
-  // The stateless module: unchanged one-shot `claude -p` subprocess per run,
-  // exactly as before this change — mechanism AND auth (process.env, `/login`).
+  // The stateless module: one `query()` per run, torn down when it finalizes.
+  // Distinct from PO's resident session in lifetime, not in transport.
   async function startDevRun(run) {
     // Model is resolved at run START (not at submit time), so a model change
     // made while this task was queued still applies — see design.md D4. Only
@@ -197,37 +183,14 @@ export function createRunExec({
       }
     }
 
-    const args = [
-      "-p", run.task,
-      "--output-format", "stream-json",
-      "--verbose",
-      "--permission-mode", process.env.IRIS_CLAUDE_PERMISSION_MODE || "bypassPermissions",
-      "--append-system-prompt",
-      systemPrompt,
-    ];
-    if (run.agent) args.push("--agent", `${agentPrefix}${run.agent}`);
-    if (run.model) args.push("--model", run.model);
-
     // canvas-claude-mcp (design.md D6/5.2): Iris-scoped per-run wiring, never
-    // written to ~/.claude. A 0600 temp file (not inline argv) so the bearer
-    // token isn't visible via `ps`; deleted once the run's own process ends
-    // (see the child "close"/"error" handlers and the spawn-failure catch
-    // below) — cleanupMcpConfig() is idempotent and safe to call from all three.
+    // written to ~/.claude. The SDK takes the server record directly, so the
+    // bearer token now travels in-process — it never reaches a temp file or an
+    // argv visible to `ps`, and there is nothing left to clean up afterwards.
     const mcpRecord = await ensureCanvasMcpForRun();
-    let mcpConfigDir = null;
-    if (mcpRecord) {
-      mcpConfigDir = fs.mkdtempSync(path.join(os.tmpdir(), "iris-mcp-"));
-      const mcpConfigPath = path.join(mcpConfigDir, "mcp-config.json");
-      fs.writeFileSync(mcpConfigPath, JSON.stringify({ mcpServers: { "iris-canvas": mcpRecord } }), { mode: 0o600 });
-      args.push("--mcp-config", mcpConfigPath);
-    }
-    function cleanupMcpConfig() {
-      if (mcpConfigDir) fs.rmSync(mcpConfigDir, { recursive: true, force: true });
-      mcpConfigDir = null;
-    }
 
     // CONTEXT IS USER-CONTROLLED. Every role (and plain Claude) keeps its OWN
-    // continuous conversation within this workstream: a task always --resumes the
+    // continuous conversation within this workstream: a task always resumes the
     // role's stored session, no matter what ran in between. Nothing here ever
     // drops a session on its own — context resets only when the USER asks for it:
     // the "New" session button, an explicit voice new-session request, or picking
@@ -236,93 +199,111 @@ export function createRunExec({
     // the project, never via a shared conversation.
     const key = agentKey(run.agent);
     const previousSession = workstream?.agent_sessions?.[key] ?? null;
-    if (previousSession) args.push("--resume", previousSession);
 
-    let child;
-    try {
-      child = spawnImpl(claudeBinary(), args, {
-        cwd: run.cwd,
-        stdio: ["ignore", "pipe", "pipe"],
-        // D12 (harden-security-boundaries): derived by subtraction, not
-        // process.env passed through by reference — GEMINI_API_KEY has no use
-        // to any role, and CLAUDE_CODE_OAUTH_TOKEN specifically has none to
-        // DEV, confirmed empirically (an invalid token left the CLI's result
-        // unaffected — `claude -p` authenticates via its own /login-based
-        // credential store, never this env var; only the Agent SDK PO uses
-        // reads it). Withholding an unused credential from a worker that runs
-        // with bypassPermissions and reads untrusted content is pure risk
-        // reduction, not a functional change.
-        env: computeWorkerEnv(process.env, ["GEMINI_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"]),
-        // Process-group leader (POSIX) so killChild's group kill also reaches
-        // this run's own tool subprocesses (bash, MCP servers under
-        // bypassPermissions) — not unref()'d, the parent keeps managing the
-        // child. See design.md D2 of bound-shutdown-teardown.
-        detached: true,
-      });
-    } catch (error) {
-      cleanupMcpConfig();
-      runQueue.finalize(run.run_id, RUN_STATUS.ERROR, `Failed to launch claude: ${error.message}`);
-      return;
+    const permissionMode = /** @type {import("@anthropic-ai/claude-agent-sdk").PermissionMode} */ (
+      process.env.IRIS_CLAUDE_PERMISSION_MODE || "bypassPermissions"
+    );
+    /** @type {import("@anthropic-ai/claude-agent-sdk").Options} */
+    const options = {
+      cwd: run.cwd,
+      permissionMode,
+      // The SDK rejects `bypassPermissions` unless this accompanies it. Only
+      // attached for that mode, so IRIS_CLAUDE_PERMISSION_MODE=acceptEdits|plan
+      // genuinely restricts the worker rather than being quietly overridden.
+      ...(permissionMode === "bypassPermissions" ? { allowDangerouslySkipPermissions: true } : {}),
+      // The typed equivalent of the old `--append-system-prompt` flag: Claude
+      // Code's own system prompt, plus Iris's instructions. Stated explicitly
+      // rather than relying on `appendSystemPrompt` (which the SDK still honours
+      // at runtime but does not declare on Options) so the base prompt is not
+      // left to a default that could change.
+      systemPrompt: { type: "preset", preset: "claude_code", append: systemPrompt },
+      env: computeClaudeWorkerEnv(process.env),
+      pathToClaudeCodeExecutable: claudeBinary(),
+      // The skills and /opsx commands the personas invoke, from the app bundle.
+      // Namespaced by the plugin: `iris:grilling`, `/iris:opsx:apply`.
+      ...(irisPluginConfig() ? { plugins: irisPluginConfig() } : {}),
+      // The user's ~/.claude is deliberately NOT a source: Iris brings its own
+      // skills and must not depend on, or be perturbed by, whatever the user has
+      // installed in their own Claude Code. "project" is kept so a run still
+      // picks up the settings of the repository it is working in.
+      settingSources: /** @type {Array<"project">} */ (["project"]),
+      skills: /** @type {"all"} */ ("all"),
+    };
+    if (run.agent) {
+      // The persona is handed over by value rather than looked up by name in
+      // ~/.claude/agents — nothing is installed outside the app.
+      const name = `${agentPrefix}${run.agent}`;
+      options.agents = { [name]: resolveAgentDefinition(run.agent, run.cwd) };
+      options.agent = name;
     }
+    if (run.model) options.model = run.model;
+    if (mcpRecord) options.mcpServers = { "iris-canvas": mcpRecord };
+    if (previousSession) options.resume = previousSession;
+
+    // Replaces the detached process-group kill: aborting the controller tears
+    // down the SDK's own subprocess and everything it spawned, so run-queue no
+    // longer needs to know a subprocess exists at all.
+    const abortController = new AbortController();
+    options.abortController = abortController;
+    run.cancel = () => abortController.abort();
 
     run.status = RUN_STATUS.RUNNING;
     run.started_at = Date.now() / 1000;
-    run.child = child;
     // The id the run will resume (if any) — replaced by the live id once
     // Claude's init event confirms it.
     run.claude_session_id = previousSession ?? null;
     emitEvent(toUpdateEvent(run, EMIT_STATUS.STARTED, { urgency: run.urgency }));
 
-    let stdoutBuffer = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdoutBuffer += chunk;
-      let newlineIndex;
-      while ((newlineIndex = stdoutBuffer.indexOf("\n")) !== -1) {
-        const line = stdoutBuffer.slice(0, newlineIndex).trim();
-        stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
-        if (line) handleClaudeStreamEvent(run, line);
+    try {
+      for await (const message of queryImpl({ prompt: run.task, options })) {
+        handleClaudeStreamMessage(run, message);
       }
-    });
-    child.stderr.on("data", (chunk) => { stderr += chunk; });
-    child.on("error", (error) => {
-      cleanupMcpConfig();
-      runQueue.finalize(run.run_id, RUN_STATUS.ERROR, `Failed to launch claude: ${error.message}`);
-    });
-    child.on("close", (code) => {
-      cleanupMcpConfig();
+    } catch (error) {
+      // An abort surfaces here as a thrown error; the run was already marked
+      // CANCELLED by runQueue.stop() before the abort fired.
       if (run.status === RUN_STATUS.CANCELLED) {
         runQueue.finalize(run.run_id, RUN_STATUS.CANCELLED, "Run was stopped before completion.");
         return;
       }
-      const result = run.result;
-      if (code === 0 && result && !result.is_error) {
-        let output = String(result.result ?? "");
-        // Backstop for the soft append-system-prompt vault directive (design.md
-        // Risks): the directive is a prompt, not a sandboxed writable root, so
-        // Claude could ignore it. Only checked for plain-Claude tasks that look
-        // like a note-capture request, so unrelated tasks (e.g. "translate
-        // this") never get a spurious caveat — and only when nothing under the
-        // vault changed, so a real save is never second-guessed.
-        if (!run.agent && noteCaptureHintRe.test(run.task) && !vaultChangedSince(run.started_at * 1000)) {
-          output +=
-            `\n\n[vault-check: no file changes detected under ${notesVaultDir} during this run — verify the note actually saved before confirming that to the user]`;
-        }
-        runQueue.finalize(run.run_id, RUN_STATUS.COMPLETED, output);
-      } else {
-        const detail = result?.result || stderr.trim() || `claude exited with code ${code}`;
-        // A dead --resume id (deleted history, moved project) would otherwise fail
-        // every subsequent task; dropping it lets the next run start fresh.
-        if (previousSession && /no conversation|session.*not.*found|unknown session/i.test(String(detail))) {
-          const ws = findWorkstream(run.workstream_id);
-          if (ws?.agent_sessions?.[key] === previousSession) {
-            delete ws.agent_sessions[key];
-            persistSessionStore();
-          }
-        }
-        runQueue.finalize(run.run_id, RUN_STATUS.FAILED, String(detail));
+      runQueue.finalize(run.run_id, RUN_STATUS.ERROR, `Failed to run claude: ${error.message}`);
+      return;
+    }
+
+    if (run.status === RUN_STATUS.CANCELLED) {
+      runQueue.finalize(run.run_id, RUN_STATUS.CANCELLED, "Run was stopped before completion.");
+      return;
+    }
+
+    const result = run.result;
+    if (result && !result.is_error && result.subtype === "success") {
+      let output = String(result.result ?? "");
+      // Backstop for the soft append-system-prompt vault directive (design.md
+      // Risks): the directive is a prompt, not a sandboxed writable root, so
+      // Claude could ignore it. Only checked for plain-Claude tasks that look
+      // like a note-capture request, so unrelated tasks (e.g. "translate
+      // this") never get a spurious caveat — and only when nothing under the
+      // vault changed, so a real save is never second-guessed.
+      if (!run.agent && noteCaptureHintRe.test(run.task) && !vaultChangedSince(run.started_at * 1000)) {
+        output +=
+          `\n\n[vault-check: no file changes detected under ${notesVaultDir} during this run — verify the note actually saved before confirming that to the user]`;
       }
-    });
+      runQueue.finalize(run.run_id, RUN_STATUS.COMPLETED, output);
+      return;
+    }
+
+    // The iterator ending with no result message at all means the transport died
+    // without reporting — name that rather than emitting an empty failure.
+    const detail = result?.result || (result ? `claude reported ${result.subtype}` : "claude ended without a result");
+    // A dead resume id (deleted history, moved project) would otherwise fail
+    // every subsequent task; dropping it lets the next run start fresh.
+    if (previousSession && /no conversation|session.*not.*found|unknown session/i.test(String(detail))) {
+      const ws = findWorkstream(run.workstream_id);
+      if (ws?.agent_sessions?.[key] === previousSession) {
+        delete ws.agent_sessions[key];
+        persistSessionStore();
+      }
+    }
+    runQueue.finalize(run.run_id, RUN_STATUS.FAILED, String(detail));
   }
 
   // The stateful module: delivers the turn into the workstream's resident Agent
@@ -363,6 +344,8 @@ export function createRunExec({
     try {
       state = getOrCreatePoSession(workstream, {
         agent: `${agentPrefix}po`,
+        agentDefinition: resolveAgentDefinition("po", run.cwd),
+        plugins: irisPluginConfig(),
         cwd: run.cwd,
         resumeSessionId: workstream.agent_sessions?.po ?? null,
         claudeExecutable: claudeBinary(),
@@ -421,7 +404,6 @@ export function createRunExec({
   }
 
   return {
-    killChild,
     runProjectDir,
     startClaudeRun,
     startDevRun,

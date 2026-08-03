@@ -76,8 +76,8 @@ const {
   agentsSnapshot,
   setWorkstreamAgent,
   setAgentModel,
-  installIrisAgents,
-  installPipelinePrereqs,
+  legacyClaudeArtifactsStatus,
+  removeLegacyClaudeArtifacts,
   resolvePendingPoQuestion,
   getPromptReviewMode,
   setPromptReviewMode,
@@ -92,7 +92,6 @@ const {
   getPipelineAvailable,
   probePipelineAvailability,
   runQueue,
-  killChild,
   secondBrainCapability,
   capabilities,
 } = wiring;
@@ -157,8 +156,8 @@ app.whenReady().then(() => {
     agentsSnapshot,
     setWorkstreamAgent,
     setAgentModel,
-    installIrisAgents,
-    installPipelinePrereqs,
+    legacyClaudeArtifactsStatus,
+  removeLegacyClaudeArtifacts,
     resolvePendingPoQuestion,
     getPromptReviewMode,
     setPromptReviewMode,
@@ -206,19 +205,19 @@ app.whenReady().then(() => {
 });
 
 // Awaited teardown for app quit (design.md D3 of bound-shutdown-teardown):
-// closes the Gemini Live socket, group-kills every live DEV child so no tool
-// subprocess is orphaned, then closes every resident PO session — in that
-// deliberate order (design.md D8), centrally, rather than as self-registered
-// per-module hooks whose order would become incidental. run-queue.mjs owns
-// the runs map, so children are reached directly via list() rather than
-// mutating run.status from outside the module. The capability teardowns
-// (canvas flush + MCP stop, vault-graph stop) run last, as a group — they
-// are mutually independent, so their order *within* the group is just
-// registration order, unlike the core sequence above it.
+// closes the Gemini Live socket, aborts every live DEV query so the Agent SDK
+// tears down its subprocess and no tool process is orphaned, then closes every
+// resident PO session — in that deliberate order (design.md D8), centrally,
+// rather than as self-registered per-module hooks whose order would become
+// incidental. run-queue.mjs owns the runs map, so live runs are reached
+// directly via list() rather than mutating run.status from outside the module.
+// The capability teardowns (canvas flush + MCP stop, vault-graph stop) run
+// last, as a group — they are mutually independent, so their order *within*
+// the group is just registration order, unlike the core sequence above it.
 async function shutdownTeardown() {
   await stopLive();
   for (const run of runQueue.list()) {
-    if (run.child) killChild(run.child, "SIGTERM");
+    run.cancel?.();
   }
   await closeAllPoSessions();
   for (const cap of capabilities) {

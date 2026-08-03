@@ -173,13 +173,11 @@ export function createRunStream({
     runQueue.heartbeat();
   }
 
-  function handleClaudeStreamEvent(run, line) {
-    let event;
-    try {
-      event = JSON.parse(line);
-    } catch {
-      return;
-    }
+  // Takes an already-parsed SDK message. Both transports now deliver objects —
+  // DEV iterates the Agent SDK's async iterator and PO's pump routes the same
+  // union — so there is no newline-delimited JSON to decode on either side.
+  function handleClaudeStreamMessage(run, event) {
+    if (!event || typeof event !== "object") return;
     parseClaudeStreamMessage(event, {
       onSessionId: (sessionId) => rememberClaudeSessionId(run, sessionId),
       onActivity: (text) => pushActivity(run, text),
@@ -254,7 +252,7 @@ export function createRunStream({
     pushActivity,
     pushToolStart,
     pushToolEnd,
-    handleClaudeStreamEvent,
+    handleClaudeStreamMessage,
     askUserQuestionViaVoice,
     resolvePendingPoQuestion,
   };

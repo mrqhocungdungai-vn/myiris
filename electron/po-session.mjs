@@ -5,29 +5,29 @@
 // separate modules rather than one code path with a role flag.
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { parseClaudeStreamMessage } from "./claude-stream.mjs";
-import { computeWorkerEnv } from "./worker-env.mjs";
+import { computeClaudeWorkerEnv } from "./worker-env.mjs";
 
 export const DEFAULT_PO_QUESTION_TIMEOUT_MS = 300000; // 5 minutes
 
 // The Agent SDK's `env` option REPLACES the subprocess environment entirely
 // (it does not merge with process.env), so callers must spread process.env
-// themselves. ANTHROPIC_API_KEY outranks CLAUDE_CODE_OAUTH_TOKEN in the SDK's
-// own auth precedence, so a stray key left in the environment would silently
-// switch PO usage from subscription billing to metered API billing — strip
-// it (and its bearer-token sibling) unconditionally for the PO session.
-// GEMINI_API_KEY is stripped too, for the separate least-privilege reason
-// worker-env.mjs describes: PO has no use for the voice credential
-// (harden-security-boundaries D12). This is now one case of the shared
-// subtraction helper both DEV's spawn and this session route through, so the
-// two paths cannot drift apart — the billing-scoped ANTHROPIC_* exclusion
-// stays PO-only exactly as before.
+// themselves. Retained as a named PO-facing alias of the shared policy — both
+// roles now run under exactly the same credential rules, so this is a
+// re-export rather than a second policy that could drift from DEV's.
 export function computePoSessionEnv(baseEnv = process.env) {
-  return computeWorkerEnv(baseEnv, ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "GEMINI_API_KEY"]);
+  return computeClaudeWorkerEnv(baseEnv);
 }
 
+// Whether PO has anything to authenticate with. A subscription token is still
+// the preferred path (it is what the persona's long-running sessions are priced
+// for), but an API key is a working credential and PO must not refuse a run the
+// pipeline gate has already declared available — pipeline-probes.mjs accepts
+// either, so refusing one here would strand API-key-only users with a live
+// pipeline whose PO turns all fail.
 export function poBillingStatus(env = process.env) {
-  const token = String(env.CLAUDE_CODE_OAUTH_TOKEN || "").trim();
-  return token ? { ok: true, mode: "subscription" } : { ok: false, mode: "missing" };
+  if (String(env.CLAUDE_CODE_OAUTH_TOKEN || "").trim()) return { ok: true, mode: "subscription" };
+  if (String(env.ANTHROPIC_API_KEY || "").trim()) return { ok: true, mode: "api-key" };
+  return { ok: false, mode: "missing" };
 }
 
 export function poQuestionTimeoutMs(env = process.env) {
@@ -177,6 +177,8 @@ async function pump(state) {
  * @param {{ id: string, agent_sessions?: Record<string, string> }} workstream
  * @param {{
  *   agent?: string,
+ *   agentDefinition?: { description: string, prompt: string, model?: string },
+ *   plugins?: Array<{ type: "local", path: string, skipMcpDiscovery?: boolean }> | null,
  *   cwd?: string,
  *   resumeSessionId?: string|null,
  *   onAskUserQuestion?: (workstreamId: string, questions: unknown[]) => Promise<{ behavior?: string, message?: string, answers?: Record<string, unknown> }>,
@@ -188,7 +190,18 @@ async function pump(state) {
  */
 export function getOrCreatePoSession(
   workstream,
-  { agent, cwd, resumeSessionId, onAskUserQuestion, claudeExecutable, model, mcpServers, query: queryFn = query } = {},
+  {
+    agent,
+    agentDefinition,
+    plugins,
+    cwd,
+    resumeSessionId,
+    onAskUserQuestion,
+    claudeExecutable,
+    model,
+    mcpServers,
+    query: queryFn = query,
+  } = {},
 ) {
   const existing = sessions.get(workstream.id);
   if (existing && !existing.ended) return existing;
@@ -216,13 +229,13 @@ export function getOrCreatePoSession(
     cwd,
     permissionMode: /** @type {"bypassPermissions"} */ ("bypassPermissions"),
     allowDangerouslySkipPermissions: true,
-    // Enable the globally-installed skills (grilling, the OpenSpec workflow
-    // skills, tdd/verify/code-review) for the live PO session explicitly.
-    // `settingSources` is intentionally left at its default (all sources) so
-    // the `user` scope — i.e. ~/.claude, where the agents and skills live — is
-    // loaded regardless of the workstream `cwd`. Verified against SDK 0.3.210:
-    // `skills: 'all'` + default settingSources surfaces every ~/.claude/skills
-    // even from a cwd with no local skills. See the po-voice-controller change.
+    // The skills PO invokes (grilling, the OpenSpec workflow skills, tdd,
+    // code-review) come from the plugin Iris ships, applied below — NOT from
+    // ~/.claude. `settingSources` therefore excludes the `user` scope: Iris
+    // brings its own skills and must neither depend on nor disturb whatever the
+    // user has in their own Claude Code install. `project` is kept so a session
+    // still picks up the settings of the repository it is working in.
+    settingSources: /** @type {Array<"project">} */ (["project"]),
     skills: /** @type {"all"} */ ("all"),
     env: computePoSessionEnv(process.env),
     canUseTool: buildCanUseTool(state, onAskUserQuestion),
@@ -232,6 +245,10 @@ export function getOrCreatePoSession(
       "use sensible defaults and record them. Report concise final results in each turn.",
   };
   if (model) options.model = model;
+  // Handed over by value: the persona lives in the app bundle, not in
+  // ~/.claude/agents (see agent-definitions.mjs).
+  if (agentDefinition) options.agents = { [agent]: agentDefinition };
+  if (plugins) options.plugins = plugins;
   if (claudeExecutable) options.pathToClaudeCodeExecutable = claudeExecutable;
   if (resumeSessionId) options.resume = resumeSessionId;
   if (mcpServers) options.mcpServers = mcpServers;

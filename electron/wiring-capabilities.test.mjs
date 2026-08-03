@@ -72,7 +72,7 @@ function makeDeps(overrides = {}) {
     getPipelineAvailable: vi.fn(() => true),
     userDisplayName: vi.fn(() => "Alex"),
     dialog: { showOpenDialog: vi.fn(), showSaveDialog: vi.fn() },
-    skillsSourceDir: vi.fn(() => "/fake/skills"),
+    irisPluginDir: vi.fn(() => "/fake/iris-plugin"),
     runQueue: {},
     findWorkstream: vi.fn(),
     persistSessionStore: vi.fn(),
@@ -82,10 +82,11 @@ function makeDeps(overrides = {}) {
     agentPrefix: "iris-",
     claudeWorkdir: vi.fn(),
     claudeBinary: vi.fn(),
-    installedAgentFile: vi.fn(),
+    resolveAgentDefinition: vi.fn(),
+    irisPluginConfig: vi.fn(() => null),
     ensureProjectScaffold: vi.fn(),
     openChangesWithTasks: vi.fn(),
-    handleClaudeStreamEvent: vi.fn(),
+    handleClaudeStreamMessage: vi.fn(),
     pushActivity: vi.fn(),
     rememberClaudeSessionId: vi.fn(),
     pushToolStart: vi.fn(),
@@ -133,10 +134,9 @@ describe("wiring-capabilities: createCapabilitiesWiring", () => {
     expect(runExecDeps.noteCaptureHintRe).toBeInstanceOf(RegExp);
   });
 
-  it("returns run-exec's killChild/startClaudeRun directly", () => {
+  it("returns run-exec's startClaudeRun directly", () => {
     const result = createCapabilitiesWiring(makeDeps());
     const runExecInstance = createRunExec.mock.results.at(-1).value;
-    expect(result.killChild).toBe(runExecInstance.killChild);
     expect(result.startClaudeRun).toBe(runExecInstance.startClaudeRun);
   });
 });

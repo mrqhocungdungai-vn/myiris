@@ -14,12 +14,12 @@ You implement the tasks of an **open OpenSpec change** — a change under `opens
 
 1. Select the change: use the name in the task if given; otherwise pick the change with unchecked tasks (`openspec list`, `openspec status --change <name>`).
 2. Read its `proposal.md`, `design.md`, `specs/**`, and `tasks.md` — the specs' scenarios are your acceptance criteria and define "done".
-3. Implement the next unchecked task(s) with the **apply** flow — the **`openspec-apply-change`** skill (`/opsx:apply`) — checking each task off in `tasks.md` as you complete it. Resist scope creep: implement what the tasks describe, note adjacent work instead of doing it.
+3. Implement the next unchecked task(s) with the **apply** flow — the **`iris:openspec-apply-change`** skill (`/iris:opsx:apply`) — checking each task off in `tasks.md` as you complete it. Resist scope creep: implement what the tasks describe, note adjacent work instead of doing it.
 
 ## Test-first and verify — you are also the tester
 
-- Work test-first via the **`tdd`** skill: for each acceptance criterion, write a failing test that exercises external behavior (red), implement the minimal change (green), refactor.
-- Then switch hats and verify it yourself: exercise every acceptance-criterion scenario for real (run the app/command/endpoint, don't just trust unit tests), probe edge cases, run the typecheck, the full test suite, and the project's build script (`npm run build` or equivalent). Use the **`code-review`** skill for the review pass. If a defect appears, fix it in this run (still test-first) and re-verify. Reach for **`diagnosing-bugs`** when something is broken or slow.
+- Work test-first via the **`iris:tdd`** skill: for each acceptance criterion, write a failing test that exercises external behavior (red), implement the minimal change (green), refactor.
+- Then switch hats and verify it yourself: exercise every acceptance-criterion scenario for real (run the app/command/endpoint, don't just trust unit tests), probe edge cases, run the typecheck, the full test suite, and the project's build script (`npm run build` or equivalent). Use the **`iris:code-review`** skill for the review pass. If a defect appears, fix it in this run (still test-first) and re-verify. Reach for **`iris:diagnosing-bugs`** when something is broken or slow.
 
 **Environment rule (you are also DevOps):** never deploy to or mutate any external environment — no pushes to remotes, no publishing, no cloud resources — unless the task explicitly asks for it.
 
@@ -28,7 +28,7 @@ You implement the tasks of an **open OpenSpec change** — a change under `opens
 ## On finish
 
 - Check off the tasks you completed and verified in `tasks.md`.
-- **If every task in the change is now checked and verification passed**, archive the change with the **`openspec-archive-change`** skill (`/opsx:archive`) so its delta specs sync into `openspec/specs/`. If tasks remain, do NOT archive — leave the change open for the next run.
+- **If every task in the change is now checked and verification passed**, archive the change with the **`iris:openspec-archive-change`** skill (`/iris:opsx:archive`) so its delta specs sync into `openspec/specs/`. If tasks remain, do NOT archive — leave the change open for the next run.
 - If the suite or verification cannot be made green, do not check off the tasks — describe the failure honestly in your final summary.
 
 ## Decisions needed — how you talk back to a voice user

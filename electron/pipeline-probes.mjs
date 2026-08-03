@@ -9,15 +9,15 @@ import path from "node:path";
 import os from "node:os";
 import { execFile as nodeExecFile } from "node:child_process";
 import { poBillingStatus } from "./po-session.mjs";
+import { resolveBundledClaude, resolveBundledOpenspec } from "./bundled-binaries.mjs";
 
 // Skills the PO/DEV personas actually invoke by name (resources/personas/
-// iris-po.md, iris-dev.md) — the three core OpenSpec workflow skills plus
-// mattpocock's. (No "verify" — that was never a real skill; DEV's own
-// verification step is now worded as an action it performs itself. See
-// resources/skills/ for the bundled snapshots the "Install missing" action
-// installs.) Presence-only probe (pipeline-availability spec): a directory
-// existing under ~/.claude/skills means "detected", not semantically
-// validated — deeper problems still surface through normal PO/DEV run errors.
+// iris-po.md, iris-dev.md). They ship in the Iris plugin
+// (resources/iris-plugin/skills/) and reach a run through the SDK's `plugins`
+// option, so this probes the APP BUNDLE — never ~/.claude, which Iris no longer
+// reads or writes. "Missing" therefore means a damaged bundle, not a skipped
+// install step. Presence-only, as before: a directory existing means
+// "detected", not semantically validated.
 const REQUIRED_SKILLS = [
   "grilling",
   "tdd",
@@ -33,9 +33,7 @@ const REQUIRED_SKILLS = [
  *   emitEvent: (event: any) => void,
  *   maybeStartCanvasMcp: () => void,
  *   checkNotesSkillsStatus: () => { ok: boolean, missing: string[] },
- *   globalAgentsDir: () => string,
- *   agentRoster: string[],
- *   agentPrefix: string,
+ *   irisPluginDir: () => string | null,
  *   execFileImpl?: (bin: string, args: string[], opts: any, cb: (error: any, stdout?: any, stderr?: any) => void) => any,
  * }} deps
  */
@@ -43,17 +41,20 @@ export function createPipelineProbes({
   emitEvent,
   maybeStartCanvasMcp,
   checkNotesSkillsStatus,
-  globalAgentsDir,
-  agentRoster,
-  agentPrefix,
+  irisPluginDir,
   execFileImpl = nodeExecFile,
 }) {
-  // Single source of truth for whether the PO → DEV pipeline is available —
-  // determined solely by the `claude` binary resolving (see design.md decision
-  // 1). Chat-only mode (no Claude tools declared to Gemini, no pipeline prompt
-  // content, pipeline UI hidden) is the default until this flips true.
-  // CLAUDE_CODE_OAUTH_TOKEN is deliberately NOT part of this check — it only
-  // gates individual PO turns via poBillingStatus(), never the master switch.
+  // Single source of truth for whether the PO → DEV pipeline is available.
+  //
+  // This used to be "the host has a `claude` binary somewhere on disk". Iris now
+  // SHIPS Claude Code inside the app (see bundled-binaries.mjs), so that question
+  // is always yes and would make the flag a constant. What a user can still
+  // legitimately lack is a *credential* — so the gate moved to "the bundled
+  // binary runs AND we have something to authenticate it with".
+  //
+  // Chat-only mode (no Claude tools declared to Gemini, no pipeline prompt
+  // content, pipeline UI hidden) survives unchanged as the no-credential state,
+  // which is the state a brand-new user starts in.
   let pipelineAvailable = false;
 
   function getPipelineAvailable() {
@@ -82,46 +83,44 @@ export function createPipelineProbes({
     }
   }
 
+  // Claude Code ships INSIDE the app as the Agent SDK's native binary. There is
+  // no host install to probe for, no PATH to search, and deliberately no
+  // override: a setting that pointed Iris at a system Claude Code would put
+  // back exactly the coupling this design removed, and would run the user's
+  // binary — possibly a different version — under bypassPermissions.
   function claudeBinary() {
-    if (process.env.IRIS_CLAUDE_BIN) {
-      assertExecutable("IRIS_CLAUDE_BIN", process.env.IRIS_CLAUDE_BIN);
-      return process.env.IRIS_CLAUDE_BIN;
-    }
-    // A packaged .app does not inherit the shell PATH, so probe common installs.
-    const known = [
-      path.join(os.homedir(), ".local", "bin", "claude"),
-      "/usr/local/bin/claude",
-      "/opt/homebrew/bin/claude",
-    ];
-    for (const candidate of known) {
-      if (fs.existsSync(candidate)) {
-        assertExecutable("the probed claude install", candidate);
-        return candidate;
-      }
-    }
-    return "claude";
+    const bundled = resolveBundledClaude();
+    // Still validated: this is the one place that would catch a packaging
+    // mistake (asarUnpack missing, the executable bit lost in a copy) with an
+    // error naming the cause rather than a bare ENOENT at spawn time.
+    assertExecutable("the bundled Claude binary", bundled);
+    return bundled;
   }
 
-  // Same PATH-probe rationale as claudeBinary(): a packaged .app does not inherit
-  // the shell PATH, and the OpenSpec CLI (the SDD engine the pipeline runs on) is
-  // typically installed under ~/.local/bin. Override with IRIS_OPENSPEC_BIN.
-  function openspecBinary() {
-    if (process.env.IRIS_OPENSPEC_BIN) {
-      assertExecutable("IRIS_OPENSPEC_BIN", process.env.IRIS_OPENSPEC_BIN);
-      return process.env.IRIS_OPENSPEC_BIN;
-    }
-    const known = [
-      path.join(os.homedir(), ".local", "bin", "openspec"),
-      "/usr/local/bin/openspec",
-      "/opt/homebrew/bin/openspec",
-    ];
-    for (const candidate of known) {
-      if (fs.existsSync(candidate)) {
-        assertExecutable("the probed openspec install", candidate);
-        return candidate;
-      }
-    }
-    return "openspec";
+  // What the pipeline can actually authenticate with. Either credential works:
+  // CLAUDE_CODE_OAUTH_TOKEN bills against a Claude subscription, ANTHROPIC_API_KEY
+  // bills per token. Neither present is the honest chat-only state — the bundled
+  // binary would launch fine and then fail every single run.
+  function claudeCredentialStatus() {
+    if (process.env.CLAUDE_CODE_OAUTH_TOKEN?.trim()) return { ok: true, kind: "subscription" };
+    if (process.env.ANTHROPIC_API_KEY?.trim()) return { ok: true, kind: "api-key" };
+    return { ok: false, kind: null };
+  }
+
+  // How to invoke OpenSpec (the SDD engine the pipeline runs on). Like Claude,
+  // it now ships with the app rather than being a host prerequisite — but it is
+  // a plain Node CLI, not a native executable, so it cannot simply be exec'd.
+  // Returns a command spec instead of a path: the bundled form runs the script
+  // through Electron's own embedded Node (ELECTRON_RUN_AS_NODE), which is the
+  // only Node a packaged app is guaranteed to have.
+  //
+  // No host override, for the same reason as claudeBinary(): the app ships it.
+  function openspecCommand() {
+    return {
+      command: process.execPath,
+      args: [resolveBundledOpenspec()],
+      env: { ELECTRON_RUN_AS_NODE: "1" },
+    };
   }
 
   // A `cwd` is OpenSpec-ready once it has an `openspec/` directory (created by
@@ -183,7 +182,7 @@ export function createPipelineProbes({
 
   async function probePipelineAvailability() {
     const status = await checkClaudeStatus();
-    const next = Boolean(status.reachable);
+    const next = Boolean(status.reachable) && claudeCredentialStatus().ok;
     if (next !== pipelineAvailable) {
       pipelineAvailable = next;
       emitEvent({ type: "pipeline_availability", available: pipelineAvailable });
@@ -197,14 +196,15 @@ export function createPipelineProbes({
 
   async function checkOpenSpecStatus() {
     return new Promise((resolve) => {
-      let binary;
+      let spec;
       try {
-        binary = openspecBinary();
+        spec = openspecCommand();
       } catch (error) {
         resolve({ ok: false, error: error.message });
         return;
       }
-      execFileImpl(binary, ["--version"], { timeout: 15000 }, (error, stdout) => {
+      const options = { timeout: 15000, env: { ...process.env, ...spec.env } };
+      execFileImpl(spec.command, [...spec.args, "--version"], options, (error, stdout) => {
         if (error) resolve({ ok: false, error: error.message });
         else resolve({ ok: true, version: String(stdout).trim() });
       });
@@ -212,19 +212,11 @@ export function createPipelineProbes({
   }
 
   function checkSkillsStatus() {
-    const skillsDir = path.join(os.homedir(), ".claude", "skills");
+    const pluginDir = irisPluginDir();
+    if (!pluginDir) return { ok: false, missing: REQUIRED_SKILLS, skillsDir: null };
+    const skillsDir = path.join(pluginDir, "skills");
     const missing = REQUIRED_SKILLS.filter((name) => !fs.existsSync(path.join(skillsDir, name)));
     return { ok: missing.length === 0, missing, skillsDir };
-  }
-
-  // Same presence-only shape as checkSkillsStatus(), for the two Iris persona
-  // files installIrisAgents() is responsible for.
-  function checkAgentsStatus() {
-    const agentsDir = globalAgentsDir();
-    const missing = agentRoster.map((role) => `${agentPrefix}${role}.md`).filter(
-      (name) => !fs.existsSync(path.join(agentsDir, name)),
-    );
-    return { ok: missing.length === 0, missing, agentsDir };
   }
 
   // Combined status for the SetupPanel's Claude section (design.md D3b/D3c):
@@ -238,31 +230,50 @@ export function createPipelineProbes({
     const billing = poBillingStatus();
     const openspecStatus = await checkOpenSpecStatus();
     const skillsStatus = checkSkillsStatus();
-    const agentsStatus = checkAgentsStatus();
     const notesSkillsStatus = checkNotesSkillsStatus();
+    const credential = claudeCredentialStatus();
     return {
-      reachable: available,
+      // `reachable` is now strictly "the bundled binary launched" — it is no
+      // longer the same question as `pipelineAvailable`, which also requires a
+      // credential. Keeping them distinct lets the SetupPanel tell a packaging
+      // failure apart from a user who simply hasn't logged in yet.
+      reachable: Boolean(status.reachable),
       pipelineAvailable: available,
       version: status.health?.version,
+      // Surfaced so the SetupPanel can tell the user the exact command that
+      // mints a subscription token. `claude setup-token` needs a real TTY
+      // (verified: with piped stdio it produces no output at all), so it cannot
+      // be driven from inside the app — but because the binary ships with Iris,
+      // the user can still run it without installing anything.
+      binaryPath: status.health?.binary,
       error: status.error,
+      credentialOk: credential.ok,
+      credentialKind: credential.kind,
       billingOk: billing.ok,
-      billingError: billing.ok
-        ? undefined
-        : "No CLAUDE_CODE_OAUTH_TOKEN set — PO turns will fail until you run `claude setup-token`.",
+      // States the fact only. The panel that shows this already tells the user
+      // what to do about it, right above — repeating the instruction here read
+      // as "go to the setup panel" while standing in the setup panel.
+      billingError: billing.ok ? undefined : "No Claude credential set yet.",
       openspecOk: openspecStatus.ok,
       openspecVersion: openspecStatus.version,
-      openspecInstallHint: "npm install -g @fission-ai/openspec@latest",
+      // Bundled with the app now — a failure here is a packaging problem, not
+      // something the user can fix by installing anything.
+      openspecInstallHint: "OpenSpec ships with Iris; if this fails, reinstall the app.",
       skillsOk: skillsStatus.ok,
       missingSkills: skillsStatus.missing,
-      skillsInstallHint: "Use \"Install missing\" below, or run: npx skills@latest add mattpocock/skills (and `openspec init` for its Claude skills)",
-      agentsOk: agentsStatus.ok,
-      missingAgents: agentsStatus.missing,
-      // Informational only — not a pipeline gate (see NOTES_SKILLS above): a
-      // Talk-only user with these missing is not "missing a prerequisite" for
-      // PO/DEV, just missing the second-brain notes capability specifically.
+      // Namespaced by the plugin, which is how the personas address them.
+      skillsDetail: skillsStatus.ok ? `${REQUIRED_SKILLS.length} skills as iris:*` : undefined,
+      skillsInstallHint: skillsStatus.ok
+        ? ""
+        : `missing from the app bundle: ${skillsStatus.missing.join(", ")} — reinstall Iris`,
+      // Informational only — not a pipeline gate: a Talk-only user with these
+      // missing is not "missing a prerequisite" for PO/DEV, just missing the
+      // second-brain notes capability specifically.
       notesSkillsOk: notesSkillsStatus.ok,
       missingNotesSkills: notesSkillsStatus.missing,
-      notesSkillsInstallHint: 'Use "Install missing" below to add the second-brain notes skills.',
+      notesSkillsInstallHint: notesSkillsStatus.ok
+        ? ""
+        : `missing from the app bundle: ${notesSkillsStatus.missing.join(", ")} — reinstall Iris`,
     };
   }
 
@@ -270,7 +281,8 @@ export function createPipelineProbes({
     getPipelineAvailable,
     assertExecutable,
     claudeBinary,
-    openspecBinary,
+    claudeCredentialStatus,
+    openspecCommand,
     hasOpenSpec,
     openChangesWithTasks,
     claudeWorkdir,
@@ -278,7 +290,6 @@ export function createPipelineProbes({
     probePipelineAvailability,
     checkOpenSpecStatus,
     checkSkillsStatus,
-    checkAgentsStatus,
     checkClaudeHealth,
   };
 }

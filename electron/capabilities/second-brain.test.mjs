@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
-const realSkillsSourceDir = path.join(repoRoot, "resources", "skills");
+const realPluginDir = path.join(repoRoot, "resources", "iris-plugin");
 
 vi.mock("../vault-graph.mjs", () => ({
   createVaultGraph: vi.fn(() => ({
@@ -46,7 +46,7 @@ function make(overrides = {}) {
   return createSecondBrainCapability({
     emitEvent: vi.fn(),
     emitToRenderer: vi.fn(),
-    skillsSourceDir: vi.fn(() => realSkillsSourceDir),
+    irisPluginDir: vi.fn(() => realPluginDir),
     userDisplayName: vi.fn(() => "Alex"),
     getPipelineAvailable: vi.fn(() => true),
     ...overrides,
@@ -54,31 +54,31 @@ function make(overrides = {}) {
 }
 
 describe("second-brain capability: checkNotesSkillsStatus", () => {
-  it("reports ok exactly when nothing is missing", () => {
-    // os.homedir() is already mocked to homeDir for the whole test (top
-    // beforeEach) — checkNotesSkillsStatus reads it live (not captured at
-    // import time, unlike NOTES_VAULT_DIR), so populating homeDir/.claude/
-    // skills directly is enough, no additional mocking needed.
+  it("reports ok against the REAL shipped plugin, never ~/.claude", () => {
+    // The wiki skills ship in resources/iris-plugin. Asserting against the real
+    // bundle is what would catch a skill being dropped or renamed in a refactor.
     const cap = make();
-    const skillsRoot = path.join(homeDir, ".claude", "skills");
-    const names = ["wiki-config", "wiki-ingest", "wiki-query", "wiki-lint", "wiki-integrate", "wiki-crystallize"];
-    fs.mkdirSync(skillsRoot, { recursive: true });
-    for (const name of names) fs.mkdirSync(path.join(skillsRoot, name));
     const status = cap.checkNotesSkillsStatus();
-    expect(status).toEqual({ ok: true, missing: [], skillsDir: skillsRoot });
+    expect(status).toEqual({ ok: true, missing: [], skillsDir: path.join(realPluginDir, "skills") });
+    // The user's own Claude Code install is not consulted at all.
+    expect(status.skillsDir.startsWith(homeDir)).toBe(false);
   });
 
-  it("lists exactly the missing skill names when some are absent", () => {
-    const cap = make();
-    const status = cap.checkNotesSkillsStatus();
-    expect(status.ok).toBe(false);
-    expect(status.missing).toEqual(["wiki-config", "wiki-ingest", "wiki-query", "wiki-lint", "wiki-integrate", "wiki-crystallize"]);
+  it("lists exactly the missing skill names when the bundle lacks them", () => {
+    const emptyPlugin = fs.mkdtempSync(path.join(os.tmpdir(), "iris-empty-plugin-"));
+    try {
+      const status = make({ irisPluginDir: () => emptyPlugin }).checkNotesSkillsStatus();
+      expect(status.ok).toBe(false);
+      expect(status.missing).toEqual(["wiki-config", "wiki-ingest", "wiki-query", "wiki-lint", "wiki-integrate", "wiki-crystallize"]);
+    } finally {
+      fs.rmSync(emptyPlugin, { recursive: true, force: true });
+    }
   });
 });
 
 describe("second-brain capability: ensureNotesVaultReady", () => {
   it("creates the vault directory even when the skill bundle is unresolved", () => {
-    const cap = make({ skillsSourceDir: vi.fn(() => null) });
+    const cap = make({ irisPluginDir: vi.fn(() => null) });
     cap.ensureNotesVaultReady();
     expect(fs.existsSync(NOTES_VAULT_DIR)).toBe(true);
     expect(fs.existsSync(path.join(NOTES_VAULT_DIR, "wiki-config.md"))).toBe(false);
@@ -159,17 +159,17 @@ describe("second-brain capability: promptFragment", () => {
     expect(make({ getPipelineAvailable: () => false }).promptFragment()).toBe("");
   });
 
-  it("is empty when the pipeline is available but notes skills are missing", () => {
-    expect(make({ getPipelineAvailable: () => true }).promptFragment()).toBe("");
+  it("is empty when the pipeline is available but the bundle lacks the notes skills", () => {
+    const emptyPlugin = fs.mkdtempSync(path.join(os.tmpdir(), "iris-empty-plugin-"));
+    try {
+      expect(make({ getPipelineAvailable: () => true, irisPluginDir: () => emptyPlugin }).promptFragment()).toBe("");
+    } finally {
+      fs.rmSync(emptyPlugin, { recursive: true, force: true });
+    }
   });
 
-  it("offers the note-save line only when the pipeline is available and skills are installed", () => {
-    const skillsRoot = path.join(homeDir, ".claude", "skills");
-    for (const name of ["wiki-config", "wiki-ingest", "wiki-query", "wiki-lint", "wiki-integrate", "wiki-crystallize"]) {
-      fs.mkdirSync(path.join(skillsRoot, name), { recursive: true });
-    }
-    const cap = make();
-    expect(cap.promptFragment()).toContain("NOTE-OFFER");
+  it("offers the note-save line when the pipeline is available and the bundle has the skills", () => {
+    expect(make().promptFragment()).toContain("NOTE-OFFER");
   });
 });
 

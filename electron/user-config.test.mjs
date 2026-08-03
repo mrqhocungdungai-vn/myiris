@@ -111,6 +111,47 @@ describe("user-config: savePoToken", () => {
     const result = config.savePoToken("   ");
     expect(result.ok).toBe(false);
   });
+
+  it("writes the metered API key when that credential is selected", () => {
+    const config = make();
+    const result = config.savePoToken("sk-ant-api-key", { key: "ANTHROPIC_API_KEY" });
+    expect(result.ok).toBe(true);
+
+    const written = fs.readFileSync(path.join(repoRoot, ".env"), "utf8");
+    expect(written).toContain("ANTHROPIC_API_KEY=sk-ant-api-key");
+    expect(written).not.toContain("CLAUDE_CODE_OAUTH_TOKEN");
+    expect(result.config.anthropicApiKeySet).toBe(true);
+    expect(result.config.poTokenSet).toBe(false);
+  });
+
+  it("removes only the credential it was asked to remove", () => {
+    const config = make();
+    config.savePoToken("sk-test-token-123");
+    config.savePoToken("sk-ant-api-key", { key: "ANTHROPIC_API_KEY" });
+
+    const result = config.savePoToken(null, { remove: true, key: "ANTHROPIC_API_KEY" });
+    expect(result.ok).toBe(true);
+    expect(process.env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(process.env.CLAUDE_CODE_OAUTH_TOKEN).toBe("sk-test-token-123");
+  });
+
+  it("refuses a key that is not a Claude credential", () => {
+    // The IPC payload is renderer-controlled, so an arbitrary key must not
+    // become a write primitive into the user's .env.
+    const config = make();
+    const result = config.savePoToken("value", { key: "GEMINI_API_KEY" });
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/not a Claude credential/);
+  });
+
+  it("re-probes pipeline availability after a credential changes", () => {
+    // The gate is a credential check now, so the UI would otherwise stay in
+    // chat-only mode until the user hit "Test" or restarted.
+    const probePipelineAvailability = vi.fn(async () => ({ available: true }));
+    const config = make({ probePipelineAvailability });
+    config.savePoToken("sk-test-token-123");
+    expect(probePipelineAvailability).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("user-config: writeUserConfig", () => {

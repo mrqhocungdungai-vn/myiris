@@ -40,7 +40,7 @@ const NOTE_CAPTURE_HINT_RE = /ghi ch[uú]|note (it |this )?down|jot down|save (a
  * @param {{
  *   emitEvent: (event: any) => void,
  *   emitToRenderer: (channel: string, payload: any) => void,
- *   skillsSourceDir: () => string | null,
+ *   irisPluginDir: () => string | null,
  *   userDisplayName: () => string,
  *   getPipelineAvailable: () => boolean,
  * }} deps
@@ -48,17 +48,18 @@ const NOTE_CAPTURE_HINT_RE = /ghi ch[uú]|note (it |this )?down|jot down|save (a
 export function createSecondBrainCapability({
   emitEvent,
   emitToRenderer,
-  skillsSourceDir,
+  irisPluginDir,
   userDisplayName,
   getPipelineAvailable,
 }) {
-  // Same presence-only shape as checkSkillsStatus()/checkAgentsStatus() — used
-  // both to gate the append-system-prompt directive (startDevRun) and to
-  // surface a status row in the SetupPanel (checkClaudeHealth), so the user
-  // has a visible signal for whether the notes capability is actually
-  // installed, not just whether the vault directory happens to exist.
+  // The wiki skills ship in the Iris plugin, so this checks the app bundle —
+  // never ~/.claude, which Iris no longer reads or writes. It still gates the
+  // append-system-prompt directive (startDevRun) and the SetupPanel row, but
+  // "missing" now means a damaged bundle rather than a skipped install step.
   function checkNotesSkillsStatus() {
-    const skillsDir = path.join(os.homedir(), ".claude", "skills");
+    const pluginDir = irisPluginDir();
+    if (!pluginDir) return { ok: false, missing: NOTES_SKILLS, skillsDir: null };
+    const skillsDir = path.join(pluginDir, "skills");
     const missing = NOTES_SKILLS.filter((name) => !fs.existsSync(path.join(skillsDir, name)));
     return { ok: missing.length === 0, missing, skillsDir };
   }
@@ -92,7 +93,7 @@ export function createSecondBrainCapability({
   // the turn asking the user to run an interactive /wiki-config setup — a
   // question a one-shot `claude -p` run has no way to answer (design.md D5 of
   // the llm-wiki change). Idempotent: never overwrites either file once
-  // present, so user edits or a missing bundle (skillsSourceDir() unresolved)
+  // present, so user edits or a missing bundle (irisPluginDir() unresolved)
   // are safe — the directory still gets created either way.
   function ensureNotesVaultReady() {
     try {
@@ -106,9 +107,9 @@ export function createSecondBrainCapability({
     const schemaTarget = path.join(NOTES_VAULT_DIR, "wiki-schema.md");
     if (fs.existsSync(configTarget) && fs.existsSync(schemaTarget)) return;
 
-    const skillsRoot = skillsSourceDir();
-    if (!skillsRoot) return; // bundle not present (e.g. unpackaged dev checkout) — directory alone is still created above
-    const assetsDir = path.join(skillsRoot, "claude-skills", "wiki-config", "assets");
+    const pluginDir = irisPluginDir();
+    if (!pluginDir) return; // bundle not present — the directory alone is still created above
+    const assetsDir = path.join(pluginDir, "skills", "wiki-config", "assets");
 
     try {
       if (!fs.existsSync(schemaTarget)) {

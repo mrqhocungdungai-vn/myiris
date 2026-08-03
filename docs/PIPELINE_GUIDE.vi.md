@@ -25,27 +25,35 @@ Bạn (giọng nói) ──▶ PO (hỏi vặn yêu cầu, đề xuất một Op
 
 ## 2. Cài đặt
 
-Pipeline tự bật ngay khi Iris phát hiện binary `claude` — không có công tắc riêng để bật/tắt. Cần chuẩn bị 4 thứ:
+**Claude Code và CLI `openspec` đã nằm sẵn bên trong Iris.** Bạn không phải cài
+cái nào cả, và hai persona agent cũng đã được tích hợp sẵn. Pipeline tự bật ngay
+khi có một credential Claude — không có công tắc riêng để bật/tắt.
 
-1. **Claude Code CLI**, đã cài và đăng nhập:
-   ```bash
-   claude --version
-   ```
-2. **Token subscription cho PO** (PO là một phiên Agent SDK stateful, không kế thừa đăng nhập `claude` tương tác của bạn; DEV thì không cần cái này):
-   ```bash
-   claude setup-token
-   ```
-   Dán kết quả vào Settings → Claude pipeline → Subscription token (khuyến nghị — đây là đường duy nhất ở bản đóng gói, và có hiệu lực ngay mà không cần khởi động lại), hoặc vào `.env` với tên `CLAUDE_CODE_OAUTH_TOKEN` (xem `.env.example`).
-3. **CLI `openspec`** — cần để dựng khung và quản lý quy trình spec-driven:
-   ```bash
-   npm install -g @fission-ai/openspec@latest
-   ```
-4. **Global skills + agent personas** — mở Iris → **Settings → Claude pipeline** rồi bấm **"Install missing"**. Nút này cài trong một lần bấm:
-   - hai persona `iris-po`/`iris-dev` vào `~/.claude/agents/`,
-   - các skill cần thiết (`grilling`, `tdd`, `code-review`, `diagnosing-bugs`, cùng 3 skill cốt lõi của OpenSpec) vào `~/.claude/skills/`,
-   - các lệnh `/opsx` vào `~/.claude/commands/opsx/`.
+1. **Một credential Claude** — mở Iris → **Settings → Claude pipeline** và điền
+   *một trong hai*:
 
-   Nó chỉ cài phần còn thiếu — thứ gì bạn đã tự cài trước đó (qua `skills.sh`, `openspec init`, hay cài tay) đều được giữ nguyên, không đè. Mỗi dòng đều có một lệnh cài tay copy được, nếu bạn muốn tự làm.
+   - **Subscription token** (`CLAUDE_CODE_OAUTH_TOKEN`) — tính phí theo gói Claude
+     của bạn. Để tạo token, chạy lệnh mà panel hiển thị trong Terminal; lệnh đó
+     trỏ thẳng vào binary *của chính Iris*, nên bạn vẫn không phải cài gì:
+     ```bash
+     "/Applications/Iris.app/Contents/Resources/app.asar.unpacked/node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude" setup-token
+     ```
+     (Panel in ra đường dẫn chính xác cho bản build của bạn — kiến trúc máy và vị
+     trí cài đặt sẽ khác nhau.) Dán kết quả vào ô Subscription token. Có hiệu lực
+     ngay, không cần khởi động lại.
+   - **Anthropic API key** (`ANTHROPIC_API_KEY`) — lựa chọn tính phí theo token từ
+     console.anthropic.com, dành cho người không có gói Claude.
+
+   Chỉ cần một trong hai là pipeline bật. Nếu điền cả hai, subscription token thắng.
+
+2. **Global skills** — vẫn trong **Settings → Claude pipeline**, bấm
+   **"Install missing"**. Nút này chép các skill cần thiết (`grilling`, `tdd`,
+   `code-review`, `diagnosing-bugs`, cùng 3 skill cốt lõi của OpenSpec) vào
+   `~/.claude/skills/` và các lệnh `/opsx` vào `~/.claude/commands/opsx/`.
+   Những thứ này bắt buộc phải nằm trên đĩa vì Claude Code nạp skill theo tên.
+
+   Nó chỉ cài phần còn thiếu — thứ gì bạn đã tự cài trước đó (qua `skills.sh`,
+   `openspec init`, hay cài tay) đều được giữ nguyên, không đè.
 
 Khi mọi dòng trong Settings đều xanh, đánh thức Iris và chuyển sang role PO từ pipeline bar (hoặc nói bằng giọng).
 
@@ -81,10 +89,9 @@ Hoặc dùng tương tác ngay trong một phiên Claude Code ở project đã c
 
 | Hiện tượng | Nguyên nhân | Cách sửa |
 | --- | --- | --- |
-| Settings báo "Claude CLI not found" | `claude` không có trong PATH | Cài Claude Code, hoặc đặt `IRIS_CLAUDE_BIN` nếu nó nằm ở vị trí khác thường |
-| PO báo lỗi thiếu token | Chưa có `CLAUDE_CODE_OAUTH_TOKEN` | Chạy `claude setup-token`, dán kết quả vào Settings → Claude pipeline → Subscription token (không cần khởi động lại) |
-| Dòng "openspec CLI" vẫn đỏ sau khi cài | Shell PATH chưa được nhận | Khởi động lại Iris (hoặc đặt `IRIS_OPENSPEC_BIN` trực tiếp) |
+| Settings báo pipeline đang tắt, chỉ chat được | Chưa cấu hình credential Claude nào | Thêm subscription token hoặc API key trong Settings → Claude pipeline. Đây là trạng thái bình thường của một bản cài mới |
+| Settings báo không khởi chạy được binary Claude đi kèm | Bundle ứng dụng bị hỏng (lỗi đóng gói, không phải thứ bạn cài thêm được) | Cài lại Iris |
+| Run báo lỗi credential | Token/key bị từ chối hoặc hết hạn | Tạo lại token bằng lệnh `setup-token` mà panel hiển thị, hoặc thay API key |
+| Dòng "openspec CLI" vẫn đỏ | Bundle ứng dụng bị hỏng — OpenSpec đi kèm Iris | Cài lại Iris |
 | Dòng "Global skills" vẫn đỏ | Skill chưa được cài ở cấp user | Bấm "Install missing", hoặc chạy lệnh copy được cạnh dòng đó |
-| Dòng "Iris agents" vẫn đỏ | Persona chưa được cài | Bấm "Install missing" (hoặc nút "Install agents…" trên pipeline bar) |
 | DEV báo lỗi "no open change with remaining tasks" | PO chưa đề xuất gì cả | Chuyển sang PO và yêu cầu nó hỏi vặn rồi đề xuất trước — DEV không bao giờ tự code khi chưa có spec |
-| DEV báo lỗi "agent is not installed" | Persona agent bị thiếu | Bấm "Install missing" trong Settings, hoặc "Install agents…" trên pipeline bar |

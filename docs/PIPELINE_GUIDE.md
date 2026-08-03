@@ -25,27 +25,35 @@ You (voice) ──▶ PO (grills the request, proposes an OpenSpec change)
 
 ## 2. Setup
 
-The pipeline turns on automatically once Iris detects the `claude` binary — there's no separate flag to flip. Four things need to be in place:
+**Claude Code and the `openspec` CLI ship inside Iris.** You do not install either
+one, and the agent personas are built in too. The pipeline turns on as soon as a
+Claude credential is configured — there's no separate flag to flip.
 
-1. **Claude Code CLI**, installed and authenticated:
-   ```bash
-   claude --version
-   ```
-2. **A subscription token for PO** (PO is a stateful Agent SDK session and does not inherit your interactive `claude` login; DEV doesn't need this):
-   ```bash
-   claude setup-token
-   ```
-   Paste the result into Settings → Claude pipeline → Subscription token (recommended — it's the only route in a packaged build, and it applies without a restart), or into `.env` as `CLAUDE_CODE_OAUTH_TOKEN` (see `.env.example`).
-3. **The `openspec` CLI** — needed to scaffold and manage the spec-driven workflow:
-   ```bash
-   npm install -g @fission-ai/openspec@latest
-   ```
-4. **Global skills + agent personas** — open Iris → **Settings → Claude pipeline** and click **"Install missing"**. This installs, in one click:
-   - the `iris-po`/`iris-dev` agent personas into `~/.claude/agents/`,
-   - the required skills (`grilling`, `tdd`, `code-review`, `diagnosing-bugs`, plus the three core OpenSpec skills) into `~/.claude/skills/`,
-   - the `/opsx` commands into `~/.claude/commands/opsx/`.
+1. **A Claude credential** — open Iris → **Settings → Claude pipeline** and fill in
+   *one* of:
 
-   It only fills in what's missing — anything you've already installed yourself (via `skills.sh`, `openspec init`, or manually) is left untouched. A copyable manual command is shown next to each row if you'd rather install it yourself.
+   - **Subscription token** (`CLAUDE_CODE_OAUTH_TOKEN`) — bills against your Claude
+     plan. To mint one, run the command the panel shows you in Terminal; it points
+     at Iris's *own* bundled binary, so you still install nothing:
+     ```bash
+     "/Applications/Iris.app/Contents/Resources/app.asar.unpacked/node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude" setup-token
+     ```
+     (The panel prints the exact path for your build — architecture and install
+     location differ.) Paste the result into the Subscription token field. It
+     applies immediately, no restart.
+   - **Anthropic API key** (`ANTHROPIC_API_KEY`) — the metered alternative from
+     console.anthropic.com, for users without a Claude plan.
+
+   Either one enables the pipeline. If both are set, the subscription token wins.
+
+2. **Global skills** — still in **Settings → Claude pipeline**, click
+   **"Install missing"**. This copies the required skills (`grilling`, `tdd`,
+   `code-review`, `diagnosing-bugs`, plus the three core OpenSpec skills) into
+   `~/.claude/skills/` and the `/opsx` commands into `~/.claude/commands/opsx/`.
+   These have to live on disk because Claude Code loads skills by name.
+
+   It only fills in what's missing — anything you've already installed yourself
+   (via `skills.sh`, `openspec init`, or manually) is left untouched.
 
 Once every row in Settings is green, wake Iris and switch to the PO role from the pipeline bar (or ask by voice).
 
@@ -81,10 +89,9 @@ Or interactively inside a Claude Code session in a project that has `openspec/`:
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| Settings shows "Claude CLI not found" | `claude` isn't on PATH | Install Claude Code, or set `IRIS_CLAUDE_BIN` if it's in a non-standard location |
-| PO turns fail with a token error | No `CLAUDE_CODE_OAUTH_TOKEN` | Run `claude setup-token`, paste the result into Settings → Claude pipeline → Subscription token (no restart needed) |
-| "openspec CLI" row stays red after install | Shell PATH not picked up yet | Restart Iris (or set `IRIS_OPENSPEC_BIN` explicitly) |
+| Settings says the pipeline is off, chat-only | No Claude credential configured | Add a subscription token or an API key in Settings → Claude pipeline. This is the normal state for a fresh install |
+| Settings says the bundled Claude binary won't launch | Broken app bundle (a packaging fault, not something you can install around) | Reinstall Iris |
+| Runs fail with a credential error | Token or key rejected/expired | Re-mint the token with the `setup-token` command the panel shows, or replace the API key |
+| "openspec CLI" row stays red | Broken app bundle — OpenSpec ships with Iris | Reinstall Iris |
 | "Global skills" row stays red | Skills not installed at user level yet | Click "Install missing", or run the copyable command shown next to the row |
-| "Iris agents" row stays red | Personas not installed | Click "Install missing" (or the "Install agents…" button on the pipeline bar) |
 | DEV run fails with "no open change with remaining tasks" | PO hasn't proposed anything yet | Switch to PO and ask it to grill and propose first — DEV never free-codes without a spec |
-| DEV run fails with "agent is not installed" | Agent personas missing | Click "Install missing" in Settings, or "Install agents…" on the pipeline bar |

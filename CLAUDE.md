@@ -10,11 +10,13 @@ read the relevant one on demand instead of assuming.
 
 A desktop voice companion (Electron + React + Vite + TypeScript), **macOS only**.
 **Gemini Live** handles realtime voice conversation — by default that's the whole
-app, and chat needs only `GEMINI_API_KEY`. When the `claude` binary is detected,
-Iris additionally unlocks a **PO → DEV** build pipeline: Gemini delegates real
-work to Claude as a background worker. PO is a **stateful** Agent SDK session
+app, and chat needs only `GEMINI_API_KEY`. Iris **ships Claude Code inside the
+app** (the Agent SDK's native binary — nothing to install), so adding a Claude
+credential unlocks a **PO → DEV** build pipeline: Gemini delegates real work to
+Claude as a background worker. Both roles run on the **Agent SDK's `query()`**;
+they differ in lifetime, not transport. PO is a **stateful** resident session
 that can pause mid-turn to ask a voice question; DEV is a **stateless** one-shot
-`claude -p --resume` subprocess that never asks.
+`query()` per run that never asks.
 
 ## Where to read more
 
@@ -39,7 +41,8 @@ npm run build          # tsc --noEmit (src) + tsc -p tsconfig.electron.json (ele
 npm test               # vitest run (behavioral gate)
 npm start              # build then launch Electron from dist/ (production-like)
 npm run start:prod     # launch prod build without rebuilding
-npm run package:mac    # build + electron-builder --mac --dir (unpacked .app)
+npm run package:mac    # build + both mac arches (x64 + arm64) as unpacked .app
+npm run package:mac:host # build + host arch only (skips the ~250 MB arm64 fetch)
 npm run dist:mac       # build + full macOS distributable
 ```
 
@@ -69,7 +72,7 @@ the Node **Electron** embeds rather than this floor, guarded at build time by
 
 - macOS only — Iris refuses to launch elsewhere (`electron/platform.mjs`'s `shouldRefuseLaunch`; `IRIS_ALLOW_ANY_PLATFORM=1` is the developer escape hatch).
 - `GEMINI_API_KEY` in `.env` (repo `.env` in dev, `~/.iris/.env` when packaged). Enough on its own for chat-only mode.
-- Optional, for the pipeline: Claude Code CLI installed and authenticated. A packaged GUI app may not inherit shell PATH — `main.mjs` probes `~/.local/bin`, `/usr/local/bin`, `/opt/homebrew/bin`, or set `IRIS_CLAUDE_BIN`. Presence of this binary is the **sole** switch that enables the pipeline.
+- Optional, for the pipeline: a **Claude credential** — `CLAUDE_CODE_OAUTH_TOKEN` (subscription) or `ANTHROPIC_API_KEY` (metered), both settable from the Setup panel. Claude Code and OpenSpec themselves are **bundled**, not host prerequisites: `electron/bundled-binaries.mjs` resolves the Agent SDK's native `claude` and `@fission-ai/openspec` out of `node_modules` (rewriting `app.asar` → `app.asar.unpacked`, since a subprocess cannot exec from inside an asar). Having a working binary **and** a credential is the switch that enables the pipeline; no credential is the chat-only state. There is deliberately no override pointing at a host install. The skills and `/opsx` commands the personas invoke ship as a Claude Code **plugin** (`resources/iris-plugin`, passed via the SDK's `plugins` option, namespaced `iris:*`), and `settingSources` excludes the `user` scope — so the user's own `~/.claude` is never read or written.
 
 ## File map
 
@@ -89,9 +92,12 @@ Electron-free and importable in a plain vitest file with no harness. See the
 - **`electron/listen-mode.mjs`** — listening mode's enter/exit/rotation sequences and engagement state; drives `live-session.mjs` via named transitions, never raw field writes.
 - **`electron/gemini-tools.mjs`** / **`gemini-prompts.mjs`** — Gemini's function-declaration schemas and system-instruction prose; both compose contributions from registered capabilities rather than hardcoding them.
 - **`electron/session-store.mjs`** — workstreams, the agent roster, and per-role model selection.
-- **`electron/run-dispatch.mjs`** (+ **`run-stream.mjs`**, **`run-exec.mjs`**) — the pre-dispatch review gate and tool-execution surface; run activity/tool-step streaming and the PO live-question relay; spawning/driving DEV and PO runs.
+- **`electron/run-dispatch.mjs`** (+ **`run-stream.mjs`**, **`run-exec.mjs`**) — the pre-dispatch review gate and tool-execution surface; run activity/tool-step streaming and the PO live-question relay; driving DEV and PO runs (both via the Agent SDK's `query()`).
 - **`electron/announcements.mjs`** — voice announcements to the Live session, buffered while offline.
-- **`electron/pipeline-probes.mjs`** / **`pipeline-install.mjs`** — Claude/OpenSpec availability probing and agent/skill installation.
+- **`electron/pipeline-probes.mjs`** / **`pipeline-install.mjs`** — Claude/OpenSpec availability probing (binary + credential) and skill installation.
+- **`electron/bundled-binaries.mjs`** — resolves the app's own `claude` and `openspec`, including the `app.asar` → `app.asar.unpacked` rewrite. The only module that knows asar exists.
+- **`electron/agent-definitions.mjs`** — parses `resources/personas/*.md` into the SDK's `AgentDefinition`, so personas are passed to `query()` by value instead of installed into `~/.claude/agents`.
+- **`resources/iris-plugin/`** — a Claude Code plugin (`.claude-plugin/plugin.json` + `skills/` + `commands/opsx/`) shipped with the app and passed to every run via the SDK's `plugins` option. Everything it provides is namespaced `iris:*` (`iris:grilling`, `/iris:opsx:apply`) — the personas reference those names.
 - **`electron/user-config.mjs`** — env/user config, the prompt-review-mode flag, and API-key/token handling.
 - **`electron/capabilities/canvas.mjs`** / **`capabilities/second-brain.mjs`** — the canvas-claude-mcp and personal-knowledge-notes/second-brain capabilities, each owning its own state, IPC handlers, teardown, and Gemini prompt fragment end to end (`electron/capabilities/` is where a new capability's main-process code should live).
 - **`electron/live-config.mjs`** — `buildLiveConfig()`, extracted so the Live session config (converse vs. listening) is testable without booting Electron.
@@ -124,12 +130,13 @@ any of these.
 
 ## Conventions
 
-- Config is env-driven with `IRIS_*` / `GEMINI_*` prefixes and sensible fallbacks; add new options the same way and document them in `.env.example`. PO-specific: `CLAUDE_CODE_OAUTH_TOKEN` (auth), `IRIS_PO_QUESTION_TIMEOUT_MS` (default 300000), `IRIS_PO_LIVE_SESSION` (rollback switch). Wake-word-specific: `IRIS_WAKE_THRESHOLD` (default 0.15, also settable from Settings as Strict/Balanced/Sensitive), `IRIS_WAKE_CONSECUTIVE` (default 2, env-only), `IRIS_WAKE_DEBUG` (default off — emits score diagnostics to the renderer console and opens DevTools).
+- **Iris never reads or writes the user's `~/.claude`.** Personas go to the SDK by value, skills/commands come from the bundled plugin, and `settingSources` excludes the `user` scope (keeping `project`, so a run still picks up the repo it works in). The only code that touches `~/.claude` is the Settings-panel action that removes what *older* Iris versions installed there, and only on an explicit click.
+- Config is env-driven with `IRIS_*` / `GEMINI_*` prefixes and sensible fallbacks; add new options the same way and document them in `.env.example`. Claude auth: `CLAUDE_CODE_OAUTH_TOKEN` (subscription) or `ANTHROPIC_API_KEY` (metered). PO-specific: `IRIS_PO_QUESTION_TIMEOUT_MS` (default 300000). Wake-word-specific: `IRIS_WAKE_THRESHOLD` (default 0.15, also settable from Settings as Strict/Balanced/Sensitive), `IRIS_WAKE_CONSECUTIVE` (default 2, env-only), `IRIS_WAKE_DEBUG` (default off — emits score diagnostics to the renderer console and opens DevTools).
 - `bypassPermissions` is the intentional default for the headless worker (no interactive approval exists in headless mode). `IRIS_CLAUDE_PERMISSION_MODE=acceptEdits|plan` restricts it. PO keeps `bypassPermissions` too (hardcoded in `po-session.mjs`) — only `AskUserQuestion` pauses it.
-- Never commit real keys; `.env` is gitignored, including `CLAUDE_CODE_OAUTH_TOKEN`. Never set `ANTHROPIC_API_KEY` unless you intend PO to bill per-token (`computePoSessionEnv` strips it from the PO session regardless).
-- Role workers get their environment by **subtraction, not `process.env` passed through** — `electron/worker-env.mjs`'s `computeWorkerEnv` is the shared helper both `startClaudeRun`'s DEV spawn and `computePoSessionEnv` route through, so the two paths can't drift. `GEMINI_API_KEY` is withheld from both roles (no role has a use for the voice credential); `CLAUDE_CODE_OAUTH_TOKEN` is additionally withheld from DEV, confirmed empirically to authenticate via its own `/login` session, never that env var.
+- Never commit real keys; `.env` is gitignored, including `CLAUDE_CODE_OAUTH_TOKEN` and `ANTHROPIC_API_KEY`. Setting `ANTHROPIC_API_KEY` means metered billing — it is used only when no subscription token is present, and stripped from both roles when one is.
+- Role workers get their environment by **subtraction, not `process.env` passed through** — `electron/worker-env.mjs`'s `computeClaudeWorkerEnv` is the single policy both DEV and PO route through, so the two can't drift. `GEMINI_API_KEY` is withheld from both roles (no role has a use for the voice credential). A subscription token, when present, wins: `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` are stripped so a stray key can't silently switch billing. With no token, the API key stays as the metered fallback. (DEV used to have `CLAUDE_CODE_OAUTH_TOKEN` withheld on the grounds that `claude -p` used its own `/login` store — that stopped being true once the binary shipped inside the app, which has no host store to fall back on.)
 - The renderer executes only code shipped inside the app: a Content-Security-Policy (`vite.config.ts`'s `transformIndexHtml`) blocks remote script/WASM execution, the privileged window can't navigate off-origin, and device permissions are scoped to the app's own document. See the `renderer-content-security` capability spec.
-- `@anthropic-ai/claude-agent-sdk` is a real npm dependency (drives the same `claude` binary DEV spawns directly) — keep its version pinned like the other exact identifiers in [docs/REFERENCE.md](docs/REFERENCE.md).
+- `@anthropic-ai/claude-agent-sdk` is the **only** transport to Claude, and it ships its own native binary as a per-platform optional dependency — so the SDK version and the shipped Claude Code version are coupled (`0.3.210` ⇒ CLI `2.1.210`, per the SDK's `manifest.json`). Bumping it is also a CLI bump and a ~250 MB asset change; keep it pinned like the other exact identifiers in [docs/REFERENCE.md](docs/REFERENCE.md).
 - `electron/` is typechecked by `tsconfig.electron.json` (a second `tsc -p` in `npm run build`), covering every `.mjs`/`.cjs` under it automatically — no per-file opt-in. Coverage is raised by enabling a compiler flag, not by annotating files; the three currently-deferred flags and their measured error-count cost: `useUnknownInCatchVariables` +26, `strictNullChecks` +88, `noImplicitAny` +792. These counts move with `@types/node` and `lib` — they were re-measured against `@types/node@24.13.3` at `lib: ES2025`, so re-measure rather than trust them after either changes. Two-project typecheck setup and rationale: [docs/TESTING.md](docs/TESTING.md).
 - File-size convention: one responsibility per file, graspable in a few minutes, target 250–450 lines; `*.test.*` files are exempt (append-only case lists, not read start-to-end). Enforcement is convention-only by deliberate decision — no guard script — so don't mistake the absence of a check for an oversight.
 - Docs discipline: keep this file a router. New deep detail goes to `docs/` or a capability spec, with a one-line pointer here.

@@ -82,20 +82,24 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
   let secondBrainCapability;
 
   // One task at a time, globally — see electron/run-queue.mjs. startClaudeRun
-  // and killChild come from wiring-capabilities.mjs's runExec, constructed
-  // later in this function — referencing them directly here would see them
-  // before initialization, so every such collaborator is called through a
-  // thunk, deferred until runQueue actually dispatches a run (design.md D6:
-  // "ESM circular imports resolving to undefined" is the single highest-risk
-  // step in the whole split).
+  // comes from wiring-capabilities.mjs's runExec, constructed later in this
+  // function — referencing it directly here would see it before
+  // initialization, so every such collaborator is called through a thunk,
+  // deferred until runQueue actually dispatches a run (design.md D6: "ESM
+  // circular imports resolving to undefined" is the single highest-risk step in
+  // the whole split).
   const runQueue = createRunQueue({
     startRun: (run) => startClaudeRun(run),
-    killChild: (child, signal) => killChild(child, signal),
-    // Routes stop() on an active PO turn (no child process to signal) by
-    // workstream — a no-op if no live session exists for it. Never touches the
-    // slot itself; the slot releases when startPoRun's settle handler finalizes
-    // the run, exactly like the DEV kill-signal branch (design.md D1/D2).
+    // Ends an active run's transport, whichever shape it has. A DEV run carries
+    // its own `cancel` (the AbortController for its query); a PO turn is ended
+    // through its resident session, looked up by workstream. Never touches the
+    // slot itself — the slot releases when the transport settles and finalizes
+    // the run (design.md D1/D2).
     cancelRun: (run) => {
+      if (run.cancel) {
+        run.cancel();
+        return;
+      }
       const state = getPoSessionState(run.workstream_id);
       if (state) cancelPoTurn(state);
     },
@@ -108,7 +112,7 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
       // but the started_at gate below is for the announcement, not this.
       // Deferred through runStream (constructed further down this wiring
       // block) rather than a direct reference — same late-binding reason as
-      // startRun/killChild/emit above.
+      // startRun/emit above.
       runStream.cancelActivityThrottle();
       // A run that never started (rejected at a gate before dispatch, e.g. a
       // missing agent) has no result worth speaking — the exact rule
@@ -205,21 +209,17 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     // Deferred: canvasCapability/secondBrainCapability (constructed further
     // down this wiring block, after pipelineInstall) are the actual owners of
     // these two now — only called once the app is running, well after both
-    // are assigned. Same forward-reference shape as globalAgentsDir below.
+    // are assigned.
     maybeStartCanvasMcp: () => canvasCapability.maybeStartCanvasMcp(),
     checkNotesSkillsStatus: () => secondBrainCapability.checkNotesSkillsStatus(),
-    // Deferred: pipeline-install.mjs (constructed below, after this module,
-    // because it in turn needs hasOpenSpec/openspecBinary from this one) owns
-    // globalAgentsDir. Only called once the app is running, by which point
-    // pipelineInstall is assigned — never at construction time.
-    globalAgentsDir: () => pipelineInstall.globalAgentsDir(),
-    agentRoster: AGENT_ROSTER,
-    agentPrefix: AGENT_PREFIX,
+    // Deferred like the two above: pipelineInstall is constructed further down,
+    // because it needs hasOpenSpec/openspecCommand from this module.
+    irisPluginDir: () => pipelineInstall.irisPluginDir(),
   });
   const {
     getPipelineAvailable,
     claudeBinary,
-    openspecBinary,
+    openspecCommand,
     hasOpenSpec,
     openChangesWithTasks,
     claudeWorkdir,
@@ -235,6 +235,11 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     emitToRenderer,
     getLiveSession: () => getLiveSession(),
     runQueue,
+    // Saving or clearing a Claude credential moves the pipeline gate, so the
+    // flag has to be re-read right after. pipelineProbes is constructed further
+    // up this block, but the thunk keeps this consistent with every other
+    // cross-module call here.
+    probePipelineAvailability: () => probePipelineAvailability(),
   });
   const {
     getPromptReviewMode,
@@ -261,7 +266,7 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     pushActivity,
     pushToolStart,
     pushToolEnd,
-    handleClaudeStreamEvent,
+    handleClaudeStreamMessage,
     askUserQuestionViaVoice,
     resolvePendingPoQuestion,
   } = runStream;
@@ -300,16 +305,16 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     agentLabels: AGENT_LABELS,
     retiredAgents: RETIRED_AGENTS,
     hasOpenSpec,
-    openspecBinary,
+    openspecCommand,
     findWorkstream,
     getActiveWorkstreamId,
     resolveAgentModel,
   });
   const {
-    installedAgentFile,
-    skillsSourceDir,
-    installIrisAgents,
-    installPipelinePrereqs,
+    resolveAgentDefinition,
+    irisPluginConfig,
+    legacyClaudeArtifactsStatus,
+    removeLegacyClaudeArtifacts,
     ensureProjectScaffold,
     agentsSnapshot,
   } = pipelineInstall;
@@ -327,7 +332,7 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     getPipelineAvailable: () => getPipelineAvailable(),
     userDisplayName,
     dialog,
-    skillsSourceDir: () => skillsSourceDir(),
+    irisPluginDir: () => pipelineInstall.irisPluginDir(),
     runQueue,
     findWorkstream,
     persistSessionStore,
@@ -337,10 +342,11 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     agentPrefix: AGENT_PREFIX,
     claudeWorkdir,
     claudeBinary,
-    installedAgentFile,
+    resolveAgentDefinition,
+    irisPluginConfig,
     ensureProjectScaffold,
     openChangesWithTasks,
-    handleClaudeStreamEvent,
+    handleClaudeStreamMessage,
     pushActivity,
     rememberClaudeSessionId,
     pushToolStart,
@@ -353,7 +359,7 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
   });
   canvasCapability = caps.canvasCapability;
   secondBrainCapability = caps.secondBrainCapability;
-  const { killChild, startClaudeRun, geminiTools, geminiPrompts } = caps;
+  const { startClaudeRun, geminiTools, geminiPrompts } = caps;
   const CAPABILITIES = caps.capabilities;
 
   // The Live session, listening mode, and window/HUD/tray — split into
@@ -419,8 +425,8 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     agentsSnapshot,
     setWorkstreamAgent,
     setAgentModel,
-    installIrisAgents,
-    installPipelinePrereqs,
+      legacyClaudeArtifactsStatus,
+    removeLegacyClaudeArtifacts,
     resolvePendingPoQuestion,
     // Config / prompt review
     getPromptReviewMode,
@@ -437,7 +443,6 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     probePipelineAvailability,
     // Run pipeline (for shutdownTeardown)
     runQueue,
-    killChild,
     // Capabilities
     secondBrainCapability,
     capabilities: CAPABILITIES,

@@ -50,22 +50,17 @@ type AgentsSnapshot = {
   };
 };
 
-type AgentsInstallResult = {
-  status: "ok" | "partial" | "error";
-  error?: string;
-  installed: string[];
-  skipped: string[];
-  removed?: string[];
-  errors: string[];
+/** What an older Iris wrote into the user's ~/.claude. Nothing is installed
+ *  there any more — skills and commands come from the bundled Iris plugin — so
+ *  these are inert leftovers the user may choose to remove. */
+type LegacyClaudeArtifacts = {
+  count: number;
+  paths: string[];
+  dir: string;
 };
 
-type PipelinePrereqsInstallResult = {
-  status: "ok" | "partial";
-  agents: AgentsInstallResult;
-  installedSkills: string[];
-  skippedSkills: string[];
-  installedCommands: string[];
-  skippedCommands: string[];
+type LegacyCleanupResult = {
+  removed: string[];
   errors: string[];
 };
 
@@ -115,6 +110,8 @@ type IrisConfig = {
   googleSearch: boolean;
   /** Presence only — the PO subscription token itself never reaches the renderer. */
   poTokenSet: boolean;
+  /** Presence only — the metered API key itself never reaches the renderer. */
+  anthropicApiKeySet: boolean;
   configured: boolean;
   voices: string[];
   models: string[];
@@ -127,9 +124,15 @@ type PoTokenResult = {
   config: IrisConfig;
 };
 
+/** Which Claude credential a SetupPanel action targets. */
+type ClaudeCredentialKey = "CLAUDE_CODE_OAUTH_TOKEN" | "ANTHROPIC_API_KEY";
+
 type ClaudeHealth = {
   reachable: boolean;
   pipelineAvailable: boolean;
+  binaryPath?: string;
+  credentialOk: boolean;
+  credentialKind: "subscription" | "api-key" | null;
   version?: string;
   error?: string;
   billingOk: boolean;
@@ -139,9 +142,8 @@ type ClaudeHealth = {
   openspecInstallHint: string;
   skillsOk: boolean;
   missingSkills: string[];
+  skillsDetail?: string;
   skillsInstallHint: string;
-  agentsOk: boolean;
-  missingAgents: string[];
   notesSkillsOk: boolean;
   missingNotesSkills: string[];
   notesSkillsInstallHint: string;
@@ -255,8 +257,8 @@ type IrisApi = {
     workstreamId: string,
     agent: AgentRole | null,
   ) => Promise<SessionsSnapshot & { status?: string; error?: string }>;
-  installAgents: () => Promise<AgentsInstallResult>;
-  installPipelinePrereqs: () => Promise<PipelinePrereqsInstallResult>;
+  getLegacyClaudeArtifacts: () => Promise<LegacyClaudeArtifacts>;
+  removeLegacyClaudeArtifacts: () => Promise<LegacyCleanupResult>;
   setAgentModel: (
     workstreamId: string,
     role: AgentRole,
@@ -295,8 +297,8 @@ type IrisApi = {
   onListenModeState: (callback: (payload: { engaged: boolean }) => void) => () => void;
   getConfig: () => Promise<IrisConfig>;
   saveConfig: (updates: Partial<Record<string, string>>) => Promise<IrisConfig>;
-  savePoToken: (token: string) => Promise<PoTokenResult>;
-  removePoToken: () => Promise<PoTokenResult>;
+  savePoToken: (token: string, key?: ClaudeCredentialKey) => Promise<PoTokenResult>;
+  removePoToken: (key?: ClaudeCredentialKey) => Promise<PoTokenResult>;
   testGemini: (key: string) => Promise<{ ok: boolean; error?: string }>;
   testClaude: () => Promise<ClaudeHealth>;
   getPipelineStatus: () => Promise<PipelineStatus>;

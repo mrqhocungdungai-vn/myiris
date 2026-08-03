@@ -40,8 +40,8 @@ const { ipcMain } = electron;
  *   agentsSnapshot: (id: string) => any,
  *   setWorkstreamAgent: (workstreamId: string, agent: any) => any,
  *   setAgentModel: (workstreamId: string, role: any, model: any) => any,
- *   installIrisAgents: () => any,
- *   installPipelinePrereqs: () => any,
+ *   legacyClaudeArtifactsStatus: () => any,
+ *   removeLegacyClaudeArtifacts: () => any,
  *   resolvePendingPoQuestion: (answers: any) => any,
  *   getPromptReviewMode: () => boolean,
  *   setPromptReviewMode: (enabled: boolean) => any,
@@ -80,8 +80,8 @@ export function registerIpc(deps) {
     agentsSnapshot,
     setWorkstreamAgent,
     setAgentModel,
-    installIrisAgents,
-    installPipelinePrereqs,
+    legacyClaudeArtifactsStatus,
+    removeLegacyClaudeArtifacts,
     resolvePendingPoQuestion,
     getPromptReviewMode,
     setPromptReviewMode,
@@ -118,8 +118,10 @@ export function registerIpc(deps) {
   ipcMain.handle("agents:list", (_event, id) => agentsSnapshot(String(id || "")));
   ipcMain.handle("agents:select", (_event, payload) =>
     setWorkstreamAgent(String(payload?.workstreamId || ""), payload?.agent ?? null));
-  ipcMain.handle("agents:install", () => installIrisAgents());
-  ipcMain.handle("pipeline:install-prereqs", () => installPipelinePrereqs());
+  // Iris installs nothing into ~/.claude any more; these only report and, on
+  // explicit user action, remove what an older version left there.
+  ipcMain.handle("pipeline:legacy-artifacts", () => legacyClaudeArtifactsStatus());
+  ipcMain.handle("pipeline:remove-legacy-artifacts", () => removeLegacyClaudeArtifacts());
   ipcMain.handle("agents:set-model", (_event, payload) =>
     setAgentModel(String(payload?.workstreamId || ""), payload?.role, payload?.model));
   // Secondary answer path for the PO's pending AskUserQuestion — lets a
@@ -155,8 +157,15 @@ export function registerIpc(deps) {
   });
   ipcMain.handle("config:get", () => getFullConfig());
   ipcMain.handle("config:save", (_event, updates) => writeUserConfig(updates));
-  ipcMain.handle("config:save-po-token", (_event, payload) => savePoToken(payload?.token));
-  ipcMain.handle("config:remove-po-token", () => savePoToken("", { remove: true }));
+  // `key` selects which Claude credential is being written — the subscription
+  // token or the metered API key. Defaulted in savePoToken, which also rejects
+  // any key that is not one of those two.
+  ipcMain.handle("config:save-po-token", (_event, payload) =>
+    savePoToken(payload?.token, payload?.key ? { key: payload.key } : {}),
+  );
+  ipcMain.handle("config:remove-po-token", (_event, payload) =>
+    savePoToken("", { remove: true, ...(payload?.key ? { key: payload.key } : {}) }),
+  );
   ipcMain.handle("config:test-gemini", (_event, payload) => testGeminiKey(payload?.key));
   ipcMain.handle("config:test-claude", () => checkClaudeHealth());
   // Renderer's boot-time read of the pipeline master switch (see design.md

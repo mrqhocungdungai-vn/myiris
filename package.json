@@ -28,13 +28,16 @@
     "preview": "vite preview",
     "start": "npm run build && node scripts/run-electron.mjs --prod",
     "start:prod": "node scripts/run-electron.mjs --prod",
-    "package:mac": "npm run build && electron-builder --mac --dir",
-    "dist:mac": "npm run build && electron-builder --mac",
+    "prepare:mac-binaries": "node scripts/prepare-mac-binaries.mjs",
+    "package:mac": "npm run build && npm run prepare:mac-binaries && electron-builder --mac --x64 --arm64",
+    "package:mac:host": "npm run build && electron-builder --mac",
+    "dist:mac": "npm run build && npm run prepare:mac-binaries && electron-builder --mac --x64 --arm64",
     "electron": "node scripts/run-electron.mjs"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.210",
     "@excalidraw/excalidraw": "0.18.1",
+    "@fission-ai/openspec": "^1.7.0",
     "@google/genai": "^2.10.0",
     "@mediapipe/tasks-vision": "^0.10.35",
     "@modelcontextprotocol/sdk": "1.29.0",
@@ -87,21 +90,32 @@
       "build/trayTemplate@2x.png",
       "package.json"
     ],
+    "asarUnpack": [
+      "node_modules/@anthropic-ai/claude-agent-sdk-*/**",
+      "node_modules/@fission-ai/openspec/**"
+    ],
     "extraResources": [
       {
         "from": "resources/personas",
         "to": "personas"
       },
       {
-        "from": "resources/project-seed",
-        "to": "project-seed"
+        "from": "resources/iris-plugin",
+        "to": "iris-plugin"
       }
     ],
+    "afterPack": "scripts/prune-foreign-arch.mjs",
     "mac": {
       "category": "public.app-category.productivity",
       "icon": "build/icon.png",
       "target": [
-        "dir"
+        {
+          "target": "dir",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
       ]
     }
   }

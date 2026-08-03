@@ -120,7 +120,7 @@ describe("run-stream: activity and tool-step projection", () => {
     expect(runQueue.heartbeat).toHaveBeenCalledTimes(2);
   });
 
-  it("handleClaudeStreamEvent records the Claude session id on a session_id message", () => {
+  it("handleClaudeStreamMessage records the Claude session id on a session_id message", () => {
     const persistSessionStore = vi.fn();
     const emitSessions = vi.fn();
     const workstream = makeWorkstream();
@@ -130,15 +130,18 @@ describe("run-stream: activity and tool-step projection", () => {
       emitSessions,
     });
     const run = { workstream_id: "ws1", agent: null, task: "do thing" };
-    stream.handleClaudeStreamEvent(run, JSON.stringify({ type: "system", subtype: "init", session_id: "sess-123" }));
+    stream.handleClaudeStreamMessage(run, { type: "system", subtype: "init", session_id: "sess-123" });
     expect(workstream.agent_sessions.default).toBe("sess-123");
     expect(persistSessionStore).toHaveBeenCalled();
     expect(emitSessions).toHaveBeenCalled();
   });
 
-  it("handleClaudeStreamEvent silently ignores an unparsable line", () => {
+  it("handleClaudeStreamMessage silently ignores a non-message value", () => {
+    // The SDK iterator yields only objects, but the projection is on the hot
+    // path for every run — it must never be the thing that throws.
     const stream = make();
     const run = { activity: [] };
-    expect(() => stream.handleClaudeStreamEvent(run, "not json")).not.toThrow();
+    expect(() => stream.handleClaudeStreamMessage(run, null)).not.toThrow();
+    expect(() => stream.handleClaudeStreamMessage(run, "not a message")).not.toThrow();
   });
 });

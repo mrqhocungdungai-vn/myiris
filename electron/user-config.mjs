@@ -7,7 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { GoogleGenAI } from "@google/genai";
-import { poBillingStatus, closeAllPoSessions } from "./po-session.mjs";
+import { closeAllPoSessions } from "./po-session.mjs";
 import { RUN_STATUS } from "./run-queue.mjs";
 import { writeFileAtomicSync } from "./atomic-file.mjs";
 
@@ -103,6 +103,10 @@ const ALLOWED_CONFIG_KEYS = new Set([
   "IRIS_WAKE_CONSECUTIVE",
   "IRIS_WAKE_DEBUG",
   "CLAUDE_CODE_OAUTH_TOKEN",
+  // The metered alternative to the subscription token. Either one satisfies the
+  // pipeline's credential gate (pipeline-probes.mjs's claudeCredentialStatus),
+  // and it is the only credential a user without a Claude subscription can get.
+  "ANTHROPIC_API_KEY",
   "IRIS_PROMPT_REVIEW",
   "IRIS_ENABLE_GOOGLE_SEARCH",
 ]);
@@ -110,7 +114,7 @@ const ALLOWED_CONFIG_KEYS = new Set([
 // The SetupPanel's token/key inputs always render empty (the stored value
 // never reaches the renderer), so a plain Save would otherwise blank them on
 // every visit. Empty means "keep" for these keys only. See design D3/D11.
-const KEEP_ON_EMPTY_CONFIG_KEYS = new Set(["CLAUDE_CODE_OAUTH_TOKEN", "GEMINI_API_KEY"]);
+const KEEP_ON_EMPTY_CONFIG_KEYS = new Set(["CLAUDE_CODE_OAUTH_TOKEN", "GEMINI_API_KEY", "ANTHROPIC_API_KEY"]);
 
 function ensureIncludes(list, value) {
   if (value && !list.includes(value)) return [value, ...list];
@@ -125,9 +129,18 @@ function ensureIncludes(list, value) {
  *   emitToRenderer: (channel: string, payload: any) => void,
  *   getLiveSession: () => any,
  *   runQueue: { list: () => Array<{ agent: string, status: string }> },
+ *   probePipelineAvailability?: () => Promise<any>,
  * }} deps
  */
-export function createUserConfig({ repoRoot, getIsPackaged, emitEvent, emitToRenderer, getLiveSession, runQueue }) {
+export function createUserConfig({
+  repoRoot,
+  getIsPackaged,
+  emitEvent,
+  emitToRenderer,
+  getLiveSession,
+  runQueue,
+  probePipelineAvailability,
+}) {
   // Pre-dispatch review gate (prompt-review-gate spec): when on, submit_claude_task
   // parks a brief for Approve/Edit/Cancel instead of dispatching it immediately —
   // modeled exactly on pipelineAvailable (module flag, one mutation choke point
@@ -163,8 +176,12 @@ export function createUserConfig({ repoRoot, getIsPackaged, emitEvent, emitToRen
       wakeConsecutive: envNumber("IRIS_WAKE_CONSECUTIVE", 2, { min: 1, max: 10, integer: true }),
       wakeDebug: envFlag("IRIS_WAKE_DEBUG", false),
       googleSearch: envFlag("IRIS_ENABLE_GOOGLE_SEARCH", false),
-      // Presence only — the token itself never crosses the IPC boundary (design D2).
-      poTokenSet: poBillingStatus().ok,
+      // Presence only — the credential itself never crosses the IPC boundary
+      // (design D2). Reported per-key rather than through poBillingStatus(),
+      // which is now true for EITHER credential: the panel has a separate field
+      // for each and must not show the API key as a saved subscription token.
+      poTokenSet: Boolean((process.env.CLAUDE_CODE_OAUTH_TOKEN || "").trim()),
+      anthropicApiKeySet: Boolean((process.env.ANTHROPIC_API_KEY || "").trim()),
       configured: Boolean((process.env.GEMINI_API_KEY || "").trim()),
       voices: GEMINI_VOICES,
       models: ensureIncludes(GEMINI_LIVE_MODELS, process.env.GEMINI_LIVE_MODEL),
@@ -263,10 +280,16 @@ export function createUserConfig({ repoRoot, getIsPackaged, emitEvent, emitToRen
     return runQueue.list().some((run) => run.agent === "po" && run.status === RUN_STATUS.RUNNING);
   }
 
-  // Set or clear CLAUDE_CODE_OAUTH_TOKEN from the SetupPanel. Returns the same
-  // config snapshot shape as config:save so the renderer can refresh in place;
-  // the token value is never echoed back and never logged (design D2/D6).
-  function savePoToken(rawToken, { remove = false } = {}) {
+  // Set or clear a Claude credential from the SetupPanel — either the
+  // subscription token or the metered API key, selected by `key`. Returns the
+  // same config snapshot shape as config:save so the renderer can refresh in
+  // place; the value is never echoed back and never logged (design D2/D6).
+  const CLAUDE_CREDENTIAL_KEYS = new Set(["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"]);
+
+  function savePoToken(rawToken, { remove = false, key = "CLAUDE_CODE_OAUTH_TOKEN" } = {}) {
+    if (!CLAUDE_CREDENTIAL_KEYS.has(key)) {
+      return { ok: false, error: `${key} is not a Claude credential.`, config: getFullConfig() };
+    }
     const token = String(rawToken ?? "").trim();
     if (!remove && !token) {
       return { ok: false, error: "No token provided.", config: getFullConfig() };
@@ -274,20 +297,25 @@ export function createUserConfig({ repoRoot, getIsPackaged, emitEvent, emitToRen
     if (poTurnRunning()) {
       return {
         ok: false,
-        error: "A PO turn is running right now. Wait for it to finish, then change the token.",
+        error: "A PO turn is running right now. Wait for it to finish, then change the credential.",
         config: getFullConfig(),
       };
     }
     let config;
     try {
-      config = remove
-        ? writeUserConfig({}, { deleteKeys: ["CLAUDE_CODE_OAUTH_TOKEN"] })
-        : writeUserConfig({ CLAUDE_CODE_OAUTH_TOKEN: token });
+      config = remove ? writeUserConfig({}, { deleteKeys: [key] }) : writeUserConfig({ [key]: token });
     } catch (error) {
       return { ok: false, error: error.message, config: getFullConfig() };
     }
     closeAllPoSessions();
-    console.log(`[IRIS][po-auth] Subscription token ${remove ? "removed" : "updated"} from Settings.`);
+    // The pipeline gate is now a credential check, so adding or removing one
+    // changes app-wide availability. Re-probe here rather than leaving the UI
+    // stale until the user happens to hit "Test" or restarts — writeUserConfig
+    // has already updated process.env, so the probe sees the new state.
+    // Fire-and-forget: the returned config snapshot does not depend on it, and
+    // the flip reaches the renderer through the probe's own event.
+    Promise.resolve(probePipelineAvailability?.()).catch(() => {});
+    console.log(`[IRIS][po-auth] ${key} ${remove ? "removed" : "updated"} from Settings.`);
     return { ok: true, config };
   }
 

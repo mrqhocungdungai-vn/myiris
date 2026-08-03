@@ -24,7 +24,7 @@
  * @property {number} [finished_at]
  * @property {string} [cwd]
  * @property {string|null} [claude_session_id]
- * @property {import("node:child_process").ChildProcess|null} child
+ * @property {(() => void)|null} [cancel] - set by the transport; ends it early
  * @property {Object} [result]
  * @property {boolean} [finalized]
  */
@@ -100,8 +100,7 @@ export function toUpdateEvent(run, status, extra = {}) {
 /**
  * @param {Object} deps
  * @param {(run: Run) => void} deps.startRun - launches the transport (DEV subprocess or PO turn); must not touch the slot itself
- * @param {(run: Run) => void} [deps.cancelRun] - ends an active run whose transport has no child process (a PO turn); must not touch the slot itself — the slot is released when the run is later finalized through the normal settle path, exactly like the DEV kill-signal branch. Optional: if omitted, stop() on such a run remains a no-op.
- * @param {(child: import("node:child_process").ChildProcess, signal: NodeJS.Signals) => void} [deps.killChild] - signals a run's subprocess transport; defaults to `(child, signal) => child.kill(signal)`. Injected (parallel to cancelRun) so process-group knowledge (e.g. a negative-pid group kill) lives in the caller, not here.
+ * @param {(run: Run) => void} [deps.cancelRun] - ends an active run's transport (aborting a DEV query, cancelling a PO turn); must not touch the slot itself — the slot is released when the run is later finalized through the normal settle path. Optional: if omitted, stop() on an active run remains a no-op.
  * @param {(event: Object) => void} deps.emit - the sidecar event sink
  * @param {(run: Run) => void} [deps.onFinalized] - fires once per run, after a terminal claude_task_update (e.g. the voice completion announcement); NOT called for a queued run cancelled before it ever started
  * @param {number} [deps.idleTimeoutMs] - overrides runIdleTimeoutMs() for testing; production callers should omit this and let it read IRIS_RUN_IDLE_TIMEOUT_MS
@@ -109,7 +108,6 @@ export function toUpdateEvent(run, status, extra = {}) {
 export function createRunQueue({
   startRun,
   cancelRun,
-  killChild = (child, signal) => child.kill(signal),
   emit,
   onFinalized,
   idleTimeoutMs = runIdleTimeoutMs(),
@@ -140,21 +138,31 @@ export function createRunQueue({
     idleTimer = null;
   }
 
-  // Kills the run's transport (if it has one) and always finalizes — used by
-  // both the idle watchdog's expiry (D4) and stop()'s escalation (D5). The
-  // once-guard inside finalize() (not a check here) is what makes this safe
-  // if the transport's own termination callback also reaches finalize() —
-  // whichever gets there first wins, and the loser is a no-op.
-  function killWithEscalation(run, terminalStatus, output) {
-    if (!run.child) {
+  // Ends the run's transport, then finalizes. Both transports are now Agent SDK
+  // queries with no subprocess handle of their own, so cancelling is uniform and
+  // the old SIGTERM→SIGKILL escalation is gone.
+  //
+  // The two callers want different finalize timing, which is why `graceMs` is a
+  // parameter rather than a constant:
+  //   - stop() (D5) waits out STOP_GRACE_MS first, giving the transport a chance
+  //     to unwind and report its own terminal status; the timer is only the
+  //     backstop for a transport that never settles.
+  //   - the idle watchdog (D4) finalizes immediately — it has already declared
+  //     the run dead, and the spec says a silent run loses the slot at expiry,
+  //     not five seconds later.
+  //
+  // The once-guard inside finalize() (not a check here) is what makes both safe
+  // when the transport's own settle path also reaches finalize() — whichever
+  // gets there first wins, and the loser is a no-op.
+  function cancelAndFinalize(run, terminalStatus, output, graceMs) {
+    cancelRun?.(run);
+    if (!graceMs) {
       finalize(run.run_id, terminalStatus, output);
       return;
     }
-    killChild(run.child, "SIGTERM");
     const graceTimer = setTimeout(() => {
-      if (run.child) killChild(run.child, "SIGKILL");
       finalize(run.run_id, terminalStatus, output);
-    }, STOP_GRACE_MS);
+    }, graceMs);
     graceTimer.unref?.();
   }
 
@@ -164,10 +172,11 @@ export function createRunQueue({
     const run = runs.get(active);
     if (!run) return;
     const minutes = Math.round(idleTimeoutMs / 60000);
-    killWithEscalation(
+    cancelAndFinalize(
       run,
       RUN_STATUS.ERROR,
       `No progress for ${minutes} minutes (IRIS_RUN_IDLE_TIMEOUT_MS) — the run was terminated automatically and the slot released.`,
+      0,
     );
   }
 
@@ -227,7 +236,8 @@ export function createRunQueue({
     run.status = status;
     run.output = output;
     run.finished_at = Date.now() / 1000;
-    run.child = null;
+    // Drop the transport handle so a finalized run holds nothing live.
+    run.cancel = null;
     emit(toUpdateEvent(run, status, { output }));
     onFinalized?.(run);
     // Slot side-effects belong to the run that holds the slot. Guarding them
@@ -257,23 +267,14 @@ export function createRunQueue({
       // announce (never started), no slot to release (never held it).
       return run.status;
     }
-    if (run.child) {
-      run.status = RUN_STATUS.CANCELLED;
-      // Normally the slot is released by finalize(), invoked by the
-      // transport's own termination callback once the process actually
-      // closes. killWithEscalation only forces things (SIGKILL + finalize
-      // itself) if that callback hasn't fired within the grace period — see
-      // design D5. Doing it unconditionally here would risk a double-start.
-      killWithEscalation(run, RUN_STATUS.CANCELLED, "Run was stopped before completion.");
-      return run.status;
-    }
-    // Active run with no child (a PO turn has no subprocess to signal):
-    // delegate the actual turn-ending to the injected cancelRun, mirroring
-    // the DEV branch above. Deliberately NOT finalize() here — the slot is
-    // released when the turn settles and the transport's own settle path
-    // finalizes it, exactly as the DEV branch relies on child.on("close").
+    // Marked CANCELLED before the transport is touched, because that is what
+    // the transport's own settle path reads to tell a cancellation apart from a
+    // failure. Deliberately NOT finalize() here — the slot is released when the
+    // transport settles and finalizes itself; forceFinalize only steps in if
+    // that hasn't happened within the grace period (design D5). Finalizing
+    // unconditionally here would risk a double-start.
     run.status = RUN_STATUS.CANCELLED;
-    cancelRun?.(run);
+    cancelAndFinalize(run, RUN_STATUS.CANCELLED, "Run was stopped before completion.", STOP_GRACE_MS);
     return run.status;
   }
 
@@ -289,13 +290,13 @@ export function createRunQueue({
     const run = runs.get(runId);
     if (!run) return null;
     // Named only to keep them out of `rest` — omit-by-destructuring, not dead bindings.
-    const { child: _child, result: _result, ...rest } = run;
+    const { cancel: _cancel, result: _result, ...rest } = run;
     return rest;
   }
 
   // Not part of the design's core interface, but the runs map is otherwise
   // fully private to this closure and app shutdown (electron/main.mjs
-  // before-quit) needs to reach every live child process to signal it.
+  // before-quit) needs to reach every live run to end its transport.
   function list() {
     return [...runs.values()];
   }

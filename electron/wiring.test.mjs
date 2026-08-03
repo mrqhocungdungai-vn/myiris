@@ -14,7 +14,7 @@ vi.mock("./pipeline-probes.mjs", () => ({
   createPipelineProbes: vi.fn((deps) => ({
     getPipelineAvailable: vi.fn(() => true),
     claudeBinary: vi.fn(),
-    openspecBinary: vi.fn(),
+    openspecCommand: vi.fn(),
     hasOpenSpec: vi.fn(),
     openChangesWithTasks: vi.fn(),
     claudeWorkdir: vi.fn(),
@@ -29,9 +29,11 @@ vi.mock("./pipeline-install.mjs", () => ({
   createPipelineInstall: vi.fn(() => ({
     globalAgentsDir: vi.fn(),
     installedAgentFile: vi.fn(),
-    skillsSourceDir: vi.fn(() => "/fake/skills"),
     installIrisAgents: vi.fn(),
-    installPipelinePrereqs: vi.fn(),
+    irisPluginDir: vi.fn(() => "/fake/iris-plugin"),
+    irisPluginConfig: vi.fn(() => null),
+    legacyClaudeArtifactsStatus: vi.fn(),
+    removeLegacyClaudeArtifacts: vi.fn(),
     ensureProjectScaffold: vi.fn(),
     agentsSnapshot: vi.fn(),
   })),
@@ -114,7 +116,7 @@ vi.mock("./run-stream.mjs", () => ({
     pushActivity: vi.fn(),
     pushToolStart: vi.fn(),
     pushToolEnd: vi.fn(),
-    handleClaudeStreamEvent: vi.fn(),
+    handleClaudeStreamMessage: vi.fn(),
     askUserQuestionViaVoice: vi.fn(),
     resolvePendingPoQuestion: vi.fn(),
   })),
@@ -126,7 +128,6 @@ vi.mock("./wiring-capabilities.mjs", () => ({
   createCapabilitiesWiring: vi.fn(() => ({
     canvasCapability: fakeCapabilities[0],
     secondBrainCapability: fakeCapabilities[1],
-    killChild: vi.fn(),
     startClaudeRun: vi.fn(),
     capabilities: fakeCapabilities,
     geminiTools: { buildLiveTools: vi.fn(() => []) },
@@ -218,9 +219,11 @@ describe("wiring: createWiring", () => {
     expect(capsDeps.dialog).toBe(dialog);
   });
 
-  it("returns runQueue and killChild for shutdownTeardown's use", () => {
+  it("returns runQueue for shutdownTeardown's use", () => {
+    // Shutdown reaches live runs through list() and each run's own cancel(),
+    // so the queue handle is the only thing wiring has to expose for it.
     const result = createWiring(makeDeps());
     expect(typeof result.runQueue.list).toBe("function");
-    expect(typeof result.killChild).toBe("function");
+    expect(result.killChild).toBeUndefined();
   });
 });

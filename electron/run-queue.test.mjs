@@ -23,7 +23,7 @@ function makeRun(overrides = {}) {
     output: "",
     activity: [],
     queued_at: Date.now() / 1000,
-    child: null,
+    cancel: null,
     ...overrides,
   };
 }
@@ -52,21 +52,12 @@ function makeQueue(overrides = {}) {
   return { queue, events, finalized, invoked };
 }
 
-// A run.child fake that records what it was signalled, without ever actually
-// "closing" — simulating a subprocess that ignores SIGTERM, so the escalation
-// path (SIGKILL) is what a test can observe.
-function makeChildFake() {
-  const killCalls = [];
-  return { child: { kill: (signal) => killCalls.push(signal) }, killCalls };
-}
-
-// The injected killChild hook (bound-shutdown-teardown design D1) — records
-// (child, signal) pairs, distinct from a call directly on run.child.kill, so
-// a test can assert the queue delegates through the hook rather than calling
-// the transport itself.
-function makeKillChildFake() {
+// The injected cancelRun hook — records which runs it was asked to end, without
+// ever settling them, simulating a transport that ignores the cancel. That is
+// what makes the grace-period force-finalize observable.
+function makeCancelRunFake() {
   const calls = [];
-  return { killChild: (child, signal) => calls.push(signal), calls };
+  return { cancelRun: (run) => calls.push(run.run_id), calls };
 }
 
 describe("run-queue", () => {
@@ -505,27 +496,25 @@ describe("run-queue idle watchdog", () => {
     }
   });
 
-  it("escalates to SIGKILL through the injected killChild and finalizes exactly once when a signalled process ignores SIGTERM (spec: 'A signalled process ignores the signal', bound-shutdown-teardown design D1)", () => {
+  it("cancels the transport and force-finalizes exactly once when the transport ignores the cancel (spec: 'A signalled process ignores the signal', bound-shutdown-teardown design D1/D5)", () => {
     vi.useFakeTimers();
     try {
-      const { killChild, calls } = makeKillChildFake();
-      const { queue, events, finalized } = makeQueue({ killChild });
-      const { child } = makeChildFake();
-      const run = makeRun({ child: /** @type {any} */ (child), status: RUN_STATUS.RUNNING });
+      const { cancelRun, calls } = makeCancelRunFake();
+      const { queue, events, finalized } = makeQueue({ cancelRun });
+      const run = makeRun({ status: RUN_STATUS.RUNNING });
       queue.submit(run);
 
       queue.stop(run.run_id);
-      expect(calls).toEqual(["SIGTERM"]);
+      expect(calls).toEqual([run.run_id]);
       expect(queue.get(run.run_id).finalized).not.toBe(true); // grace period still pending
 
-      vi.advanceTimersByTime(5001); // past the SIGTERM->SIGKILL grace period
-      expect(calls).toEqual(["SIGTERM", "SIGKILL"]);
+      vi.advanceTimersByTime(5001); // past the grace period
       expect(finalized).toEqual([run.run_id]);
       const terminalEvents = events.filter((e) => e.run_id === run.run_id && e.status === RUN_STATUS.CANCELLED);
       expect(terminalEvents.length).toBe(1);
 
-      // A stale escalation timer (or a duplicate call) firing again later
-      // must stay a no-op — finalize-once still holds.
+      // A stale grace timer (or a duplicate call) firing again later must stay
+      // a no-op — finalize-once still holds.
       vi.advanceTimersByTime(60000);
       expect(finalized).toEqual([run.run_id]);
     } finally {
@@ -533,19 +522,46 @@ describe("run-queue idle watchdog", () => {
     }
   });
 
-  it("defaults killChild to child.kill when the dep is omitted, so a queue built without the hook still terminates the child (back-compat, bound-shutdown-teardown design D1)", () => {
+  it("lets a transport that settles on its own finalize first, leaving the grace timer a no-op", () => {
+    // The normal path: cancelRun reaches the transport, which unwinds and
+    // finalizes itself well inside the grace window. The forced finalize must
+    // not then overwrite the status the transport reported.
     vi.useFakeTimers();
     try {
-      const { queue } = makeQueue(); // no killChild override
-      const { child, killCalls } = makeChildFake();
-      const run = makeRun({ child: /** @type {any} */ (child), status: RUN_STATUS.RUNNING });
+      const finalizedStatuses = [];
+      const { queue, events } = makeQueue({
+        cancelRun: (run) => queue.finalize(run.run_id, RUN_STATUS.CANCELLED, "settled by transport"),
+        onFinalized: (run) => finalizedStatuses.push([run.status, run.output]),
+      });
+      const run = makeRun({ status: RUN_STATUS.RUNNING });
       queue.submit(run);
 
       queue.stop(run.run_id);
-      expect(killCalls).toEqual(["SIGTERM"]);
+      expect(finalizedStatuses).toEqual([[RUN_STATUS.CANCELLED, "settled by transport"]]);
+
+      vi.advanceTimersByTime(60000);
+      expect(finalizedStatuses).toEqual([[RUN_STATUS.CANCELLED, "settled by transport"]]);
+      expect(events.filter((e) => e.status === RUN_STATUS.CANCELLED).length).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("still force-finalizes a stopped run when no cancelRun hook is injected", () => {
+    // cancelRun is optional; without it stop() has no transport to end, but the
+    // run must not be left holding the single slot forever.
+    vi.useFakeTimers();
+    try {
+      const { queue, finalized } = makeQueue(); // no cancelRun override
+      const run = makeRun({ status: RUN_STATUS.RUNNING });
+      queue.submit(run);
+
+      queue.stop(run.run_id);
+      expect(finalized).toEqual([]);
 
       vi.advanceTimersByTime(5001);
-      expect(killCalls).toEqual(["SIGTERM", "SIGKILL"]);
+      expect(finalized).toEqual([run.run_id]);
+      expect(queue.get(run.run_id).status).toBe(RUN_STATUS.CANCELLED);
     } finally {
       vi.useRealTimers();
     }

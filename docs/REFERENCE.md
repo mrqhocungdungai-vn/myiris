@@ -23,11 +23,33 @@ so future changes don't reintroduce wrong/deprecated names or version drift.
 | Bloom/post-processing | `@react-three/postprocessing` `^3.0.4` | `package.json` | npm |
 | Second-brain galaxy 3D graph | `3d-force-graph` `1.80.0` (exact) | `package.json` | npm |
 | Note frontmatter parser | `gray-matter` `4.0.3` (exact) | `package.json` | npm |
+| Claude Agent SDK | `@anthropic-ai/claude-agent-sdk` `^0.3.210` | `package.json` | npm |
+| Bundled Claude Code binary | `2.1.210` — **coupled to the SDK version**, not pinned separately | `@anthropic-ai/claude-agent-sdk-darwin-{x64,arm64}` (the SDK's own optional deps); the mapping is in the SDK's `manifest.json` | npm |
+| Bundled OpenSpec CLI | `@fission-ai/openspec` `^1.7.0` | `package.json` | npm |
 | Electron | `42.5.0` (exact) | `package.json` | npm |
 | Linter | `oxlint` `1.76.0` (exact) | `package.json`, rules in `.oxlintrc.json` | npm |
 | Secret scanner | `gitleaks` `8.30.1` — **not lockfile-pinned** | Homebrew, outside npm | `brew install gitleaks` |
 
 ## Known footguns / lessons (avoid repeating these)
+
+**Bumping the Agent SDK is also a Claude Code bump and a ~250 MB asset change.**
+The SDK ships the CLI as a per-platform native binary in its own
+`optionalDependencies`; SDK `0.3.210` carries CLI `2.1.210`. Two consequences:
+(1) npm installs only the binary matching the *host* arch, and `npm install
+--os/--cpu` does **not** override that (npm 11 still fails `EBADPLATFORM`) — so
+`scripts/prepare-mac-binaries.mjs` fetches the foreign-arch tarball with `npm
+pack` and unpacks it, and `scripts/prune-foreign-arch.mjs` (an electron-builder
+`afterPack` hook) removes the wrong one from each `.app`. (2) The binary must be
+in `asarUnpack`: a subprocess cannot be exec'd from inside an asar archive, and
+Electron's `require.resolve` returns the *packed* path, so
+`electron/bundled-binaries.mjs` rewrites `app.asar` → `app.asar.unpacked`.
+
+**`require.resolve('<pkg>/package.json')` is not a reliable way to find a
+package root.** It works for packages with no `exports` map (the Claude binary
+packages) but is a hard `ERR_PACKAGE_PATH_NOT_EXPORTED` for ones that have an
+`exports` map without a `./package.json` entry — `@fission-ai/openspec` is
+exactly that. `bundled-binaries.mjs` falls back to resolving the package's main
+entry and walking up.
 
 - **Use the exact Live model name `gemini-3.1-flash-live-preview`.** Live models
   are a distinct family from regular `gemini-*` chat models; a normal chat model

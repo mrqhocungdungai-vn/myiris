@@ -29,7 +29,7 @@ function make(overrides = {}) {
     agentLabels: { po: "PO", dev: "DEV" },
     retiredAgents: ["ba", "test"],
     hasOpenSpec: () => false,
-    openspecBinary: () => "openspec",
+    openspecCommand: () => ({ command: "/fake/node", args: ["/fake/openspec.js"], env: { ELECTRON_RUN_AS_NODE: "1" } }),
     findWorkstream: () => null,
     getActiveWorkstreamId: () => null,
     resolveAgentModel: () => null,
@@ -46,44 +46,77 @@ function writePersonas(personas) {
 }
 
 describe("pipeline-install", () => {
-  it("installs persona files that are missing from the agents dir", () => {
-    writePersonas({ "iris-po.md": "PO persona", "iris-dev.md": "DEV persona" });
+  it("resolves the bundled persona into an SDK agent definition", () => {
+    writePersonas({ "iris-po.md": "---\ndescription: The PO\n---\nPO persona body." });
     const install = make();
-    const result = install.installIrisAgents();
-    expect(result.status).toBe("ok");
-    expect(result.installed.sort()).toEqual(["iris-dev.md", "iris-po.md"]);
-    expect(fs.readFileSync(path.join(homeDir, ".claude", "agents", "iris-po.md"), "utf8")).toBe("PO persona");
+    expect(install.resolveAgentDefinition("po", null)).toEqual({
+      description: "The PO",
+      prompt: "PO persona body.",
+    });
+    // Nothing is written outside the app any more.
+    expect(fs.existsSync(path.join(homeDir, ".claude", "agents"))).toBe(false);
   });
 
-  it("cleans up RETIRED_AGENTS files on install", () => {
-    writePersonas({ "iris-po.md": "PO persona", "iris-dev.md": "DEV persona" });
+  it("prefers a project-local persona override over the bundled one", () => {
+    writePersonas({ "iris-dev.md": "---\ndescription: Bundled\n---\nBundled body." });
+    const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "iris-install-proj-"));
+    try {
+      const dir = path.join(projectDir, ".claude", "agents");
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, "iris-dev.md"), "---\ndescription: Local\n---\nLocal body.");
+
+      const install = make();
+      expect(install.resolveAgentDefinition("dev", projectDir).prompt).toBe("Local body.");
+      expect(install.resolveAgentDefinition("dev", null).prompt).toBe("Bundled body.");
+    } finally {
+      fs.rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it("throws when the persona is missing from the bundle", () => {
+    const install = make();
+    expect(() => install.resolveAgentDefinition("po", null)).toThrow(/app bundle/);
+  });
+
+  it("reports what an older Iris left in ~/.claude without touching it", () => {
     const agentsDir = path.join(homeDir, ".claude", "agents");
+    const skillsDir = path.join(homeDir, ".claude", "skills");
     fs.mkdirSync(agentsDir, { recursive: true });
-    fs.writeFileSync(path.join(agentsDir, "iris-ba.md"), "stale BA persona");
-    fs.writeFileSync(path.join(agentsDir, "iris-test.md"), "stale test persona");
+    fs.mkdirSync(path.join(skillsDir, "grilling"), { recursive: true });
+    fs.writeFileSync(path.join(agentsDir, "iris-po.md"), "stale");
 
-    const install = make();
-    const result = install.installIrisAgents();
+    const status = make().legacyClaudeArtifactsStatus();
 
-    expect(result.removed.sort()).toEqual(["iris-ba.md", "iris-test.md"]);
-    expect(fs.existsSync(path.join(agentsDir, "iris-ba.md"))).toBe(false);
-    expect(fs.existsSync(path.join(agentsDir, "iris-test.md"))).toBe(false);
+    expect(status.count).toBe(2);
+    // Reporting must never be destructive — this is what the panel calls on open.
+    expect(fs.existsSync(path.join(agentsDir, "iris-po.md"))).toBe(true);
+    expect(fs.existsSync(path.join(skillsDir, "grilling"))).toBe(true);
   });
 
-  it("skips a persona file whose installed content already matches the bundled template", () => {
-    writePersonas({ "iris-po.md": "PO persona" });
-    const install = make({ agentRoster: ["po"] });
-    install.installIrisAgents();
-    const second = install.installIrisAgents();
-    expect(second.skipped).toEqual(["iris-po.md"]);
-    expect(second.installed).toEqual([]);
-  });
+  it("removes only what Iris itself put in ~/.claude", () => {
+    // ~/.claude belongs to the user's own Claude Code install. Deleting
+    // anything Iris did not write there is the exact interference this change
+    // exists to end.
+    const agentsDir = path.join(homeDir, ".claude", "agents");
+    const skillsDir = path.join(homeDir, ".claude", "skills");
+    const commandsDir = path.join(homeDir, ".claude", "commands", "opsx");
+    fs.mkdirSync(agentsDir, { recursive: true });
+    fs.mkdirSync(commandsDir, { recursive: true });
+    for (const name of ["iris-po.md", "iris-dev.md", "iris-ba.md"]) fs.writeFileSync(path.join(agentsDir, name), "stale");
+    for (const name of ["grilling", "tdd", "wiki-query"]) fs.mkdirSync(path.join(skillsDir, name), { recursive: true });
+    fs.writeFileSync(path.join(commandsDir, "apply.md"), "stale");
+    // Things Iris never wrote:
+    fs.writeFileSync(path.join(agentsDir, "someone-elses.md"), "keep me");
+    fs.mkdirSync(path.join(skillsDir, "my-own-skill"), { recursive: true });
 
-  it("reports an error when persona templates are missing from the bundle", () => {
-    const install = make();
-    const result = install.installIrisAgents();
-    expect(result.status).toBe("error");
-    expect(result.installed).toEqual([]);
+    const result = make().removeLegacyClaudeArtifacts();
+
+    expect(result.removed.length).toBe(7);
+    expect(result.errors).toEqual([]);
+    expect(fs.existsSync(path.join(agentsDir, "someone-elses.md"))).toBe(true);
+    expect(fs.existsSync(path.join(skillsDir, "my-own-skill"))).toBe(true);
+    expect(fs.existsSync(path.join(skillsDir, "grilling"))).toBe(false);
+    expect(make().legacyClaudeArtifactsStatus().count).toBe(0);
   });
 
   it("pathExists treats a broken symlink as present", () => {
@@ -96,9 +129,11 @@ describe("pipeline-install", () => {
   });
 
   it("agentsSnapshot reports installed roster and project gates", () => {
-    writePersonas({ "iris-po.md": "PO persona", "iris-dev.md": "DEV persona" });
-    const install = make({ resolveAgentModel: (_ws, role) => `model-for-${role}` });
-    install.installIrisAgents();
+    writePersonas({
+      "iris-po.md": "---\ndescription: The PO\n---\nPO body.",
+      "iris-dev.md": "---\ndescription: The DEV\n---\nDEV body.",
+    });
+    make({ resolveAgentModel: (_ws, role) => `model-for-${role}` });
 
     const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "iris-install-project-"));
     try {

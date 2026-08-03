@@ -1,0 +1,5 @@
+{
+  "name": "iris",
+  "version": "0.1.0",
+  "description": "The skills and /opsx commands the Iris PO and DEV personas invoke. Shipped inside the Iris app and loaded as a local plugin, so nothing is written to the user's ~/.claude."
+}

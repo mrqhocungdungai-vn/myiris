@@ -88,6 +88,9 @@ export default function SetupPanel({
   const [pipelinePrereqs, setPipelinePrereqs] = useState<ClaudeHealth | null>(null);
   const [installingPrereqs, setInstallingPrereqs] = useState(false);
   const [installReport, setInstallReport] = useState<string | null>(null);
+  // Files an older Iris wrote into ~/.claude. Iris neither reads nor writes
+  // there now, so these are inert — offered for removal, never removed silently.
+  const [legacyArtifacts, setLegacyArtifacts] = useState<LegacyClaudeArtifacts | null>(null);
   const [geminiApiKeySet, setGeminiApiKeySet] = useState(config.geminiApiKeySet);
   // The stored token never reaches the renderer, so the input is always empty
   // and `poTokenSet` is the only thing we know about it.
@@ -95,6 +98,10 @@ export default function SetupPanel({
   const [poTokenSet, setPoTokenSet] = useState(config.poTokenSet);
   const [poTokenBusy, setPoTokenBusy] = useState(false);
   const [poTokenError, setPoTokenError] = useState<string | null>(null);
+  // The metered alternative, same presence-only contract as the token above.
+  // Either credential satisfies the pipeline gate.
+  const [apiKey, setApiKey] = useState("");
+  const [apiKeySet, setApiKeySet] = useState(config.anthropicApiKeySet);
   const [preview, setPreview] = useState<TestState>({ status: "idle" });
   const [mic, setMic] = useState<PermState>("idle");
   const [cam, setCam] = useState<PermState>("idle");
@@ -181,10 +188,11 @@ export default function SetupPanel({
     };
   }, [mic]);
 
-  // Run the Claude CLI + subscription-billing check once when the panel opens
-  // so Settings mode shows current status without an extra click.
+  // Probe the bundled runtime + credential once when the panel opens, so
+  // Settings shows current status without an extra click.
   useEffect(() => {
     checkClaude();
+    window.iris.getLegacyClaudeArtifacts().then(setLegacyArtifacts);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -197,32 +205,58 @@ export default function SetupPanel({
   async function checkClaude() {
     setClaude({ status: "testing" });
     const health = await window.iris.testClaude();
-    const billing = health.billingOk
-      ? "Subscription token found — PO bills against your Claude subscription."
-      : health.billingError || "No CLAUDE_CODE_OAUTH_TOKEN set — PO turns will fail until you run `claude setup-token`.";
-    if (health.reachable) {
-      setClaude({ status: "ok", message: health.version ? `Ready · ${health.version}` : "Ready", billing });
+
+    // Which credential is actually in use, not just "a token exists" — the two
+    // bill differently and the user needs to know which one they're on.
+    const billing =
+      health.credentialKind === "subscription"
+        ? "Subscription token in use — runs bill against your Claude plan."
+        : health.credentialKind === "api-key"
+          ? "Anthropic API key in use — runs bill per token."
+          : health.billingError || "No Claude credential set yet.";
+
+    if (!health.reachable) {
+      // A packaging fault, not something the user can install around.
+      setClaude({
+        status: "error",
+        message: health.error || "Iris could not launch its bundled Claude binary.",
+        billing,
+      });
+    } else if (health.pipelineAvailable) {
+      // `claude --version` prints "2.1.210 (Claude Code)"; the suffix would read
+      // as "Claude 2.1.210 (Claude Code)" here.
+      const version = (health.version ?? "").replace(/\s*\(Claude Code\)\s*$/, "").trim();
+      setClaude({ status: "ok", message: version ? `Pipeline ready · Claude ${version}` : "Pipeline ready", billing });
     } else {
-      setClaude({ status: "error", message: health.error || "Claude CLI not found.", billing });
+      // The binary is fine; the pipeline is off only because there's no
+      // credential. Reporting "Ready" here would contradict the panel's own
+      // "Pipeline off" line directly below it.
+      setClaude({ status: "idle", message: undefined, billing });
     }
     setPipelinePrereqs(health);
   }
 
-  // Save/remove share one path: on success clear the input, refresh the
-  // presence flag, and re-run the Claude check so the billing line updates in
-  // place. On refusal (a PO turn is running) keep what the user typed.
-  async function applyPoToken(action: "save" | "remove") {
+  // Save/remove share one path across both credentials: on success clear the
+  // input, refresh the presence flags, and re-run the Claude check so the
+  // billing and availability lines update in place. On refusal (a PO turn is
+  // running) keep what the user typed.
+  async function applyCredential(action: "save" | "remove", key: ClaudeCredentialKey) {
+    const value = key === "CLAUDE_CODE_OAUTH_TOKEN" ? poToken : apiKey;
     setPoTokenBusy(true);
     setPoTokenError(null);
     try {
       const result =
-        action === "save" ? await window.iris.savePoToken(poToken.trim()) : await window.iris.removePoToken();
+        action === "save"
+          ? await window.iris.savePoToken(value.trim(), key)
+          : await window.iris.removePoToken(key);
       if (!result.ok) {
-        setPoTokenError(result.error || "Could not update the token.");
+        setPoTokenError(result.error || "Could not update the credential.");
         return;
       }
-      setPoToken("");
+      if (key === "CLAUDE_CODE_OAUTH_TOKEN") setPoToken("");
+      else setApiKey("");
       setPoTokenSet(result.config.poTokenSet);
+      setApiKeySet(result.config.anthropicApiKeySet);
       onSaved(result.config);
       await checkClaude();
     } finally {
@@ -230,21 +264,28 @@ export default function SetupPanel({
     }
   }
 
-  async function installMissingPrereqs() {
+  function applyPoToken(action: "save" | "remove") {
+    return applyCredential(action, "CLAUDE_CODE_OAUTH_TOKEN");
+  }
+
+  // The exact command that mints a subscription token, pointed at Iris's own
+  // bundled binary so the user never has to install the CLI. Quoted because the
+  // path runs through "Iris.app/Contents/…" and contains spaces.
+  const claudeSetupTokenCommand = pipelinePrereqs?.binaryPath
+    ? `"${pipelinePrereqs.binaryPath}" setup-token`
+    : "claude setup-token";
+
+  async function removeLegacyArtifacts() {
     setInstallingPrereqs(true);
     setInstallReport(null);
     try {
-      const report = await window.iris.installPipelinePrereqs();
-      const parts = [
-        `${report.agents.installed.length} agent${report.agents.installed.length === 1 ? "" : "s"} installed`,
-        `${report.installedSkills.length} skill${report.installedSkills.length === 1 ? "" : "s"} installed`,
-        `${report.installedCommands.length} command${report.installedCommands.length === 1 ? "" : "s"} installed`,
-      ];
-      if (report.errors.length) parts.push(`${report.errors.length} error(s): ${report.errors.join("; ")}`);
+      const result = await window.iris.removeLegacyClaudeArtifacts();
+      const parts = [`${result.removed.length} leftover file(s) removed from ~/.claude`];
+      if (result.errors.length) parts.push(`${result.errors.length} error(s): ${result.errors.join("; ")}`);
       setInstallReport(parts.join(", ") + ".");
+      setLegacyArtifacts(await window.iris.getLegacyClaudeArtifacts());
     } finally {
       setInstallingPrereqs(false);
-      await checkClaude();
     }
   }
 
@@ -364,32 +405,37 @@ export default function SetupPanel({
   const claudeSection = (
     <Section
       title="Claude pipeline (optional)"
-      hint="Iris talks to you with just a Gemini key. Installing the Claude Code CLI additionally unlocks the PO/DEV build pipeline — recheck any time from here."
+      hint="Iris talks to you with just a Gemini key. Claude Code ships inside Iris — adding a Claude credential below additionally unlocks the PO/DEV build pipeline. Recheck any time from here."
     >
       <div className="setup-actions">
         <button className="setup-btn" onClick={checkClaude} disabled={claude.status === "testing"}>
           {claude.status === "testing" ? <Loader2 size={14} className="spin" /> : null}
-          Check Claude
+          Re-check
         </button>
-        <TestBadge state={claude} okLabel="Ready" />
+        <TestBadge state={claude} okLabel="Pipeline ready" />
       </div>
       {pipelinePrereqs ? (
         <p className="setup-note">
           {pipelinePrereqs.pipelineAvailable
             ? "Pipeline enabled — PO/DEV tools and the Work Stream panel are active."
-            : "Pipeline off — chat-only mode. Install the Claude Code CLI, then recheck, to unlock PO/DEV."}
+            : pipelinePrereqs.reachable
+              ? "Pipeline off — chat-only mode. Add a Claude credential below to unlock PO/DEV."
+              : "Pipeline off — Iris could not launch its bundled Claude binary. Reinstalling the app should fix this."}
         </p>
       ) : null}
       {claude.billing ? <p className="setup-note">{claude.billing}</p> : null}
-      {pipelinePrereqs?.reachable ? (
-        <>
+      {/* Credential entry is always available. It used to be hidden behind
+          `pipelinePrereqs?.reachable`, which meant the fields did not exist
+          until the probe returned — and would stay hidden forever on the one
+          machine where the probe fails, i.e. the user who most needs to act. */}
+      <>
           <label className="setup-field">
             <span>Subscription token</span>
             <input
               type="password"
               value={poToken}
               placeholder={
-                poTokenSet ? "Token saved — paste a new one to replace it" : "Paste the output of `claude setup-token`"
+                poTokenSet ? "Token saved — paste a new one to replace it" : "Paste the token the command below prints"
               }
               onChange={(event) => {
                 setPoToken(event.target.value);
@@ -399,8 +445,9 @@ export default function SetupPanel({
               spellCheck={false}
             />
             <small className="setup-note">
-              Run <code>claude setup-token</code> in a terminal and paste the token here so PO bills against your
-              Claude subscription. Stored locally only, never shown again.
+              Bills against your Claude subscription. Iris ships the Claude CLI, so you can generate this without
+              installing anything: run <code>{claudeSetupTokenCommand}</code> in Terminal and paste the result here.
+              Stored locally only, never shown again.
             </small>
           </label>
           <div className="setup-actions">
@@ -423,13 +470,58 @@ export default function SetupPanel({
               </button>
             ) : null}
           </div>
+          <label className="setup-field">
+            <span>Anthropic API key</span>
+            <input
+              type="password"
+              value={apiKey}
+              placeholder={apiKeySet ? "Key saved — paste a new one to replace it" : "sk-ant-…"}
+              onChange={(event) => {
+                setApiKey(event.target.value);
+                setPoTokenError(null);
+              }}
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <small className="setup-note">
+              An alternative to the subscription token, for users without a Claude plan — billed per token from
+              console.anthropic.com. Either credential unlocks the pipeline; the subscription token wins when both
+              are set.
+            </small>
+          </label>
+          <div className="setup-actions">
+            <button
+              className="setup-btn"
+              onClick={() => applyCredential("save", "ANTHROPIC_API_KEY")}
+              disabled={poTokenBusy || !apiKey.trim()}
+            >
+              {poTokenBusy ? <Loader2 size={14} className="spin" /> : null}
+              Save key
+            </button>
+            {apiKeySet ? (
+              <button
+                className="setup-btn ghost"
+                data-no-dwell
+                onClick={() => applyCredential("remove", "ANTHROPIC_API_KEY")}
+                disabled={poTokenBusy}
+              >
+                Remove
+              </button>
+            ) : null}
+          </div>
           {poTokenError ? <p className="setup-note">{poTokenError}</p> : null}
+      </>
+      {/* Everything below reports on the bundled runtime and the skills on
+          disk, so it only renders once the probe has actually returned. */}
+      {pipelinePrereqs ? (
+        <>
           <div className="setup-perms">
-            <PrereqRow
-              label="openspec CLI"
+            <BundledRow label="Claude Code (bundled)" ok={pipelinePrereqs.reachable} detail={pipelinePrereqs.version} />
+            <BundledRow
+              label="OpenSpec (bundled)"
               ok={pipelinePrereqs.openspecOk}
-              okDetail={pipelinePrereqs.openspecVersion}
-              installHint={pipelinePrereqs.openspecInstallHint}
+              detail={pipelinePrereqs.openspecVersion}
+              brokenHint={pipelinePrereqs.openspecInstallHint}
             />
             <PrereqRow
               label="Global skills (OpenSpec + Grill Me/TDD/code-review)"
@@ -437,31 +529,37 @@ export default function SetupPanel({
               okDetail={pipelinePrereqs.skillsOk ? undefined : `missing: ${pipelinePrereqs.missingSkills.join(", ")}`}
               installHint={pipelinePrereqs.skillsInstallHint}
             />
-            <PrereqRow
-              label="Iris agents (PO/DEV personas)"
-              ok={pipelinePrereqs.agentsOk}
-              okDetail={pipelinePrereqs.agentsOk ? undefined : `missing: ${pipelinePrereqs.missingAgents.join(", ")}`}
-              installHint='Use "Install missing" below, or the Install agents button on the pipeline bar.'
+            {/* No "Iris agents" row: the PO/DEV personas ship inside the app and
+                are handed to the SDK by value, so there is nothing to install and
+                nothing that can be missing. A persona that genuinely fails to load
+                is a broken bundle, and surfaces as a run failure naming the role. */}
+            <BundledRow
+              label="Skills & /opsx commands (bundled plugin)"
+              ok={pipelinePrereqs.skillsOk}
+              detail={pipelinePrereqs.skillsDetail}
+              brokenHint={pipelinePrereqs.skillsInstallHint}
             />
-            <PrereqRow
+            <BundledRow
               label="Second-brain notes (LLM-Wiki skills)"
               ok={pipelinePrereqs.notesSkillsOk}
-              okDetail={
-                pipelinePrereqs.notesSkillsOk ? undefined : `missing: ${pipelinePrereqs.missingNotesSkills.join(", ")}`
-              }
-              installHint={pipelinePrereqs.notesSkillsInstallHint}
+              detail="in the bundled plugin"
+              brokenHint={pipelinePrereqs.notesSkillsInstallHint}
             />
           </div>
-          {!pipelinePrereqs.openspecOk ||
-          !pipelinePrereqs.skillsOk ||
-          !pipelinePrereqs.agentsOk ||
-          !pipelinePrereqs.notesSkillsOk ? (
-            <div className="setup-actions">
-              <button className="setup-btn" onClick={installMissingPrereqs} disabled={installingPrereqs}>
-                {installingPrereqs ? <Loader2 size={14} className="spin" /> : null}
-                Install missing
-              </button>
-            </div>
+          {legacyArtifacts && legacyArtifacts.count > 0 ? (
+            <>
+              <p className="setup-note">
+                An older Iris copied {legacyArtifacts.count} file(s) into {legacyArtifacts.dir}. Iris no longer reads
+                or writes there — its skills and personas ship inside the app — so these are leftovers you can safely
+                remove. Nothing else in that folder is touched.
+              </p>
+              <div className="setup-actions">
+                <button className="setup-btn ghost" onClick={removeLegacyArtifacts} disabled={installingPrereqs}>
+                  {installingPrereqs ? <Loader2 size={14} className="spin" /> : null}
+                  Remove leftovers
+                </button>
+              </div>
+            </>
           ) : null}
           {installReport ? <p className="setup-note">{installReport}</p> : null}
         </>
@@ -717,9 +815,9 @@ export default function SetupPanel({
       <div className="setup-welcome">
         <h2>Welcome to Iris</h2>
         <p>
-          Iris is a hands-free voice companion — add a Gemini key and start talking. If you also have the Claude
-          Code CLI installed, Iris unlocks an optional PO/DEV build pipeline for real work. Let's get you set up
-          in under a minute.
+          Iris is a hands-free voice companion — add a Gemini key and start talking. Claude Code ships inside
+          Iris, so adding a Claude credential also unlocks an optional PO/DEV build pipeline for real work —
+          with nothing else to install. Let's get you set up in under a minute.
         </p>
       </div>
     );
@@ -941,8 +1039,39 @@ function TestBadge({ state, okLabel }: { state: TestState; okLabel: string }) {
   return null;
 }
 
-// Read-only prerequisite check row (openspec CLI, global skills) — Iris never
-// installs these itself; it only reports presence and a copyable command.
+// Status row for a runtime that ships *inside* the app (Claude Code, OpenSpec).
+// Deliberately not a PrereqRow: there is no command the user could run to fix
+// it, so offering a copyable install hint would be actively misleading. A
+// failure here means a damaged bundle, and the row says so.
+function BundledRow({
+  label,
+  ok,
+  detail,
+  brokenHint,
+}: {
+  label: string;
+  ok: boolean;
+  detail?: string;
+  brokenHint?: string;
+}) {
+  return (
+    <div className={`setup-perm ${ok ? "granted" : "denied"}`}>
+      <span className="perm-label">
+        {label}
+        {ok && detail ? <em>{detail}</em> : null}
+        {!ok && brokenHint ? <em>{brokenHint}</em> : null}
+      </span>
+      <span className={`setup-result ${ok ? "ok" : "err"}`}>
+        {ok ? <Check size={13} /> : <X size={13} />}
+        {ok ? "Bundled" : "Damaged"}
+      </span>
+    </div>
+  );
+}
+
+// Read-only prerequisite check row (global skills) — these live on disk under
+// ~/.claude because Claude Code loads skills by name. Iris can install them on
+// request; the row reports presence and offers a copyable command.
 function PrereqRow({
   label,
   ok,
