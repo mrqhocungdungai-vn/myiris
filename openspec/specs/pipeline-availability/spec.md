@@ -44,7 +44,7 @@ The renderer SHALL receive the pipeline-availability state from the main process
 
 ### Requirement: SetupPanel reports pipeline prerequisites with install guidance
 
-The SetupPanel SHALL report, as checks beside the existing Claude CLI and subscription-token rows: the `openspec` CLI (resolved the same way the runtime resolves it), the required global skills under `~/.claude/skills` (`grilling`, `tdd`, `code-review`, `diagnosing-bugs`, `openspec-propose`, `openspec-apply-change`, `openspec-archive-change` — exactly the skills the personas invoke), and the installed Iris agent personas under `~/.claude/agents/` (`iris-po.md`, `iris-dev.md`), each as present/missing. All rows SHALL share a re-check action. Missing prerequisites SHALL be resolvable two ways: the one-click bundled install action (see the `pipeline-setup-install` capability) or the copyable manual install commands shown per row. The app SHALL NOT write into `~/.claude` at startup or without explicit user action.
+The SetupPanel SHALL report, beside the Claude runtime and credential rows, whether the `openspec` CLI and the skills plugin resolve from the app bundle (resolved the same way the runtime resolves them), each as bundled/damaged. All rows SHALL share a re-check action. Because every component ships inside the app, a failing row means a damaged bundle and SHALL point at reinstalling rather than offering an install command that could not fix it — the only genuinely user-fixable row is the credential. The app SHALL NOT write into `~/.claude` at all.
 
 #### Scenario: Missing prerequisites are actionable
 
@@ -58,7 +58,7 @@ The SetupPanel SHALL report, as checks beside the existing Claude CLI and subscr
 
 #### Scenario: Skills check is presence-based
 
-- **WHEN** the skills directories exist under `~/.claude/skills`
+- **WHEN** the skill directories exist in the app's bundled plugin
 - **THEN** the panel reports them as detected (presence, not semantic validation), and deeper problems still surface through normal PO/DEV run errors
 
 #### Scenario: No phantom requirements

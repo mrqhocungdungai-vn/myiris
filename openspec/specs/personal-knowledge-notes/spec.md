@@ -47,19 +47,21 @@ The notes vault SHALL be a user-owned Obsidian vault at `~/iris-second-brain`. I
 - **WHEN** the user captures their very first note and no `wiki-config.md` exists yet under `~/iris-second-brain`
 - **THEN** Iris has already pre-seeded `wiki-config.md` and `wiki-schema.md` before the run starts, so the plain-Claude worker's wiki skills find a valid config immediately and proceed to write the note, rather than ending the turn asking the user to run an interactive setup step it has no way to answer in a one-shot run
 
-### Requirement: The notes capability is gated on the Claude CLI and is not a pipeline prerequisite
+### Requirement: The notes capability follows the pipeline gate and is not a pipeline prerequisite
 
-The notes capability SHALL be available exactly when the Claude binary resolves — the same presence gate as the PO/DEV pipeline — because it runs on the plain-Claude worker. Its bundled skills SHALL NOT be reported as pipeline prerequisites: a user who has the Claude CLI but has not set up the PO/DEV pipeline SHALL NOT see the LLM-Wiki skills counted among missing required prerequisites. Vault creation (`~/iris-second-brain` and its pre-seeded config) and skill installation into `~/.claude/skills` are independent actions on independent schedules — the vault MAY exist before the skills are ever installed — so Iris SHALL check actual skill installation, not just vault presence, before telling the user it can capture or retrieve a note.
+The notes capability SHALL be available exactly when the pipeline is — a working bundled runtime plus a configured credential — because it runs on the plain-Claude worker. Its skills ship in the app's bundled plugin rather than being installed on the machine, so the only failure mode left is a damaged bundle, not a missing install.
 
-#### Scenario: No Claude means no notes worker
+Its skills SHALL NOT be reported as pipeline prerequisites: a user who has the pipeline available but has not set up second-brain notes SHALL NOT see the LLM-Wiki skills counted among missing required prerequisites. Vault creation (`~/iris-second-brain` and its pre-seeded config) is independent of the skills being present — the vault MAY exist while the bundle is damaged — so Iris SHALL check the skills are actually resolvable, not just that the vault exists, before telling the user it can capture or retrieve a note.
 
-- **WHEN** the Claude CLI does not resolve on the machine
+#### Scenario: No credential means no notes worker
+
+- **WHEN** the pipeline is unavailable because no Claude credential is configured
 - **THEN** Iris has no notes worker and behaves as the unchanged chat-only companion, without claiming it can save notes
 
-#### Scenario: Claude CLI present but the notes skills are not yet installed
+#### Scenario: Pipeline available but the notes skills cannot be resolved
 
-- **WHEN** the user asks Iris to capture or retrieve a note, and `~/iris-second-brain` already exists (or was just created) but the 6 LLM-Wiki skills are not present under `~/.claude/skills`
-- **THEN** the plain-Claude worker tells the user the notes capability needs to be installed first (pointing at the SetupPanel's "Install missing" action) rather than attempting an ad-hoc, ungoverned note write in place of the real LLM-Wiki workflow
+- **WHEN** the user asks Iris to capture or retrieve a note, and `~/iris-second-brain` already exists (or was just created) but the LLM-Wiki skills cannot be resolved from the app bundle
+- **THEN** the plain-Claude worker tells the user the notes capability is unavailable and the app bundle needs reinstalling, rather than attempting an ad-hoc, ungoverned note write in place of the real LLM-Wiki workflow
 
 #### Scenario: Talk-only user is not flagged for a missing prerequisite
 
@@ -69,4 +71,4 @@ The notes capability SHALL be available exactly when the Claude binary resolves 
 #### Scenario: The notes capability's install state is still visible in the SetupPanel
 
 - **WHEN** the user opens the SetupPanel's Claude section
-- **THEN** a dedicated "Second-brain notes (LLM-Wiki skills)" row shows whether the 6 LLM-Wiki skills are installed, separately from — and without affecting — the PO/DEV pipeline's own prerequisite rows; a missing state here also surfaces the "Install missing" action, which installs the notes skills through the same one-click installer as everything else
+- **THEN** a dedicated "Second-brain notes (LLM-Wiki skills)" row reports whether the skills resolve from the bundle, separately from — and without affecting — the PO/DEV pipeline's own rows; a damaged state points at reinstalling the app, since no user command can repair a bundle

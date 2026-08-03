@@ -1,6 +1,6 @@
 ## Purpose
 
-Subscription-based authentication for the live PO SDK session via `CLAUDE_CODE_OAUTH_TOKEN`, with `ANTHROPIC_API_KEY` deliberately excluded from that session's environment to guarantee subscription (not API) billing. DEV's existing `/login` auth is out of scope.
+Credential handling for both role runs. Either `CLAUDE_CODE_OAUTH_TOKEN` (subscription billing) or `ANTHROPIC_API_KEY` (metered) authenticates a run; when both are present the subscription token wins and the metered keys are stripped from the run's environment, so a stray key cannot silently change the billing path. Both roles run on the Agent SDK against the binary the app ships, so neither has a host `/login` credential store to fall back on and both go through one policy.
 ## Requirements
 ### Requirement: Auth requirements are documented
 

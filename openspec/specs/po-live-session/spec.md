@@ -15,7 +15,7 @@ The PO role SHALL run as a single long-lived Agent SDK session (one continuous c
 
 - **WHEN** the user submits a further PO task in a workstream that already has a live PO session
 - **THEN** the app delivers the task as a new user turn into the existing session
-- **AND** no new `claude -p` process is spawned and no transcript replay is performed for that turn
+- **AND** no new run is started and no transcript replay is performed for that turn
 
 #### Scenario: PO remembers earlier turns within the session
 
@@ -43,12 +43,12 @@ The live PO session SHALL persist until an explicit user-controlled reset and SH
 
 ### Requirement: DEV remains a one-shot headless run
 
-The DEV role SHALL continue to run as a one-shot `claude -p` subprocess per issue, independent of the PO's live-session mechanism. Introducing the PO live session SHALL NOT change how DEV runs are dispatched or completed.
+The DEV role SHALL run as a one-shot headless run per issue, independent of the PO's live-session mechanism. The two roles differ in **lifetime**, not in transport: both run on the Agent SDK's `query()`, PO as a resident session that can pause to ask, DEV as a single run that never asks. DEV is stateless because the task list it works from is already settled — the grilling that resolves ambiguity happens in PO, before a `tasks.md` exists.
 
 #### Scenario: DEV run is dispatched as a discrete process
 
 - **WHEN** the user submits a DEV task
-- **THEN** the app spawns a one-shot headless `claude -p` subprocess for that issue and reports its result on process exit
+- **THEN** the app starts a one-shot headless run for that issue and reports its result when the run completes
 
 #### Scenario: DEV does not hold a resident session
 

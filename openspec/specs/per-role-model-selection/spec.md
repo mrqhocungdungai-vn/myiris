@@ -39,12 +39,12 @@ For each role, the effective model SHALL resolve in this order: the workstream's
 
 ### Requirement: DEV runs receive the model at run start
 
-DEV (and only DEV — not plain Claude) runs SHALL pass the resolved model to the spawned `claude -p` subprocess via `--model <id>`. The model SHALL be resolved when the run actually starts executing, not when it is submitted, so a model change made while a task waits in the run queue applies to that task.
+DEV (and only DEV — not plain Claude) runs SHALL pass the resolved model to the run via the SDK's `model` option. The model SHALL be resolved when the run actually starts executing, not when it is submitted, so a model change made while a task waits in the run queue applies to that task.
 
 #### Scenario: Queued DEV task picks up a model change
 
 - **WHEN** a DEV task is queued behind a running task and the user switches DEV's model from Sonnet 5 to Fable 5 before the queued task starts
-- **THEN** the queued task spawns with `--model claude-fable-5`
+- **THEN** the queued task starts with the model set to `claude-fable-5`
 
 #### Scenario: Plain Claude run is unaffected
 

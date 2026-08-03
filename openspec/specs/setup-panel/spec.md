@@ -6,7 +6,7 @@ A Claude-oriented setup and settings panel (adopted from upstream, Deep Space st
 
 ### Requirement: Claude-oriented setup and settings panel
 
-The app SHALL provide a SetupPanel (adopted from upstream, Deep Space styled) that offers: Gemini API key entry with a live connection test, a Claude CLI availability check (same binary resolution as the worker: PATH probing and `IRIS_CLAUDE_BIN`), subscription-auth status derived from the existing PO billing-path logic (`CLAUDE_CODE_OAUTH_TOKEN` present vs missing) together with an entry field that lets the user set or remove that token, a voice preview, toggles for wake word, interface sounds, demo test data, and Google Search, a wake-word sensitivity control, a camera device selector for gesture control, and a microphone device selector for voice capture (see `microphone-device-selection` spec for its enumeration/persistence/hot-swap/fallback behavior). No Hermes endpoint configuration SHALL exist.
+The app SHALL provide a SetupPanel (adopted from upstream, Deep Space styled) that offers: Gemini API key entry with a live connection test, a Claude runtime check (the same bundled binary the worker uses; the host `PATH` is never probed), subscription-auth status derived from the existing PO billing-path logic (`CLAUDE_CODE_OAUTH_TOKEN` present vs missing) together with an entry field that lets the user set or remove that token, a voice preview, toggles for wake word, interface sounds, demo test data, and Google Search, a wake-word sensitivity control, a camera device selector for gesture control, and a microphone device selector for voice capture (see `microphone-device-selection` spec for its enumeration/persistence/hot-swap/fallback behavior). No Hermes endpoint configuration SHALL exist.
 
 The wake-word sensitivity control SHALL sit with the existing wake-word toggle and SHALL present a small set of named sensitivity levels rather than a raw numeric field, so a user cannot enter a value that makes wake-word detection unusable in either direction. It SHALL control only the detection threshold; the consecutive-evaluation count specified in `wake-sleep-voice` SHALL remain configuration-only and SHALL NOT appear in the panel. When the effective configuration holds a threshold that matches no named level (a hand-edited `.env`), the control SHALL indicate that a custom value is in effect and SHALL NOT silently rewrite it to the nearest level; only an explicit user selection SHALL change it. The control SHALL be shown regardless of pipeline availability, since the wake word is part of chat-only operation, and SHALL be disabled or visibly inert while the wake-word toggle is off.
 
@@ -177,21 +177,28 @@ The SetupPanel SHALL display the current pipeline availability state (chat-only 
 - **WHEN** a re-check detects the Claude binary for the first time while a voice session is connected
 - **THEN** the panel reports the pipeline as ready and offers the standard reconnect action, after which the pipeline surface is live
 
-### Requirement: One-click install of missing pipeline prerequisites
+### Requirement: Cleanup of what older versions installed into the user's Claude Code
 
-The SetupPanel SHALL offer an "Install missing" action beside the prerequisite check rows whenever any of the agents, bundled skills, or `/opsx` commands are missing. Activating it SHALL run the pipeline prerequisite installer (see `pipeline-setup-install`: personas sync-installed, third-party skills/commands copied only where missing), then automatically re-run the checks so the rows reflect the new state in place. The per-row copyable manual commands SHALL remain available as a fallback, and the PipelineBar's existing "Install agents" action SHALL keep working unchanged (both paths call the same agents install).
+There is nothing to install: Claude Code, the `openspec` CLI, the personas, and the skills and `/opsx` commands all ship inside the app. The SetupPanel SHALL therefore report bundled components as present or damaged, and SHALL NOT offer an install action, since no user command can repair a damaged bundle.
 
-#### Scenario: One click turns the rows green
+For machines that ran an earlier version, the panel SHALL report how many files that version wrote into the user's `~/.claude`, and SHALL offer to remove exactly those paths. Removal SHALL require an explicit user action and SHALL leave anything the app did not install untouched.
 
-- **WHEN** the agents and skills rows show missing and the user clicks "Install missing"
-- **THEN** the installer runs, the checks re-run automatically, and the previously missing rows report present without reopening the panel
+#### Scenario: Bundled components report present, with no install offered
 
-#### Scenario: Install reports what it did
+- **WHEN** the panel checks the bundled Claude runtime, `openspec`, and the skills plugin
+- **THEN** each row reports bundled or damaged, and no install action is presented
 
-- **WHEN** the install action completes
-- **THEN** the panel surfaces the result (installed vs already-present vs errors) rather than silently flipping state
+#### Scenario: Leftovers from an older version are offered for removal
 
-#### Scenario: Manual path still works
+- **WHEN** the panel opens on a machine where an earlier version wrote skills, commands, or personas into `~/.claude`
+- **THEN** it reports how many such files exist and offers to remove them, without modifying anything until the user acts
 
-- **WHEN** a user prefers their own tooling and runs the copyable commands instead
-- **THEN** re-check reflects their install identically, and the "Install missing" button disappears once nothing is missing
+#### Scenario: A fresh machine is offered no cleanup
+
+- **WHEN** the panel opens on a machine that never ran an older version
+- **THEN** no cleanup action is shown
+
+#### Scenario: Removal is reported, not silent
+
+- **WHEN** the cleanup action completes
+- **THEN** the panel surfaces what was removed and any errors, rather than silently flipping state
