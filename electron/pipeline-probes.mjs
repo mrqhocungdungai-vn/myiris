@@ -256,14 +256,19 @@ export function createPipelineProbes({
       billingError: billing.ok ? undefined : "No Claude credential set yet.",
       openspecOk: openspecStatus.ok,
       openspecVersion: openspecStatus.version,
-      // Bundled with the app now — a failure here is a packaging problem, not
-      // something the user can fix by installing anything.
-      openspecInstallHint: "OpenSpec ships with Iris; if this fails, reinstall the app.",
+      // Every `*BrokenHint` names a damaged bundle, never an install step: these
+      // components ship with the app, so there is nothing the user could install
+      // to fix one. They are called `Broken`, not `Install`, precisely so the
+      // renderer cannot label a button "Copy install command" and put a sentence
+      // of English on the clipboard — which is exactly what it used to do.
+      openspecBrokenHint: "OpenSpec ships with Iris; if this fails, reinstall the app.",
       skillsOk: skillsStatus.ok,
+      // Structured form of what the hint below says in prose: the hint is derived
+      // from this, and the declared type promises an array, never undefined.
       missingSkills: skillsStatus.missing,
       // Namespaced by the plugin, which is how the personas address them.
       skillsDetail: skillsStatus.ok ? `${REQUIRED_SKILLS.length} skills as iris:*` : undefined,
-      skillsInstallHint: skillsStatus.ok
+      skillsBrokenHint: skillsStatus.ok
         ? ""
         : `missing from the app bundle: ${skillsStatus.missing.join(", ")} — reinstall Iris`,
       // Informational only — not a pipeline gate: a Talk-only user with these
@@ -271,7 +276,7 @@ export function createPipelineProbes({
       // second-brain notes capability specifically.
       notesSkillsOk: notesSkillsStatus.ok,
       missingNotesSkills: notesSkillsStatus.missing,
-      notesSkillsInstallHint: notesSkillsStatus.ok
+      notesSkillsBrokenHint: notesSkillsStatus.ok
         ? ""
         : `missing from the app bundle: ${notesSkillsStatus.missing.join(", ")} — reinstall Iris`,
     };

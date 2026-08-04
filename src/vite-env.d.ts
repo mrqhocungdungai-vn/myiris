@@ -162,14 +162,14 @@ type ClaudeHealth = {
   billingError?: string;
   openspecOk: boolean;
   openspecVersion?: string;
-  openspecInstallHint: string;
+  openspecBrokenHint: string;
   skillsOk: boolean;
   missingSkills: string[];
   skillsDetail?: string;
-  skillsInstallHint: string;
+  skillsBrokenHint: string;
   notesSkillsOk: boolean;
   missingNotesSkills: string[];
-  notesSkillsInstallHint: string;
+  notesSkillsBrokenHint: string;
 };
 
 type PipelineStatus = {

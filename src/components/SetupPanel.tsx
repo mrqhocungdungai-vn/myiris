@@ -91,8 +91,10 @@ export default function SetupPanel({
   const [gemini, setGemini] = useState<TestState>({ status: "idle" });
   const [claude, setClaude] = useState<TestState & { billing?: string }>({ status: "idle" });
   const [pipelinePrereqs, setPipelinePrereqs] = useState<ClaudeHealth | null>(null);
-  const [installingPrereqs, setInstallingPrereqs] = useState(false);
-  const [installReport, setInstallReport] = useState<string | null>(null);
+  // Nothing here installs anything any more; the only write this panel can make
+  // outside `.env` is removing what an older Iris left in ~/.claude.
+  const [removingLegacy, setRemovingLegacy] = useState(false);
+  const [legacyReport, setLegacyReport] = useState<string | null>(null);
   // Files an older Iris wrote into ~/.claude. Iris neither reads nor writes
   // there now, so these are inert — offered for removal, never removed silently.
   const [legacyArtifacts, setLegacyArtifacts] = useState<LegacyClaudeArtifacts | null>(null);
@@ -281,16 +283,16 @@ export default function SetupPanel({
     : "claude setup-token";
 
   async function removeLegacyArtifacts() {
-    setInstallingPrereqs(true);
-    setInstallReport(null);
+    setRemovingLegacy(true);
+    setLegacyReport(null);
     try {
       const result = await window.iris.removeLegacyClaudeArtifacts();
       const parts = [`${result.removed.length} leftover file(s) removed from ~/.claude`];
       if (result.errors.length) parts.push(`${result.errors.length} error(s): ${result.errors.join("; ")}`);
-      setInstallReport(parts.join(", ") + ".");
+      setLegacyReport(parts.join(", ") + ".");
       setLegacyArtifacts(await window.iris.getLegacyClaudeArtifacts());
     } finally {
-      setInstallingPrereqs(false);
+      setRemovingLegacy(false);
     }
   }
 
@@ -526,29 +528,27 @@ export default function SetupPanel({
               label="OpenSpec (bundled)"
               ok={pipelinePrereqs.openspecOk}
               detail={pipelinePrereqs.openspecVersion}
-              brokenHint={pipelinePrereqs.openspecInstallHint}
+              brokenHint={pipelinePrereqs.openspecBrokenHint}
             />
-            <PrereqRow
-              label="Global skills (OpenSpec + Grill Me/TDD/code-review)"
-              ok={pipelinePrereqs.skillsOk}
-              okDetail={pipelinePrereqs.skillsOk ? undefined : `missing: ${pipelinePrereqs.missingSkills.join(", ")}`}
-              installHint={pipelinePrereqs.skillsInstallHint}
-            />
-            {/* No "Iris agents" row: the PO/DEV personas ship inside the app and
-                are handed to the SDK by value, so there is nothing to install and
-                nothing that can be missing. A persona that genuinely fails to load
-                is a broken bundle, and surfaces as a run failure naming the role. */}
+            {/* One row per bundled component, and every row reports the same two
+                states: Bundled, or Damaged. There is no row the user can fix by
+                installing something — the credential above is the only genuinely
+                user-fixable item in this panel. Nor is there an "Iris agents" row:
+                the verb personas ship inside the app and are handed to the SDK by
+                value, so there is nothing that can be missing. A persona that fails
+                to load is a broken bundle, and surfaces as a run failure naming the
+                verb. */}
             <BundledRow
               label="Skills & /opsx commands (bundled plugin)"
               ok={pipelinePrereqs.skillsOk}
               detail={pipelinePrereqs.skillsDetail}
-              brokenHint={pipelinePrereqs.skillsInstallHint}
+              brokenHint={pipelinePrereqs.skillsBrokenHint}
             />
             <BundledRow
               label="Second-brain notes (LLM-Wiki skills)"
               ok={pipelinePrereqs.notesSkillsOk}
               detail="in the bundled plugin"
-              brokenHint={pipelinePrereqs.notesSkillsInstallHint}
+              brokenHint={pipelinePrereqs.notesSkillsBrokenHint}
             />
           </div>
           {legacyArtifacts && legacyArtifacts.count > 0 ? (
@@ -559,14 +559,14 @@ export default function SetupPanel({
                 remove. Nothing else in that folder is touched.
               </p>
               <div className="setup-actions">
-                <button className="setup-btn ghost" onClick={removeLegacyArtifacts} disabled={installingPrereqs}>
-                  {installingPrereqs ? <Loader2 size={14} className="spin" /> : null}
+                <button className="setup-btn ghost" onClick={removeLegacyArtifacts} disabled={removingLegacy}>
+                  {removingLegacy ? <Loader2 size={14} className="spin" /> : null}
                   Remove leftovers
                 </button>
               </div>
             </>
           ) : null}
-          {installReport ? <p className="setup-note">{installReport}</p> : null}
+          {legacyReport ? <p className="setup-note">{legacyReport}</p> : null}
         </>
       ) : null}
     </Section>
@@ -1062,10 +1062,17 @@ function TestBadge({ state, okLabel }: { state: TestState; okLabel: string }) {
   return null;
 }
 
-// Status row for a runtime that ships *inside* the app (Claude Code, OpenSpec).
-// Deliberately not a PrereqRow: there is no command the user could run to fix
-// it, so offering a copyable install hint would be actively misleading. A
-// failure here means a damaged bundle, and the row says so.
+// Status row for anything that ships *inside* the app — which is now everything
+// this panel reports except the credential. There is no command the user could
+// run to fix a failure here, so the row never offers one: a copyable "install"
+// hint for a bundled component would be actively misleading. A failure means a
+// damaged bundle, and the row says exactly that (Bundled / Damaged).
+//
+// This used to be one of two row components. The other reported the same
+// `skillsOk` field under a "Global skills" label and offered a "Copy install
+// command" button, from when skills really did live in the user's ~/.claude — so
+// the panel showed one state twice, once saying "install these" and once saying
+// "Bundled". This row is the only one now.
 function BundledRow({
   label,
   ok,
@@ -1088,54 +1095,6 @@ function BundledRow({
         {ok ? <Check size={13} /> : <X size={13} />}
         {ok ? "Bundled" : "Damaged"}
       </span>
-    </div>
-  );
-}
-
-// Read-only prerequisite check row (global skills) — these live on disk under
-// ~/.claude because Claude Code loads skills by name. Iris can install them on
-// request; the row reports presence and offers a copyable command.
-function PrereqRow({
-  label,
-  ok,
-  okDetail,
-  installHint,
-}: {
-  label: string;
-  ok: boolean;
-  okDetail?: string;
-  installHint: string;
-}) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <div className={`setup-perm ${ok ? "granted" : "idle"}`}>
-      <span className="perm-label">
-        {label}
-        {okDetail ? <em>{okDetail}</em> : null}
-      </span>
-      {ok ? (
-        <span className="setup-result ok">
-          <Check size={13} />
-          Detected
-        </span>
-      ) : (
-        <button
-          className="setup-btn ghost"
-          title={installHint}
-          onClick={async () => {
-            try {
-              await navigator.clipboard.writeText(installHint);
-              setCopied(true);
-              setTimeout(() => setCopied(false), 2000);
-            } catch {
-              // Clipboard access can fail silently on some platforms; the
-              // command is still visible in the title tooltip.
-            }
-          }}
-        >
-          {copied ? "Copied" : "Copy install command"}
-        </button>
-      )}
     </div>
   );
 }

@@ -146,23 +146,25 @@ describe("pipeline-probes", () => {
       "error",
       "missingNotesSkills",
       "missingSkills",
-      "notesSkillsInstallHint",
+      "notesSkillsBrokenHint",
       "notesSkillsOk",
-      "openspecInstallHint",
+      "openspecBrokenHint",
       "openspecOk",
       "openspecVersion",
       "pipelineAvailable",
       "reachable",
+      "skillsBrokenHint",
       "skillsDetail",
-      "skillsInstallHint",
       "skillsOk",
       "version",
     ]);
   });
 
   it("never sends an undefined array the renderer would call .join on", async () => {
-    // The specific shape of the crash: `missing*` fields are dereferenced
-    // unguarded in SetupPanel, so an absent one is a render-time TypeError.
+    // `src/vite-env.d.ts` declares both as `string[]`, so shipping `undefined`
+    // would be a lie to every consumer, and any consumer that iterates or joins
+    // one gets a render-time TypeError rather than an empty list. The prose in
+    // `*BrokenHint` is derived from these, so they cannot silently go absent.
     const probes = make();
     const health = await probes.checkClaudeHealth();
 
