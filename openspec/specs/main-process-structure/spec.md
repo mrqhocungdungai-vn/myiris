@@ -127,7 +127,7 @@ Each module SHALL still own its own stop or flush implementation; only the seque
 #### Scenario: Teardown order is explicit
 
 - **WHEN** the app quits
-- **THEN** the Live session is closed, then every live DEV child is group-killed, then resident PO sessions are closed, then the canvas is flushed, then the canvas MCP listener and the vault watcher stop — in that order, from one routine
+- **THEN** the Live session is closed, then every live stateless run's child is group-killed, then resident stateful sessions are closed, then the canvas is flushed, then the canvas MCP listener and the vault watcher stop — in that order, from one routine
 
 #### Scenario: Teardown stays bounded
 
@@ -136,7 +136,7 @@ Each module SHALL still own its own stop or flush implementation; only the seque
 
 #### Scenario: Quit during an active run kills the process group
 
-- **WHEN** the app quits while a DEV run is active
+- **WHEN** the app quits while a stateless run is active
 - **THEN** the detached child's process group is signalled, leaving no orphaned tool subprocess
 
 ### Requirement: All renderer IPC registration lives in one module
@@ -210,10 +210,10 @@ Every existing capability spec SHALL remain true against its current text withou
 
 #### Scenario: Existing specs remain true
 
-- **WHEN** the capability specs for voice relay, PO live session, run execution queue, listen-only mode, HUD, session announcements and config persistence are checked against the reorganized code
+- **WHEN** the capability specs for voice relay, the stateful verb session, run execution queue, listen-only mode, HUD, session announcements and config persistence are checked against the reorganized code
 - **THEN** each remains satisfied with no change to its requirement text
 
 #### Scenario: The app behaves identically
 
-- **WHEN** the manual smoke path runs (launch, wake, hold a voice turn, submit a task through the review gate, answer a PO question by voice, cross the PO→DEV gate, switch workstream, choose a project folder, enter and exit HUD mode, enter and exit listen-only mode, mute the microphone, quit)
+- **WHEN** the manual smoke path runs (launch, wake, hold a voice turn, submit a task through the review gate, answer a question by voice, dispatch an implementing verb against an open change, switch workstream, choose a project folder, enter and exit HUD mode, enter and exit listen-only mode, mute the microphone, quit)
 - **THEN** every step behaves exactly as it did before the split

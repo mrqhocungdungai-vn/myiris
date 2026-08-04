@@ -1,16 +1,16 @@
 # openspec-native-pipeline Specification
 
 ## Purpose
-TBD - created by archiving change po-voice-controller. Update Purpose after archive.
+OpenSpec is the pipeline's only spec-driven-development surface. Requirements are grilled before any planning artifact exists, process work is specified before it is implemented, and the project's own `openspec/` tree — never a parallel task list Iris keeps for itself — is what gets read to answer what remains. The implementing verb reads the project's actual state and acts on it rather than refusing when no change happens to be open.
 ## Requirements
 
 ### Requirement: Grilling gates artifact creation
-The PO agent SHALL NOT create any planning artifact until it has been instructed to grill, and SHALL use the `grilling` skill to elicit and stress-test requirements first. Grilling's clarifying questions SHALL surface through the voice relay (`AskUserQuestion`), not raw stdin.
+The shaping verb SHALL NOT create any planning artifact until it has been instructed to grill, and SHALL use the `grilling` skill to elicit and stress-test requirements first. Grilling's clarifying questions SHALL surface through the voice relay (`AskUserQuestion`), not raw stdin.
 
-#### Scenario: PO refuses to produce artifacts before grilling
+#### Scenario: The shaping verb refuses to produce artifacts before grilling
 
-- **WHEN** the PO receives a work intent but has not been told to grill
-- **THEN** the PO starts a grilling pass to clarify the request
+- **WHEN** the shaping verb receives a work intent but has not been told to grill
+- **THEN** it starts a grilling pass to clarify the request
 - **AND** it does not yet create an OpenSpec change or any spec/task file
 
 #### Scenario: Grilling questions reach the voice user
@@ -64,27 +64,27 @@ The execution verb SHALL NOT refuse a request because no change has been propose
 - **THEN** it is parked for the user's review before any work begins
 
 ### Requirement: Task-status query reads OpenSpec
-When asked whether tasks remain, the PO SHALL read the open changes' `tasks.md` files and report done/not-done, and MAY brainstorm a new change when none remain.
+When asked whether tasks remain, the verb that answers SHALL read the open changes' `tasks.md` files and report done/not-done. When none remain, Iris MAY follow up by invoking the shaping verb to brainstorm a new change.
 
-#### Scenario: PO reports outstanding tasks
+#### Scenario: Outstanding tasks are reported
 
-- **WHEN** the user asks the PO "are there tasks left?"
-- **THEN** the PO reads `openspec/changes/*/tasks.md` and reports which tasks are outstanding or that all are complete
+- **WHEN** the user asks "are there tasks left?"
+- **THEN** the answering verb reads `openspec/changes/*/tasks.md` and reports which tasks are outstanding or that all are complete
 
 #### Scenario: No tasks remain
 
 - **WHEN** all changes are complete and the user asks what is next
-- **THEN** the PO reports completion and may propose or brainstorm a new change
+- **THEN** completion is reported, and Iris may go on to propose or brainstorm a new change
 
 ### Requirement: OpenSpec is the single SDD surface
 The pipeline SHALL use OpenSpec (`openspec/changes/` → `openspec/specs/`) as the only spec-driven-development surface; the personas SHALL NOT create or read a `.scratch/<slug>/` hand-written SDD. A `cwd` without OpenSpec SHALL be initialized with `openspec init` before proposing.
 
 #### Scenario: New project is initialized
 
-- **WHEN** the PO is about to propose in a `cwd` that has no `openspec/` directory
+- **WHEN** the shaping verb is about to propose in a `cwd` that has no `openspec/` directory
 - **THEN** `openspec init` is run in that `cwd` before the change is created
 
 #### Scenario: No .scratch artifacts are produced
 
-- **WHEN** the PO completes its work for a feature
+- **WHEN** the shaping verb completes its work for a feature
 - **THEN** the deliverables live under `openspec/changes/<name>/` and no `.scratch/<slug>/` analysis/PRD/issue files are written

@@ -1,6 +1,6 @@
 ## Purpose
 
-TBD — orb micro-expressions and synthesized interface sound cues for the Orbital Deck UI.
+How the interface conveys Iris's state without words: orb micro-expressions that make the current activity readable at a glance, and synthesized — never sampled — interface sound cues the user can mute. Like the backdrop, the orb's render loop pauses when nothing is animating it, so an idle app costs nothing to display.
 
 ## Requirements
 

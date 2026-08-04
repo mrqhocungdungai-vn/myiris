@@ -6,14 +6,14 @@ Names the execution behavior the delegation model already relies on: the one-at-
 ## Requirements
 
 ### Requirement: Single execution slot
-The system SHALL allow at most one Claude run (PO turn, DEV run, or plain task) to be mid-execution at any time, system-wide. A task submitted while the slot is free SHALL start immediately; a task submitted while the slot is held SHALL be queued FIFO. Starting a run SHALL be able to fail synchronously (for example, a run rejected at a start-time gate or a transport that fails to launch); when it does, the submitter SHALL receive the run's terminal status rather than a `started` acknowledgement, so the submitter is never told a run started when it did not.
+The system SHALL allow at most one Claude run (a stateful turn, a stateless run, or a plain task) to be mid-execution at any time, system-wide. A task submitted while the slot is free SHALL start immediately; a task submitted while the slot is held SHALL be queued FIFO. Starting a run SHALL be able to fail synchronously (for example, a run rejected at a start-time gate or a transport that fails to launch); when it does, the submitter SHALL receive the run's terminal status rather than a `started` acknowledgement, so the submitter is never told a run started when it did not.
 
 #### Scenario: Submit while idle
 - **WHEN** a task is submitted, no run holds the execution slot, and the run begins running
 - **THEN** the run acquires the slot and starts, and the submitter receives `status: "started"` with the `run_id`
 
 #### Scenario: Submit rejected synchronously at start
-- **WHEN** a task is submitted while the slot is free but the run is finalized during start (e.g. a DEV run with no open change to implement, an uninstalled agent, or a transport that fails to launch)
+- **WHEN** a task is submitted while the slot is free but the run is finalized during start (e.g. a run rejected for lack of an open change, or a transport that fails to launch)
 - **THEN** the submitter receives the run's terminal status (`failed` or `error`) with the reason, not `status: "started"`
 
 #### Scenario: Submit while busy
@@ -71,9 +71,9 @@ The `claude_task_update` event payload SHALL be produced by one projection from 
 - **WHEN** `claude_task_update` events for one run are compared across its lifecycle (queued, started, running, terminal)
 - **THEN** the shared fields are populated identically from the run record at each point in time, with omissions only where a value does not exist yet (e.g. `claude_session_id` before the transport reports one, or `usage` before the run completes)
 ### Requirement: Stopping a run
-Stopping a queued run SHALL remove it from the queue and bring it to the `cancelled` terminal state immediately — emitting exactly one `claude_task_update` with status `cancelled` and marking the run as finalized so it cannot be finalized again — but SHALL NOT route it through the slot-release path: it SHALL NOT release or advance the execution slot and SHALL NOT trigger a completion announcement, because a queued run never held the slot and never started. Stopping the active run SHALL mark it `cancelled` and signal its transport; for a subprocess transport this SHALL target the run's whole process group (SIGTERM to the group), so descendant tool subprocesses spawned by the run are terminated too and never left orphaned — the queue SHALL delegate the actual group-aware kill to an injected transport-kill hook rather than embedding process-group or platform knowledge itself. The slot SHALL be released through the normal finalize-on-termination path, not by the stop call itself. Stopping the active run whose transport has no child process (a PO turn) SHALL likewise mark it `cancelled` and cancel the in-progress turn through a transport-agnostic cancel hook, bringing the run to the `cancelled` terminal state and releasing the slot through the normal finalize path — never leaving the turn running to completion. The resident PO session SHALL survive the cancellation, or be torn down in a way that preserves continuity via its stored session id so a subsequent turn continues the same conversation; only the cancelled turn's in-flight work is discarded.
+Stopping a queued run SHALL remove it from the queue and bring it to the `cancelled` terminal state immediately — emitting exactly one `claude_task_update` with status `cancelled` and marking the run as finalized so it cannot be finalized again — but SHALL NOT route it through the slot-release path: it SHALL NOT release or advance the execution slot and SHALL NOT trigger a completion announcement, because a queued run never held the slot and never started. Stopping the active run SHALL mark it `cancelled` and signal its transport; for a subprocess transport this SHALL target the run's whole process group (SIGTERM to the group), so descendant tool subprocesses spawned by the run are terminated too and never left orphaned — the queue SHALL delegate the actual group-aware kill to an injected transport-kill hook rather than embedding process-group or platform knowledge itself. The slot SHALL be released through the normal finalize-on-termination path, not by the stop call itself. Stopping the active run whose transport has no child process (a stateful turn) SHALL likewise mark it `cancelled` and cancel the in-progress turn through a transport-agnostic cancel hook, bringing the run to the `cancelled` terminal state and releasing the slot through the normal finalize path — never leaving the turn running to completion. The resident stateful session SHALL survive the cancellation, or be torn down in a way that preserves continuity via its stored session id so a subsequent turn continues the same conversation; only the cancelled turn's in-flight work is discarded.
 
-A signalled transport that does not terminate SHALL NOT hold the slot indefinitely. After a bounded grace period following the signal, the system SHALL escalate to an unconditional kill of the same process group, and SHALL finalize the run and release the slot even if the transport never reports termination itself. For a PO turn (no subprocess), the idle-time bound remains the backstop if a cancelled turn fails to settle.
+A signalled transport that does not terminate SHALL NOT hold the slot indefinitely. After a bounded grace period following the signal, the system SHALL escalate to an unconditional kill of the same process group, and SHALL finalize the run and release the slot even if the transport never reports termination itself. For a stateful turn (no subprocess), the idle-time bound remains the backstop if a cancelled turn fails to settle.
 
 #### Scenario: Stop a queued run
 - **WHEN** `stop` is called with the id of a run in status `queued`
@@ -88,15 +88,15 @@ A signalled transport that does not terminate SHALL NOT hold the slot indefinite
 - **WHEN** `finalize` is later called with the id of a run that was cancelled while queued
 - **THEN** the call is a no-op — no further event, no announcement, and no queue advance — because the run is already marked finalized
 
-#### Scenario: Stop the active DEV run
+#### Scenario: Stop the active stateless run
 - **WHEN** `stop` is called with the id of the active run and that run has a child process
 - **THEN** the run is marked `cancelled` and its process group is sent SIGTERM through the injected kill hook; when the process closes, the run finalizes as `cancelled` and the slot is released
 - **AND** no descendant tool subprocess of that run is left running
 
-#### Scenario: Stop an active PO turn
-- **WHEN** `stop` is called with the id of the active run and that run has no child process (a PO turn)
+#### Scenario: Stop an active stateful turn
+- **WHEN** `stop` is called with the id of the active run and that run has no child process (a stateful turn)
 - **THEN** the run is marked `cancelled`, the in-progress turn is cancelled through the cancel hook, the run finalizes as `cancelled` exactly once, and the slot is released
-- **AND** the turn does not continue to completion, while the resident PO session remains available (or resumable via its stored session id) for the next turn
+- **AND** the turn does not continue to completion, while the resident stateful session remains available (or resumable via its stored session id) for the next turn
 
 #### Scenario: A signalled process ignores the signal
 - **WHEN** `stop` is called on the active run, SIGTERM is sent to its process group, and the process has not closed when the grace period elapses
@@ -134,7 +134,7 @@ Only the run currently holding the slot SHALL be subject to the bound. A queued 
 
 While the active run is legitimately blocked waiting for a human answer, the idle bound SHALL be suspended and SHALL NOT accrue. It SHALL resume when the run is unblocked, regardless of how the block was resolved.
 
-This is required because a PO turn paused on `AskUserQuestion` produces no progress signal for as long as `IRIS_PO_QUESTION_TIMEOUT_MS` allows. Without suspension the bound would terminate precisely those runs that are behaving correctly.
+This is required because a stateful turn paused on `AskUserQuestion` produces no progress signal for as long as `IRIS_PO_QUESTION_TIMEOUT_MS` allows. Without suspension the bound would terminate precisely those runs that are behaving correctly.
 
 #### Scenario: Turn paused on a question outlives the idle bound
 

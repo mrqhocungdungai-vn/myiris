@@ -1,16 +1,16 @@
 ## Purpose
 
-TBD — visual handoff comets between the orb and Work Stream, and a per-task step timeline built from existing Claude sidecar events.
+How a delegated run is made legible while it happens and after it ends: a visual handoff between the orb and the Work Stream when work is dispatched and when it returns, a per-run step timeline built from events the run already emits, and a completed card that shows the run's actual result rather than the last line of its activity log. Emission is rate-bounded so a chatty run cannot starve the renderer, and the bound never swallows the terminal result.
 
 ## Requirements
 
 ### Requirement: Visual handoff comets
 
-The UI SHALL render a handoff effect (comet pulse) from the orb to the Work Stream when a Claude task is delegated, and from the Work Stream back to the orb when a task reaches a terminal state, driven purely by observing the tasks array (worker-agnostic), for both PO turns and DEV runs.
+The UI SHALL render a handoff effect (comet pulse) from the orb to the Work Stream when a Claude task is delegated, and from the Work Stream back to the orb when a task reaches a terminal state, driven purely by observing the tasks array (worker-agnostic), for both stateful turns and stateless runs.
 
 #### Scenario: Delegation comet
 
-- **WHEN** a task is submitted to Claude (PO or DEV)
+- **WHEN** a task is submitted to Claude, in either run shape
 - **THEN** a comet animates from the orb to the Work Stream panel and the card shows its submitted stamp
 
 #### Scenario: Completion comet
@@ -20,17 +20,17 @@ The UI SHALL render a handoff effect (comet pulse) from the orb to the Work Stre
 
 ### Requirement: Per-task step timeline from Claude events
 
-Each Work Stream card SHALL display a collapsible step timeline (tool calls / progress notes with running/done states) built from the existing Claude sidecar event stream (`claude_task_update` payloads from DEV NDJSON parsing and PO SDK message routing). Upstream's Hermes SSE ingestion (`hermes_task_event`) SHALL NOT be ported. If the current payload lacks start/end pairing, the existing `claude_task_update` payload MAY be extended with an additive structured phase field — no new IPC channel or event type.
+Each Work Stream card SHALL display a collapsible step timeline (tool calls / progress notes with running/done states) built from the existing Claude sidecar event stream (`claude_task_update` payloads from stateless-run and stateful-session SDK message routing). Upstream's Hermes SSE ingestion (`hermes_task_event`) SHALL NOT be ported. If the current payload lacks start/end pairing, the existing `claude_task_update` payload MAY be extended with an additive structured phase field — no new IPC channel or event type.
 
-#### Scenario: DEV run timeline
+#### Scenario: Stateless run timeline
 
-- **WHEN** a DEV run executes tool calls
+- **WHEN** a stateless run executes tool calls
 - **THEN** the card's timeline shows each step in order, marking the current step as running and prior steps as done, updating in realtime
 
-#### Scenario: PO turn timeline
+#### Scenario: Stateful turn timeline
 
-- **WHEN** a PO turn executes tool calls in the resident SDK session
-- **THEN** the same timeline presentation appears on the PO card, with no PO/DEV rendering differences
+- **WHEN** a stateful turn executes tool calls in the resident SDK session
+- **THEN** the same timeline presentation appears on that card, with no rendering differences between the two run shapes
 
 #### Scenario: Timeline toggle
 

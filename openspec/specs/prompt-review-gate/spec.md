@@ -67,9 +67,9 @@ The flag SHALL NOT be writable by the voice model. No tool declaration exposing 
 ### Requirement: A parked review is resolved over a voice+UI settle-once relay, independent of the execution slot
 A parked review SHALL be held as an at-most-one pending item, resolvable by either a voice tool decision or a UI action, whichever settles first; the later channel SHALL be a no-op. Resolving SHALL be one of: **approve** (optionally with edited brief text), or **cancel**. A subsequent task submission SHALL supersede the currently parked review, replacing it.
 
-The pending review SHALL be a distinct object from the pending PO question and SHALL NOT suspend or resume the execution queue's idle bound, because a parked review holds no execution slot — the slot, if held, belongs to an unrelated run whose progress bound must not be paused by an unrelated review.
+The pending review SHALL be a distinct object from the pending voice question and SHALL NOT suspend or resume the execution queue's idle bound, because a parked review holds no execution slot — the slot, if held, belongs to an unrelated run whose progress bound must not be paused by an unrelated review.
 
-Approve SHALL dispatch the (possibly edited) brief against the **parked** workstream — never a re-read of the currently active workstream — and SHALL relay the real dispatch outcome (`queued`, `started`, or a synchronous terminal rejection such as the DEV no-open-change gate) back through whichever channel approved it. An empty or whitespace-only edited brief SHALL be rejected rather than dispatched.
+Approve SHALL dispatch the (possibly edited) brief against the **parked** workstream — never a re-read of the currently active workstream — and SHALL relay the real dispatch outcome (`queued`, `started`, or a synchronous terminal rejection such as a verb refusing for lack of an open change) back through whichever channel approved it. An empty or whitespace-only edited brief SHALL be rejected rather than dispatched.
 
 #### Scenario: Approve dispatches the parked brief
 - **WHEN** a parked review is approved
@@ -88,8 +88,8 @@ Approve SHALL dispatch the (possibly edited) brief against the **parked** workst
 - **THEN** the previous parked brief is discarded and replaced by the new one, and only the surviving brief can be approved
 
 #### Scenario: Parking does not pause an active run's idle bound
-- **WHEN** a DEV run holds the execution slot and a PO brief is parked for review
-- **THEN** the DEV run keeps the slot and its idle watchdog continues to run, unaffected by the parked review
+- **WHEN** a stateless run holds the execution slot and a brief is parked for review
+- **THEN** the stateless run keeps the slot and its idle watchdog continues to run, unaffected by the parked review
 
 ### Requirement: A review is cancelled on timeout and on session reset, never auto-sent
 An unanswered review SHALL be cancelled after a configurable timeout `IRIS_PROMPT_REVIEW_TIMEOUT_MS` (documented default) — never auto-approved, because auto-sending an unreviewed brief is exactly the waste the gate prevents. A pending review SHALL also be cancelled whenever the session is reset: a new session, a workstream switch, or a project-folder change. On any cancellation the voice layer SHALL be informed the brief was not sent.

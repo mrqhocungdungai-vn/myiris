@@ -20,12 +20,12 @@ The renderer SHALL use the upstream Deep Space visual system: `src/styles/tokens
 
 ### Requirement: Claude-custom styling isolated on Deep Space tokens
 
-All Claude-specific UI styling (`.pipeline-bar`, agent chips and their model segment, `.model-popover`, PO question banner, `.claude-session-line`, chain badges, `.project-bar`, agent install button) SHALL live in a dedicated `src/styles/claude.css`, expressed against the Deep Space token variables from `tokens.css` so the custom UI reads as part of the new skin.
+All Claude-specific UI styling (`.pipeline-bar`, verb chips and their model segment, `.model-popover`, the question banner, `.claude-session-line`, chain badges, `.project-bar`) SHALL live in a dedicated `src/styles/claude.css`, expressed against the Deep Space token variables from `tokens.css` so the custom UI reads as part of the new skin.
 
 #### Scenario: Custom elements render correctly on the new skin
 
 - **WHEN** the deck renders with the Deep Space skin
-- **THEN** pipeline chips, model popover, PO question banner, session line, project bar, and install button are visually legible and positioned as before, with no unstyled or visually broken element
+- **THEN** pipeline chips, model popover, the question banner, session line, and project bar are visually legible and positioned as before, with no unstyled or visually broken element
 
 #### Scenario: Tokens drive custom styling
 

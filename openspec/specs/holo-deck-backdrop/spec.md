@@ -1,6 +1,6 @@
 ## Purpose
 
-TBD — WebGL particle/node network backdrop for the non-HUD deck, with lifecycle-aware render-loop pausing.
+The deck's ambient background: a WebGL particle/node network behind the non-HUD deck, giving the interface depth without competing with the orb or the Work Stream for attention. Its render loop is lifecycle-aware and stops when nothing is looking at it, because a continuously running WebGL loop is a permanent main-thread and GPU cost paid for an invisible surface — see `main-thread-budget` for the budget it answers to.
 
 ## Requirements
 

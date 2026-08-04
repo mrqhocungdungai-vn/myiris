@@ -1,15 +1,15 @@
 ## Purpose
 
-Bundles the third-party skills and commands the personas invoke as repo-vendored snapshots, and provides a single explicit install action that provisions a fresh machine's `~/.claude` in one click — personas sync-installed (Iris-owned), everything else copied only where missing, so no existing tool-managed install (skills.sh, manual `openspec init`) is ever overwritten.
+Bundles the third-party skills and commands the verbs invoke as repo-vendored snapshots and ships them inside the app as a Claude Code plugin, reaching a run through the Agent SDK's `plugins` option. There is no install step and nothing to provision: a fresh machine needs only a Claude credential, and the app never writes into the user's own `~/.claude`.
 ## Requirements
 ### Requirement: Setup and workflow guide is documented bilingually
 
-The repo SHALL contain a voice-first pipeline guide in English (`docs/PIPELINE_GUIDE.md`) and Vietnamese (`docs/PIPELINE_GUIDE.vi.md`), cross-linked, sharing one section structure: what the pipeline is, setup steps ending at the in-app install action, a walkthrough of what to say at each stage (PO grilling → "propose" → DEV "implement remaining tasks" → archive) that explains `/opsx:propose`/`/opsx:apply` are run by the agents rather than typed by the user, an appendix on using the agents directly in Claude Code, and troubleshooting mapped to the SetupPanel check rows. The README pipeline section SHALL link to the guide instead of duplicating it.
+The repo SHALL contain a voice-first pipeline guide in English (`docs/PIPELINE_GUIDE.md`) and Vietnamese (`docs/PIPELINE_GUIDE.vi.md`), cross-linked, sharing one section structure: what the pipeline is, setup steps ending at a saved Claude credential, a walkthrough of what to say at each stage (the shaping verb grills → "propose" → an implementing verb works the tasks → archive) that explains `/opsx:propose`/`/opsx:apply` are run by the agents rather than typed by the user, an appendix on using the agents directly in Claude Code, and troubleshooting mapped to the SetupPanel check rows. The README pipeline section SHALL link to the guide instead of duplicating it.
 
 #### Scenario: A new user reaches a working pipeline from the guide alone
 
-- **WHEN** a community user follows the guide's setup section on a machine with none of the prerequisites
-- **THEN** every step is covered in order (Claude CLI, `claude setup-token`, openspec CLI, in-app install) and ends with the SetupPanel checks green
+- **WHEN** a community user follows the guide's setup section on a machine that has never had Claude Code or the `openspec` CLI installed
+- **THEN** the guide states that both ship inside Iris, covers the one step that remains — obtaining and saving a Claude credential — and ends with the SetupPanel rows reading bundled and the credential row satisfied
 
 #### Scenario: Voice walkthrough teaches speaking, not typing
 
@@ -20,14 +20,14 @@ The repo SHALL contain a voice-first pipeline guide in English (`docs/PIPELINE_G
 
 The vendored third-party skills and `/opsx` commands SHALL ship inside the app as a **Claude Code plugin** (`resources/iris-plugin/`, with `.claude-plugin/plugin.json`, `skills/`, and `commands/`), and SHALL reach a run through the Agent SDK's `plugins` option rather than by being copied anywhere.
 
-Everything the plugin provides is namespaced by the plugin name (`iris:grilling`, `/iris:opsx:apply`). The persona prompts SHALL reference those namespaced names, since that is what the runtime exposes.
+Everything the plugin provides is namespaced by the plugin name (`iris:grilling`, `/iris:opsx:apply`). The verb prompts SHALL reference those namespaced names, since that is what the runtime exposes.
 
 Attribution for the vendored sources SHALL be retained alongside the plugin.
 
 #### Scenario: Skills are available with nothing installed on the machine
 
-- **WHEN** a role run starts on a machine whose `~/.claude` contains no Iris skills or commands
-- **THEN** every skill the personas invoke is available to the run, sourced from the app bundle
+- **WHEN** a run starts on a machine whose `~/.claude` contains no Iris skills or commands
+- **THEN** every skill the verbs invoke is available to the run, sourced from the app bundle
 
 #### Scenario: A damaged bundle is reported as such
 
@@ -38,7 +38,7 @@ Attribution for the vendored sources SHALL be retained alongside the plugin.
 
 The app SHALL NOT write to the user's `~/.claude` — not skills, not commands, not agent personas, and not the session transcripts a run produces. It SHALL NOT read from it either: `settingSources` SHALL exclude the `user` scope, so a run neither depends on nor is perturbed by the user's own Claude Code configuration. The `project` scope SHALL remain enabled, so a run still picks up the settings of the repository it is working in.
 
-`settingSources` alone SHALL NOT be relied on for this. Session transcripts, the always-read global `.claude.json`, and auto-memory are read and written regardless of it, and all resolve under `CLAUDE_CONFIG_DIR`. Every role run SHALL therefore also run with `CLAUDE_CONFIG_DIR` pointed at storage the app owns, and with auto-memory disabled. That directory SHALL be stable across runs, since a resumed session has to find the transcript an earlier run wrote.
+`settingSources` alone SHALL NOT be relied on for this. Session transcripts, the always-read global `.claude.json`, and auto-memory are read and written regardless of it, and all resolve under `CLAUDE_CONFIG_DIR`. Every run SHALL therefore also run with `CLAUDE_CONFIG_DIR` pointed at storage the app owns, and with auto-memory disabled. That directory SHALL be stable across runs, since a resumed session has to find the transcript an earlier run wrote.
 
 A consequence of the pinned directory is that the host Claude Code's own login is no longer reachable. This is intended: a credential SHALL come from the environment, which is what the availability gate already requires. Authenticating from the host's credential store would make the app depend on the user's Claude Code install and would hide, on a developer machine, the failure a machine without one would hit.
 
@@ -46,12 +46,12 @@ For machines that ran an earlier Iris, the app SHALL be able to report exactly w
 
 #### Scenario: A run leaves the user's Claude Code untouched
 
-- **WHEN** any role run executes
+- **WHEN** any run executes
 - **THEN** no file under `~/.claude` is created, modified, or deleted, and nothing under it is loaded into the run
 
 #### Scenario: A run's transcript goes to the app's own storage
 
-- **WHEN** a role run executes and its session transcript is written
+- **WHEN** a run executes and its session transcript is written
 - **THEN** the transcript is written under the app's own state directory, and the user's `~/.claude/projects/` is unchanged
 
 #### Scenario: A resumed session finds its transcript

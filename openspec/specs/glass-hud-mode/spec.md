@@ -32,8 +32,8 @@ HUD mode SHALL present the upstream Glass HUD layout — orb cluster with mute/w
 - **AND** while the cluster is at rest the drawing toggle is hidden like the other controls
 
 ### Requirement: Claude task parity inside the HUD
-Task cards rendered in the HUD tasks column SHALL carry the same Claude-specific presentation as the deck Work Stream: agent (PO/DEV) badge, model, chain badge, live step timeline with toggle, and realtime updates from the existing sidecar events.
+Task cards rendered in the HUD tasks column SHALL carry the same Claude-specific presentation as the deck Work Stream: verb badge, model, chain badge, live step timeline with toggle, and realtime updates from the existing sidecar events.
 
-#### Scenario: DEV run followed from the HUD
-- **WHEN** a DEV run streams tool events while HUD mode is active
+#### Scenario: A stateless run followed from the HUD
+- **WHEN** a stateless run streams tool events while HUD mode is active
 - **THEN** the HUD card shows the same step timeline and completion state the deck card would, without leaving HUD mode

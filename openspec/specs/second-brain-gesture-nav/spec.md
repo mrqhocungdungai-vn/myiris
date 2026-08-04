@@ -1,7 +1,7 @@
 # second-brain-gesture-nav Specification
 
 ## Purpose
-TBD - created by archiving change second-brain-gesture-nav. Update Purpose after archive.
+Hands-free navigation of the second-brain galaxy: point-and-dwell opens a node, a closed fist orbits the camera, a pinch zooms, and the gestures carry into the note reader once a node is open. One authoritative gesture context governs the galaxy and its reader together, so the two can never disagree about which layer owns the pointing hand. It follows the same hand-control opt-in as the rest of the gesture surface, and suspends while Iris is asleep.
 ## Requirements
 ### Requirement: A node is opened hands-free by point-and-dwell
 

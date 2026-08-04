@@ -4,18 +4,18 @@ A mid-turn question/answer loop in which a stateful run's `AskUserQuestion` requ
 
 ## Requirements
 
-### Requirement: SDK-role questions pause the turn and surface to voice
-When the live PO session calls `AskUserQuestion`, the session SHALL pause that turn and the app SHALL surface the request to the Gemini voice layer as a structured event containing the question text and any offered options. The session runs in `bypassPermissions` mode, so tool-use approvals are auto-allowed and do NOT pause the turn — only `AskUserQuestion` does.
+### Requirement: Worker questions pause the turn and surface to voice
+When the live stateful session calls `AskUserQuestion`, the session SHALL pause that turn and the app SHALL surface the request to the Gemini voice layer as a structured event containing the question text and any offered options. The session runs in `bypassPermissions` mode, so tool-use approvals are auto-allowed and do NOT pause the turn — only `AskUserQuestion` does.
 
-#### Scenario: The PO asks a structured question mid-turn
+#### Scenario: The worker asks a structured question mid-turn
 
-- **WHEN** the PO session calls `AskUserQuestion` during a turn
+- **WHEN** the live session calls `AskUserQuestion` during a turn
 - **THEN** the SDK `canUseTool` callback fires, the turn is paused, and the app emits a structured question event (question + options) to the voice layer
 - **AND** no new Claude process is spawned to convey the question
 
 #### Scenario: Question is read aloud to the user
 
-- **WHEN** the app emits a PO question event
+- **WHEN** the app emits a question event
 - **THEN** Gemini reads the question and its options aloud so the user can answer by voice
 
 ### Requirement: Voice answer resumes the same turn
@@ -38,16 +38,16 @@ A voice answer to a pending question SHALL resolve the paused permission callbac
 - **THEN** it applies a sensible default and records it, and does not pause to ask the user — the question tool is not available to it at all
 
 ### Requirement: Pending questions have a safe fallback
-While a PO question is pending, the app SHALL keep the turn paused awaiting a voice answer, and SHALL provide a deterministic fallback if no answer is obtained (timeout or user abandonment) rather than hanging indefinitely.
+While a question is pending, the app SHALL keep the turn paused awaiting a voice answer, and SHALL provide a deterministic fallback if no answer is obtained (timeout or user abandonment) rather than hanging indefinitely.
 
 #### Scenario: User abandons the decision
 
-- **WHEN** a PO question remains unanswered beyond the configured wait
-- **THEN** the app resolves the callback with a safe default (the PO's recommended option) and records that the default was applied
+- **WHEN** a question remains unanswered beyond the configured wait
+- **THEN** the app resolves the callback with a safe default (the asking verb's recommended option) and records that the default was applied
 
 #### Scenario: Session reset with a question pending
 
-- **WHEN** the user resets the session while a PO question is pending
+- **WHEN** the user resets the session while a question is pending
 - **THEN** the pending callback is settled and the paused turn is torn down without leaving an orphaned Claude process
 
 ### Requirement: Live questions remain answerable in HUD mode
@@ -65,21 +65,21 @@ The voice tool that resolves the relay is named for what it does — answering t
 - **WHEN** a question is pending in HUD mode and the user answers by voice
 - **THEN** the relay resolves via the voice layer's question-answering tool unchanged, and the banner dismisses in the overlay
 
-### Requirement: PO is permitted to ask; DEV is not
-PO SHALL be permitted to pause mid-turn and ask the user a question through the voice relay. DEV SHALL NOT.
+### Requirement: A stateful verb may ask; a stateless verb cannot
+A stateful verb SHALL be permitted to pause mid-turn and ask the user a question through the voice relay. A stateless verb SHALL NOT.
 
-DEV's inability to ask SHALL be enforced by the configuration of the run — the question tool SHALL be unavailable to it — and not by prompt instruction alone. A headless run SHALL additionally carry a handler for the question path that fails the run with a diagnostic, so that a headless run can never reach a state where it waits for an answer nobody is listening for.
+That inability SHALL be enforced by the configuration of the run — the question tool SHALL be unavailable to it — and not by prompt instruction alone. A headless run SHALL additionally carry a handler for the question path that fails the run with a diagnostic, so that a headless run can never reach a state where it waits for an answer nobody is listening for.
 
 The prompts SHALL continue to state the asymmetry, since the model needs to know it in order to plan; the prompt is the explanation, and the configuration is the guarantee.
 
-#### Scenario: PO pauses and is answered
+#### Scenario: A stateful verb pauses and is answered
 
-- **WHEN** PO reaches a decision that materially shapes the change
+- **WHEN** a stateful verb reaches a decision that materially shapes the change
 - **THEN** it pauses, the question reaches the user by voice, and the same turn resumes with the answer
 
-#### Scenario: DEV cannot ask
+#### Scenario: A stateless run cannot ask
 
-- **WHEN** a DEV run executes
+- **WHEN** a stateless run executes
 - **THEN** the question tool is not available to it
 
 #### Scenario: A headless question attempt fails loudly
@@ -88,33 +88,33 @@ The prompts SHALL continue to state the asymmetry, since the model needs to know
 - **THEN** the run fails with a diagnostic naming the violation, rather than waiting indefinitely
 
 ### Requirement: A session reset denies a pending question rather than answering it
-When a pending PO question is settled because the user reset the session (New session, voice new-session, or a project-folder change) — as opposed to a timeout — the app SHALL settle the paused `canUseTool` callback as a **denial**, not as an answer. It SHALL NOT feed the asking role a fabricated or default selection on a deliberate reset, because doing so lets the role continue the torn-down turn and act on a decision the user never made — including writing files into the project folder the user just left. This is distinct from the timeout fallback, which continues to apply the recommended default for a question genuinely left unanswered.
+When a pending question is settled because the user reset the session (New session, voice new-session, or a project-folder change) — as opposed to a timeout — the app SHALL settle the paused `canUseTool` callback as a **denial**, not as an answer. It SHALL NOT feed the asking verb a fabricated or default selection on a deliberate reset, because doing so lets it continue the torn-down turn and act on a decision the user never made — including writing files into the project folder the user just left. This is distinct from the timeout fallback, which continues to apply the recommended default for a question genuinely left unanswered.
 
 #### Scenario: Reset denies the pending question
 
-- **WHEN** the user resets the session while a PO question is pending
-- **THEN** the pending callback is settled as a denial (no answer selection is supplied to the asking role)
+- **WHEN** the user resets the session while a question is pending
+- **THEN** the pending callback is settled as a denial (no answer selection is supplied to the asking verb)
 - **AND** the paused turn is torn down without leaving an orphaned Claude process
 
 #### Scenario: Reset does not act on a fabricated answer
 
 - **WHEN** a pending question is denied because of a session reset
-- **THEN** the asking role does not proceed to act on a default or fabricated selection for that question (e.g. it does not run a tool that writes into the abandoned project folder on the strength of a made-up answer)
+- **THEN** the asking verb does not proceed to act on a default or fabricated selection for that question (e.g. it does not run a tool that writes into the abandoned project folder on the strength of a made-up answer)
 
 #### Scenario: Timeout still applies the default, unchanged
 
-- **WHEN** a PO question remains unanswered beyond the configured wait and no reset occurred
+- **WHEN** a question remains unanswered beyond the configured wait and no reset occurred
 - **THEN** the callback is settled with the recommended default option and that default is recorded, exactly as before — the denial semantics apply only to a deliberate reset
 
 ### Requirement: A question survives the relay without losing its shape
-A question raised by a role SHALL reach the user with everything that changes how it is answered: its short label, its options with their descriptions, and whether more than one option may be chosen.
+A question raised by a verb SHALL reach the user with everything that changes how it is answered: its short label, its options with their descriptions, and whether more than one option may be chosen.
 
-A question that permits multiple selections SHALL be answerable with multiple selections — by voice, from the interface, and on the timeout fallback path. Iris SHALL NOT silently reduce a multiple-selection question to a single choice, which answers a different question than the one the role asked.
+A question that permits multiple selections SHALL be answerable with multiple selections — by voice, from the interface, and on the timeout fallback path. Iris SHALL NOT silently reduce a multiple-selection question to a single choice, which answers a different question than the one the verb asked.
 
 #### Scenario: A multiple-selection question is answered with multiple options
 
-- **WHEN** a role asks a question that permits selecting more than one option
-- **THEN** the user can choose several, and every chosen option reaches the role
+- **WHEN** a verb asks a question that permits selecting more than one option
+- **THEN** the user can choose several, and every chosen option reaches the verb
 
 #### Scenario: The timeout default respects the question's shape
 
@@ -127,7 +127,7 @@ A question that permits multiple selections SHALL be answerable with multiple se
 - **THEN** its short label is available to Iris as context for how to introduce it
 
 ### Requirement: End-of-run decisions travel as structured data
-Decisions a role defers to the end of a run SHALL be produced as structured data validated against a declared schema, rather than parsed out of prose. Each decision SHALL carry its question, its options with descriptions, and the role's recommendation.
+Decisions a verb defers to the end of a run SHALL be produced as structured data validated against a declared schema, rather than parsed out of prose. Each decision SHALL carry its question, its options with descriptions, and the verb's recommendation.
 
 Iris SHALL prefer structured decisions when a run produces them. It SHALL retain the prose fallback for runs that do not — a session resumed from before the schema existed cannot produce one, and a run that completed its real work SHALL NOT be failed for being unable to format a summary.
 

@@ -76,13 +76,13 @@ Iris SHALL warn while a run is still executing when it crosses a fraction of its
 - **THEN** it completes without approaching either ceiling
 
 ### Requirement: A role that must not ask is prevented from asking, not merely told not to
-DEV's guarantee that it never pauses for a question SHALL be enforced by the runtime configuration of the run, not only by prompt text. The question tool SHALL be unavailable to a headless role.
+A stateless verb's guarantee that it never pauses for a question SHALL be enforced by the runtime configuration of the run, not only by prompt text. The question tool SHALL be unavailable to a headless run.
 
 Because prevention can be bypassed by a future configuration change, a headless run SHALL additionally carry a handler for the question path that fails the run with a diagnostic. A headless run SHALL NOT be able to reach a state where it waits for an answer nobody is listening for.
 
 #### Scenario: A headless role cannot ask
 
-- **WHEN** a DEV run executes
+- **WHEN** a stateless run executes
 - **THEN** the question tool is not available to it
 
 #### Scenario: A question on the headless path fails loudly

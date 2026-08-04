@@ -14,7 +14,7 @@ Read this before changing anything in the pipeline modules under `electron/`
 `vault-write.mjs`, `session-store.mjs`, `user-config.mjs`) or
 `electron/po-session.mjs`. The
 corresponding living specs are in `openspec/specs/` (`verb-tool-surface`,
-`pipeline-availability`, `voice-decision-relay`, `per-role-model-selection`,
+`pipeline-availability`, `voice-decision-relay`, `per-verb-model-selection`,
 `agent-subscription-auth`, `openspec-native-pipeline`, `run-execution-queue`,
 `prompt-review-gate`, `setup-panel`) — if this doc and a spec disagree, the spec
 wins and this doc needs fixing.

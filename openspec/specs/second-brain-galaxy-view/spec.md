@@ -188,7 +188,7 @@ Because notes may originate from the web (`wiki-ingest`), the galaxy SHALL treat
 
 ### Requirement: The galaxy view is gated on the vault existing, independent of the Claude pipeline
 
-The "show second brain" capability SHALL be available exactly when the vault directory `~/iris-second-brain` exists, regardless of whether the Claude CLI resolves or the PO/DEV pipeline is available — because viewing only reads local markdown. When the vault exists but contains no notes, the galaxy SHALL show a friendly empty-state rather than an error or a blank layer. Iris SHALL NOT create the vault merely because the toggle was shown.
+The "show second brain" capability SHALL be available exactly when the vault directory `~/iris-second-brain` exists, regardless of whether the Claude pipeline is available — because viewing only reads local markdown. When the vault exists but contains no notes, the galaxy SHALL show a friendly empty-state rather than an error or a blank layer. Iris SHALL NOT create the vault merely because the toggle was shown.
 
 #### Scenario: Galaxy works without the Claude pipeline
 

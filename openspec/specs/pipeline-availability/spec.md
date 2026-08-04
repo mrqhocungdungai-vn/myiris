@@ -1,6 +1,6 @@
 ## Purpose
 
-Detects whether the Claude pipeline can run on this machine (the `claude` binary resolving is the sole signal) and gates the Gemini tool declarations, system-prompt content, and pipeline UI on that single flag — so the community release runs as a pure chat companion out of the box and self-reveals the build pipeline once Claude Code is installed, with no separate config flag.
+Detects whether the Claude pipeline can run — the bundled binary answering a `--version` probe **and** a configured Claude credential, the two together — and gates the Gemini tool declarations, system-prompt content, and pipeline UI on that single flag. So the community release runs as a pure chat companion out of the box and self-reveals the build pipeline once a credential is saved, with no separate config flag. Nothing here depends on a host Claude Code install; there is none to detect.
 ## Requirements
 
 ### Requirement: Chat-only mode declares no Claude tools and omits pipeline prompt content
@@ -45,45 +45,52 @@ Review-mode mutation is not a declared tool in any mode. It is absent in chat-on
 - **THEN** the review-decision tool is not declared, since there is nothing to gate and the review flow is inert
 
 ### Requirement: Pipeline UI is hidden in chat-only mode
-The renderer SHALL receive the pipeline-availability state from the main process (at boot and on re-check) and, when the pipeline is unavailable, SHALL NOT render the pipeline surfaces: the Work Stream panel, the role/model PipelineBar, the workstream switcher, the task chooser, the HUD tasks column, and the PO question banner mount. Chat surfaces (Comms, orb/HUD core, camera/gesture, setup) render unchanged.
+The renderer SHALL receive the pipeline-availability state from the main process (at boot and on re-check) and, when the pipeline is unavailable, SHALL NOT render the pipeline surfaces: the Work Stream panel, the verb/model PipelineBar, the workstream switcher, the task chooser, the HUD tasks column, and the pending-question banner mount. Chat surfaces (Comms, orb/HUD core, camera/gesture, setup) render unchanged.
 
 #### Scenario: First-run user sees a chat app
 
-- **WHEN** a user with no Claude CLI launches Iris for the first time and completes Gemini key setup
-- **THEN** the deck shows conversation surfaces only, with no pipeline panels, role chips, or workstream controls visible
+- **WHEN** a user with no Claude credential launches Iris for the first time and completes Gemini key setup
+- **THEN** the deck shows conversation surfaces only, with no pipeline panels, verb roster, or workstream controls visible
 
 #### Scenario: Pipeline UI appears after enablement
 
 - **WHEN** pipeline availability flips to available and the Gemini session reconnects
 - **THEN** the pipeline surfaces render without requiring an app restart
 
-### Requirement: SetupPanel reports pipeline prerequisites with install guidance
+### Requirement: SetupPanel reports every bundled component as bundled or damaged
 The SetupPanel SHALL report, beside the Claude runtime and credential rows, whether the `openspec` CLI and the skills plugin resolve from the app bundle (resolved the same way the runtime resolves them), each as bundled/damaged. All rows SHALL share a re-check action. Because every component ships inside the app, a failing row means a damaged bundle and SHALL point at reinstalling rather than offering an install command that could not fix it — the only genuinely user-fixable row is the credential. The app SHALL NOT write into `~/.claude` at all.
 
-#### Scenario: Missing prerequisites are actionable
+No bundled-component row SHALL offer an install action, an install command, or a copyable string presented as a command. Each SHALL report one of exactly two states, worded identically across rows, and each underlying check SHALL appear in exactly one row.
 
-- **WHEN** the user opens the SetupPanel on a machine without the `openspec` CLI, the global skills, or the agent personas
-- **THEN** each missing item is shown with the one-click install action available and a copyable manual command as fallback, and nothing installs until the user acts
+#### Scenario: A damaged bundle points at reinstalling, never at installing
 
-#### Scenario: Re-check reflects a completed install
+- **WHEN** the user opens the SetupPanel on a machine where the `openspec` CLI or a bundled skill does not resolve from the app bundle
+- **THEN** each failing row reports the damaged state and names what is missing from the bundle, and offers no install action and no copyable command — because no command the user could run would repair a damaged bundle
 
-- **WHEN** the user installs a missing prerequisite (via the button or manually) and triggers re-check
-- **THEN** the corresponding row flips to present without restarting the app
+#### Scenario: One check, one row, one vocabulary
+
+- **WHEN** the panel renders its bundled-component rows
+- **THEN** each underlying check appears exactly once, and every row reports success and failure in the same two words as every other row — the same check SHALL NOT appear twice under differing labels, and SHALL NOT report success in one wording in one place and another wording elsewhere
+
+#### Scenario: Re-check re-probes without a restart
+
+- **WHEN** the user triggers the shared re-check action
+- **THEN** every row re-reports from a fresh probe, and a credential saved since the last probe is reflected without restarting the app
 
 #### Scenario: Skills check is presence-based
 
 - **WHEN** the skill directories exist in the app's bundled plugin
-- **THEN** the panel reports them as detected (presence, not semantic validation), and deeper problems still surface through normal PO/DEV run errors
+- **THEN** the panel reports them as bundled (presence, not semantic validation), and deeper problems still surface through normal run errors naming the verb
 
 #### Scenario: No phantom requirements
 
-- **WHEN** a machine has every bundled skill, command, and persona installed
-- **THEN** every prerequisite row reports present — the required list contains only skills that actually exist and are actually invoked by the personas
+- **WHEN** every skill and command the verbs invoke resolves from the app bundle
+- **THEN** every row reports bundled — the required list contains only skills that actually exist and are actually invoked by the verb prompts
 
 ### Requirement: A working bundled runtime and a Claude credential are the pipeline master switch
 The app SHALL ship Claude Code inside the application bundle and SHALL NOT probe the host machine for an installed `claude` binary. Availability SHALL be determined by two conditions together: the bundled binary responds to a `--version` probe, AND at least one usable Claude credential is configured (`CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`). The probe SHALL run before the Gemini Live session is created, and SHALL re-run on a SetupPanel re-check, on every Gemini session (re)connect, and immediately after a credential is saved or removed.
 
-When either condition fails, the app SHALL run in chat-only mode; when both hold, the full PO → DEV pipeline surface SHALL be enabled.
+When either condition fails, the app SHALL run in chat-only mode; when both hold, the full verb surface SHALL be enabled.
 
 The health payload SHALL report binary reachability and pipeline availability as separate fields, so a packaging failure is distinguishable from a missing credential.
 
@@ -97,7 +104,7 @@ There SHALL be no setting that points the app at a host-installed binary. Such a
 #### Scenario: Credential present enables the pipeline
 
 - **WHEN** the app starts with a Claude credential configured and the bundled `--version` probe succeeds
-- **THEN** the Claude tools are declared to Gemini, the pipeline UI is shown, and PO/DEV behave exactly as specified by the existing pipeline capabilities
+- **THEN** the Claude tools are declared to Gemini, the pipeline UI is shown, and the verbs behave exactly as specified by the existing pipeline capabilities
 
 #### Scenario: No host Claude install is required
 

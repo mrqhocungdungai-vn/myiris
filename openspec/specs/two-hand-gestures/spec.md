@@ -1,6 +1,6 @@
 ## Purpose
 
-TBD — two-hand tracking, dwell-click, two-palm reader resize, and per-hand reticles/skeleton for the gesture-driven UI.
+Hands as an input device for the deck: two hands tracked independently with per-hand stabilization, a universal point-and-hold click that works on any interactive element, two-palm resize for the reader, and per-hand reticles so the user can see what the system believes their hands are doing. Gesture control is an opt-in persisted preference and its camera is user-selectable — it is never switched on for someone who did not ask for it, and destructive controls are deliberately excluded from the dwell path.
 ## Requirements
 ### Requirement: Two hands tracked with per-hand stabilization
 
@@ -63,11 +63,11 @@ If the selected device cannot be opened (not present among current devices, or `
 
 ### Requirement: Universal point-and-hold click
 
-A pointing primary hand dwelling ~300 ms over any interactive element (`button`, `a`, `[data-task-id]`, `[role="button"]`) SHALL trigger a click on it, including PO question answer options, step-timeline toggles, chips, and close buttons — EXCEPT elements explicitly marked as dwell-excluded (`[data-no-dwell]`, or any element contained within one), and EXCEPT while a reader overlay or a fullscreen HUD layer (the second-brain galaxy or the drawing panel) owns the gesture surface, since those layers bind the pointing hand to their own semantics. Dwell exclusion SHALL be reserved for destructive or irreversible controls — those whose action loses data or cannot be undone (e.g. removing the saved subscription token, starting a new session, switching the project folder) — so that a merely hovering hand cannot fire them. Excluded controls SHALL remain fully operable by mouse and by voice; only the hands-free dwell path skips them, and the dwell indicator SHALL NOT engage on them. The HUD's own control island (the button row that hosts the layer toggles) SHALL remain dwell-activatable even while a fullscreen layer is active, so any layer the user can open hands-free can also be closed hands-free.
+A pointing primary hand dwelling ~300 ms over any interactive element (`button`, `a`, `[data-task-id]`, `[role="button"]`) SHALL trigger a click on it, including question answer options, step-timeline toggles, chips, and close buttons — EXCEPT elements explicitly marked as dwell-excluded (`[data-no-dwell]`, or any element contained within one), and EXCEPT while a reader overlay or a fullscreen HUD layer (the second-brain galaxy or the drawing panel) owns the gesture surface, since those layers bind the pointing hand to their own semantics. Dwell exclusion SHALL be reserved for destructive or irreversible controls — those whose action loses data or cannot be undone (e.g. removing the saved subscription token, starting a new session, switching the project folder) — so that a merely hovering hand cannot fire them. Excluded controls SHALL remain fully operable by mouse and by voice; only the hands-free dwell path skips them, and the dwell indicator SHALL NOT engage on them. The HUD's own control island (the button row that hosts the layer toggles) SHALL remain dwell-activatable even while a fullscreen layer is active, so any layer the user can open hands-free can also be closed hands-free.
 
 #### Scenario: Dwell-click a button
 
-- **WHEN** the user points at a PO question option button and holds for the dwell duration
+- **WHEN** the user points at a question option button and holds for the dwell duration
 - **THEN** that option is selected exactly as a mouse click would
 
 #### Scenario: Dwell-open still works

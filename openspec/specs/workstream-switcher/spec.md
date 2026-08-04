@@ -12,7 +12,7 @@ The renderer SHALL replace the workstream `<select>` dropdown with the upstream 
 
 - **WHEN** the user opens the session switcher
 - **THEN** all workstreams are listed with their name and project folder (cwd)
-- **AND** selecting one switches the active workstream exactly as the old dropdown did (including closing any resident PO session for the workstream being left, per existing main-process behavior)
+- **AND** selecting one switches the active workstream exactly as the old dropdown did (including closing any resident stateful session for the workstream being left, per existing main-process behavior)
 
 #### Scenario: Creating a workstream
 
@@ -21,7 +21,7 @@ The renderer SHALL replace the workstream `<select>` dropdown with the upstream 
 
 #### Scenario: Per-role session identity visible
 
-- **WHEN** a workstream has stored PO and/or DEV Claude session ids
+- **WHEN** a workstream has stored Claude session ids for one or more verbs
 - **THEN** the switcher (or its active-row detail) surfaces that identity consistent with the existing `.claude-session-line` (`who ▸ id`) presentation
 
 ### Requirement: Project folder selection remains reachable

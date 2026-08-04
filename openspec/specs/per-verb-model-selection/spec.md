@@ -1,6 +1,6 @@
 ## Purpose
 
-Lets each verb run on an independently chosen Claude model, selectable per workstream via UI or voice, resolved fresh at run start with no automatic fallback, and traceable per run. (TBD: expand with broader rationale if needed.)
+Lets each verb run on an independently chosen Claude model, selectable per workstream via UI or voice, resolved fresh at run start with no automatic fallback, and traceable per run. The absence of a fallback is deliberate: silently substituting a different model would change both what the user is billed for and how the run behaves, with nothing in the record saying it happened.
 
 ## Requirements
 
@@ -74,7 +74,7 @@ When a selected model cannot be used (no subscription access, retired ID, hard a
 
 #### Scenario: Model rejected by the backend
 
-- **WHEN** a DEV run starts with a model the account cannot use
+- **WHEN** a stateless run starts with a model the account cannot use
 - **THEN** the run ends in the existing failure state with the error visible in the Work Stream, and no run is retried on a different model automatically
 
 ### Requirement: The model a run executed on is shown on its own card
