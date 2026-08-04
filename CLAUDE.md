@@ -13,19 +13,25 @@ A desktop voice companion (Electron + React + Vite + TypeScript), **macOS only**
 **Gemini Live** handles realtime voice conversation — by default that's the whole
 app, and chat needs only `GEMINI_API_KEY`. Iris **ships Claude Code inside the
 app** (the Agent SDK's native binary — nothing to install), so adding a Claude
-credential unlocks a **PO → DEV** build pipeline: Gemini delegates real work to
-Claude as a background worker. Both roles run on the **Agent SDK's `query()`**;
-they differ in lifetime, not transport. PO is a **stateful** resident session
-that can pause mid-turn to ask a voice question; DEV is a **stateless** one-shot
-`query()` per run that never asks.
+credential unlocks the build pipeline: Gemini delegates real work to Claude
+through **seven named verbs**, each with its own parameter schema, scoped skills,
+model, and ceilings — all declared in one registry, `electron/verbs.mjs`. **Iris
+picks the verb per request**; the user never names a role or operates a control.
+
+Every verb runs on the **Agent SDK's `query()`**. They differ in lifetime, not
+transport: a **stateful** verb is a resident session that can pause mid-turn to
+ask a voice question, a **stateless** one is a one-shot `query()` per run that
+never asks. Statefulness means *only* that — every verb, stateless included,
+resumes its own prior conversation.
 
 ## Where to read more
 
 | Topic | Read |
 | --- | --- |
 | **Authoritative behavior of any capability** | `openspec/specs/<capability>/spec.md` |
+| **What each verb is, and everything that follows from it** | `electron/verbs.mjs` — the single registry the tool declarations, the review gate, and the run configuration all derive from |
 | Module/file map, end-to-end audio + delegation flow, component responsibilities, Gemini tool surface | **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** |
-| Pipeline internals: availability gating, delegation flow, voice relay, sessions/context ownership, PO→DEV pipeline, PO subscription auth, prompt/budget policy, hooks, skill scoping | **[docs/PIPELINE_INTERNALS.md](docs/PIPELINE_INTERNALS.md)** |
+| Pipeline internals: availability gating, the verb registry and dispatch, voice relay, sessions/context ownership, subscription auth, prompt/budget policy, hooks, skill scoping, the run inbox | **[docs/PIPELINE_INTERNALS.md](docs/PIPELINE_INTERNALS.md)** |
 | Test harness: the four gates, what vitest picks up, the SDK options test, typecheck projects, testability conventions | **[docs/TESTING.md](docs/TESTING.md)** + `openspec/specs/test-harness/spec.md` |
 | **Pinned exact identifiers** (Gemini Live model + voice, audio rates, SDK/CLI coupling, vendored WASM assets), the footgun list, and the Agent SDK `Options` audit — what Iris sets and every option deliberately declined | **[docs/REFERENCE.md](docs/REFERENCE.md)** |
 | Using the pipeline as a user (setup, voice walkthrough, troubleshooting) | [docs/PIPELINE_GUIDE.md](docs/PIPELINE_GUIDE.md) |
@@ -77,8 +83,11 @@ tracks *that*, guarded by `scripts/check-types-node.mjs`.
 ## Conventions
 
 - **Iris never reads or writes the user's `~/.claude`.** This takes *two* mechanisms — `settingSources` excluding the `user` scope, **and** pinning `CLAUDE_CONFIG_DIR` to `~/.iris/claude-home`, because transcripts, `.claude.json`, and auto-memory are read/written regardless of `settingSources`. Both live in `worker-env.mjs`; the reasoning and its consequences are in [docs/PIPELINE_INTERNALS.md](docs/PIPELINE_INTERNALS.md).
-- **Configure a run only through options the Agent SDK declares.** An undeclared option is silently dropped — `appendSystemPrompt` was, for months, and PO ran with no base prompt while the tests claimed otherwise. `electron/sdk-options.test.mjs` asserts each role's complete options key set; add a field ⇒ add it there. Full audit in [docs/REFERENCE.md](docs/REFERENCE.md).
+- **Configure a run only through options the Agent SDK declares.** An undeclared option is silently dropped — `appendSystemPrompt` was, for months, and the resident session ran with no base prompt while the tests claimed otherwise. `electron/sdk-options.test.mjs` asserts each run shape's complete options key set; add a field ⇒ add it there. Full audit in [docs/REFERENCE.md](docs/REFERENCE.md).
 - **Every run carries a turn and spend ceiling**, and a run that hits one finalizes as `limited` — its own terminal status, never `failed`. Cost is recorded from the runtime, never estimated.
+- **A verb is defined in exactly one place.** `gemini-tools.mjs` derives its declarations from the registry, `run-dispatch.mjs` derives the park label, `run-exec.mjs` derives the `query()` options. Adding a verb means adding a record — three hand-wired copies is the mechanism that produced the silently-dropped `appendSystemPrompt`.
+- **`skills` is scoped per verb, and that scoping is the substance.** Without it, seven verbs would be seven names for one agent.
+- **The review gate reads the verb's declared label, never the brief's text**, and it is enforced in the main process at dispatch — never by asking the voice layer to honour an instruction.
 - `bypassPermissions` is the intentional default for the headless worker. The `PreToolUse` denylist is a **guard against accidents, not a sandbox** — never describe it as containment.
 - Config is env-driven with `IRIS_*` / `GEMINI_*` prefixes; add new options the same way and **document them in `.env.example`**, which is the authoritative list.
 - **Never commit real keys.** `.env` is gitignored. Setting `ANTHROPIC_API_KEY` means metered billing; it is used only when no subscription token is present.

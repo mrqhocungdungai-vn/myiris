@@ -13,14 +13,23 @@ type LiveAudioChunk = {
   mimeType?: string;
 };
 
-type AgentRole = "po" | "dev";
+// The verbs Iris can hand work to. There is no "current" one: a verb is chosen
+// per request by Iris itself, so this type names what RAN, never what is
+// selected. Mirrors electron/verbs.mjs's VERB_NAMES.
+type Verb =
+  | "shape_requirements"
+  | "shape_on_canvas"
+  | "execute"
+  | "finish"
+  | "investigate"
+  | "review"
+  | "capture_learning";
 
 type ClaudeSession = {
   id: string;
   label: string;
-  agent_sessions: Partial<Record<AgentRole | "default", string>>;
-  active_agent: AgentRole | null;
-  last_agent_used: AgentRole | null;
+  agent_sessions: Partial<Record<string, string>>;
+  last_verb_used: Verb | null;
   cwd: string | null;
   created_at: number;
   last_used_at: number;
@@ -32,21 +41,26 @@ type SessionsSnapshot = {
   sessions: ClaudeSession[];
 };
 
-type AgentInfo = {
-  key: AgentRole;
+type VerbInfo = {
+  key: Verb;
   label: string;
-  installed: boolean;
+  loadable: boolean;
   description: string;
+  stateful: boolean;
+  park: "always" | "on_open" | "never";
   model: string | null;
 };
 
-type AgentsSnapshot = {
-  roster: AgentInfo[];
-  installed: boolean;
+type VerbsSnapshot = {
+  roster: VerbInfo[];
+  loadable: boolean;
   hasProject: boolean;
-  gates: {
+  /** How far the project's current OpenSpec change has got. Display only — it
+   *  is no longer a gate on who may run. */
+  change: {
     slug: string | null;
-    byRole: Partial<Record<AgentRole, boolean>>;
+    shaped: boolean;
+    built: boolean;
   };
 };
 
@@ -75,7 +89,7 @@ type PoQuestion = {
   header: string;
   options: PoQuestionOption[];
   // When true the user may choose several options. Reducing such a question to
-  // one choice answers a different question than the role asked.
+  // one choice answers a different question than the one that was asked.
   multiSelect?: boolean;
 };
 
@@ -86,17 +100,21 @@ type PoQuestionAnswer = {
   choice: string | string[];
 };
 
+/** never = dispatch immediately; always = park everything; verb = park what the
+ *  verb registry declares as reviewed (the default). */
+type ReviewMode = "never" | "always" | "verb";
+
 type PromptReviewStatus = {
-  reviewMode: boolean;
+  reviewMode: ReviewMode;
 };
 
-// A brief parked by submit_claude_task for Approve/Edit/Cancel before any
-// Claude tokens are spent (prompt-review-gate spec).
+// A request parked for Approve/Edit/Cancel before any Claude tokens are spent
+// (prompt-review-gate spec).
 type PendingTaskReview = {
   workstreamId: string;
   task: string;
   urgency: string;
-  agent: AgentRole | null;
+  verb: Verb | null;
 };
 
 type PromptReviewResolveAction = "approve" | "cancel";
@@ -257,25 +275,21 @@ type IrisApi = {
   chooseProjectFolder: (
     id?: string,
   ) => Promise<SessionsSnapshot & { status?: string; error?: string }>;
-  listAgents: (workstreamId?: string) => Promise<AgentsSnapshot>;
-  selectAgent: (
-    workstreamId: string,
-    agent: AgentRole | null,
-  ) => Promise<SessionsSnapshot & { status?: string; error?: string }>;
+  listVerbs: (workstreamId?: string) => Promise<VerbsSnapshot>;
   getLegacyClaudeArtifacts: () => Promise<LegacyClaudeArtifacts>;
   removeLegacyClaudeArtifacts: () => Promise<LegacyCleanupResult>;
-  setAgentModel: (
+  setVerbModel: (
     workstreamId: string,
-    role: AgentRole,
+    verb: Verb,
     model: string,
-  ) => Promise<SessionsSnapshot & { status?: string; error?: string }>;
+  ) => Promise<SessionsSnapshot & { status?: string; error?: string; verbs?: Verb[]; shared?: boolean }>;
   answerPoQuestion: (answers: PoQuestionAnswer[]) => Promise<{ status: string; error?: string }>;
   getPromptStatus: () => Promise<PromptReviewStatus>;
   resolvePromptReview: (payload: {
     action: PromptReviewResolveAction;
     editedTask?: string;
   }) => Promise<{ status: string; error?: string }>;
-  setPromptReviewMode: (enabled: boolean) => Promise<{ status: string; reviewMode: boolean }>;
+  setPromptReviewMode: (mode: ReviewMode) => Promise<{ status: string; reviewMode: ReviewMode; error?: string }>;
   sendContextSupplement: (text: string) => Promise<{ status: string; error?: string }>;
   toggleHud: () => Promise<{ mode: UiMode }>;
   setHudInteractive: (on: boolean) => void;

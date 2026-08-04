@@ -200,8 +200,9 @@ describe("run-queue", () => {
 
   it("returns the run's terminal status when startRun finalizes it synchronously, and releases the slot (BUG E, report-synchronous-start-failure design D1)", () => {
     // startRun (the injected transport) can finalize the run before beginRun
-    // returns — e.g. the DEV "no open change with tasks" gate. submit() must
-    // report that real status, not the "started" it would otherwise assume.
+    // returns — e.g. an unknown verb, or a persona the bundle cannot load.
+    // submit() must report that real status, not the "started" it would
+    // otherwise assume.
     const events = [];
     const finalized = [];
     const invoked = [];
@@ -211,7 +212,7 @@ describe("run-queue", () => {
       // Only the first run hits the synchronous-rejection gate — the second
       // submit (after the slot is released) takes the healthy path.
       if (invoked.length === 1) {
-        queue.finalize(run.run_id, RUN_STATUS.FAILED, "no open change with tasks");
+        queue.finalize(run.run_id, RUN_STATUS.FAILED, "the stateless persona could not be loaded");
       }
     };
     queue = createRunQueue({
@@ -230,7 +231,7 @@ describe("run-queue", () => {
 
     const outcome = queue.submit(run);
 
-    expect(outcome).toEqual({ status: RUN_STATUS.FAILED, output: "no open change with tasks", run_id: run.run_id });
+    expect(outcome).toEqual({ status: RUN_STATUS.FAILED, output: "the stateless persona could not be loaded", run_id: run.run_id });
     expect(queue.get(run.run_id).finalized).toBe(true);
     // Guard for the double-speak the plan warned about: a run finalized
     // during start never stamped started_at, so the gated onFinalized never
@@ -267,7 +268,7 @@ describe("run-queue", () => {
     expect(outcome).toEqual({ status: "queued", position: 1 });
   });
 
-  it("stops an active run with no child (a PO turn) by calling the injected cancelRun, marking it cancelled without releasing the slot itself (make-po-turns-cancellable design D1)", () => {
+  it("stops an active run with no child (a stateful turn) by calling the injected cancelRun, marking it cancelled without releasing the slot itself (make-po-turns-cancellable design D1)", () => {
     const cancelCalls = [];
     const { queue, invoked } = makeQueue({ cancelRun: (run) => cancelCalls.push(run.run_id) });
     const active = makeRun({ status: RUN_STATUS.RUNNING });
@@ -290,7 +291,7 @@ describe("run-queue", () => {
     expect(invoked).toEqual([active.run_id]);
   });
 
-  it("releases the slot and starts the next queued run, exactly once, once the (fake) transport finalizes the cancelled PO run (make-po-turns-cancellable design D1)", () => {
+  it("releases the slot and starts the next queued run, exactly once, once the (fake) transport finalizes the cancelled stateful run (make-po-turns-cancellable design D1)", () => {
     const { queue, invoked, finalized } = makeQueue({ cancelRun: () => {} });
     const active = makeRun({ status: RUN_STATUS.RUNNING });
     const queuedRun = makeRun();

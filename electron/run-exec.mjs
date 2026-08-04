@@ -1,10 +1,15 @@
-// Drives the two Claude worker shapes, both now on the Agent SDK: DEV (a
-// one-shot `query()` per run) and PO (a resident `query()` session). Neither
-// touches a host-installed CLI — the binary ships with the app, see
-// bundled-binaries.mjs. Split out of electron/main.mjs
+// Drives the two Claude worker shapes, both on the Agent SDK: **stateless** (a
+// one-shot `query()` per run) and **stateful** (a resident `query()` session
+// that can pause mid-turn to ask by voice). They differ in lifetime, not in
+// transport. Neither touches a host-installed CLI — the binary ships with the
+// app, see bundled-binaries.mjs. Split out of electron/main.mjs
 // (split-main-process-modules): Electron-free — every cross-module effect (the
 // run queue, session store, run-stream projection, notes-vault/canvas
 // capability hooks, pipeline probes/install) is injected.
+//
+// Which shape a run takes is not decided here: it is a declared property of the
+// verb, read from electron/verbs.mjs. This module's whole job is to turn one
+// resolved verb into one `query()`.
 import fs from "node:fs";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import {
@@ -20,9 +25,10 @@ import { budgetWarnFraction, describeCeiling, isCeilingSubtype, resolveRunBudget
 import { buildRunHooks, readInFlightCostUsd } from "./run-hooks.mjs";
 import { DECISION_OUTPUT_FORMAT, readRunOutput } from "./run-output-format.mjs";
 import { isSessionAlive } from "./run-sessions.mjs";
-import { skillsForRole } from "./run-skills.mjs";
 import { computeClaudeWorkerEnv } from "./worker-env.mjs";
 import { RUN_STATUS, EMIT_STATUS, toUpdateEvent } from "./run-queue.mjs";
+import { resolveVerb } from "./verbs.mjs";
+import { buildRunPrompt } from "./run-context.mjs";
 
 // A run that terminated because it could not produce valid structured output
 // after the SDK's own retries. Named as its own cause: the work it did may be
@@ -75,13 +81,12 @@ function withStderr(message, tail) {
  *   emitEvent: (event: any) => void,
  *   findWorkstream: (id: string | null) => any,
  *   persistSessionStore: () => void,
- *   agentKey: (agent: string | null) => string,
- *   resolveAgentModel: (workstream: any, role: string) => string | null,
- *   agentLabels: Record<string, string>,
+ *   sessionKeyFor: (verb: string) => string,
+ *   resolveVerbModel: (workstream: any, verb: string) => string | null,
  *   agentPrefix: string,
  *   claudeWorkdir: () => string,
  *   claudeBinary: () => string,
- *   resolveAgentDefinition: (agent: string, cwd: string | null) => { description: string, prompt: string, model?: string },
+ *   resolveAgentDefinition: (base: string, cwd: string | null) => { description: string, prompt: string, model?: string },
  *   irisPluginConfig: () => Array<{ type: "local", path: string, skipMcpDiscovery?: boolean }> | null,
  *   ensureProjectScaffold: (cwd: string) => { created: string[], error?: string },
  *   openChangesWithTasks: (cwd: string) => string[],
@@ -89,6 +94,8 @@ function withStderr(message, tail) {
  *   ensureNotesVaultReady: () => void,
  *   checkNotesSkillsStatus: () => { ok: boolean },
  *   notesVaultDir: string,
+ *   notesInboxDir: string,
+ *   recentUtterances: () => Array<{ text: string, at: number }>,
  *   handleClaudeStreamMessage: (run: any, message: any) => void,
  *   pushActivity: (run: any, line: string) => void,
  *   rememberClaudeSessionId: (run: any, claudeSessionId: string | null) => void,
@@ -104,9 +111,8 @@ export function createRunExec({
   emitEvent,
   findWorkstream,
   persistSessionStore,
-  agentKey,
-  resolveAgentModel,
-  agentLabels,
+  sessionKeyFor,
+  resolveVerbModel,
   agentPrefix,
   claudeWorkdir,
   claudeBinary,
@@ -118,6 +124,8 @@ export function createRunExec({
   ensureNotesVaultReady,
   checkNotesSkillsStatus,
   notesVaultDir,
+  notesInboxDir,
+  recentUtterances,
   handleClaudeStreamMessage,
   pushActivity,
   rememberClaudeSessionId,
@@ -152,115 +160,118 @@ export function createRunExec({
     persistSessionStore();
   }
 
-  // Shared preamble (cwd, install check, scaffold) then dispatches to the
-  // stateful PO module or the stateless DEV module — see design.md D1. This is
-  // the `startRun` injected into electron/run-queue.mjs's createRunQueue(), which
-  // owns slot acquisition and finalization; both modules finalize through the
-  // same runQueue.finalize() path, so they share the single "Claude does one
-  // thing at a time" execution slot without either one needing to know the
-  // other exists.
+  // Shared preamble (cwd, verb resolution, persona check, scaffold) then
+  // dispatches to the stateful or the stateless shape — which one is a declared
+  // property of the verb, not a decision made here. This is the `startRun`
+  // injected into electron/run-queue.mjs's createRunQueue(), which owns slot
+  // acquisition and finalization; both shapes finalize through the same
+  // runQueue.finalize() path, so they share the single "Claude does one thing at
+  // a time" execution slot without either one needing to know the other exists.
   function startClaudeRun(run) {
     run.cwd = runProjectDir(run);
 
-    // A run submitted for a role must run AS that role — falling back to plain
-    // Claude would silently skip the gate the user thinks they are in. The
-    // personas ship inside the app now, so the only way this fails is a broken
-    // bundle, not a missing install step the user could have skipped.
-    if (run.agent) {
-      try {
-        resolveAgentDefinition(run.agent, run.cwd);
-      } catch (error) {
-        runQueue.finalize(
-          run.run_id,
-          RUN_STATUS.FAILED,
-          `The ${agentLabels[run.agent] ?? run.agent} persona could not be loaded: ${error.message}`,
-        );
-        return;
-      }
+    // The project is read HERE, at run start, not at submit time: a change
+    // proposed while this run sat queued should be seen by it. This is the state
+    // `execute` forks on (design.md D4).
+    let verb;
+    try {
+      verb = resolveVerb(run.verb, openChangesWithTasks(run.cwd));
+    } catch (error) {
+      runQueue.finalize(run.run_id, RUN_STATUS.FAILED, error.message);
+      return;
+    }
+    run.verbConfig = verb;
+    // Every dispatch records why it happened: offering seven verbs creates more
+    // ways to select wrongly than one general tool did, and that trade is only
+    // acceptable while every selection is inspectable afterwards. The brief
+    // itself is deliberately absent — it is the user's content, not diagnostics.
+    emitEvent({
+      type: "log",
+      level: "info",
+      message:
+        `Dispatching ${verb.verb} · model ${verb.model} · ${verb.stateful ? "stateful" : "stateless"} ` +
+        `· session ${verb.sessionKey} · park ${verb.park} · skills [${verb.skills.join(", ") || "none"}] ` +
+        `· project ${run.cwd} (${verb.projectState.hasOpenChange ? `open changes: ${verb.projectState.changes.join(", ")}` : "no open change"}).`,
+    });
+
+    // A run must run as its verb's persona — the personas ship inside the app
+    // now, so the only way this fails is a broken bundle, not a missing install
+    // step the user could have skipped.
+    try {
+      resolveAgentDefinition(verb.basePersona, run.cwd);
+    } catch (error) {
+      runQueue.finalize(run.run_id, RUN_STATUS.FAILED, `The ${verb.label} persona could not be loaded: ${error.message}`);
+      return;
     }
 
-    // First role run in a fresh project: make it OpenSpec-ready (`openspec init`)
-    // so the PO can propose changes and the DEV can implement their tasks.
-    if (run.agent) {
+    // First shaping run in a fresh project: make it OpenSpec-ready
+    // (`openspec init`) so a change can be proposed into it. Deliberately NOT
+    // done for the other verbs — the openspec-native-pipeline spec requires
+    // ordinary work to create no process artifacts, and scaffolding a project
+    // the user only asked a question about would be exactly that.
+    if (verb.stateful) {
       const scaffold = ensureProjectScaffold(run.cwd);
       if (scaffold.created.length) {
-        emitEvent({
-          type: "log",
-          level: "info",
-          message: `Set up ${run.cwd} for the agent pipeline: ${scaffold.created.join(", ")}.`,
-        });
+        emitEvent({ type: "log", level: "info", message: `Set up ${run.cwd} for OpenSpec: ${scaffold.created.join(", ")}.` });
       }
       if (scaffold.error) {
         emitEvent({ type: "log", level: "warn", message: `Project setup incomplete (${scaffold.error}) — the run continues anyway.` });
       }
     }
 
-    // DEV runs only against an open OpenSpec change with unchecked tasks (see the
-    // po-voice-controller change / openspec-native-pipeline spec). No open change
-    // with work means the PO has not proposed yet — fail loudly rather than let
-    // DEV free-code without a spec, and tell the user to have the PO propose first.
-    if (run.agent === "dev" && !openChangesWithTasks(run.cwd).length) {
-      runQueue.finalize(
-        run.run_id,
-        RUN_STATUS.FAILED,
-        "No open OpenSpec change with remaining tasks to implement. Ask the PO to grill and propose a change first (it creates openspec/changes/<name>/tasks.md), then run the DEV.",
-      );
-      return;
-    }
+    // The gate that used to sit here — a DEV run refused outright when no open
+    // change had unchecked tasks — is gone (design.md D4, and recorded as a
+    // decision in the openspec-native-pipeline spec). `execute` reads the
+    // project and forks instead: a user asking for a small piece of work is not
+    // asking for a software-development process, and refusing them was never a
+    // safety measure. The protection that gate provided now comes from `execute`
+    // being parked for review on EVERY dispatch (run-dispatch.mjs). If that park
+    // is ever weakened, this decision must be revisited with it.
 
-    // PO is the stateful module: a resident session that can pause mid-turn to
-    // ask. The IRIS_PO_LIVE_SESSION rollback switch is gone — it fell back to a
-    // one-shot `claude -p --resume` subprocess path that no longer exists now
-    // that both roles run on the Agent SDK.
-    if (run.agent === "po") {
-      startPoRun(run);
+    if (verb.stateful) {
+      startStatefulRun(run, verb);
       return;
     }
-    startDevRun(run);
+    startStatelessRun(run, verb);
   }
 
-  // The stateless module: one `query()` per run, torn down when it finalizes.
-  // Distinct from PO's resident session in lifetime, not in transport.
-  async function startDevRun(run) {
+  // The stateless shape: one `query()` per run, torn down when it finalizes.
+  // Distinct from the resident session in lifetime, not in transport.
+  async function startStatelessRun(run, verb) {
     // Model is resolved at run START (not at submit time), so a model change
-    // made while this task was queued still applies — see design.md D4. Only
-    // role runs are model-selectable; plain Claude gets no --model flag and no
-    // --fallback-model is ever set (an unavailable model must fail loudly, not
-    // silently downgrade — see design.md D6).
+    // made while this task was queued still applies. No --fallback-model is ever
+    // set: an unavailable model must fail loudly, not silently downgrade.
     const workstream = findWorkstream(run.workstream_id);
-    run.model = run.agent ? resolveAgentModel(workstream, run.agent) : null;
+    run.model = resolveVerbModel(workstream, verb.verb);
 
-    // No prompt text is built here. DEV and plain Claude get their base prompt
-    // from the same policy PO does (role-prompt.mjs) — that module owns both the
-    // wording and the choice of SDK field, which is what stopped the two roles
-    // from drifting apart. The only thing decided at this call site is which
-    // role is being started and whether the notes vault applies.
-    //
-    // The vault clause is for plain-Claude runs only (`!run.agent`): PO and DEV
-    // must never see it (design.md D3/D5 of the llm-wiki change), and
-    // buildRoleInstructions ignores a notesVault passed for any other role.
+    // No prompt text is built here. Every verb gets its instruction from one
+    // policy (role-prompt.mjs), which owns both the wording and the choice of
+    // SDK field — that is what stopped two call sites from drifting apart. The
+    // only thing decided here is whether the notes vault applies, which is
+    // itself a declared property of the verb.
     let notesVault = null;
-    if (!run.agent) {
+    if (verb.vault) {
       ensureNotesVaultReady();
-      notesVault = { dir: notesVaultDir, skillsInstalled: checkNotesSkillsStatus().ok };
+      notesVault = { dir: notesVaultDir, skillsInstalled: checkNotesSkillsStatus().ok, inbox: notesInboxDir };
     }
-    const systemPrompt = buildSystemPrompt(run.agent ? "dev" : "plain", { notesVault });
+    const systemPrompt = buildSystemPrompt(verb, { notesVault });
 
-    // canvas-claude-mcp (design.md D6/5.2): Iris-scoped per-run wiring, never
-    // written to ~/.claude. The SDK takes the server record directly, so the
-    // bearer token now travels in-process — it never reaches a temp file or an
-    // argv visible to `ps`, and there is nothing left to clean up afterwards.
-    const mcpRecord = await ensureCanvasMcpForRun();
+    // canvas-claude-mcp: Iris-scoped per-run wiring, never written to ~/.claude.
+    // The SDK takes the server record directly, so the bearer token travels
+    // in-process — it never reaches a temp file or an argv visible to `ps`.
+    // Wired only for a verb whose registry entry declares it, rather than for
+    // every run on the off-chance.
+    const mcpRecord = verb.mcpServers.includes("iris-canvas") ? await ensureCanvasMcpForRun() : null;
 
-    // CONTEXT IS USER-CONTROLLED. Every role (and plain Claude) keeps its OWN
-    // continuous conversation within this workstream: a task always resumes the
-    // role's stored session, no matter what ran in between. Nothing here ever
-    // drops a session on its own — context resets only when the USER asks for it:
-    // the "New" session button, an explicit voice new-session request, or picking
-    // a different project folder (Claude stores conversations per directory).
-    // Cross-role context still crosses the PO → DEV gate via the handoff files in
-    // the project, never via a shared conversation.
-    const key = agentKey(run.agent);
+    // CONTEXT IS USER-CONTROLLED. Every verb keeps its OWN continuous
+    // conversation within this workstream: a run always resumes the verb's
+    // stored session, no matter what ran in between. Continuity is not
+    // statefulness — a stateless verb resumes too, which is what makes a
+    // follow-up request intelligible. Nothing here ever drops a session on its
+    // own: context resets only when the USER asks for it (the "New" session
+    // button, an explicit voice new-session request, or picking a different
+    // project folder, since Claude stores conversations per directory).
+    const key = sessionKeyFor(verb.verb);
     const storedSession = workstream?.agent_sessions?.[key] ?? null;
     // Checked before the run starts, not guessed from the error it would
     // otherwise fail with. Only a positive "this session does not exist" drops
@@ -272,7 +283,7 @@ export function createRunExec({
       emitEvent({
         type: "log",
         level: "info",
-        message: "The stored Claude session for this role no longer exists — starting a fresh one.",
+        message: `The stored Claude conversation for ${verb.verb} no longer exists — starting a fresh one.`,
       });
     }
 
@@ -280,12 +291,10 @@ export function createRunExec({
       process.env.IRIS_CLAUDE_PERMISSION_MODE || "bypassPermissions"
     );
     // Declared before the options object because three of its fields close over
-    // them: the ceilings, the stderr sink, and (for DEV) a canUseTool that has to
-    // be able to abort the run it is guarding.
-    const budget = resolveRunBudget(run.agent === "dev" ? "dev" : "plain");
-    const sessionTitle = [workstream?.label, run.agent ? agentLabels[run.agent] ?? run.agent : "Claude"]
-      .filter(Boolean)
-      .join(" · ");
+    // them: the ceilings, the stderr sink, and a canUseTool that has to be able
+    // to abort the run it is guarding.
+    const budget = resolveRunBudget(verb.budget);
+    const sessionTitle = [workstream?.label, verb.label].filter(Boolean).join(" · ");
     const { collect: collectStderr, tail: stderrTail } = createStderrBuffer();
     // The SDK's Query handle, needed by the PreToolUse hook for the in-flight
     // spend figure. Assigned when the query is created, read only from inside a
@@ -304,10 +313,11 @@ export function createRunExec({
       // attached for that mode, so IRIS_CLAUDE_PERMISSION_MODE=acceptEdits|plan
       // genuinely restricts the worker rather than being quietly overridden.
       ...(permissionMode === "bypassPermissions" ? { allowDangerouslySkipPermissions: true } : {}),
-      // Built by role-prompt.mjs, the single policy both roles share. Measured
-      // caveat (design.md D1): on a run with `agent` set, the definition's
-      // prompt replaces the base, so the `claude_code` preset half is discarded
-      // and only the `append` half reaches the model. Plain-Claude runs get both.
+      // Built by role-prompt.mjs, the single policy every verb shares. Measured
+      // caveat: on a run with `agent` set — which is every verb run — the
+      // definition's prompt replaces the base, so the `claude_code` preset half
+      // is discarded and only the `append` half (preamble + statefulness clause
+      // + the verb's own clause) reaches the model.
       systemPrompt,
       env: computeClaudeWorkerEnv(process.env),
       pathToClaudeCodeExecutable: claudeBinary(),
@@ -319,9 +329,11 @@ export function createRunExec({
       // installed in their own Claude Code. "project" is kept so a run still
       // picks up the settings of the repository it is working in.
       settingSources: /** @type {Array<"project">} */ (["project"]),
-      // Not "all": a run sees only the skills its own work needs. The lists and
-      // the evidence behind each entry live in run-skills.mjs.
-      skills: skillsForRole(run.agent === "dev" ? "dev" : "plain"),
+      // Not "all": a run sees only the skills its own work needs, declared by
+      // its verb. Without this, seven verbs would be seven names for one agent —
+      // the scoping is the substance and the verb table is the vehicle. The
+      // lists and the evidence behind each entry live in run-skills.mjs.
+      skills: verb.skills,
       // The runaway guard. Without these a voice-dispatched run executes under
       // bypassPermissions with no turn limit and no spend limit, on a credential
       // the user may be paying per token for. Both produce their own result
@@ -340,7 +352,8 @@ export function createRunExec({
       // to be GRANTED, not described. It used to be named in a prose directive
       // and then checked for afterwards — a prompt is not a writable root, and
       // diffing a directory to guess whether the model complied is not a
-      // mechanism. Plain-Claude runs only, matching who gets the vault clause.
+      // mechanism. Only the verb that declares `vault`, matching who gets the
+      // vault clause in its prompt.
       ...(notesVault ? { additionalDirectories: [notesVault.dir] } : {}),
       // The guard (spend warning + destructive-command denylist) and the
       // authoritative tool-end boundary. `handle` is assigned just below, before
@@ -354,39 +367,43 @@ export function createRunExec({
         emitEvent,
       }),
     };
-    if (run.agent) {
-      // The persona is handed over by value rather than looked up by name in
-      // ~/.claude/agents — nothing is installed outside the app.
-      const name = `${agentPrefix}${run.agent}`;
-      options.agents = { [name]: resolveAgentDefinition(run.agent, run.cwd) };
-      options.agent = name;
-    }
-    if (run.agent) {
-      // Role runs only. Plain Claude answers arbitrary spoken requests, and
-      // forcing every one of those through a summary/decisions schema would
-      // reshape answers that have nothing to do with a build pipeline.
+    // The persona is handed over by value rather than looked up by name in
+    // ~/.claude/agents — nothing is installed outside the app.
+    const agentName = `${agentPrefix}${verb.basePersona}`;
+    options.agents = { [agentName]: resolveAgentDefinition(verb.basePersona, run.cwd) };
+    options.agent = agentName;
+    if (verb.structuredOutput) {
+      // Declared per verb. A verb that answers a spoken question rather than
+      // reporting on work has no use for a summary/decisions schema, and forcing
+      // one on it would reshape an answer that has nothing to do with a build.
       options.outputFormat = DECISION_OUTPUT_FORMAT;
     }
-    if (run.agent === "dev") {
-      // "DEV never asks" was a prompt promise with nothing behind it. Measured
-      // (design.md D1c): `AskUserQuestion` is only exposed to the model when a
-      // `canUseTool` callback is present, and `disallowedTools` removes it even
-      // when one is — so this is the guarantee and the callback below is the
-      // backstop if a future change adds a callback for some other reason.
-      options.disallowedTools = ["AskUserQuestion"];
-      options.canUseTool = async (toolName, input) => {
-        if (toolName !== "AskUserQuestion") return { behavior: "allow", updatedInput: input };
-        // Nobody is listening on the headless path, so waiting here would hang
-        // the run and the single execution slot with it. Fail loudly instead:
-        // record the violation, then abort so the run settles now rather than
-        // continuing on an answer it invented.
-        run.askViolation =
-          "The DEV run tried to ask a question, but nothing is listening on the headless path. " +
-          "DEV must work autonomously; ask the PO to make the decision instead.";
-        abortController.abort();
-        return { behavior: "deny", message: run.askViolation };
-      };
-    }
+    // A stateless verb's inability to ask is enforced by configuration, not by
+    // instruction — "DEV never asks" was a prompt promise with nothing behind
+    // it. Measured: `AskUserQuestion` is only exposed to the model when a
+    // `canUseTool` callback is present, and `disallowedTools` removes it even
+    // when one is. So the list is the guarantee and the callback below is the
+    // backstop if a future change adds a callback for some other reason.
+    // `investigate` carries Write/Edit in the same list: investigating does not
+    // modify, and that has to be structural too.
+    options.disallowedTools = [...verb.disallowedTools];
+    options.canUseTool = async (toolName, input) => {
+      if (!verb.disallowedTools.includes(toolName)) return { behavior: "allow", updatedInput: input };
+      if (toolName !== "AskUserQuestion") {
+        // A withheld edit tool is refused without ending the run: the model can
+        // still answer, which is what it was asked for.
+        return { behavior: "deny", message: `${verb.verb} runs cannot use ${toolName}.` };
+      }
+      // Nobody is listening on the headless path, so waiting here would hang the
+      // run and the single execution slot with it. Fail loudly instead: record
+      // the violation, then abort so the run settles now rather than continuing
+      // on an answer it invented.
+      run.askViolation =
+        `The ${verb.verb} run tried to ask a question, but nothing is listening on the headless path. ` +
+        "It must work autonomously; shape the requirements first if a decision is genuinely needed.";
+      abortController.abort();
+      return { behavior: "deny", message: run.askViolation };
+    };
     if (run.model) options.model = run.model;
     if (mcpRecord) options.mcpServers = { "iris-canvas": mcpRecord };
     if (previousSession) options.resume = previousSession;
@@ -402,7 +419,9 @@ export function createRunExec({
     emitEvent(toUpdateEvent(run, EMIT_STATUS.STARTED, { urgency: run.urgency }));
 
     try {
-      handle = queryImpl({ prompt: run.task, options });
+      // The brief plus the fenced transcript of what the user actually said —
+      // so the voice layer's summary is no longer the only thing this run sees.
+      handle = queryImpl({ prompt: buildRunPrompt(verb, { brief: run.task, utterances: recentUtterances() }), options });
       for await (const message of handle) {
         handleClaudeStreamMessage(run, message);
       }
@@ -480,13 +499,19 @@ export function createRunExec({
     runQueue.finalize(run.run_id, RUN_STATUS.FAILED, withStderr(String(detail), stderrTail));
   }
 
-  // The stateful module: delivers the turn into the workstream's resident Agent
-  // SDK session (creating it on the first PO turn), instead of spawning a new
-  // process. See electron/po-session.mjs and design.md D1/D2/D3.
-  async function startPoRun(run) {
+  // The stateful shape: delivers the turn into the workstream's resident Agent
+  // SDK session (creating it on the first turn), instead of spawning a new
+  // process. See electron/po-session.mjs.
+  //
+  // Both stateful verbs land here and share ONE session, keyed by the registry's
+  // sessionKey (design.md D3): shaping by voice and shaping on the canvas are the
+  // same conversation in two media, and switching to the canvas happens precisely
+  // when talking has stopped working — the moment the accumulated context matters
+  // most. Whichever verb is called first is what opens it.
+  async function startStatefulRun(run, verb) {
     const workstream = findWorkstream(run.workstream_id);
     if (!workstream) {
-      runQueue.finalize(run.run_id, RUN_STATUS.ERROR, "Unknown workstream for PO run.");
+      runQueue.finalize(run.run_id, RUN_STATUS.ERROR, `Unknown workstream for the ${verb.verb} run.`);
       return;
     }
     const billing = poBillingStatus();
@@ -494,52 +519,62 @@ export function createRunExec({
       runQueue.finalize(
         run.run_id,
         RUN_STATUS.FAILED,
-        "PO needs a subscription token: run `claude setup-token`, set CLAUDE_CODE_OAUTH_TOKEN (see .env.example), then retry. DEV is unaffected.",
+        "A live session needs a subscription token: run `claude setup-token`, set CLAUDE_CODE_OAUTH_TOKEN " +
+          "(see .env.example), then retry. The one-shot verbs are unaffected.",
       );
       return;
     }
 
+    const sessionKey = sessionKeyFor(verb.verb);
     // Resolved at run start (not submit time) so a model change made while this
-    // task was queued still applies — see design.md D5.
-    run.model = resolveAgentModel(workstream, "po");
-    // canvas-claude-mcp (design.md D6/5.1): awaits server-ready before wiring,
-    // so a PO turn that fires the instant the canvas is engaged never wires an
-    // undefined URL, and never wires anything at all when the canvas MCP does
-    // not apply to this session.
-    const mcpRecord = await ensureCanvasMcpForRun();
+    // task was queued still applies.
+    run.model = resolveVerbModel(workstream, verb.verb);
+    // canvas-claude-mcp: awaits server-ready before wiring, so a turn that fires
+    // the instant the canvas is engaged never wires an undefined URL, and never
+    // wires anything at all when this verb does not declare the server. The
+    // session is shared, so a canvas turn wires it lazily into a session a voice
+    // turn already opened — see setPoSessionMcpServers below.
+    const mcpRecord = verb.mcpServers.includes("iris-canvas") ? await ensureCanvasMcpForRun() : null;
     const mcpServers = mcpRecord ? { "iris-canvas": mcpRecord } : undefined;
 
     run.status = RUN_STATUS.RUNNING;
     run.started_at = Date.now() / 1000;
-    run.claude_session_id = workstream.agent_sessions?.po ?? null;
+    run.claude_session_id = workstream.agent_sessions?.[sessionKey] ?? null;
     emitEvent(toUpdateEvent(run, EMIT_STATUS.STARTED, { urgency: run.urgency }));
 
-    // Same policy DEV routes through, so the two roles' ceilings cannot drift.
+    // Same policy the stateless shape routes through, so the two cannot drift.
     // A resident session applies them once per `query()` — across the session's
-    // whole lifetime, not per turn — so a long-lived PO session is measured
+    // whole lifetime, not per turn — so a long-lived session is measured
     // cumulatively, which is the behaviour a runaway guard wants.
-    const budget = resolveRunBudget("po");
+    const budget = resolveRunBudget(verb.budget);
     const { collect: collectStderr, tail: stderrTail } = createStderrBuffer();
 
     /** @type {any} */
     let state;
     try {
       state = getOrCreatePoSession(workstream, {
-        agent: `${agentPrefix}po`,
-        agentDefinition: resolveAgentDefinition("po", run.cwd),
+        agent: `${agentPrefix}${verb.basePersona}`,
+        agentDefinition: resolveAgentDefinition(verb.basePersona, run.cwd),
         plugins: irisPluginConfig(),
         cwd: run.cwd,
-        resumeSessionId: workstream.agent_sessions?.po ?? null,
+        sessionKey,
+        resumeSessionId: workstream.agent_sessions?.[sessionKey] ?? null,
         claudeExecutable: claudeBinary(),
         onAskUserQuestion: (workstreamId, questions) => askUserQuestionViaVoice(workstreamId, questions),
         model: run.model,
         mcpServers,
         budget,
         stderr: collectStderr,
-        skills: skillsForRole("po"),
-        title: [workstream.label, agentLabels.po ?? "PO"].filter(Boolean).join(" · "),
+        skills: verb.skills,
+        // Set once, when the session opens. Because the session is SHARED, the
+        // clause baked in here is whichever verb opened it — which is why each
+        // turn also carries its own verb's clause in its prompt below. A session
+        // opened by voice must still be told, on the turn that moves to the
+        // canvas, that this turn is canvas work.
+        systemPrompt: buildSystemPrompt(verb),
+        title: [workstream.label, "Shaping"].filter(Boolean).join(" · "),
         // The session supplies the per-turn seams; the policy (thresholds,
-        // denylist, what a hook does) stays here so both roles share one.
+        // denylist, what a hook does) stays here so both shapes share one.
         // `run` is captured deliberately: hooks that fire between turns route
         // through `state.currentTurn`, which is null then, so nothing lands on
         // a stale run.
@@ -552,14 +587,14 @@ export function createRunExec({
           }),
       });
     } catch (error) {
-      runQueue.finalize(run.run_id, RUN_STATUS.ERROR, `Failed to start PO session: ${error.message}`);
+      runQueue.finalize(run.run_id, RUN_STATUS.ERROR, `Failed to start the live session: ${error.message}`);
       return;
     }
 
-    // Both roles now cancel through the same caller-facing handle: the queue
-    // calls run.cancel() and does not need to know whether it is stopping a
-    // one-shot query or a turn inside a resident session. DEV's aborts its
-    // controller; PO's interrupts its turn and leaves the session alive.
+    // Both shapes cancel through the same caller-facing handle: the queue calls
+    // run.cancel() and does not need to know whether it is stopping a one-shot
+    // query or a turn inside a resident session. The stateless one aborts its
+    // controller; this one interrupts its turn and leaves the session alive.
     run.cancel = () => {
       void cancelPoTurn(state);
     };
@@ -571,21 +606,22 @@ export function createRunExec({
     const modelReady = (
       state.currentModel === run.model ? Promise.resolve() : setPoSessionModel(state, run.model)
     ).catch((error) => {
-      emitEvent({ type: "log", level: "warn", message: `Could not switch PO's live session model: ${error.message}` });
+      emitEvent({ type: "log", level: "warn", message: `Could not switch the live session's model: ${error.message}` });
     });
-    // Applied lazily, at most once per session (design.md D6/D8) — a session
-    // created before the canvas was engaged gets wired here on its first turn
-    // after; a session created with it already set (mcpServers above) has
-    // state.currentMcp === true and this is a no-op.
+    // Applied lazily, at most once per session — a session opened by a voice
+    // turn gets the canvas wired here on the first canvas turn into it, which is
+    // exactly the shared-session case D3 exists for. A session created with it
+    // already set (mcpServers above) has state.currentMcp === true and this is a
+    // no-op.
     const mcpReady = (
       state.currentMcp || !mcpServers ? Promise.resolve() : setPoSessionMcpServers(state, mcpServers)
     ).catch((error) => {
-      emitEvent({ type: "log", level: "warn", message: `Could not wire the canvas MCP into PO's live session: ${error.message}` });
+      emitEvent({ type: "log", level: "warn", message: `Could not wire the canvas server into the live session: ${error.message}` });
     });
 
     Promise.all([modelReady, mcpReady])
       .then(() =>
-        deliverPoTurn(state, run.task, {
+        deliverPoTurn(state, buildRunPrompt(verb, { brief: `${verb.clause}\n\n${run.task}`, utterances: recentUtterances() }), {
           onActivity: (line) => pushActivity(run, line),
           onSessionId: (sessionId) => rememberClaudeSessionId(run, sessionId),
           onToolStart: (toolId, toolName, detail) => pushToolStart(run, toolId, toolName, detail),
@@ -594,7 +630,7 @@ export function createRunExec({
       )
       .then((result) => {
         // po-session.mjs reports the raw subtype and usage without interpreting
-        // either; the budget policy lives here, once, for both roles.
+        // either; the budget policy lives here, once, for both shapes.
         if (result.usage) run.usage = result.usage;
         if (result.decisions) run.decisions = result.decisions;
         if (isCeilingSubtype(result.subtype)) {
@@ -614,7 +650,7 @@ export function createRunExec({
         // finally), not on session state — the session may already be deleted
         // from the map by the time this settles.
         if (error?.poEndReason?.kind === "teardown") {
-          runQueue.finalize(run.run_id, RUN_STATUS.CANCELLED, "PO session was reset before the turn completed.");
+          runQueue.finalize(run.run_id, RUN_STATUS.CANCELLED, "The live session was reset before the turn completed.");
           return;
         }
         if (error?.poEndReason?.kind === "cancelled") {
@@ -634,7 +670,7 @@ export function createRunExec({
         runQueue.finalize(
           run.run_id,
           RUN_STATUS.ERROR,
-          withStderr(`PO session error: ${error.message}`, stderrTail),
+          withStderr(`Live session error: ${error.message}`, stderrTail),
         );
       });
   }
@@ -642,7 +678,7 @@ export function createRunExec({
   return {
     runProjectDir,
     startClaudeRun,
-    startDevRun,
-    startPoRun,
+    startStatelessRun,
+    startStatefulRun,
   };
 }

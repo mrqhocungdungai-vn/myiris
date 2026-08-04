@@ -27,7 +27,7 @@ describe("computeWorkerEnv", () => {
 });
 
 describe("computeClaudeWorkerEnv", () => {
-  it("withholds the voice credential from every role, always", () => {
+  it("withholds the voice credential from every run, always", () => {
     // Least privilege: no role has any use for GEMINI_API_KEY, and a worker runs
     // with bypassPermissions over content it did not author.
     const result = computeClaudeWorkerEnv({ PATH: "/usr/bin", GEMINI_API_KEY: "voice-secret" });

@@ -134,7 +134,7 @@ below.
 **The failure this exists to prevent.** For months Iris passed
 `appendSystemPrompt` at the top level of `Options`. It is not a declared field:
 the SDK's normalizer destructures it into the rest object and never reads it, so
-PO's live-session instruction reached nothing while the code and its tests both
+The live-session instruction reached nothing while the code and its tests both
 claimed it was in force. Measured against the running SDK — a query with only
 `appendSystemPrompt` answers *"I don't have a codeword"*; the same text under
 `systemPrompt: { preset, append }` answers correctly. **An option the SDK does
@@ -146,11 +146,11 @@ call site (full workings in the change's `design.md` D1):
 - **A run with `agent` set does not receive the `claude_code` preset.** The
   main-thread `AgentDefinition`'s prompt replaces the base prompt; only
   `systemPrompt`'s *append* half survives. Token-counted: `preset` alone adds
-  ~3 259 tokens, `agent` + `preset` adds **0**. Every PO and DEV run is in this
+  ~3 259 tokens, `agent` + `preset` adds **0**. Every verb run is in this
   case — the persona body *is* their base prompt. Only plain-Claude runs get the
   preset. There is no opt-in to inherit it alongside a definition.
 - **`AskUserQuestion` is only exposed when `canUseTool` is set**, and
-  `disallowedTools` removes it even then. That is why DEV cannot ask, and why PO
+  `disallowedTools` removes it even then. That is why a stateless verb cannot ask, and why a stateful one
   can.
 
 ### Unused, with reasons
@@ -161,7 +161,7 @@ call site (full workings in the change's `design.md` D1):
 | `tools`, `toolAliases` | Iris restricts by exception (`disallowedTools`), not by allowlist — a whitelist would silently break a persona whenever Claude Code gains a tool. |
 | `continue` | Iris resumes by explicit session id per role and workstream; "most recent in this directory" is exactly the cross-role bleed the session model prevents. |
 | `fallbackModel` | A deliberately chosen model that silently downgrades would make the user believe they are debugging on a model they are not. Failing loudly is the intended behavior. |
-| `enableFileCheckpointing` | Evaluated and declined: `rewindFiles()` is a method on the **live** `Query`, and DEV — the role that edits code — is torn down when its run finalizes, so the undo it would enable cannot be reached. See `design.md` D9. |
+| `enableFileCheckpointing` | Evaluated and declined: `rewindFiles()` is a method on the **live** `Query`, and the stateless shape — which is what edits code — is torn down when its run finalizes, so the undo it would enable cannot be reached. See `design.md` D9. |
 | `includePartialMessages` | Evaluated and declined: the voice layer speaks once at run end, and the deck's activity log is already coalesced behind a throttle, so partials would add volume and no latency win. See `design.md` D9. |
 | `effort` | Evaluated and declined **for now**: it moves both spend and quality, and this change sets every number from measurement. Largely covered today by the per-role model selector. See `design.md` D9. |
 | `taskBudget` | Alpha, and it changes model *behavior* (API-side pacing) rather than adding a ceiling. `maxTurns`/`maxBudgetUsd` are the guard. |
@@ -177,7 +177,7 @@ call site (full workings in the change's `design.md` D1):
 | `includeHookEvents` | Iris registers hook callbacks directly; the mirrored `hook_started`/`hook_response` system messages would be duplicate telemetry. |
 | `betas` | No beta is needed; `context-1m` would change cost characteristics that the budgets were measured against. |
 | `onElicitation`, `onUserDialog`, `supportedDialogKinds` | Both are MCP/CLI dialog surfaces with no voice equivalent. Unhandled elicitations are auto-declined, which is the correct headless behavior. |
-| `permissionPromptToolName` | Mutually exclusive with `canUseTool`, which is how PO's question relay works. |
+| `permissionPromptToolName` | Mutually exclusive with `canUseTool`, which is how the live question relay works. |
 | `planModeInstructions` | Only applies to `permissionMode: 'plan'`, which is an escape hatch (`IRIS_CLAUDE_PERMISSION_MODE`), not a supported mode. |
 | `promptSuggestions` | Predicts a *typed* next prompt. Iris has no prompt box — the user speaks. |
 | `settings`, `managedSettings` | Iris's policy is expressed in the options object itself, in code, under test. A second settings layer would put half of it somewhere unversioned. |

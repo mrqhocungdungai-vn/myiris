@@ -1,13 +1,13 @@
-// The exact `Options` object each role hands to `query()`, asserted field by
-// field — the guard F1 lacked.
+// The exact `Options` object each run shape hands to `query()`, asserted field
+// by field — the guard the dropped-instruction failure lacked.
 //
-// F1's failure mode is not "a wrong value". It is a field the SDK does not read,
-// sitting in an options object that looks entirely correct at the call site:
-// `appendSystemPrompt` was passed for months, the code claimed PO had a
-// live-session instruction, and the SDK silently dropped it. A test that checks
-// only the fields it expects to be there cannot catch that — so these assert the
-// COMPLETE key set, and an option that is added, renamed, or misspelled fails
-// here instead of in a user's run.
+// That failure was not "a wrong value". It was a field the SDK does not read,
+// sitting in an options object that looked entirely correct at the call site:
+// `appendSystemPrompt` was passed for months, the code claimed the resident
+// session had a live-session instruction, and the SDK silently dropped it. A
+// test that checks only the fields it expects to be there cannot catch that — so
+// these assert the COMPLETE key set, and an option that is added, renamed, or
+// misspelled fails here instead of in a user's run.
 //
 // Every field name below is checked against the installed SDK's declared
 // `Options` type by the last test in this file, so a field that ceases to exist
@@ -22,7 +22,7 @@ import { getOrCreatePoSession, closeAllPoSessions } from "./po-session.mjs";
 import { buildSystemPrompt } from "./role-prompt.mjs";
 import { DECISION_OUTPUT_FORMAT } from "./run-output-format.mjs";
 import { resolveRunBudget } from "./run-budget.mjs";
-import { skillsForRole } from "./run-skills.mjs";
+import { resolveVerb } from "./verbs.mjs";
 
 function fakeQuery() {
   const calls = [];
@@ -40,19 +40,18 @@ function fakeQuery() {
 }
 
 function makeExec(queryImpl, overrides = {}) {
-  const workstream = { id: "ws1", cwd: "/tmp/project", agent_sessions: {}, active_agent: null };
+  const workstream = { id: "ws1", cwd: "/tmp/project", agent_sessions: {} };
   return createRunExec({
     runQueue: { finalize: vi.fn() },
     emitEvent: vi.fn(),
     findWorkstream: () => workstream,
     persistSessionStore: vi.fn(),
-    agentKey: (agent) => agent ?? "default",
-    resolveAgentModel: () => "claude-sonnet-5",
-    agentLabels: { po: "PO", dev: "DEV" },
+    sessionKeyFor: (verb) => resolveVerb(verb).sessionKey,
+    resolveVerbModel: () => "claude-sonnet-5",
     agentPrefix: "iris-",
     claudeWorkdir: () => "/tmp/default-workspace",
     claudeBinary: () => "/bundled/claude",
-    resolveAgentDefinition: (role) => ({ description: `${role} persona`, prompt: `You are ${role}.` }),
+    resolveAgentDefinition: (base) => ({ description: `${base} persona`, prompt: `You are ${base}.` }),
     irisPluginConfig: () => [{ type: "local", path: "/bundle/iris-plugin", skipMcpDiscovery: true }],
     ensureProjectScaffold: () => ({ created: [] }),
     openChangesWithTasks: () => ["some-change"],
@@ -60,6 +59,8 @@ function makeExec(queryImpl, overrides = {}) {
     ensureNotesVaultReady: vi.fn(),
     checkNotesSkillsStatus: () => ({ ok: true }),
     notesVaultDir: "/tmp/notes-vault",
+    notesInboxDir: "/tmp/notes-vault/inbox/runs",
+    recentUtterances: () => [],
     handleClaudeStreamMessage: (run, message) => {
       if (message?.type === "result") run.result = message;
     },
@@ -77,7 +78,7 @@ function makeExec(queryImpl, overrides = {}) {
 function makeRun(overrides = {}) {
   return {
     run_id: "r1",
-    agent: null,
+    verb: "execute",
     task: "do a thing",
     workstream_id: "ws1",
     urgency: "normal",
@@ -86,15 +87,15 @@ function makeRun(overrides = {}) {
   };
 }
 
-async function optionsFor(agent) {
+async function optionsFor(name, changes = ["some-change"]) {
   const queryImpl = fakeQuery();
-  await makeExec(queryImpl).startDevRun(makeRun({ agent }));
+  await makeExec(queryImpl).startStatelessRun(makeRun({ verb: name }), resolveVerb(name, changes));
   return queryImpl.calls[0].options;
 }
 
 // Keys that carry a function or a live object, asserted by presence and shape
 // rather than by value.
-const DEV_KEYS = [
+const EXECUTE_KEYS = [
   "cwd",
   "permissionMode",
   "allowDangerouslySkipPermissions",
@@ -118,7 +119,9 @@ const DEV_KEYS = [
   "title",
 ];
 
-const PLAIN_KEYS = [
+// The capture verb is the only one granted the vault, and the only stateless
+// verb without the decisions schema.
+const CAPTURE_KEYS = [
   "cwd",
   "permissionMode",
   "allowDangerouslySkipPermissions",
@@ -133,35 +136,41 @@ const PLAIN_KEYS = [
   "stderr",
   "hooks",
   "additionalDirectories",
+  "agents",
+  "agent",
+  "disallowedTools",
+  "canUseTool",
+  "model",
   "abortController",
   "title",
 ];
 
-describe("the options DEV hands to query()", () => {
+describe("the options `execute` hands to query()", () => {
   it("has exactly these fields, and no others", async () => {
-    expect(Object.keys(await optionsFor("dev")).sort()).toEqual([...DEV_KEYS].sort());
+    expect(Object.keys(await optionsFor("execute")).sort()).toEqual([...EXECUTE_KEYS].sort());
   });
 
   it("sets each one to the value the policy modules produce", async () => {
-    const options = await optionsFor("dev");
-    const budget = resolveRunBudget("dev", {});
+    const verb = resolveVerb("execute", ["some-change"]);
+    const options = await optionsFor("execute");
+    const budget = resolveRunBudget("worker", {});
 
     expect(options.cwd).toBe("/tmp/project");
     expect(options.permissionMode).toBe("bypassPermissions");
     expect(options.allowDangerouslySkipPermissions).toBe(true);
-    expect(options.systemPrompt).toEqual(buildSystemPrompt("dev"));
+    expect(options.systemPrompt).toEqual(buildSystemPrompt(verb));
     expect(options.pathToClaudeCodeExecutable).toBe("/bundled/claude");
     expect(options.settingSources).toEqual(["project"]);
-    expect(options.skills).toEqual(skillsForRole("dev"));
+    expect(options.skills).toEqual(verb.skills);
     expect(options.maxTurns).toBe(budget.maxTurns);
     expect(options.maxBudgetUsd).toBe(budget.maxBudgetUsd);
     expect(options.outputFormat).toBe(DECISION_OUTPUT_FORMAT);
     expect(options.disallowedTools).toEqual(["AskUserQuestion"]);
-    expect(options.agent).toBe("iris-dev");
-    expect(Object.keys(options.agents)).toEqual(["iris-dev"]);
+    expect(options.agent).toBe("iris-stateless");
+    expect(Object.keys(options.agents)).toEqual(["iris-stateless"]);
     expect(options.model).toBe("claude-sonnet-5");
     // A transcript the user can identify, instead of an auto-generated summary.
-    expect(options.title).toContain("DEV");
+    expect(options.title).toContain("Build");
     expect(typeof options.stderr).toBe("function");
     expect(typeof options.canUseTool).toBe("function");
     expect(options.abortController).toBeInstanceOf(AbortController);
@@ -175,39 +184,56 @@ describe("the options DEV hands to query()", () => {
   });
 
   // The user's own ~/.claude is never a source, and the voice credential never
-  // reaches a role. Both are load-bearing security properties, not conveniences.
+  // reaches a run. Both are load-bearing security properties, not conveniences.
   it("keeps the worker's environment computed by subtraction", async () => {
-    const options = await optionsFor("dev");
+    const options = await optionsFor("execute");
     expect(options.settingSources).not.toContain("user");
     expect(options.env.GEMINI_API_KEY).toBeUndefined();
     expect(options.env.CLAUDE_CONFIG_DIR).toContain(path.join(".iris", "claude-home"));
     expect(options.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe("1");
   });
+
+  // D4: the fork is visible in the options, not just in a branch somewhere.
+  it("changes exactly the skills and the prompt when there is no open change", async () => {
+    const withChange = await optionsFor("execute", ["some-change"]);
+    const without = await optionsFor("execute", []);
+
+    expect(Object.keys(without).sort()).toEqual(Object.keys(withChange).sort());
+    expect(without.skills).toEqual([]);
+    expect(without.systemPrompt).not.toEqual(withChange.systemPrompt);
+  });
 });
 
-describe("the options plain Claude hands to query()", () => {
+describe("the options `capture_learning` hands to query()", () => {
   it("has exactly these fields, and no others", async () => {
-    expect(Object.keys(await optionsFor(null)).sort()).toEqual([...PLAIN_KEYS].sort());
+    expect(Object.keys(await optionsFor("capture_learning")).sort()).toEqual([...CAPTURE_KEYS].sort());
   });
 
-  // Plain Claude is not a role: no persona, no schema, no question lockout, and
-  // it is the only one granted the notes vault.
-  it("differs from DEV exactly where it should", async () => {
-    const options = await optionsFor(null);
+  // Every verb is a persona run now, so what differs is the capability surface:
+  // the vault grant, the skills, the ceiling, and whether a decisions schema
+  // applies at all.
+  it("differs from `execute` exactly where it should", async () => {
+    const options = await optionsFor("capture_learning");
 
-    expect(options.agent).toBeUndefined();
-    expect(options.agents).toBeUndefined();
     expect(options.outputFormat).toBeUndefined();
-    expect(options.disallowedTools).toBeUndefined();
-    expect(options.canUseTool).toBeUndefined();
-    expect(options.model).toBeUndefined();
     expect(options.additionalDirectories).toEqual(["/tmp/notes-vault"]);
-    expect(options.skills).toEqual(skillsForRole("plain"));
-    expect(options.maxTurns).toBe(resolveRunBudget("plain", {}).maxTurns);
+    expect(options.skills).toEqual(resolveVerb("capture_learning").skills);
+    expect(options.maxTurns).toBe(resolveRunBudget("light", {}).maxTurns);
+    expect(options.disallowedTools).toEqual(["AskUserQuestion"]);
   });
 });
 
-describe("the options PO hands to query()", () => {
+describe("the options `investigate` hands to query()", () => {
+  // Investigating does not modify, and that is enforced by configuration rather
+  // than promised in a prompt.
+  it("withholds the edit tools as well as the question tool", async () => {
+    const options = await optionsFor("investigate");
+    expect(options.disallowedTools).toEqual(["AskUserQuestion", "Write", "Edit", "NotebookEdit"]);
+    expect(options.additionalDirectories).toBeUndefined();
+  });
+});
+
+describe("the options the resident session hands to query()", () => {
   const PO_KEYS = [
     "agent",
     "cwd",
@@ -237,17 +263,19 @@ describe("the options PO hands to query()", () => {
     getOrCreatePoSession(
       { id: `ws-${Math.random()}` },
       {
-        agent: "iris-po",
-        agentDefinition: { description: "po", prompt: "You are PO." },
+        agent: "iris-stateful",
+        agentDefinition: { description: "stateful", prompt: "You are stateful." },
         plugins: [{ type: "local", path: "/bundle/iris-plugin" }],
         cwd: "/tmp/project",
+        sessionKey: resolveVerb("shape_requirements").sessionKey,
         claudeExecutable: "/bundled/claude",
         model: "claude-opus-5",
-        budget: resolveRunBudget("po", {}),
+        budget: resolveRunBudget("stateful", {}),
         stderr: () => {},
-        skills: skillsForRole("po"),
+        skills: resolveVerb("shape_requirements").skills,
+        systemPrompt: buildSystemPrompt(resolveVerb("shape_requirements")),
         buildHooks: () => ({ PreToolUse: [] }),
-        title: "Iris · PO",
+        title: "Iris · Shaping",
         onAskUserQuestion: async () => ({ behavior: "allow", answers: {} }),
         query: /** @type {any} */ (({ options }) => {
           captured = options;
@@ -263,21 +291,21 @@ describe("the options PO hands to query()", () => {
     await closeAllPoSessions();
   });
 
-  // The whole point of F1: PO's live-session instruction must travel on the
-  // field the SDK reads, and its base prompt must match DEV's.
+  // The whole point of the original failure: the live-session instruction must
+  // travel on the field the SDK reads.
   it("carries the live-session instruction on `systemPrompt`, never `appendSystemPrompt`", async () => {
     const options = poOptions();
     expect(options).not.toHaveProperty("appendSystemPrompt");
-    expect(options.systemPrompt).toEqual(buildSystemPrompt("po"));
+    expect(options.systemPrompt).toEqual(buildSystemPrompt(resolveVerb("shape_requirements")));
     await closeAllPoSessions();
   });
 
-  it("shares its ceilings, skills, and schema policy with DEV's", async () => {
+  it("shares its ceilings, skills, and schema policy with the stateless shape's", async () => {
     const options = poOptions();
-    expect(options.maxTurns).toBe(resolveRunBudget("po", {}).maxTurns);
-    expect(options.skills).toEqual(skillsForRole("po"));
+    expect(options.maxTurns).toBe(resolveRunBudget("stateful", {}).maxTurns);
+    expect(options.skills).toEqual(resolveVerb("shape_requirements").skills);
     expect(options.outputFormat).toBe(DECISION_OUTPUT_FORMAT);
-    // PO is the role that IS allowed to ask, so it must not be locked out.
+    // This is the shape that IS allowed to ask, so it must not be locked out.
     expect(options).not.toHaveProperty("disallowedTools");
     expect(typeof options.canUseTool).toBe("function");
     await closeAllPoSessions();
@@ -286,7 +314,8 @@ describe("the options PO hands to query()", () => {
 
 // The check that makes the above more than a snapshot of our own beliefs: every
 // field name we set must exist on the SDK's declared `Options` type. This is
-// exactly what would have caught F1 — `appendSystemPrompt` is not declared there.
+// exactly what would have caught the original failure — `appendSystemPrompt` is
+// not declared there.
 describe("every option Iris sets is one the SDK declares", () => {
   it("finds each field on the installed Options type", () => {
     const sdkTypes = fs.readFileSync(
@@ -306,10 +335,10 @@ describe("every option Iris sets is one the SDK declares", () => {
     const declared = new Set(
       [...optionsBlock.matchAll(/^\s{4}(\w+)\??:/gm)].map((match) => match[1]),
     );
-    for (const field of new Set([...DEV_KEYS, ...PLAIN_KEYS])) {
+    for (const field of new Set([...EXECUTE_KEYS, ...CAPTURE_KEYS])) {
       expect(declared, `Options does not declare "${field}"`).toContain(field);
     }
-    // The control: the field F1 was actually passing is NOT declared.
+    // The control: the field that was actually being passed is NOT declared.
     expect(declared).not.toContain("appendSystemPrompt");
   });
 });

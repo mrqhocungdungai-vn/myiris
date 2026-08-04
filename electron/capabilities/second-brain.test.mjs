@@ -152,7 +152,17 @@ describe("second-brain capability: promptFragment", () => {
   });
 
   it("offers the note-save line when the pipeline is available and the bundle has the skills", () => {
-    expect(make().promptFragment()).toContain("NOTE-OFFER");
+    expect(make().promptFragment()).toContain("SECOND BRAIN");
+  });
+
+  // The capability is reachable as a named function now, so its prose says only
+  // what a schema cannot: when to offer. It no longer has to describe how to
+  // route note work through a general-purpose task tool.
+  it("names the verb rather than describing how to shape a general task", () => {
+    const fragment = make().promptFragment();
+    expect(fragment).toContain("capture_learning");
+    expect(fragment).not.toContain("submit_claude_task");
+    expect(fragment).not.toMatch(/\bPO\b|\bDEV\b/);
   });
 });
 

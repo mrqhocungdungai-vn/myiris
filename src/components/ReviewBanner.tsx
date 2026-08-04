@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { FileText } from "lucide-react";
+import { verbLabel } from "../lib/verbs";
 
 // Deck gets an editable textarea (`editable` default true); the HUD passes
 // editable=false — its window is click-through except over `.hud-hit`
@@ -30,7 +31,7 @@ export default function ReviewBanner({
     <div className="task-review-banner" role="status">
       <div className="task-review-banner-head">
         <FileText size={13} />
-        <span>Review before sending{review.agent ? ` · ${review.agent.toUpperCase()}` : ""}</span>
+        <span>Review before sending{review.verb ? ` · ${verbLabel(review.verb)}` : ""}</span>
       </div>
       {editable ? (
         <textarea

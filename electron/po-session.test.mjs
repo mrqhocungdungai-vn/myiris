@@ -11,7 +11,8 @@ import {
   closePoSession,
   setPoSessionMcpServers,
 } from "./po-session.mjs";
-import { buildRoleInstructions, buildSystemPrompt, ROLE_CLAUSES } from "./role-prompt.mjs";
+import { STATEFULNESS_CLAUSES, buildRunInstructions, buildSystemPrompt } from "./role-prompt.mjs";
+import { resolveVerb } from "./verbs.mjs";
 
 // A hand-rolled async iterator (not a generator function) so the test has
 // direct control over `.return()` — mirroring exactly what
@@ -188,24 +189,37 @@ describe("po-session system prompt", () => {
     return captured;
   }
 
-  // F1: PO's live-session instruction travelled on a top-level
-  // `appendSystemPrompt`, which the SDK destructures away and never reads — so
-  // PO ran on the minimal prompt while DEV got a full one. Confirmed against
-  // the live SDK in design.md D1b.
-  it("delivers the live-session instruction on the field the SDK reads", () => {
-    const options = captureOptions();
+  // The live-session instruction travelled on a top-level `appendSystemPrompt`,
+  // which the SDK destructures away and never reads — so the resident session
+  // ran on the minimal prompt while the one-shot path got a full one. Confirmed
+  // against the live SDK in the agent-sdk-conformance design.md D1b.
+  //
+  // This module no longer builds the prompt at all: it is handed one, so it
+  // cannot be the place a second policy grows.
+  it("delivers the caller's prompt on the field the SDK reads", () => {
+    const verb = resolveVerb("shape_requirements");
+    const options = captureOptions({ systemPrompt: buildSystemPrompt(verb) });
 
     expect(options.appendSystemPrompt).toBeUndefined();
-    expect(options.systemPrompt).toEqual(buildSystemPrompt("po"));
+    expect(options.systemPrompt).toEqual(buildSystemPrompt(verb));
     expect(options.systemPrompt.append).toContain("AskUserQuestion");
   });
 
-  it("shares the base prompt with the headless role, one clause apart", () => {
-    const po = captureOptions().systemPrompt.append;
+  it("shares the base prompt with the stateless shape, one statefulness clause apart", () => {
+    const shape = resolveVerb("shape_requirements");
+    const execute = resolveVerb("execute");
+    const stateful = captureOptions({ systemPrompt: buildSystemPrompt(shape) }).systemPrompt.append;
 
-    expect(po.replace(ROLE_CLAUSES.po, "<CLAUSE>")).toEqual(
-      buildRoleInstructions("dev").replace(ROLE_CLAUSES.worker, "<CLAUSE>"),
+    expect(stateful.replace(STATEFULNESS_CLAUSES.stateful, "<BASE>").replace(shape.clause, "<CLAUSE>")).toEqual(
+      buildRunInstructions(execute).replace(STATEFULNESS_CLAUSES.stateless, "<BASE>").replace(execute.clause, "<CLAUSE>"),
     );
+  });
+
+  // A caller that forgets to pass a list must get a session that can reach
+  // nothing, never one silently widened back to every skill the bundle ships.
+  it("defaults to no skills rather than to all of them", () => {
+    expect(captureOptions().skills).toEqual([]);
+    expect(captureOptions({ skills: ["iris:grilling"] }).skills).toEqual(["iris:grilling"]);
   });
 });
 

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { createGeminiTools } from "./gemini-tools.mjs";
+import { VERB_NAMES, resolveAllVerbs } from "./verbs.mjs";
 
 const modelChoices = [
   { id: "claude-opus-5", label: "Opus 5" },
@@ -36,11 +37,57 @@ describe("gemini-tools", () => {
     expect(Array.isArray(tools[0].functionDeclarations)).toBe(true);
   });
 
-  it("set_agent_model describes the injected model choices", () => {
+  it("set_verb_model describes the injected model choices and every verb", () => {
     const declarations = make().buildPipelineToolDeclarations();
-    const setAgentModel = declarations.find((d) => d.name === "set_agent_model");
-    expect(setAgentModel.parameters.properties.model.description).toContain("claude-opus-5");
-    expect(setAgentModel.parameters.properties.model.description).toContain("claude-sonnet-5");
+    const setVerbModel = declarations.find((d) => d.name === "set_verb_model");
+    expect(setVerbModel.parameters.properties.model.description).toContain("claude-opus-5");
+    expect(setVerbModel.parameters.properties.model.description).toContain("claude-sonnet-5");
+    for (const verb of VERB_NAMES) {
+      expect(setVerbModel.parameters.properties.verb.description).toContain(verb);
+    }
+  });
+
+  // The registry is the single definition; a declaration written out by hand
+  // here is exactly the second copy the registry exists to prevent.
+  it("derives a declaration for every verb from the registry, schema and all", () => {
+    const declarations = make().buildPipelineToolDeclarations();
+    for (const resolved of resolveAllVerbs()) {
+      const declaration = declarations.find((entry) => entry.name === resolved.verb);
+      expect(declaration).toBeDefined();
+      expect(declaration.description).toBe(resolved.description);
+      expect(declaration.parameters).toEqual(resolved.params);
+    }
+  });
+
+  // The two stateful verbs take a thin schema because their model can pause and
+  // ask; the stateless ones cannot, so their parameters are the instruction.
+  it("gives the stateful verbs a thin schema and the stateless ones concrete parameters", () => {
+    const declarations = make().buildPipelineToolDeclarations();
+    for (const name of ["shape_requirements", "shape_on_canvas"]) {
+      expect(Object.keys(declarations.find((d) => d.name === name).parameters.properties)).toEqual(["said", "reading"]);
+    }
+    const execute = declarations.find((d) => d.name === "execute");
+    expect(execute.parameters.required).toEqual(["goal", "details"]);
+    expect(execute.parameters.properties.details.description).toContain("cannot ask you anything");
+  });
+
+  // A tool with no boundary is not a tool. The general-purpose one survives only
+  // as a deprecated alias, so a resumed Gemini session does not break.
+  it("offers no undifferentiated task tool beyond the deprecated alias", () => {
+    const declarations = make().buildPipelineToolDeclarations();
+    const legacy = declarations.find((d) => d.name === "submit_claude_task");
+    expect(legacy.description).toMatch(/^DEPRECATED/);
+    expect(declarations.filter((d) => /hand .*work to claude/i.test(d.description))).toEqual([]);
+  });
+
+  // Role vocabulary leaves the surface the model reads.
+  it("mentions no role in any declaration", () => {
+    const declarations = [...make().buildPipelineToolDeclarations(), ...make().buildAlwaysToolDeclarations()];
+    for (const declaration of declarations) {
+      expect(`${declaration.name} ${declaration.description} ${JSON.stringify(declaration.parameters)}`).not.toMatch(
+        /\bPO\b|\bDEV\b|Product Owner/,
+      );
+    }
   });
 
   it("buildLiveTools adds googleSearch only when the env flag is set", () => {

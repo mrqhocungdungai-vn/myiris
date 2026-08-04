@@ -5,10 +5,8 @@
 // separate modules rather than one code path with a role flag.
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { parseClaudeStreamMessage, runUsageFrom } from "./claude-stream.mjs";
-import { buildSystemPrompt } from "./role-prompt.mjs";
 import { readInFlightCostUsd } from "./run-hooks.mjs";
 import { DECISION_OUTPUT_FORMAT, readRunOutput } from "./run-output-format.mjs";
-import { skillsForRole } from "./run-skills.mjs";
 import { computeClaudeWorkerEnv } from "./worker-env.mjs";
 
 export const DEFAULT_PO_QUESTION_TIMEOUT_MS = 300000; // 5 minutes
@@ -194,6 +192,7 @@ async function pump(state) {
  *   agentDefinition?: { description: string, prompt: string, model?: string },
  *   plugins?: Array<{ type: "local", path: string, skipMcpDiscovery?: boolean }> | null,
  *   cwd?: string,
+ *   sessionKey?: string,
  *   resumeSessionId?: string|null,
  *   onAskUserQuestion?: (workstreamId: string, questions: unknown[]) => Promise<{ behavior?: string, message?: string, answers?: Record<string, unknown> }>,
  *   claudeExecutable?: string,
@@ -201,6 +200,7 @@ async function pump(state) {
  *   mcpServers?: Record<string, unknown>,
  *   budget?: { maxTurns: number, maxBudgetUsd: number },
  *   skills?: string[],
+ *   systemPrompt?: import("@anthropic-ai/claude-agent-sdk").Options["systemPrompt"],
  *   title?: string,
  *   buildHooks?: (seams: { costUsd: () => Promise<number|null>, onToolEnd: (toolId: string, isError: boolean) => void, onActivity: (line: string) => void }) => any,
  *   stderr?: (data: string) => void,
@@ -214,6 +214,7 @@ export function getOrCreatePoSession(
     agentDefinition,
     plugins,
     cwd,
+    sessionKey,
     resumeSessionId,
     onAskUserQuestion,
     claudeExecutable,
@@ -222,6 +223,7 @@ export function getOrCreatePoSession(
     budget,
     stderr,
     skills,
+    systemPrompt,
     buildHooks,
     title,
     query: queryFn = query,
@@ -233,6 +235,11 @@ export function getOrCreatePoSession(
   const channel = createUserMessageChannel();
   const state = {
     workstreamId: workstream.id,
+    // Which stored conversation this resident session writes back to. Both
+    // stateful verbs resolve to the same key, which is what makes moving from
+    // voice to the canvas continue one conversation rather than opening a
+    // second (design.md D3).
+    sessionKey: sessionKey || "stateful",
     sessionId: resumeSessionId || null,
     currentTurn: null,
     ended: false,
@@ -266,18 +273,20 @@ export function getOrCreatePoSession(
     // still picks up the settings of the repository it is working in.
     settingSources: /** @type {Array<"project">} */ (["project"]),
     // Supplied by the caller rather than fixed at "all" here, so the list is a
-    // property of the run and not of this module (run-skills.mjs owns it). The
-    // fallback keeps a caller that passes nothing on PO's own list rather than
-    // silently widening back to every skill the bundle ships.
-    skills: skills ?? skillsForRole("po"),
+    // property of the verb and not of this module (verbs.mjs declares it,
+    // run-skills.mjs holds the lists). The fallback is the empty list, not
+    // "all": a caller that forgets to pass one should get a session that can
+    // reach nothing, never one silently widened to every skill the bundle ships.
+    skills: skills ?? [],
     env: computePoSessionEnv(process.env),
     canUseTool: buildCanUseTool(state, onAskUserQuestion),
-    // The live-session instruction used to travel on a top-level
-    // `appendSystemPrompt`, which the SDK destructures away and never reads —
-    // so PO ran with no base prompt at all while DEV got a full one. Both roles
-    // now go through the one policy in role-prompt.mjs, on the one field the SDK
-    // actually honours. See design.md D1b.
-    systemPrompt: buildSystemPrompt("po"),
+    // Built by the caller through the one policy in role-prompt.mjs, on the one
+    // field the SDK actually honours. It used to travel on a top-level
+    // `appendSystemPrompt`, which the SDK destructures away and never reads — so
+    // the live session ran with no base prompt at all while the one-shot path got
+    // a full one. This module no longer knows what a persona is; it is handed
+    // one. See the agent-sdk-conformance design.md D1b.
+    systemPrompt,
     // Decisions come back as validated data rather than a markdown heading the
     // voice layer has to find. Applies to the whole resident session, so every
     // turn reports in this shape — which is why the schema keeps `summary` as
@@ -286,7 +295,8 @@ export function getOrCreatePoSession(
   };
   if (model) options.model = model;
   // The ceilings come from the caller (run-exec.mjs → run-budget.mjs) rather
-  // than being read here, so both roles resolve their budget through one policy.
+  // than being read here, so both run shapes resolve their budget through one
+  // policy.
   // A resident session applies them per `query()`, i.e. across the session's
   // whole lifetime rather than per turn — see design.md D3.
   if (budget) {

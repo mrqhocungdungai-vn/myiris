@@ -10,7 +10,7 @@ import {
   resolveMergedString,
   taskKeyFor,
 } from "./lib/tasks";
-import { AGENT_LABELS, PIPELINE, isAgentRole, modelLabel } from "./lib/agents";
+import { isVerb, modelLabel, verbLabel } from "./lib/verbs";
 import { resolveGestureContext } from "./lib/gestureContext";
 import { uiSounds } from "./lib/sounds";
 import { useAudioPipeline } from "./hooks/useAudioPipeline";
@@ -33,7 +33,6 @@ import ReaderOverlay from "./components/ReaderOverlay";
 import NoteReader from "./components/NoteReader";
 import type { GalaxyNode } from "./components/VaultGalaxy";
 import HistoryDrawer from "./components/HistoryDrawer";
-import ConfirmModal from "./components/ConfirmModal";
 import TaskChooser from "./components/TaskChooser";
 import SetupPanel from "./components/SetupPanel";
 import HandReticles from "./components/HandReticles";
@@ -97,13 +96,10 @@ export default function App() {
   const [taskChooser, setTaskChooser] = useState<{ query: string; matches: TaskCard[] } | null>(null);
   const [showHistory, setShowHistory] = useState(false);
   const [handControl, setHandControl] = useState(loadHandEnabled);
-  // Non-blocking replacement for window.confirm (BUG item 3): resolving/rejecting
-  // this promise never suspends the event loop, so the orb/audio/gestures keep
-  // running while the user decides.
-  const [confirm, setConfirm] = useState<{ message: string; resolve: (ok: boolean) => void } | null>(null);
-  function askConfirm(message: string) {
-    return new Promise<boolean>((resolve) => setConfirm({ message, resolve }));
-  }
+  // The non-blocking confirm dialog is gone with its only caller: the soft gate
+  // that warned before switching pipeline roles. Nothing asks the user to
+  // confirm anything now — Iris picks the verb, and the review gate is where a
+  // consequential dispatch stops for a human decision.
   // Master switch for the PO → DEV pipeline surface (Work Stream, PipelineBar,
   // workstream switcher, task chooser, HUD tasks column, PO question banner) —
   // determined by main from whether the `claude` binary resolves. Defaults to
@@ -120,7 +116,7 @@ export default function App() {
   const [wakeFailed, setWakeFailed] = useState(false);
   const [sessions, setSessions] = useState<ClaudeSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
-  const [agents, setAgents] = useState<AgentsSnapshot | null>(null);
+  const [verbs, setVerbs] = useState<VerbsSnapshot | null>(null);
   // Bumped whenever a run completes or sessions change so the gate ✓s re-scan.
   const [agentsTick, setAgentsTick] = useState(0);
   // The PO's live session is mid-question — set while status is "pending",
@@ -134,7 +130,7 @@ export default function App() {
   // Picks per question, as a LIST: a multi-select question may take several,
   // and collapsing it to one answers a different question than the PO asked.
   const [poAnswers, setPoAnswers] = useState<Record<string, string[]>>({});
-  // A brief submit_claude_task just parked for Approve/Edit/Cancel
+  // A request a verb just parked for Approve/Edit/Cancel
   // (prompt-review-gate spec) — cleared by the "task_review" sidecar event
   // once main resolves it (approved/cancelled/timed_out/abandoned), never
   // optimistically here, so a rejected empty edit leaves the banner up.
@@ -142,10 +138,10 @@ export default function App() {
   // Review-gate mode mirror (prompt-review-gate spec) — read at mount via
   // getPromptStatus, kept live via the prompt_review_mode sidecar event.
   // Defaults true to match main's own IRIS_PROMPT_REVIEW default.
-  const [reviewMode, setReviewModeState] = useState(true);
+  const [reviewMode, setReviewModeState] = useState<ReviewMode>("verb");
   // Which role's model popover is open (clicking the chip's model segment,
   // not its role-select label) — at most one at a time.
-  const [modelPopoverRole, setModelPopoverRole] = useState<AgentRole | null>(null);
+  const [modelPopoverVerb, setModelPopoverVerb] = useState<Verb | null>(null);
 
   // Glass HUD mode: main process drives the window shape; we mirror it in a
   // root class and re-layout. App always boots into deck mode (design.md D5).
@@ -426,7 +422,7 @@ export default function App() {
       .catch(() => {});
     window.iris
       .getPromptStatus()
-      .then((status) => setReviewModeState(Boolean(status.reviewMode)))
+      .then((status) => setReviewModeState(status.reviewMode ?? "verb"))
       .catch(() => {});
     // Dispatch through the ref so this always calls the newest closure —
     // handleSidecarEvent may safely read live state (pendingPoQuestion,
@@ -736,78 +732,51 @@ export default function App() {
     () => sessions.find((entry) => entry.id === activeSessionId) ?? null,
     [sessions, activeSessionId],
   );
-  const activeAgent = activeSession?.active_agent ?? null;
+  // What ran most recently, for display. There is no *current* verb: Iris picks
+  // one per request, so a workstream has a history, not a mode.
+  const lastVerb = activeSession?.last_verb_used ?? null;
 
   useEffect(() => {
     if (!hasBridge) return;
     window.iris
-      .listAgents(activeSessionId ?? undefined)
-      .then(setAgents)
-      .catch(() => setAgents(null));
+      .listVerbs(activeSessionId ?? undefined)
+      .then(setVerbs)
+      .catch(() => setVerbs(null));
   }, [hasBridge, activeSessionId, sessions, agentsTick]);
 
   useEffect(() => {
-    if (!modelPopoverRole) return;
+    if (!modelPopoverVerb) return;
     function onDocPointerDown(event: PointerEvent) {
       const target = event.target as HTMLElement | null;
       if (target?.closest(".agent-chip-model") || target?.closest(".model-popover")) return;
-      setModelPopoverRole(null);
+      setModelPopoverVerb(null);
     }
     document.addEventListener("pointerdown", onDocPointerDown);
     return () => document.removeEventListener("pointerdown", onDocPointerDown);
-  }, [modelPopoverRole]);
+  }, [modelPopoverVerb]);
 
-  // Switching roles is a GATE: each role keeps its OWN continuous Claude
-  // conversation (resumed on every task; only the user resets it via "New"),
-  // and picks up the other role's context from the handoff files. The gate is
-  // soft — a missing handoff warns but the user can push through on purpose.
-  async function chooseAgent(role: AgentRole | null) {
-    if (!hasBridge || !activeSessionId || role === activeAgent) return;
-    if (role) {
-      const index = PIPELINE.indexOf(role);
-      const prevRole = index > 0 ? PIPELINE[index - 1] : null;
-      const prevHandoff = prevRole ? Boolean(agents?.gates.byRole?.[prevRole]) : true;
-      if (prevRole && !prevHandoff) {
-        const slug = agents?.gates.slug;
-        const where = slug ? `.scratch/${slug}/handoff/${prevRole}.md` : `the ${AGENT_LABELS[prevRole]} handoff file`;
-        const ok = await askConfirm(
-          `Gate check: ${where} does not exist yet, so ${AGENT_LABELS[role]} has no handoff from ${AGENT_LABELS[prevRole]} to work from.\n\nSwitch to ${AGENT_LABELS[role]} anyway?`,
-        );
-        if (!ok) return;
-      }
-    }
-    const snapshot = await window.iris.selectAgent(activeSessionId, role);
-    if (snapshot.status === "error") {
-      pushLog("error", snapshot.error ?? "Could not switch the agent.");
-      return;
-    }
-    applySessions(snapshot);
-    if (role) {
-      const index = PIPELINE.indexOf(role);
-      const prevRole = index > 0 ? PIPELINE[index - 1] : null;
-      const gatePassed = prevRole ? Boolean(agents?.gates.byRole?.[prevRole]) : true;
-      pushLog(
-        "info",
-        `${prevRole && gatePassed ? `Gate passed: ${AGENT_LABELS[prevRole]} → ${AGENT_LABELS[role]}. ` : ""}Agent switched to ${AGENT_LABELS[role]} — next task resumes ${AGENT_LABELS[role]}'s own conversation; context from other roles flows via the handoff files.`,
-      );
-    } else {
-      pushLog("info", "Agent switched to plain Iris/Claude (no role).");
-    }
-  }
-
-  // Deliberately does NOT touch activeAgent — the model segment is a separate
-  // click zone from the role-select label, so picking a model for the OTHER
-  // role never switches the pipeline picker.
-  async function setRoleModel(role: AgentRole, model: string) {
+  // The verb-selection handler is gone with the chip that called it. Choosing
+  // what kind of work a request is belongs to Iris, which is the component that
+  // actually heard the request — a control here could only ever disagree with
+  // it, and did.
+  async function setVerbModelChoice(verb: Verb, model: string) {
     if (!hasBridge || !activeSessionId) return;
-    setModelPopoverRole(null);
-    const result = await window.iris.setAgentModel(activeSessionId, role, model);
+    setModelPopoverVerb(null);
+    const result = await window.iris.setVerbModel(activeSessionId, verb, model);
     if (result.status === "error") {
       pushLog("error", result.error ?? "Could not change the model.");
       return;
     }
     setAgentsTick((tick) => tick + 1);
-    pushLog("info", `${AGENT_LABELS[role]}'s model is now ${modelLabel(model)}.`);
+    // Two shaping verbs share one live conversation, so a change to either
+    // applies to both. Say so rather than appearing to change one.
+    const affected = result.verbs?.length ? result.verbs : [verb];
+    pushLog(
+      "info",
+      `${affected.map(verbLabel).join(" and ")} now ${affected.length > 1 ? "run" : "runs"} on ${modelLabel(model)}${
+        result.shared ? " — they share one live conversation" : ""
+      }.`,
+    );
   }
 
   // Secondary answer path: lets a sighted user click an option directly
@@ -865,10 +834,14 @@ export default function App() {
     if (result.status === "error") pushLog("error", result.error ?? "Could not cancel the brief.");
   }
 
-  async function toggleReviewMode(next: boolean) {
+  async function setReviewMode(next: ReviewMode) {
     if (!hasBridge) return;
     const result = await window.iris.setPromptReviewMode(next);
-    setReviewModeState(Boolean(result.reviewMode));
+    if (result.status === "error") {
+      pushLog("error", result.error ?? "Could not change review mode.");
+      return;
+    }
+    setReviewModeState(result.reviewMode);
   }
 
   function handleSidecarEvent(event: SidecarEvent) {
@@ -938,7 +911,7 @@ export default function App() {
       const rawRunId = readString(event.run_id);
       const runId = rawRunId || taskKeyFor(task);
       const status = readString(event.status, "unknown");
-      const agent = isAgentRole(event.agent) ? event.agent : null;
+      const verb = isVerb(event.verb) ? event.verb : null;
       const model = typeof event.model === "string" ? event.model : null;
       // Additive step-timeline fields (see electron/claude-stream.mjs) — a tool
       // call opens a step keyed by Claude's own tool_use id, the matching
@@ -977,7 +950,7 @@ export default function App() {
           status,
           output: resolveMergedString(event.output, existing?.output),
           error: resolveMergedString(event.error, existing?.error),
-          agent: agent ?? existing?.agent ?? null,
+          verb: verb ?? existing?.verb ?? null,
           model: model ?? existing?.model ?? null,
           claudeSessionId: readString(event.claude_session_id) || existing?.claudeSessionId || null,
           usage: usage ?? existing?.usage ?? null,
@@ -1015,7 +988,7 @@ export default function App() {
     }
 
     if (event.type === "prompt_review_mode") {
-      setReviewModeState(Boolean(event.reviewMode));
+      setReviewModeState((event.reviewMode as ReviewMode) ?? "verb");
       return;
     }
 
@@ -1026,7 +999,7 @@ export default function App() {
           workstreamId: readString(event.workstream_id),
           task: readString(event.task),
           urgency: readString(event.urgency, "normal"),
-          agent: isAgentRole(event.agent) ? event.agent : null,
+          verb: isVerb(event.verb) ? event.verb : null,
         });
       } else {
         setPendingReview(null);
@@ -1652,14 +1625,13 @@ export default function App() {
               onToggleTaskSteps={toggleTaskSteps}
             >
               <PipelineBar
-                agents={agents}
-                activeAgent={activeAgent}
-                modelPopoverRole={modelPopoverRole}
+                verbs={verbs}
+                lastVerb={lastVerb}
+                modelPopoverVerb={modelPopoverVerb}
                 reviewMode={reviewMode}
-                onChooseAgent={chooseAgent}
-                onToggleModelPopover={(role) => setModelPopoverRole((current) => (current === role ? null : role))}
-                onSetRoleModel={setRoleModel}
-                onToggleReviewMode={toggleReviewMode}
+                onToggleModelPopover={(verb) => setModelPopoverVerb((current) => (current === verb ? null : verb))}
+                onSetVerbModel={setVerbModelChoice}
+                onSetReviewMode={setReviewMode}
               />
               <ProjectBar project={activeProject} onChoose={chooseProjectFolder} />
               {pendingPoQuestion ? (
@@ -1743,16 +1715,6 @@ export default function App() {
             if (!sidecarRunning) start();
           }}
           onRunWizard={() => setSetup({ mode: "onboarding" })}
-        />
-      ) : null}
-
-      {confirm ? (
-        <ConfirmModal
-          message={confirm.message}
-          onResolve={(ok) => {
-            confirm.resolve(ok);
-            setConfirm(null);
-          }}
         />
       ) : null}
 

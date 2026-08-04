@@ -7,11 +7,22 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createVaultGraph } from "../vault-graph.mjs";
+import { appendRunRecord, inboxBacklog } from "../run-inbox.mjs";
 
 // Personal-knowledge-notes capability (see openspec/changes/llm-wiki/): the
-// LLM-Wiki vault is pinned to this fixed, user-level path, independent of
-// any workstream's project cwd — plain-Claude runs only, never PO/DEV.
+// LLM-Wiki vault is pinned to this fixed, user-level path, independent of any
+// workstream's project cwd. Only the `capture_learning` verb is granted it.
 const NOTES_VAULT_DIR = path.join(os.homedir(), "iris-second-brain");
+
+// Where every finished run's record is appended (design.md D5). Inside the
+// vault, so `capture_learning` reaches it through the same granted directory it
+// already has, with nothing extra to wire.
+const NOTES_INBOX_DIR = path.join(NOTES_VAULT_DIR, "inbox", "runs");
+
+// How many un-synthesized records make it worth OFFERING to weave them in.
+// Offering too eagerly trains the user to say no; the number is a threshold for
+// an offer, never for an action — synthesis is never started unprompted.
+const INBOX_OFFER_THRESHOLD = 8;
 
 // The 6 vendored skill names this capability needs installed in
 // ~/.claude/skills before Claude actually has LLM-Wiki instructions to follow
@@ -157,15 +168,54 @@ export function createSecondBrainCapability({
     return secondBrainAvailable;
   }
 
+  // Records one finished run. Called from the run queue's finalize path for
+  // EVERY terminal status, successes and failures alike — a failed attempt is at
+  // least as worth keeping as a successful one. It is a plain file append: no
+  // run is started, no tokens are spent, and the single execution slot is not
+  // held, so bookkeeping can never delay the user's next request.
+  //
+  // Deliberately not conditional on the voice layer choosing to record
+  // something: accumulated knowledge that requires a model to remember to save
+  // it is knowledge that will be lost.
+  function captureRunOutcome(run) {
+    return appendRunRecord({
+      dir: NOTES_INBOX_DIR,
+      run,
+      onError: (error) => {
+        emitEvent({ type: "log", level: "warn", message: `Could not record the run in the second brain: ${error.message}` });
+      },
+    });
+  }
+
+  // What is waiting to be synthesized. Read by the voice layer's prose below so
+  // Iris can offer — never so it can act.
+  function notesInboxStatus() {
+    const backlog = inboxBacklog({ dir: NOTES_INBOX_DIR });
+    return { ...backlog, worthProcessing: backlog.records >= INBOX_OFFER_THRESHOLD };
+  }
+
   function promptFragment() {
-    // Pipeline-availability gate mirrors the pre-split behavior and is a
-    // hard requirement of role-capabilities ("When the pipeline is
-    // available... Iris MAY offer..."). Notes-skills gate is additional (not
-    // just pipelineAvailable) — otherwise Iris could offer a save the
-    // plain-Claude worker would refuse (role-capabilities "No offer when
-    // notes skills are not installed").
+    // Pipeline-availability gate mirrors the pre-split behavior and is a hard
+    // requirement of role-capabilities. Notes-skills gate is additional (not
+    // just pipelineAvailable) — otherwise Iris could offer a save the worker
+    // would refuse (role-capabilities "No offer when notes skills are not
+    // installed").
+    //
+    // What this no longer does is describe how to route note work through a
+    // general-purpose task tool. The second brain has its own verb with its own
+    // schema, so this fragment says only what a schema cannot: when to offer.
     if (!getPipelineAvailable() || !checkNotesSkillsStatus().ok) return "";
-    return `NOTE-OFFER — after a conversational exchange has produced durable value (a research result, a worked-out decision), you MAY offer ONCE, in a single short line, to save it to ${userDisplayName()}'s second brain (e.g. "Want me to save that to your notes?"). Never auto-save and never repeat the offer for the same exchange; if declined or ignored, drop it silently. Always honor an explicit save or retrieve request regardless of whether you offered — send it to Claude as a plain task.`;
+    const backlog = notesInboxStatus();
+    const nudge = backlog.worthProcessing
+      ? ` Right now ${backlog.records} finished runs are waiting to be woven in — you MAY mention that once, in one short line, and offer to do it. Never start it unprompted.`
+      : "";
+    return (
+      `SECOND BRAIN — ${userDisplayName()} has a personal notes vault, reachable through the capture_learning verb. ` +
+      "After a conversational exchange has produced durable value (a research result, a worked-out decision), you MAY offer ONCE, " +
+      'in a single short line, to save it (e.g. "Want me to save that to your notes?"). Never auto-save and never repeat the offer ' +
+      "for the same exchange; if declined or ignored, drop it silently. Always honor an explicit save or retrieve request whether or " +
+      `not you offered.${nudge}`
+    );
   }
 
   /** @type {Array<{ channel: string, kind: "handle"|"on", fn: Function }>} */
@@ -232,13 +282,17 @@ export function createSecondBrainCapability({
   }
 
   return {
-    // No Gemini function declarations — the second brain is offered purely
-    // through submit_claude_task plus the NOTE-OFFER prose above. Declared
-    // explicitly (rather than omitted) so this capability object shares at
-    // least one property with every other core module's
-    // `{ toolDeclarations?: any[] }` composition target.
+    // The second brain contributes no declaration of its own: `capture_learning`
+    // is a verb in the registry, and the registry is the single place a verb is
+    // defined. A capability adding a second, parallel declaration for the same
+    // work is exactly the duplication the registry exists to prevent. What
+    // changed is that it IS reachable as a function now, rather than only as
+    // prose telling the voice layer to describe it correctly to a general tool.
     toolDeclarations: [],
     notesVaultDir: NOTES_VAULT_DIR,
+    notesInboxDir: NOTES_INBOX_DIR,
+    captureRunOutcome,
+    notesInboxStatus,
     checkNotesSkillsStatus,
     ensureNotesVaultReady,
     probeSecondBrainAvailability,

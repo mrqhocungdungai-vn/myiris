@@ -14,53 +14,50 @@ import path from "node:path";
 import os from "node:os";
 import { execFileSync } from "node:child_process";
 import { buildAgentDefinition } from "./agent-definitions.mjs";
+import { resolveAllVerbs } from "./verbs.mjs";
 
 /**
  * @param {{
  *   repoRoot: string,
  *   emitEvent: (event: any) => void,
- *   agentRoster: string[],
  *   agentPrefix: string,
- *   agentLabels: Record<string, string>,
  *   retiredAgents: string[],
  *   hasOpenSpec: (cwd: string) => boolean,
  *   openspecCommand: () => { command: string, args: string[], env: Record<string,string> },
  *   findWorkstream: (id: string | null) => any,
  *   getActiveWorkstreamId: () => string | null,
- *   resolveAgentModel: (workstream: any, role: string) => string | null,
+ *   resolveVerbModel: (workstream: any, verb: string) => string | null,
  * }} deps
  */
 export function createPipelineInstall({
   repoRoot,
   emitEvent,
-  agentRoster,
   agentPrefix,
-  agentLabels,
   retiredAgents,
   hasOpenSpec,
   openspecCommand,
   findWorkstream,
   getActiveWorkstreamId,
-  resolveAgentModel,
+  resolveVerbModel,
 }) {
   // A project-local .claude/agents copy still wins, so a user who customized a
   // persona for one project keeps that. There is no longer a global
   // ~/.claude/agents fallback: the bundled persona IS the default, handed to the
   // SDK by value (see agent-definitions.mjs), so nothing has to be installed.
-  function projectAgentFile(agent, cwd) {
+  // The override keeps the `iris-` prefix; the bundled file does not need one.
+  function projectAgentFile(base, cwd) {
     if (!cwd) return null;
-    const candidate = path.join(cwd, ".claude", "agents", `${agentPrefix}${agent}.md`);
+    const candidate = path.join(cwd, ".claude", "agents", `${agentPrefix}${base}.md`);
     return fs.existsSync(candidate) ? candidate : null;
   }
 
-  // The SDK agent definition for a role: the project-local override if there is
-  // one, otherwise the persona shipped in the app bundle. Throws if neither can
-  // be read — callers turn that into a run failure naming the role.
-  function resolveAgentDefinition(agent, cwd) {
-    return buildAgentDefinition(agent, {
+  // The SDK agent definition for a base persona: the project-local override if
+  // there is one, otherwise the persona shipped in the app bundle. Throws if
+  // neither can be read — callers turn that into a run failure naming the verb.
+  function resolveAgentDefinition(base, cwd) {
+    return buildAgentDefinition(base, {
       personasDir: personasSourceDir(),
-      agentPrefix,
-      projectFile: projectAgentFile(agent, cwd),
+      projectFile: projectAgentFile(base, cwd),
     });
   }
 
@@ -144,7 +141,7 @@ export function createPipelineInstall({
     const found = [];
     const transcripts = legacyTranscriptDir();
     if (pathExists(transcripts)) found.push(transcripts);
-    for (const agent of [...agentRoster, ...retiredAgents]) {
+    for (const agent of retiredAgents) {
       const p = path.join(home, "agents", `${agentPrefix}${agent}.md`);
       if (pathExists(p)) found.push(p);
     }
@@ -242,54 +239,56 @@ export function createPipelineInstall({
     }
   }
 
-  // Snapshot for the pipeline UI: the roles and — for the workstream's project
-  // folder — which gates have been passed for the current OpenSpec change. PO
-  // gate = a proposal exists (the change was proposed); DEV gate = every task in
-  // tasks.md is checked (implementation complete).
+  // Snapshot for the pipeline UI: every verb with the model it would run on,
+  // plus — for the workstream's project folder — how far the current OpenSpec
+  // change has got. `shaped` = a proposal exists; `built` = every task in
+  // tasks.md is checked.
   //
-  // `installed` is retained in the shape but is now always true: the personas
-  // ship in the app, so a role can no longer be missing. It stays because the
-  // renderer's roster rendering keys off it, and a role that genuinely cannot
-  // load still fails loudly at run start (startClaudeRun).
-  function agentsSnapshot(workstreamId) {
+  // These are no longer *gates* on who may run: a verb is chosen per request and
+  // `execute` forks on this same state rather than being refused by it (design.md
+  // D4). They remain here because "what stage is this change at" is genuinely
+  // useful to show, and because Iris reads it when deciding what to suggest.
+  //
+  // `loadable` is retained per verb: the personas ship in the app, so it is
+  // normally true, and a persona that genuinely cannot load still fails loudly
+  // at run start (startClaudeRun).
+  function verbsSnapshot(workstreamId) {
     const workstream = findWorkstream(workstreamId) || findWorkstream(getActiveWorkstreamId());
     const cwd = workstream?.cwd && fs.existsSync(workstream.cwd) ? workstream.cwd : null;
-    const roster = agentRoster.map((agent) => {
-      let description = "";
-      let installed = true;
+    const roster = resolveAllVerbs().map((verb) => {
+      let loadable = true;
       try {
-        description = resolveAgentDefinition(agent, cwd).description;
+        resolveAgentDefinition(verb.basePersona, cwd);
       } catch {
-        installed = false;
+        loadable = false;
       }
       return {
-        key: agent,
-        label: agentLabels[agent],
-        installed,
-        description,
-        model: resolveAgentModel(workstream, agent),
+        key: verb.verb,
+        label: verb.label,
+        loadable,
+        description: verb.description,
+        stateful: verb.stateful,
+        park: verb.park,
+        model: resolveVerbModel(workstream, verb.verb),
       };
     });
-    const gates = { slug: null, byRole: {} };
+    const change = { slug: null, shaped: false, built: false };
     if (cwd) {
-      gates.slug = latestOpenChange(cwd);
-      if (gates.slug) {
-        const changeDir = path.join(cwd, "openspec", "changes", gates.slug);
-        gates.byRole.po = fs.existsSync(path.join(changeDir, "proposal.md"));
-        // DEV gate passes when tasks.md exists and has no unchecked `- [ ]` left.
-        let devDone = false;
+      change.slug = latestOpenChange(cwd);
+      if (change.slug) {
+        const changeDir = path.join(cwd, "openspec", "changes", change.slug);
+        change.shaped = fs.existsSync(path.join(changeDir, "proposal.md"));
         try {
           const tasks = fs.readFileSync(path.join(changeDir, "tasks.md"), "utf8");
-          devDone = !/^\s*-\s*\[\s\]/m.test(tasks);
-        } catch { devDone = false; }
-        gates.byRole.dev = devDone;
+          change.built = !/^\s*-\s*\[\s\]/m.test(tasks);
+        } catch { change.built = false; }
       }
     }
     return {
       roster,
-      installed: roster.every((entry) => entry.installed),
+      loadable: roster.every((entry) => entry.loadable),
       hasProject: Boolean(cwd),
-      gates,
+      change,
     };
   }
 
@@ -306,6 +305,6 @@ export function createPipelineInstall({
     ensureProjectScaffold,
     agentDescription,
     latestOpenChange,
-    agentsSnapshot,
+    verbsSnapshot,
   };
 }

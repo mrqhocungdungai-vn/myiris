@@ -11,13 +11,14 @@ import {
   toolCategory,
   usageSummary,
 } from "../lib/tasks";
-import { AGENT_COLORS, AGENT_LABELS, isAgentRole, modelLabel } from "../lib/agents";
+import { VERB_COLORS, VERB_LABELS, isVerb, modelLabel } from "../lib/verbs";
 
-export function AgentBadge({ agent, model }: { agent?: AgentRole | null; model?: string | null }) {
-  if (!agent || !isAgentRole(agent)) return null;
+// What ran, and on which model — every run is attributable after the fact.
+export function VerbBadge({ verb, model }: { verb?: Verb | null; model?: string | null }) {
+  if (!verb || !isVerb(verb)) return null;
   return (
-    <span className="agent-badge" style={{ "--agent-color": AGENT_COLORS[agent] } as CSSProperties}>
-      {AGENT_LABELS[agent]}
+    <span className="agent-badge" style={{ "--agent-color": VERB_COLORS[verb] } as CSSProperties}>
+      {VERB_LABELS[verb]}
       {model ? <span className="agent-badge-model">{modelLabel(model)}</span> : null}
     </span>
   );
@@ -96,7 +97,7 @@ export default function WorkCard({
       {accepted ? <span className="wcard-accepted">Task submitted</span> : null}
       <div className="wcard-top">
         <span className={`badge ${status}`}>{task.status}</span>
-        <AgentBadge agent={task.agent} model={task.model} />
+        <VerbBadge verb={task.verb} model={task.model} />
         {cost ? (
           <span className="wcard-cost" title="What this run cost, as Claude reported it">
             {cost}

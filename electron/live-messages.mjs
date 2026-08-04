@@ -21,7 +21,7 @@
  *   appendUserTranscript: (text: string) => void,
  *   appendModelTranscript: (text: string) => void,
  *   executeClaudeTool: (name: string, args: any) => Promise<any>,
- *   submitClaudeTask: (params: any) => Promise<any>,
+ *   submitClaudeTask: (params: any) => any,
  *   listenMode: any,
  *   notifyFreshResumptionHandle: (handle: string) => void,
  *   notifyTurnComplete: () => void,
@@ -160,10 +160,18 @@ export function createLiveMessages({
       if (!liveSession) throw new Error("Gemini Live is not running");
       liveSession.sendRealtimeInput({ text: command.text });
     }
+    // The developer-facing "just run this string" escape hatch. It routes
+    // through the deprecated task tool, which dispatches as `execute` — there is
+    // no verb to name here, and no `agent` to pass any more.
     if (command?.type === "submit_claude_task" && command.task) {
-      submitClaudeTask({ task: command.task, agent: command.agent }).catch((error) => {
+      try {
+        const result = submitClaudeTask({ task: command.task });
+        if (result?.status === "error") {
+          emitEvent({ type: "claude_task_update", status: "error", task: command.task, error: result.error });
+        }
+      } catch (error) {
         emitEvent({ type: "claude_task_update", status: "error", task: command.task, error: error.message });
-      });
+      }
     }
   }
 

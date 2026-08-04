@@ -37,14 +37,13 @@ const { ipcMain } = electron;
  *   selectWorkstream: (id: string) => any,
  *   createWorkstream: (label: any) => any,
  *   chooseWorkstreamCwd: (id: string) => any,
- *   agentsSnapshot: (id: string) => any,
- *   setWorkstreamAgent: (workstreamId: string, agent: any) => any,
- *   setAgentModel: (workstreamId: string, role: any, model: any) => any,
+ *   verbsSnapshot: (id: string) => any,
+ *   setVerbModel: (workstreamId: string, verb: any, model: any) => any,
  *   legacyClaudeArtifactsStatus: () => any,
  *   removeLegacyClaudeArtifacts: () => any,
  *   resolvePendingPoQuestion: (answers: any) => any,
- *   getPromptReviewMode: () => boolean,
- *   setPromptReviewMode: (enabled: boolean) => any,
+ *   getPromptReviewMode: () => string,
+ *   setPromptReviewMode: (mode: string) => any,
  *   resolvePromptReview: (payload: any) => any,
  *   sendContextSupplement: (text: any) => any,
  *   getFullConfig: () => any,
@@ -77,9 +76,8 @@ export function registerIpc(deps) {
     selectWorkstream,
     createWorkstream,
     chooseWorkstreamCwd,
-    agentsSnapshot,
-    setWorkstreamAgent,
-    setAgentModel,
+    verbsSnapshot,
+    setVerbModel,
     legacyClaudeArtifactsStatus,
     removeLegacyClaudeArtifacts,
     resolvePendingPoQuestion,
@@ -115,19 +113,21 @@ export function registerIpc(deps) {
     return { status: "ok", session: { id: workstream.id, label: workstream.label }, ...sessionsSnapshot() };
   });
   ipcMain.handle("sessions:choose-cwd", (_event, id) => chooseWorkstreamCwd(String(id || "")));
-  ipcMain.handle("agents:list", (_event, id) => agentsSnapshot(String(id || "")));
-  ipcMain.handle("agents:select", (_event, payload) =>
-    setWorkstreamAgent(String(payload?.workstreamId || ""), payload?.agent ?? null));
+  // The verb roster is now a DISPLAY surface, not a control: there is no
+  // `verbs:select` counterpart to the old `agents:select`, because there is no
+  // current verb to select. One is chosen per request, by Iris, from what the
+  // user said and what the project looks like.
+  ipcMain.handle("verbs:list", (_event, id) => verbsSnapshot(String(id || "")));
   // Iris installs nothing into ~/.claude any more; these only report and, on
   // explicit user action, remove what an older version left there.
   ipcMain.handle("pipeline:legacy-artifacts", () => legacyClaudeArtifactsStatus());
   ipcMain.handle("pipeline:remove-legacy-artifacts", () => removeLegacyClaudeArtifacts());
-  ipcMain.handle("agents:set-model", (_event, payload) =>
-    setAgentModel(String(payload?.workstreamId || ""), payload?.role, payload?.model));
-  // Secondary answer path for the PO's pending AskUserQuestion — lets a
-  // sighted user click an option directly instead of answering by voice.
-  // Whichever path (this, or the Gemini answer_po_question tool) answers
-  // first wins; the other becomes a no-op since the question is already resolved.
+  ipcMain.handle("verbs:set-model", (_event, payload) =>
+    setVerbModel(String(payload?.workstreamId || ""), payload?.verb, payload?.model));
+  // Secondary answer path for a pending AskUserQuestion — lets a sighted user
+  // click an option directly instead of answering by voice. Whichever path
+  // (this, or the Gemini answer_claude_question tool) answers first wins; the
+  // other becomes a no-op since the question is already resolved.
   ipcMain.handle("po:answer-question", (_event, answers) => resolvePendingPoQuestion(answers));
   // Renderer's boot-time read of the review-gate mode (see setPromptReviewMode
   // above) plus the UI's Approve/Edit/Cancel and mode-toggle paths. Only
@@ -136,7 +136,7 @@ export function registerIpc(deps) {
   // po:answer-question pattern for whichever channel resolves first.
   ipcMain.handle("prompt:status", () => ({ reviewMode: getPromptReviewMode() }));
   ipcMain.handle("prompt:resolve-review", (_event, payload) => resolvePromptReview(payload));
-  ipcMain.handle("prompt:set-review-mode", (_event, payload) => setPromptReviewMode(Boolean(payload?.enabled)));
+  ipcMain.handle("prompt:set-review-mode", (_event, payload) => setPromptReviewMode(payload?.mode));
   ipcMain.handle("context-supplement:send", (_event, text) => sendContextSupplement(text));
   ipcMain.handle("hud:toggle", () => {
     toggleHud();

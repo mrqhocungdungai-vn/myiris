@@ -3,7 +3,7 @@ import remarkGfm from "remark-gfm";
 import type { TaskCard } from "../types";
 import { normalizeMarkdown, shortRunId } from "../lib/tasks";
 import type { HandState } from "../hooks/useHandControl";
-import { AgentBadge } from "./WorkCard";
+import { VerbBadge } from "./WorkCard";
 import ReaderCore from "./ReaderCore";
 
 export default function ReaderOverlay({
@@ -33,7 +33,7 @@ export default function ReaderOverlay({
       headerSlot={
         <>
           <span className={`badge ${task.status.toLowerCase()}`}>{task.status}</span>
-          <AgentBadge agent={task.agent} model={task.model} />
+          <VerbBadge verb={task.verb} model={task.model} />
           <code
             title={
               task.claudeSessionId

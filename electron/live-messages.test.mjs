@@ -193,10 +193,21 @@ describe("live-messages: sendAudioChunk/sendCommand", () => {
     expect(session.sendRealtimeInput).toHaveBeenCalledWith({ text: "hi" });
   });
 
-  it("sendCommand submits a Claude task", () => {
-    const submitClaudeTask = vi.fn(async () => ({ status: "started" }));
+  // The developer escape hatch routes through the deprecated task tool, which
+  // dispatches as `execute`. There is no role to pass any more.
+  it("sendCommand submits a Claude task through the deprecated alias", () => {
+    const submitClaudeTask = vi.fn(() => ({ status: "started" }));
     const messages = make({ submitClaudeTask });
     messages.sendCommand({ type: "submit_claude_task", task: "do it", agent: "dev" });
-    expect(submitClaudeTask).toHaveBeenCalledWith({ task: "do it", agent: "dev" });
+    expect(submitClaudeTask).toHaveBeenCalledWith({ task: "do it" });
+  });
+
+  it("reports a refused command rather than dropping it silently", () => {
+    const emitEvent = vi.fn();
+    const submitClaudeTask = vi.fn(() => ({ status: "error", error: "Task is required." }));
+    make({ submitClaudeTask, emitEvent }).sendCommand({ type: "submit_claude_task", task: "x" });
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "claude_task_update", status: "error", error: "Task is required." }),
+    );
   });
 });

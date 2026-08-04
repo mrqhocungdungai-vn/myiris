@@ -9,7 +9,7 @@
 // move measured 670 lines against the reorganization's 450-line ceiling —
 // see run-dispatch.mjs's header comment. run-dispatch.mjs takes this
 // module's resolvePendingPoQuestion as an injected dependency for its
-// answer_po_question tool case.
+// answer_claude_question tool case.
 import { parseClaudeStreamMessage, runUsageFrom } from "./claude-stream.mjs";
 import { nameSession } from "./run-sessions.mjs";
 import { poQuestionTimeoutMs } from "./po-session.mjs";
@@ -23,8 +23,7 @@ import { activityEmitIntervalMs } from "./user-config.mjs";
  *   emitEvent: (event: any) => void,
  *   notifyIris: (lines: string | string[], opts?: { bufferIfOffline?: boolean }) => void,
  *   findWorkstream: (id: string | null) => any,
- *   agentKey: (agent: string | null) => string,
- *   agentLabels?: Record<string, string>,
+ *   sessionKeyFor: (verb: string) => string,
  *   persistSessionStore: () => void,
  *   emitSessions: () => void,
  * }} deps
@@ -34,8 +33,7 @@ export function createRunStream({
   emitEvent,
   notifyIris,
   findWorkstream,
-  agentKey,
-  agentLabels = {},
+  sessionKeyFor,
   persistSessionStore,
   emitSessions,
 }) {
@@ -109,12 +107,11 @@ export function createRunStream({
     run.claude_session_id = claudeSessionId;
     const workstream = findWorkstream(run.workstream_id);
     if (!workstream) return;
-    const key = agentKey(run.agent);
+    const key = sessionKeyFor(run.verb);
     const changed =
-      workstream.agent_sessions[key] !== claudeSessionId ||
-      workstream.last_agent_used !== (run.agent ?? null);
+      workstream.agent_sessions[key] !== claudeSessionId || workstream.last_verb_used !== run.verb;
     workstream.agent_sessions[key] = claudeSessionId;
-    workstream.last_agent_used = run.agent ?? null;
+    workstream.last_verb_used = run.verb;
     workstream.last_used_at = Date.now() / 1000;
     workstream.last_task = run.task.slice(0, 100);
     persistSessionStore();
@@ -123,11 +120,9 @@ export function createRunStream({
       // Name the session after the workstream, once, when it is first seen.
       // Every session Iris created used to carry an auto-generated title, so a
       // user browsing their transcripts had no way to tell which project or
-      // which role a session belonged to. Fire-and-forget and never throws — a
-      // title is cosmetic and must not be able to disturb a run.
-      const label = [workstream.label, run.agent ? agentLabels[run.agent] ?? run.agent : "Claude"]
-        .filter(Boolean)
-        .join(" · ");
+      // which kind of work a session belonged to. Fire-and-forget and never
+      // throws — a title is cosmetic and must not be able to disturb a run.
+      const label = [workstream.label, run.verbConfig?.label ?? run.verb].filter(Boolean).join(" · ");
       void nameSession(claudeSessionId, label, { dir: workstream.cwd });
     }
   }
@@ -250,7 +245,7 @@ export function createRunStream({
       "SYSTEM_EVENT_PO_QUESTION",
       "instructions_to_iris:",
       "- The PO has paused to ask you something. Read each question aloud with its options, in order, and collect the user's answer for each.",
-      "- Once you have every answer, call answer_po_question with one entry per question (question text verbatim, and the option label the user chose).",
+      "- Once you have every answer, call answer_claude_question with one entry per question (question text verbatim, and the option label the user chose).",
       "- If asked for your recommendation, suggest the first-listed option, but submit whatever the user actually picks.",
       // `header` is the question's own short label. Relayed so Iris can
       // introduce a question by its topic instead of launching into the full

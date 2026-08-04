@@ -82,6 +82,24 @@ export function shutdownDeadlineMs() {
 
 // How long a parked review waits for Approve/Cancel before it is cancelled
 // (never auto-approved — see PendingReview.expire).
+export const PROMPT_REVIEW_MODES = Object.freeze(["never", "always", "verb"]);
+export const DEFAULT_PROMPT_REVIEW_MODE = "verb";
+
+// Accepts the three names, and still accepts the previous boolean values so an
+// existing configuration is not silently reinterpreted: `1`/`true`/`on`/`yes`
+// meant "park everything" and still does; `0`/`false`/`off`/`no` meant "never"
+// and still does. Anything unrecognized falls back to the default rather than
+// disabling the gate — the failure mode of a typo must be more review, not less.
+/** @param {unknown} raw @returns {"never"|"always"|"verb"} */
+export function parsePromptReviewMode(raw) {
+  const value = String(raw ?? "").trim().toLowerCase();
+  if (!value) return DEFAULT_PROMPT_REVIEW_MODE;
+  if (PROMPT_REVIEW_MODES.includes(value)) return /** @type {any} */ (value);
+  if (["1", "true", "on", "yes"].includes(value)) return "always";
+  if (["0", "false", "off", "no"].includes(value)) return "never";
+  return DEFAULT_PROMPT_REVIEW_MODE;
+}
+
 export function promptReviewTimeoutMs() {
   const parsed = Number(process.env.IRIS_PROMPT_REVIEW_TIMEOUT_MS);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 300000;
@@ -141,13 +159,20 @@ export function createUserConfig({
   runQueue,
   probePipelineAvailability,
 }) {
-  // Pre-dispatch review gate (prompt-review-gate spec): when on, submit_claude_task
-  // parks a brief for Approve/Edit/Cancel instead of dispatching it immediately —
-  // modeled exactly on pipelineAvailable (module flag, one mutation choke point
+  // Pre-dispatch review gate (prompt-review-gate spec), now three-valued:
+  //
+  //   "never"  — dispatch immediately (the old `off`)
+  //   "always" — park everything (the old `on`)
+  //   "verb"   — park what the verb registry says to park (the default)
+  //
+  // `verb` exists because "park everything" is what makes users disable the
+  // gate: parking a read-only question, or every turn of a live conversation, is
+  // friction with no safety gained. The registry declares which verbs write to
+  // the repository, and those are the ones worth a human decision.
+  //
+  // Modeled exactly on pipelineAvailable (module flag, one mutation choke point
   // in setPromptReviewMode below, getter IPC + sidecar event on change).
-  // Default on: an unreviewed brief should never burn tokens unless the user
-  // opts out (design.md D5).
-  let promptReviewMode = envFlag("IRIS_PROMPT_REVIEW", true);
+  let promptReviewMode = parsePromptReviewMode(process.env.IRIS_PROMPT_REVIEW);
 
   function getPromptReviewMode() {
     return promptReviewMode;
@@ -256,16 +281,19 @@ export function createUserConfig({
   }
 
   // Sole mutation point for promptReviewMode. The voice model has no tool that
-  // reaches this — only the UI toggle (PipelineBar) and the IRIS_PROMPT_REVIEW
-  // startup default call it, so the flag is not disarmable by the model
-  // (design.md D3, mirrors setAgentModel). The toggle persists via the
-  // same IRIS_PROMPT_REVIEW key that seeds the startup default, so it survives
-  // a restart.
-  function setPromptReviewMode(enabled) {
-    const next = Boolean(enabled);
+  // reaches this — only the UI control (PipelineBar) and the IRIS_PROMPT_REVIEW
+  // startup default call it, so the flag is not disarmable by the model. The
+  // control persists via the same IRIS_PROMPT_REVIEW key that seeds the startup
+  // default, so it survives a restart. An unrecognized value is refused rather
+  // than silently coerced — a typo must not quietly disarm the gate.
+  function setPromptReviewMode(mode) {
+    const next = /** @type {"never"|"always"|"verb"} */ (String(mode ?? "").trim().toLowerCase());
+    if (!PROMPT_REVIEW_MODES.includes(next)) {
+      return { status: "error", error: `Unknown review mode: ${mode}. One of ${PROMPT_REVIEW_MODES.join(", ")}.` };
+    }
     if (next !== promptReviewMode) {
       promptReviewMode = next;
-      writeUserConfig({ IRIS_PROMPT_REVIEW: promptReviewMode ? "1" : "0" });
+      writeUserConfig({ IRIS_PROMPT_REVIEW: promptReviewMode });
       emitEvent({ type: "prompt_review_mode", reviewMode: promptReviewMode });
     }
     return { status: "ok", reviewMode: promptReviewMode };

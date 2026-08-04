@@ -4,7 +4,9 @@
 
 A desktop voice companion built on **Gemini Live** for natural realtime conversation, with an optional **Claude Code** build pipeline for real work.
 
-**Out of the box, Iris just talks to you** — add a Gemini API key and start speaking; no other setup required. Add a **Claude credential** and Iris unlocks a second layer: a **PO → DEV** build pipeline that lets you delegate real work (coding, research, files, terminal, automation) by voice. [Claude Code](https://code.claude.com/docs/en/agent-sdk/overview) itself **ships inside Iris** — there is no CLI to install. Both roles run on the Agent SDK's `query()` and differ in lifetime, not mechanism: **PO** is a **stateful** module — a resident session that stays open across turns and can pause mid-turn to ask you something — while **DEV** is a **stateless** module — one `query()` per issue that never asks. The pipeline uses [mattpocock/skills](https://github.com/mattpocock/skills), especially **Grill Me** on the PO side, and [Fission-AI/openspec](https://github.com/Fission-AI/openspec) for **SDD (spec-driven development)**. PO grills and shapes the request into a proper spec first; once the spec is complete, DEV implements it using **`opsx:apply`**. See "Claude pipeline (PO → DEV)" below for how it's detected and enabled.
+**Out of the box, Iris just talks to you** — add a Gemini API key and start speaking; no other setup required. Add a **Claude credential** and Iris unlocks a second layer: a build pipeline that lets you delegate real work (coding, research, files, terminal, automation) by voice. [Claude Code](https://code.claude.com/docs/en/agent-sdk/overview) itself **ships inside Iris** — there is no CLI to install.
+
+**You never pick a mode or a role.** Iris reaches Claude through seven named tools — shape, canvas, build, finish, look, review, notes — and chooses one per request from what you said and what your project looks like. Each has its own model, its own bounded set of skills, and its own ceilings. Two of them are **stateful** (a resident session that can pause mid-turn to ask you something by voice); the other five are **stateless** (one `query()` per run that never asks). The pipeline uses [mattpocock/skills](https://github.com/mattpocock/skills), especially **Grill Me** when shaping a request, and [Fission-AI/openspec](https://github.com/Fission-AI/openspec) for **SDD (spec-driven development)**: shaping grills the request into a proper spec, and building implements it via **`opsx:apply`**. See "Claude pipeline" below for how it's detected and enabled.
 
 **Iris supports macOS only.** It refuses to launch on other platforms; see
 "App Environment" below for the `IRIS_ALLOW_ANY_PLATFORM` developer escape
@@ -20,7 +22,7 @@ npm start
 ```
 
 That's it — Iris wakes up and talks to you. The Claude pipeline is a separate,
-optional layer described under "Claude pipeline (PO → DEV)" below; skip it
+optional layer described under "Claude pipeline" below; skip it
 entirely if you only want a voice companion.
 
 ## What This App Does
@@ -52,15 +54,15 @@ gesture → action mapping.
 
 Working on the bridge itself? **[docs/PIPELINE_INTERNALS.md](docs/PIPELINE_INTERNALS.md)**
 is the implementation-level reference for pipeline availability gating, the
-delegation flow, the PO voice question relay, session/context ownership, and PO
-subscription auth. Test harness and the two verification gates:
+delegation flow, the verb registry, the voice question relay, session/context
+ownership, and subscription auth. Test harness and the two verification gates:
 **[docs/TESTING.md](docs/TESTING.md)**.
 
-## Claude pipeline (PO → DEV) — optional, advanced
+## Claude pipeline — optional, advanced
 
 This entire section is optional. Skip it if you only want to talk to Iris. It
 covers the second layer: delegating real work to [Claude Code](https://code.claude.com/docs/en/headless)
-through a Product Owner → Developer pipeline.
+by voice.
 
 **Full setup steps and a voice-first walkthrough of using it live in the
 [Pipeline Guide](docs/PIPELINE_GUIDE.md) ([Tiếng Việt](docs/PIPELINE_GUIDE.vi.md))** —
@@ -69,9 +71,9 @@ this section just summarizes how it turns on.
 Iris probes for the `claude` binary at startup and before every Gemini
 (re)connection — **the binary's presence is the only switch**. No config flag,
 no toggle: install the Claude CLI and Iris detects it automatically. When
-detected, the pipeline's Gemini tools are declared, the Work Stream / PipelineBar
-/ session-switcher UI appears, and PO/DEV become selectable. When not detected,
-Iris stays in chat-only mode.
+detected, the pipeline's Gemini tools are declared and the Work Stream /
+PipelineBar / session-switcher UI appears. When not detected, Iris stays in
+chat-only mode.
 
 Claude Code and the `openspec` CLI both ship **inside** Iris, so there is
 nothing to install. All the pipeline needs is a credential, set from
@@ -91,14 +93,14 @@ That isolation also means Iris can't use your terminal Claude Code login — the
 credential above is what it authenticates with. See the guide for the full
 walkthrough and troubleshooting.
 
-## Roles & modes
+## Modes
 
-Iris presents exactly **three roles**, split across **two co-equal modes**:
+Iris runs as **two co-equal modes**:
 
-- **Talk mode** — the conversation you're having right now: interface/HUD control, wake/sleep, note-taking to your second brain (below), and Google Search when you've turned it on. This is **Iris**, always available with just a Gemini key.
-- **Build mode** — the PO → DEV pipeline, once a Claude credential is configured (see "Claude pipeline (PO → DEV)" above). **PO** grills your request and proposes an OpenSpec change (decides WHAT gets built); **DEV** implements it headlessly (decides HOW). Ask Iris "what can you do" or "how do I build software with you" any time and it explains this model by voice — it never volunteers the explanation unprompted.
+- **Talk mode** — the conversation you're having right now: interface/HUD control, wake/sleep, note-taking to your second brain (below), and Google Search when you've turned it on. Always available with just a Gemini key.
+- **Build mode** — settling what to build, then building it, once a Claude credential is configured (see "Claude pipeline" above). Ask Iris "what can you do" or "how do I build software with you" any time and it explains how this works by voice — it never volunteers the explanation unprompted.
 
-Ask to start a new project or feature while chatting, and Iris tells you it's Build-mode work and forwards it to PO automatically — no need to switch roles yourself first. Quick tasks (lookups, checks, small automations, notes) stay decisive and are handled directly.
+**This is explanatory, not operational.** You do not have to hold this model to get work done: ask to start a new project or feature while chatting and Iris says it will settle the requirements first, then does so. Quick tasks (lookups, checks, small automations, notes) stay decisive and are handled directly. Requests that write to your project stop for your approval first — see the [Pipeline Guide](docs/PIPELINE_GUIDE.md).
 
 **Second brain (notes).** With the pipeline enabled, Iris can also capture and retrieve personal notes by voice into a plain-markdown Obsidian vault at `~/iris-second-brain`, independent of whatever project you're working in. After a research exchange or a worked-out decision, Iris may offer once to save it — it never saves without you agreeing, and you can always ask directly to save or recall a note.
 
@@ -176,7 +178,7 @@ synchronous function calls): see **[docs/REFERENCE.md](docs/REFERENCE.md)**.
   tool. See [docs/REFERENCE.md](docs/REFERENCE.md).
 - A Gemini API key for the Live model (`GEMINI_API_KEY`).
 - macOS with microphone permission available. Iris refuses to launch on other platforms; set `IRIS_ALLOW_ANY_PLATFORM=1` to bypass this as a developer escape hatch.
-- *Optional, for the Claude pipeline:* Claude Code installed and authenticated (`claude --version` works) — see "Claude pipeline (PO → DEV)" above.
+- *Optional, for the Claude pipeline:* a Claude credential — see "Claude pipeline" above. Claude Code itself ships inside the app.
 
 ### 1. Install dependencies
 
@@ -291,7 +293,7 @@ The app always boots into deck mode (booting straight into a click-through
 overlay with no visible affordance would be a lockout risk). Management
 surfaces — pipeline role, model choice, sessions, project folder, setup — are
 deck-only; the HUD's exit control (⌥Space, the HUD button, or the tray) takes
-you back. A pending PO question stays answerable while the HUD is up: it
+you back. A pending question stays answerable while the HUD is up: it
 surfaces as a lit banner island, answerable by voice, click, or gesture
 dwell-click exactly as in the deck.
 
