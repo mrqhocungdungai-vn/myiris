@@ -1,6 +1,6 @@
 ## MODIFIED Requirements
 
-### Requirement: DEV runs only on an open change with unchecked tasks
+### Requirement: The execution verb reads the project rather than refusing
 
 The execution verb SHALL read the project at dispatch and behave according to what is there:
 
@@ -31,7 +31,7 @@ The execution verb SHALL NOT refuse a request because no change has been propose
 - **WHEN** the execution verb is dispatched, with or without an open change
 - **THEN** it is parked for the user's review before any work begins
 
-### Requirement: A change exists before DEV runs
+### Requirement: Process work is specified before it is implemented
 
 Work that goes through the software-development process SHALL still be specified before it is implemented: shaping produces a change with tasks, and the execution verb implements those tasks.
 
@@ -46,3 +46,11 @@ What SHALL NOT be required is that the **user** enforces this ordering by naming
 
 - **WHEN** the user asks to build something and then asks to get on with it
 - **THEN** the correct verb runs at each point without the user naming a worker or operating a control
+
+## RENAMED Requirements
+
+- FROM: `### Requirement: DEV runs only on an open change with unchecked tasks`
+- TO: `### Requirement: The execution verb reads the project rather than refusing`
+
+- FROM: `### Requirement: A change exists before DEV runs`
+- TO: `### Requirement: Process work is specified before it is implemented`

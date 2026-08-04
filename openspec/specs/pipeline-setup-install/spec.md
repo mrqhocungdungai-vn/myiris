@@ -1,6 +1,6 @@
 ## Purpose
 
-Bundles the third-party skills and commands the PO/DEV personas invoke as repo-vendored snapshots, and provides a single explicit install action that provisions a fresh machine's `~/.claude` in one click — personas sync-installed (Iris-owned), everything else copied only where missing, so no existing tool-managed install (skills.sh, manual `openspec init`) is ever overwritten.
+Bundles the third-party skills and commands the personas invoke as repo-vendored snapshots, and provides a single explicit install action that provisions a fresh machine's `~/.claude` in one click — personas sync-installed (Iris-owned), everything else copied only where missing, so no existing tool-managed install (skills.sh, manual `openspec init`) is ever overwritten.
 ## Requirements
 ### Requirement: Setup and workflow guide is documented bilingually
 

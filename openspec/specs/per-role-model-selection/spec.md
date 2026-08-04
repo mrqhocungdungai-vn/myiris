@@ -1,72 +1,75 @@
 ## Purpose
 
-Lets the PO and DEV pipeline roles each run on an independently chosen Claude model, selectable per workstream via UI or voice, resolved fresh at run start with no automatic fallback, and traceable per run. (TBD: expand with broader rationale if needed.)
+Lets each verb run on an independently chosen Claude model, selectable per workstream via UI or voice, resolved fresh at run start with no automatic fallback, and traceable per run. (TBD: expand with broader rationale if needed.)
 
 ## Requirements
 
-### Requirement: Model choice is stored per role per workstream
+### Requirement: Model choice is stored per verb per workstream
+The model a run executes on SHALL be a property of the **verb**, stored per verb per workstream. Verbs differ in what they are for — settling requirements, reviewing, implementing, recording notes — and the reason to change a model is always about the kind of work, never about how the run is structured.
 
-Each workstream SHALL persist a chosen Claude model per pipeline role in an `agent_models` object (`{ po?, dev? }`) stored beside `agent_sessions` in `~/.iris/claude-sessions.json`. Only the PO and DEV roles are model-selectable; the plain (role-less) Claude path SHALL keep the CLI default model and offer no model choice. Workstreams without an `agent_models` field (including all pre-existing ones) SHALL remain valid, and a legacy `agent_models.study` key SHALL be ignored on load rather than rejected.
+A workstream stored before verbs existed SHALL be migrated forward: a stored choice for the conversational worker applies to the conversational verbs, and a stored choice for the autonomous worker applies to the autonomous ones. No stored choice SHALL be discarded.
 
-#### Scenario: Model persists across app restarts
+#### Scenario: A verb runs on its own model
 
-- **WHEN** the user sets DEV's model to Opus 5 in a workstream and restarts the app
-- **THEN** the workstream still reports Opus 5 as DEV's model, while other workstreams are unaffected
+- **WHEN** a verb is dispatched
+- **THEN** the run executes on the model stored for that verb in that workstream, or that verb's default if none is stored
 
-#### Scenario: Legacy workstream without agent_models
+#### Scenario: A prior choice survives the upgrade
 
-- **WHEN** a workstream persisted before this change (no `agent_models` field) is loaded
-- **THEN** it loads without error and each role's model resolves through the env/default fallback chain
-
-#### Scenario: Legacy study key is ignored
-
-- **WHEN** a workstream persisted with an `agent_models.study` entry is loaded
-- **THEN** it loads without error, the key has no effect, and PO/DEV model resolution is unaffected
+- **WHEN** a workstream stored before this change is loaded
+- **THEN** its stored model choices are carried onto the corresponding verbs rather than reset
 
 ### Requirement: Model resolution order
+For each verb, the effective model SHALL resolve in this order: the workstream's stored entry for that verb, then the environment default for that verb's persona group, then the verb's own declared default. The selectable model list SHALL be a curated constant of four models: Opus 5 (`claude-opus-5`), Sonnet 5 (`claude-sonnet-5`), Opus 4.8 (`claude-opus-4-8`), and Haiku 4.5 (`claude-haiku-4-5-20251001`), each with a display label.
 
-For each role, the effective model SHALL resolve in this order: the workstream's `agent_models` entry, then the environment variable (`IRIS_PO_MODEL` for PO, `IRIS_DEV_MODEL` for DEV), then the hardcoded default — `claude-opus-5` for PO and `claude-sonnet-5` for DEV. The selectable model list SHALL be a curated constant of four models: Opus 5 (`claude-opus-5`), Sonnet 5 (`claude-sonnet-5`), Opus 4.8 (`claude-opus-4-8`), and Haiku 4.5 (`claude-haiku-4-5-20251001`), each with a display label.
+The environment default SHALL be expressed per **persona group** rather than per verb, because a user setting a model in the environment is expressing how strong the thinking work should be, which is exactly that split. The previously documented role-named variables SHALL continue to be accepted as aliases, so an existing configuration is not silently reinterpreted.
 
-#### Scenario: Fresh workstream uses role defaults
+#### Scenario: Fresh workstream uses each verb's declared default
 
-- **WHEN** a PO or DEV task runs in a workstream that has no `agent_models` entry and no `IRIS_PO_MODEL`/`IRIS_DEV_MODEL` env vars are set
-- **THEN** PO runs on `claude-opus-5` and DEV runs on `claude-sonnet-5`
+- **WHEN** a verb runs in a workstream with no stored entry for it and no environment default set
+- **THEN** it runs on the model its registry record declares, which differs between verbs according to what the work is worth
 
-#### Scenario: Env var overrides the hardcoded default only
+#### Scenario: Env default overrides the declared default only
 
-- **WHEN** `IRIS_DEV_MODEL=claude-haiku-4-5-20251001` is set and the workstream's `agent_models.dev` is `claude-opus-5`
-- **THEN** DEV runs on `claude-opus-5` (the workstream choice outranks the env var)
+- **WHEN** an environment default is set for a persona group and the workstream also has a stored entry for a verb in that group
+- **THEN** the stored entry wins, because a choice made for this workstream outranks a machine-wide default
 
-### Requirement: DEV runs receive the model at run start
+#### Scenario: A previously documented variable still applies
 
-DEV (and only DEV — not plain Claude) runs SHALL pass the resolved model to the run via the SDK's `model` option. The model SHALL be resolved when the run actually starts executing, not when it is submitted, so a model change made while a task waits in the run queue applies to that task.
+- **WHEN** the environment carries one of the role-named model variables and no current-named one
+- **THEN** it is honoured for the corresponding persona group rather than ignored
 
-#### Scenario: Queued DEV task picks up a model change
+### Requirement: Every run receives its model at run start
+**Every** verb's runs SHALL pass the resolved model to the run. The model SHALL be resolved when the run actually starts executing, not when it is submitted, so a model change made while a request waits in the run queue applies to that request.
 
-- **WHEN** a DEV task is queued behind a running task and the user switches DEV's model from Sonnet 5 to Opus 5 before the queued task starts
-- **THEN** the queued task starts with the model set to `claude-opus-5`
+There is no longer a run shape that executes on whatever the runtime happens to default to: the previous carve-out for an unrolled "plain" run disappeared with that run kind, and a model no one chose is a model no one can account for afterwards.
 
-#### Scenario: Plain Claude run is unaffected
+#### Scenario: A queued request picks up a model change
 
-- **WHEN** a task runs with no pipeline role selected
-- **THEN** the spawned command contains no `--model` flag
+- **WHEN** a request is queued behind a running one and the user changes that verb's model before the queued request starts
+- **THEN** the queued request starts on the newly chosen model
 
-### Requirement: PO model applies without losing the live session
+#### Scenario: No run executes on an unstated model
 
-The PO's resolved model SHALL be passed as the SDK `model` option when its resident session is created. When the PO model changes while a live session exists, the app SHALL apply it via `query.setModel()` on that session so the next turn uses the new model with the session's context fully preserved — the session SHALL NOT be closed, recreated, or resumed to change models.
+- **WHEN** any verb's run starts
+- **THEN** a resolved model accompanies it, and that model is what the run records
 
-#### Scenario: Model switch on a live PO session keeps context
+### Requirement: A model change applies without losing the live session
+Changing the model for a verb whose runs share a live session SHALL be applied to that session in place, without closing or resuming it, so the conversation's context is preserved.
 
-- **WHEN** a PO session is live with prior turns and the user switches PO's model
-- **THEN** the app calls `setModel()` on the existing session, the next PO turn runs on the new model, and the PO can still reference its earlier conversation
+Because such verbs share one session, a model change SHALL apply to **all** verbs sharing it. The system SHALL state this when the change is made, rather than appearing to change one verb's model while silently changing another's. This coupling is a declared consequence of sharing a conversation, not a defect to work around.
 
-#### Scenario: New PO session created with the chosen model
+#### Scenario: A live conversation changes model without losing context
 
-- **WHEN** the first PO turn of a workstream starts and the workstream has a stored PO model
-- **THEN** the SDK session is created with that model in its options
+- **WHEN** the model is changed for a verb whose live session is resident
+- **THEN** the session continues with its context intact on the new model
+
+#### Scenario: The coupling is stated
+
+- **WHEN** the model is changed for one verb that shares a live session with another
+- **THEN** the change applies to both and the system says so
 
 ### Requirement: Unavailable model fails loudly
-
 When a selected model cannot be used (no subscription access, retired ID, hard availability error), the run SHALL fail through the existing error path — surfaced in the Work Stream and announced by voice like any other failed run. The app SHALL NOT configure automatic model fallback (`--fallback-model` / `fallbackModel`) or otherwise silently substitute a different model.
 
 #### Scenario: Model rejected by the backend
@@ -74,39 +77,36 @@ When a selected model cannot be used (no subscription access, retired ID, hard a
 - **WHEN** a DEV run starts with a model the account cannot use
 - **THEN** the run ends in the existing failure state with the error visible in the Work Stream, and no run is retried on a different model automatically
 
-### Requirement: UI model badge and popover on role chips
+### Requirement: The model a run executed on is shown on its own card
+The interface SHALL show which model a run executed on, on the run's own card. It SHALL NOT surface model selection on a control for choosing a current worker, because no such control exists — the verb is chosen per request.
 
-The PO and DEV chips in the session bar SHALL display the role's effective model as a badge and offer two distinct click zones: clicking the role label selects the role (existing behavior, unchanged), and clicking the model segment opens a popover listing the four curated models — without changing the active role. Selecting a model in the popover SHALL update that role's `agent_models` entry for the active workstream. The plain Claude chip SHALL have no model badge.
+#### Scenario: A run card shows its model
 
-#### Scenario: Changing the inactive role's model
+- **WHEN** a run is displayed
+- **THEN** its card shows the verb and the model that executed it
 
-- **WHEN** PO is the active role and the user clicks the model segment of the DEV chip and picks Sonnet 5
-- **THEN** DEV's stored model becomes Sonnet 5, its badge updates, and the active role remains PO
+#### Scenario: No worker-selection control carries the model
 
-#### Scenario: Role selection behavior is preserved
-
-- **WHEN** the user clicks the role label zone of a chip
-- **THEN** the role switches exactly as before this change, with no model popover opening
+- **WHEN** the interface is rendered
+- **THEN** no persistent worker-selection control is present for the model badge to attach to
 
 ### Requirement: Voice model switching via Gemini tool
+The voice layer SHALL be able to change a verb's model on explicit request, through the same single choke point the interface uses, so the two cannot diverge. It SHALL NOT change a model on its own initiative.
 
-Gemini SHALL be given a `set_agent_model` tool (role + model) that goes through the same handler as the UI path, and its system instruction SHALL mention the capability. The tool SHALL accept only the PO and DEV roles. A successful change SHALL emit a sidecar event so the renderer updates the chip badge immediately.
+#### Scenario: A spoken model change takes effect
 
-#### Scenario: Voice request changes DEV's model
+- **WHEN** the user explicitly asks for a verb to run on a different model
+- **THEN** the change is applied through the shared choke point and confirmed
 
-- **WHEN** the user says to switch DEV to Opus 4.8 and Gemini calls `set_agent_model`
-- **THEN** the workstream's `agent_models.dev` becomes `claude-opus-4-8`, a sidecar event updates the DEV chip badge, and the tool response confirms the change
+#### Scenario: No unprompted model change
 
-#### Scenario: Invalid tool arguments are rejected
-
-- **WHEN** Gemini calls `set_agent_model` with a role outside po/dev or a model outside the curated list
-- **THEN** the tool returns an error message and no state changes
+- **WHEN** the voice layer handles any request that is not an explicit model change
+- **THEN** no model is changed
 
 ### Requirement: Runs are traceable to the model that executed them
+Every run SHALL record the verb it ran as and the model it executed on, so a result can be attributed after the fact.
 
-Each run record SHALL store the model that was actually resolved when the run started (for role runs), and Work Stream task rows SHALL display that model next to the agent badge. Task rows for plain Claude runs show no model label.
+#### Scenario: A finished run names its verb and model
 
-#### Scenario: History distinguishes runs by model
-
-- **WHEN** one DEV run executed on Sonnet 5 and a later one on Opus 5
-- **THEN** each task row in the Work Stream shows the model that run actually used, even after the role's current setting changed again
+- **WHEN** a run reaches a terminal state
+- **THEN** the verb and the model that executed it are recorded with the run

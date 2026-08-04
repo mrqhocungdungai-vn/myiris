@@ -1,17 +1,26 @@
 ## Purpose
 
-Detects whether the Claude PO → DEV pipeline can run on this machine (the `claude` binary resolving is the sole signal) and gates the Gemini tool declarations, system-prompt content, and pipeline UI on that single flag — so the community release runs as a pure chat companion out of the box and self-reveals the build pipeline once Claude Code is installed, with no separate config flag.
+Detects whether the Claude pipeline can run on this machine (the `claude` binary resolving is the sole signal) and gates the Gemini tool declarations, system-prompt content, and pipeline UI on that single flag — so the community release runs as a pure chat companion out of the box and self-reveals the build pipeline once Claude Code is installed, with no separate config flag.
 ## Requirements
-### Requirement: Chat-only mode declares no Claude tools and omits pipeline prompt content
 
-In chat-only mode the Gemini Live session SHALL be created without any Claude-delegation function declarations (`check_claude_status`, `submit_claude_task`, `get_claude_task_status`, `stop_claude_task`, `start_new_claude_session`, `get_workspace_info`, `answer_po_question`, `set_agent_model`, `respond_to_task_review`), and its system instruction SHALL contain no delegation, role, or workspace pipeline content. Interface-only tools (UI control) remain declared. The prompt SHALL be produced by one builder that includes the pipeline sections conditionally — not by a second maintained prompt variant. The prompt-review decision tool (`respond_to_task_review`) is a pipeline tool: it is meaningful only alongside `submit_claude_task`, so it is declared under the same `pipelineAvailable` gate and is absent in chat-only mode.
+### Requirement: Chat-only mode declares no Claude tools and omits pipeline prompt content
+In chat-only mode the Gemini Live session SHALL be created without **any** of the Claude-delegation function declarations — neither the named verbs nor the tools that inspect, control, or review their runs — and its system instruction SHALL contain no delegation or workspace pipeline content. Interface-only tools (UI control) remain declared. The prompt SHALL be produced by one builder that includes the pipeline sections conditionally — not by a second maintained prompt variant.
+
+The declaration set SHALL NOT be enumerated by name in this requirement. The verbs are defined in one registry and the declarations derive from it, so a list repeated here would be a second definition that drifts — which is the failure the registry exists to prevent. What this requirement fixes is that **the whole set** is governed by one flag.
+
+The prompt-review decision tool is a pipeline tool: it is meaningful only alongside the verbs it gates, so it is declared under the same `pipelineAvailable` gate and is absent in chat-only mode.
 
 Review-mode mutation is not a declared tool in any mode. It is absent in chat-only mode because the whole pipeline surface is absent, and absent in pipeline mode because the gate must not be disarmable by the model — see `prompt-review-gate`. The `pipelineAvailable` flag therefore governs which pipeline tools are declared, but is not what withholds review-mode mutation.
 
 #### Scenario: Gemini never offers to delegate
 
 - **WHEN** the user asks for a coding task in chat-only mode
-- **THEN** Gemini has no delegation tool to call and responds conversationally (including built-in search where applicable), without claiming it will hand work to Claude or producing a tool-call error
+- **THEN** Gemini has no verb to call and responds conversationally (including built-in search where applicable), without claiming it will hand work to Claude or producing a tool-call error
+
+#### Scenario: Every verb is gated by the one flag
+
+- **WHEN** the Gemini Live session is created in chat-only mode
+- **THEN** no verb is declared, and the set that is withheld is exactly the set the registry defines
 
 #### Scenario: UI control still works
 
@@ -21,15 +30,9 @@ Review-mode mutation is not a declared tool in any mode. It is absent in chat-on
 #### Scenario: The prompt-review decision tool is absent in chat-only mode
 
 - **WHEN** the Gemini Live session is created in chat-only mode
-- **THEN** `respond_to_task_review` is not declared, since there is no `submit_claude_task` to gate and the review flow is inert
-
-#### Scenario: Review-mode mutation is absent in both modes
-
-- **WHEN** the Gemini Live session is created, whether the pipeline is available or not
-- **THEN** no review-mode mutation tool is declared in either case
+- **THEN** the review-decision tool is not declared, since there is nothing to gate and the review flow is inert
 
 ### Requirement: Pipeline UI is hidden in chat-only mode
-
 The renderer SHALL receive the pipeline-availability state from the main process (at boot and on re-check) and, when the pipeline is unavailable, SHALL NOT render the pipeline surfaces: the Work Stream panel, the role/model PipelineBar, the workstream switcher, the task chooser, the HUD tasks column, and the PO question banner mount. Chat surfaces (Comms, orb/HUD core, camera/gesture, setup) render unchanged.
 
 #### Scenario: First-run user sees a chat app
@@ -43,7 +46,6 @@ The renderer SHALL receive the pipeline-availability state from the main process
 - **THEN** the pipeline surfaces render without requiring an app restart
 
 ### Requirement: SetupPanel reports pipeline prerequisites with install guidance
-
 The SetupPanel SHALL report, beside the Claude runtime and credential rows, whether the `openspec` CLI and the skills plugin resolve from the app bundle (resolved the same way the runtime resolves them), each as bundled/damaged. All rows SHALL share a re-check action. Because every component ships inside the app, a failing row means a damaged bundle and SHALL point at reinstalling rather than offering an install command that could not fix it — the only genuinely user-fixable row is the credential. The app SHALL NOT write into `~/.claude` at all.
 
 #### Scenario: Missing prerequisites are actionable
@@ -67,7 +69,6 @@ The SetupPanel SHALL report, beside the Claude runtime and credential rows, whet
 - **THEN** every prerequisite row reports present — the required list contains only skills that actually exist and are actually invoked by the personas
 
 ### Requirement: A working bundled runtime and a Claude credential are the pipeline master switch
-
 The app SHALL ship Claude Code inside the application bundle and SHALL NOT probe the host machine for an installed `claude` binary. Availability SHALL be determined by two conditions together: the bundled binary responds to a `--version` probe, AND at least one usable Claude credential is configured (`CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`). The probe SHALL run before the Gemini Live session is created, and SHALL re-run on a SetupPanel re-check, on every Gemini session (re)connect, and immediately after a credential is saved or removed.
 
 When either condition fails, the app SHALL run in chat-only mode; when both hold, the full PO → DEV pipeline surface SHALL be enabled.
@@ -105,4 +106,3 @@ There SHALL be no setting that points the app at a host-installed binary. Such a
 
 - **WHEN** the bundled binary cannot be resolved or is not executable (a packaging failure)
 - **THEN** the app runs chat-only and the health payload reports the binary as unreachable, distinctly from the missing-credential case
-

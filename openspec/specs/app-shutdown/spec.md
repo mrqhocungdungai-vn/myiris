@@ -1,7 +1,7 @@
 # app-shutdown
 
 ## Purpose
-The app blocks quit until every live transport (the Gemini Live socket, DEV subprocess groups, and resident PO sessions) is torn down, bounded by a hard deadline after which it force-exits; the teardown runs at most once even if the quit signal fires again.
+The app blocks quit until every live transport (the Gemini Live socket, one-shot runs, and resident sessions) is torn downine after which it force-exits; the teardown runs at most once even if the quit signal fires again.
 
 ## Requirements
 

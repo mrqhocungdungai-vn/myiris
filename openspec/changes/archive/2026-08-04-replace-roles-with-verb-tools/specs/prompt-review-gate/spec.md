@@ -28,32 +28,6 @@ Parking SHALL cost zero Claude tokens: nothing reaches a resident session or sta
 - **WHEN** the voice layer dispatches a verb declared as reviewed
 - **THEN** the main process parks it regardless of what the voice layer intended
 
-### Requirement: A reviewed conversation is approved once, not once per turn
-
-For a verb whose runs pause and ask — a continuing conversation rather than a one-shot job — the review SHALL apply to the call that **opens** the conversation. Subsequent turns steering that same live conversation SHALL dispatch directly.
-
-For a verb whose runs are one-shot and autonomous, the review SHALL apply to **every** call, because each call is a fresh unattended run against the project.
-
-The consent unit is therefore the *conversation* for one kind of verb and the *run* for the other — which is exactly the difference between them. Requiring approval for each turn of a live spoken conversation would send the user to the screen mid-sentence and buy no safety: the conversation is already open and already spending.
-
-Once a conversation ends, opening a new one SHALL require review again.
-
-#### Scenario: Opening a conversation is reviewed
-- **WHEN** the first call to a conversational verb is made and no live conversation exists
-- **THEN** the request is parked for review
-
-#### Scenario: Steering an open conversation is not re-reviewed
-- **WHEN** a further call steers a conversation that is already open and was approved
-- **THEN** it dispatches directly, with no second review
-
-#### Scenario: A one-shot verb is reviewed every time
-- **WHEN** a verb whose runs are one-shot and autonomous is called, however many times
-- **THEN** each call is parked for review
-
-#### Scenario: A new conversation is reviewed again
-- **WHEN** a conversation has ended and a new one is opened
-- **THEN** that opening call is parked for review
-
 ### Requirement: The mode flag is main-owned, env-defaulted, and persisted
 
 The flag SHALL be owned in the main process, initialized from `IRIS_PROMPT_REVIEW` with a documented default of **verb**. The environment budget SHALL accept the three settings by name and SHALL continue to accept its previous boolean values, mapping them to `always` and `never` so an existing configuration is not silently reinterpreted. A single setter SHALL be the sole mutation point for the UI path. The renderer SHALL read the current value at mount through an IPC getter and receive a sidecar event whenever it changes. The setting SHALL persist by writing `IRIS_PROMPT_REVIEW` to the user config, and the config writer's allowlist SHALL include this key.
@@ -87,3 +61,31 @@ The flag SHALL NOT be writable by the voice model. No tool declaration exposing 
 #### Scenario: Asking to disable review mode by voice is answered, not executed
 - **WHEN** the user asks by voice to turn review mode off
 - **THEN** Iris explains the control lives in the UI and does not change the flag
+
+## ADDED Requirements
+
+### Requirement: A reviewed conversation is approved once, not once per turn
+
+For a verb whose runs pause and ask — a continuing conversation rather than a one-shot job — the review SHALL apply to the call that **opens** the conversation. Subsequent turns steering that same live conversation SHALL dispatch directly.
+
+For a verb whose runs are one-shot and autonomous, the review SHALL apply to **every** call, because each call is a fresh unattended run against the project.
+
+The consent unit is therefore the *conversation* for one kind of verb and the *run* for the other — which is exactly the difference between them. Requiring approval for each turn of a live spoken conversation would send the user to the screen mid-sentence and buy no safety: the conversation is already open and already spending.
+
+Once a conversation ends, opening a new one SHALL require review again.
+
+#### Scenario: Opening a conversation is reviewed
+- **WHEN** the first call to a conversational verb is made and no live conversation exists
+- **THEN** the request is parked for review
+
+#### Scenario: Steering an open conversation is not re-reviewed
+- **WHEN** a further call steers a conversation that is already open and was approved
+- **THEN** it dispatches directly, with no second review
+
+#### Scenario: A one-shot verb is reviewed every time
+- **WHEN** a verb whose runs are one-shot and autonomous is called, however many times
+- **THEN** each call is parked for review
+
+#### Scenario: A new conversation is reviewed again
+- **WHEN** a conversation has ended and a new one is opened
+- **THEN** that opening call is parked for review

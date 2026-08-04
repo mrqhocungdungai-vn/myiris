@@ -1,6 +1,6 @@
 ## Purpose
 
-The PO runs as a single persistent Agent SDK conversation (one continuous context window) with an explicit lifecycle — created on first PO turn, kept alive across follow-ups, reset only on the existing user-controlled triggers (New session, voice new-session, project-folder change) — while DEV remains a one-shot headless subprocess.
+A stateful verb runs as a single persistent Agent SDK conversation (one continuous context window) with an explicit lifecycle — created on its first turn, kept alive across follow-ups, reset only on the existing user-controlled triggers (New session, voice new-session, project-folder change) — while A stateless verb remains a one-shot headless run.
 ## Requirements
 ### Requirement: PO runs as a persistent live session
 

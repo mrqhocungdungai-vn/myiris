@@ -1,6 +1,43 @@
 ## MODIFIED Requirements
 
-### Requirement: Model choice is stored per role per workstream
+### Requirement: Model resolution order
+
+For each verb, the effective model SHALL resolve in this order: the workstream's stored entry for that verb, then the environment default for that verb's persona group, then the verb's own declared default. The selectable model list SHALL be a curated constant of four models: Opus 5 (`claude-opus-5`), Sonnet 5 (`claude-sonnet-5`), Opus 4.8 (`claude-opus-4-8`), and Haiku 4.5 (`claude-haiku-4-5-20251001`), each with a display label.
+
+The environment default SHALL be expressed per **persona group** rather than per verb, because a user setting a model in the environment is expressing how strong the thinking work should be, which is exactly that split. The previously documented role-named variables SHALL continue to be accepted as aliases, so an existing configuration is not silently reinterpreted.
+
+#### Scenario: Fresh workstream uses each verb's declared default
+
+- **WHEN** a verb runs in a workstream with no stored entry for it and no environment default set
+- **THEN** it runs on the model its registry record declares, which differs between verbs according to what the work is worth
+
+#### Scenario: Env default overrides the declared default only
+
+- **WHEN** an environment default is set for a persona group and the workstream also has a stored entry for a verb in that group
+- **THEN** the stored entry wins, because a choice made for this workstream outranks a machine-wide default
+
+#### Scenario: A previously documented variable still applies
+
+- **WHEN** the environment carries one of the role-named model variables and no current-named one
+- **THEN** it is honoured for the corresponding persona group rather than ignored
+
+### Requirement: Every run receives its model at run start
+
+**Every** verb's runs SHALL pass the resolved model to the run. The model SHALL be resolved when the run actually starts executing, not when it is submitted, so a model change made while a request waits in the run queue applies to that request.
+
+There is no longer a run shape that executes on whatever the runtime happens to default to: the previous carve-out for an unrolled "plain" run disappeared with that run kind, and a model no one chose is a model no one can account for afterwards.
+
+#### Scenario: A queued request picks up a model change
+
+- **WHEN** a request is queued behind a running one and the user changes that verb's model before the queued request starts
+- **THEN** the queued request starts on the newly chosen model
+
+#### Scenario: No run executes on an unstated model
+
+- **WHEN** any verb's run starts
+- **THEN** a resolved model accompanies it, and that model is what the run records
+
+### Requirement: Model choice is stored per verb per workstream
 
 The model a run executes on SHALL be a property of the **verb**, stored per verb per workstream. Verbs differ in what they are for — settling requirements, reviewing, implementing, recording notes — and the reason to change a model is always about the kind of work, never about how the run is structured.
 
@@ -16,7 +53,7 @@ A workstream stored before verbs existed SHALL be migrated forward: a stored cho
 - **WHEN** a workstream stored before this change is loaded
 - **THEN** its stored model choices are carried onto the corresponding verbs rather than reset
 
-### Requirement: PO model applies without losing the live session
+### Requirement: A model change applies without losing the live session
 
 Changing the model for a verb whose runs share a live session SHALL be applied to that session in place, without closing or resuming it, so the conversation's context is preserved.
 
@@ -32,7 +69,7 @@ Because such verbs share one session, a model change SHALL apply to **all** verb
 - **WHEN** the model is changed for one verb that shares a live session with another
 - **THEN** the change applies to both and the system says so
 
-### Requirement: UI model badge and popover on role chips
+### Requirement: The model a run executed on is shown on its own card
 
 The interface SHALL show which model a run executed on, on the run's own card. It SHALL NOT surface model selection on a control for choosing a current worker, because no such control exists — the verb is chosen per request.
 
@@ -68,3 +105,17 @@ Every run SHALL record the verb it ran as and the model it executed on, so a res
 
 - **WHEN** a run reaches a terminal state
 - **THEN** the verb and the model that executed it are recorded with the run
+
+## RENAMED Requirements
+
+- FROM: `### Requirement: Model choice is stored per role per workstream`
+- TO: `### Requirement: Model choice is stored per verb per workstream`
+
+- FROM: `### Requirement: PO model applies without losing the live session`
+- TO: `### Requirement: A model change applies without losing the live session`
+
+- FROM: `### Requirement: DEV runs receive the model at run start`
+- TO: `### Requirement: Every run receives its model at run start`
+
+- FROM: `### Requirement: UI model badge and popover on role chips`
+- TO: `### Requirement: The model a run executed on is shown on its own card`

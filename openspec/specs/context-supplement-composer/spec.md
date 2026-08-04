@@ -27,20 +27,19 @@ The composer SHALL be disabled whenever Iris is asleep (no active voice session)
 - **THEN** the composer input becomes enabled and accepts typed text
 
 ### Requirement: Submitting supplement text echoes to the transcript and triggers Claude research
-On Enter, the app SHALL immediately render the submitted text as a "You" bubble in the conversation transcript, and SHALL deliver the text to the live Gemini voice session as a `SYSTEM_EVENT_CONTEXT_SUPPLEMENT` event instructing Gemini to decisively compose a research/reference brief from the current conversation and the supplied text, and call `submit_claude_task` immediately without asking for confirmation, using the session's currently active pipeline role.
+On Enter, the app SHALL immediately render the submitted text as a "You" bubble in the conversation transcript, and SHALL deliver the text to the live Gemini voice session as a `SYSTEM_EVENT_CONTEXT_SUPPLEMENT` event instructing Gemini to decisively compose a research/reference brief from the current conversation and the supplied text, and to call **the verb that fits it** immediately without asking for confirmation.
 
-#### Scenario: Enter sends and echoes
-- **WHEN** the user types text into the composer and presses Enter
-- **THEN** the composer clears
-- **AND** the submitted text appears as a "You" bubble in the transcript (deck and HUD)
+It SHALL NOT instruct the voice layer to call a general-purpose task tool, and it SHALL NOT rely on a currently-selected role to route the work: no such selection exists, and depending on one meant the same supplement produced different work depending on a control the user may never have touched.
 
-#### Scenario: Gemini reacts decisively
-- **WHEN** a `SYSTEM_EVENT_CONTEXT_SUPPLEMENT` event is delivered to a connected Gemini voice session
-- **THEN** Gemini calls `submit_claude_task` with a brief combining the recent conversation and the supplied text, without first asking the user for confirmation
+#### Scenario: Supplement text reaches Claude as research
 
-#### Scenario: Routed to the active role
-- **WHEN** a `SYSTEM_EVENT_CONTEXT_SUPPLEMENT` is delivered while a pipeline role (PO or DEV) is active for the session
-- **THEN** the resulting `submit_claude_task` call omits an explicit `agent` override, so the task is routed to that session's active role exactly as any other request would be
+- **WHEN** the user submits supplementary text while Iris is awake
+- **THEN** the text appears in the transcript as a "You" bubble, and Gemini composes a brief from the conversation plus that text and dispatches it without first asking for confirmation
+
+#### Scenario: Routing is chosen, not inherited
+
+- **WHEN** a supplement is dispatched
+- **THEN** the verb is selected from what the supplement asks for, with no dependence on any prior selection
 
 ### Requirement: Context supplement delivery is not buffered while disconnected
 Unlike other `SYSTEM_EVENT_*` announcements, a context supplement SHALL NOT be buffered for redelivery if the Gemini voice session is not connected at submission time — the composer being disabled while asleep is the only mechanism that prevents loss.

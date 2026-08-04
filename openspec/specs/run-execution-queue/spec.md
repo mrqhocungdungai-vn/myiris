@@ -1,7 +1,7 @@
 # run-execution-queue
 
 ## Purpose
-Names the execution behavior the delegation model already relies on: the one-at-a-time Claude execution slot shared by PO turns, DEV runs, and plain Claude tasks, its queueing/cancellation lifecycle, and the `claude_task_update` event stream it produces.
+Names the execution behavior the delegation model already relies on: the one-at-a-time Claude execution slot shared by every run, whatever verb started it, its queueing/cancellation lifecycle, and the `claude_task_update` event stream it produces.
 
 ## Requirements
 

@@ -3,8 +3,8 @@
 ## Purpose
 TBD - created by archiving change po-voice-controller. Update Purpose after archive.
 ## Requirements
-### Requirement: Grilling gates artifact creation
 
+### Requirement: Grilling gates artifact creation
 The PO agent SHALL NOT create any planning artifact until it has been instructed to grill, and SHALL use the `grilling` skill to elicit and stress-test requirements first. Grilling's clarifying questions SHALL surface through the voice relay (`AskUserQuestion`), not raw stdin.
 
 #### Scenario: PO refuses to produce artifacts before grilling
@@ -18,36 +18,52 @@ The PO agent SHALL NOT create any planning artifact until it has been instructed
 - **WHEN** the grilling pass needs a decision from the user
 - **THEN** the question is raised via `AskUserQuestion` and answered by voice before grilling continues
 
-### Requirement: A change exists before DEV runs
+### Requirement: Process work is specified before it is implemented
+Work that goes through the software-development process SHALL still be specified before it is implemented: shaping produces a change with tasks, and the execution verb implements those tasks.
 
-The PO SHALL create an OpenSpec change (via the propose flow) once grilling is satisfied, and this change SHALL exist before any DEV work is dispatched for that feature.
+What SHALL NOT be required is that the **user** enforces this ordering by naming a worker or operating a control. The ordering follows from the project's own state, which the execution verb reads at dispatch.
 
-#### Scenario: Propose creates the change
+#### Scenario: Process work is specified first
 
-- **WHEN** grilling has settled the requirements and the user approves proceeding
-- **THEN** the PO runs the OpenSpec propose flow, creating `openspec/changes/<name>/` with its planning artifacts
+- **WHEN** the user asks for a new feature and agrees to shape it
+- **THEN** a change with tasks is produced before implementation begins
 
-#### Scenario: DEV is not dispatched without a change
+#### Scenario: The ordering is not the user's to enforce
 
-- **WHEN** a DEV task is requested but no OpenSpec change with tasks exists for the feature
-- **THEN** the DEV run is not started and the PO is told to propose a change first
+- **WHEN** the user asks to build something and then asks to get on with it
+- **THEN** the correct verb runs at each point without the user naming a worker or operating a control
 
-### Requirement: DEV runs only on an open change with unchecked tasks
+### Requirement: The execution verb reads the project rather than refusing
+The execution verb SHALL read the project at dispatch and behave according to what is there:
 
-A DEV run SHALL start only when an open OpenSpec change has at least one unchecked task in its `tasks.md`; DEV implements the remaining tasks and, when the change is complete, it is archived to sync the living spec.
+- An open change with unchecked tasks SHALL be implemented through the OpenSpec apply workflow, with the OpenSpec workflow skills available.
+- No open change with unchecked tasks SHALL mean ordinary work, carried out directly, with the OpenSpec workflow skills **not** loaded and no process artifacts created.
 
-#### Scenario: DEV implements remaining tasks
+The execution verb SHALL NOT refuse a request because no change has been proposed. A user asking for a small piece of work is not asking for a software-development process, and refusing them is not a safety measure — it is a refusal to do the job.
 
-- **WHEN** an open change has unchecked `- [ ]` items in `tasks.md`
-- **THEN** the DEV run implements the remaining tasks and checks them off
+**This deliberately removes the gate that previously prevented implementation without a specification.** It is recorded here as a decision, not an omission. The protection that gate provided — an unattended run writing code against no agreed specification — now comes from the execution verb being reviewed before **every** dispatch. If that review is ever weakened, this decision SHALL be revisited with it.
 
-#### Scenario: Completed change is archived
+#### Scenario: Work with a specification follows the process
 
-- **WHEN** every task in a change's `tasks.md` is checked and verification passed
-- **THEN** the change is archived and its delta specs are synced into `openspec/specs/`
+- **WHEN** the execution verb is called in a project with an open change that has unchecked tasks
+- **THEN** the run implements those tasks through the OpenSpec apply workflow
+
+#### Scenario: Work without a specification is simply done
+
+- **WHEN** the execution verb is called in a project with no open change with unchecked tasks
+- **THEN** the run carries out the work directly, without loading the OpenSpec workflow skills and without creating process artifacts
+
+#### Scenario: A request is never refused for lacking a change
+
+- **WHEN** the execution verb is called and no change has been proposed
+- **THEN** the run proceeds as ordinary work rather than failing
+
+#### Scenario: The removed gate is replaced by review, not by nothing
+
+- **WHEN** the execution verb is dispatched, with or without an open change
+- **THEN** it is parked for the user's review before any work begins
 
 ### Requirement: Task-status query reads OpenSpec
-
 When asked whether tasks remain, the PO SHALL read the open changes' `tasks.md` files and report done/not-done, and MAY brainstorm a new change when none remain.
 
 #### Scenario: PO reports outstanding tasks
@@ -61,7 +77,6 @@ When asked whether tasks remain, the PO SHALL read the open changes' `tasks.md` 
 - **THEN** the PO reports completion and may propose or brainstorm a new change
 
 ### Requirement: OpenSpec is the single SDD surface
-
 The pipeline SHALL use OpenSpec (`openspec/changes/` → `openspec/specs/`) as the only spec-driven-development surface; the personas SHALL NOT create or read a `.scratch/<slug>/` hand-written SDD. A `cwd` without OpenSpec SHALL be initialized with `openspec init` before proposing.
 
 #### Scenario: New project is initialized
@@ -73,4 +88,3 @@ The pipeline SHALL use OpenSpec (`openspec/changes/` → `openspec/specs/`) as t
 
 - **WHEN** the PO completes its work for a feature
 - **THEN** the deliverables live under `openspec/changes/<name>/` and no `.scratch/<slug>/` analysis/PRD/issue files are written
-

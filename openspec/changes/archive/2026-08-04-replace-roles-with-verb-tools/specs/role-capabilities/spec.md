@@ -1,6 +1,6 @@
 ## MODIFIED Requirements
 
-### Requirement: Iris presents two co-equal modes and three user-facing roles
+### Requirement: Iris presents two co-equal modes, and can name the workers behind them
 
 The system SHALL describe Iris's capabilities as two co-equal modes — **Talk** (conversational companion, interface/HUD control, wake/sleep, optional billing-gated Google Search, and the second brain) and **Build** (shaping what to build, then building it) — and SHALL be able to name the underlying workers when asked. The internal ungated worker path SHALL NOT be presented to users as a distinct role.
 
@@ -21,7 +21,7 @@ This model SHALL be **explanatory, not operational**. It describes how the syste
 - **WHEN** a user who has never encountered this model asks for work spanning both modes
 - **THEN** the work proceeds, with Iris selecting verbs itself and describing what it is doing in ordinary language
 
-### Requirement: Iris explains its modes and roles on demand
+### Requirement: Iris explains how it works on demand
 
 Iris SHALL explain how it works — the modes, the underlying workers, and which is running — when the user asks what it can do, how to build software, what the modes are, or what is currently happening. This explanation SHALL be produced on request only; Iris SHALL NOT volunteer an unprompted tour at session start, on wake, or when selecting a verb.
 
@@ -67,3 +67,11 @@ This steering SHALL use the same verb selection every other request uses, so the
 
 - **WHEN** a new-project request is steered into Build mode
 - **THEN** it goes through the same verb selection as every other request
+
+## RENAMED Requirements
+
+- FROM: `### Requirement: Iris presents two co-equal modes and three user-facing roles`
+- TO: `### Requirement: Iris presents two co-equal modes, and can name the workers behind them`
+
+- FROM: `### Requirement: Iris explains its modes and roles on demand`
+- TO: `### Requirement: Iris explains how it works on demand`

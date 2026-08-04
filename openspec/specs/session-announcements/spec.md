@@ -1,6 +1,6 @@
 ## Purpose
 
-State-change announcements (role selection, workspace change, PO question, task completion) tell the Gemini voice layer about app-side changes so Iris can speak about them. Voice sessions can be disconnected at the moment a change happens (e.g. mid-reconnect), so announcements need a shared delivery mechanism that buffers for redelivery instead of silently dropping them.
+State-change announcements (workspace change, a run's live question, task completion) tell the Gemini voice layer about app-side changes so Iris can speak about them. Voice sessions can be disconnected at the moment a change happens (e.g. mid-reconnect), so announcements need a shared delivery mechanism that buffers for redelivery instead of silently dropping them.
 
 ## Requirements
 
