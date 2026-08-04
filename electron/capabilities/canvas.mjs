@@ -112,12 +112,18 @@ export function createCanvasCapability({
   }
 
   function promptFragment() {
-    // Mirrors the pre-split behavior: this text tells Gemini to call
-    // submit_claude_task, a tool that only exists when the pipeline is
-    // available — omit it entirely otherwise, same gating as the rest of
-    // the pipeline-only prose in gemini-prompts.mjs.
+    // Gated on pipelineAvailable, same as the rest of the pipeline-only prose
+    // in gemini-prompts.mjs — the verb this points at is only declared then.
+    //
+    // The workaround that used to live here is gone. It read: call the general
+    // task tool "with no 'agent' parameter (never DEV, which would be refused
+    // for lacking an open OpenSpec change)" — a drawing feature carrying an
+    // instruction about a pipeline gate it has nothing to do with, because
+    // there was no way to reach Claude except through one tool that meant
+    // seven things. `shape_on_canvas` is that way, so this fragment now says
+    // only what a schema cannot: that Iris cannot see the canvas.
     if (!getPipelineAvailable()) return "";
-    return `CANVAS — ${userDisplayName()} has a drawing canvas/whiteboard in the app that YOU cannot see. When they ask something like "what should I add to my diagram", "what do you think of my drawing", "connect these two boxes", or anything else about the canvas/diagram/whiteboard, that is real work for Claude (which CAN read and draw on it) — call submit_claude_task with no 'agent' parameter (never DEV, which would be refused for lacking an open OpenSpec change) describing exactly what they asked. Never guess at what is drawn yourself.`;
+    return `CANVAS — ${userDisplayName()} has a drawing canvas/whiteboard in the app that YOU cannot see. When they ask something like "what should I add to my diagram", "what do you think of my drawing", "connect these two boxes", or anything else about the canvas/diagram/whiteboard, call shape_on_canvas — it CAN read and draw on it, and it continues whatever was already being discussed. Never guess at what is drawn yourself.`;
   }
 
   /** @type {Array<{ channel: string, kind: "handle"|"on", fn: Function }>} */
@@ -221,11 +227,12 @@ export function createCanvasCapability({
   }
 
   return {
-    // No Gemini function declarations — get_canvas is a Claude-facing tool
-    // exposed by the local MCP server (canvas-mcp.mjs), not a Gemini Live
-    // tool. Declared explicitly (rather than omitted) so this capability
-    // object shares at least one property with every other core module's
-    // `{ toolDeclarations?: any[] }` composition target.
+    // No declaration of its own: `shape_on_canvas` is a verb in the registry,
+    // and the registry is the single place a verb is defined — a capability
+    // adding a parallel declaration for the same work is exactly the
+    // duplication the registry exists to prevent. The canvas tool server is
+    // likewise wired from that verb's `mcpServers`, not from a per-run special
+    // case. `get_canvas` remains a Claude-facing MCP tool, never a Gemini one.
     toolDeclarations: [],
     ensureCanvasMcpForRun,
     maybeStartCanvasMcp,

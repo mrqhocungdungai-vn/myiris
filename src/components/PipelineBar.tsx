@@ -1,113 +1,139 @@
 import type { CSSProperties } from "react";
-import { ShieldCheck, ShieldOff } from "lucide-react";
-import { AGENT_COLORS, AGENT_LABELS, ALL_ROLES, MODEL_CHOICES, modelLabel } from "../lib/agents";
+import { Shield, ShieldCheck, ShieldOff } from "lucide-react";
+import { MODEL_CHOICES, VERB_COLORS, VERB_LABELS, modelLabel } from "../lib/verbs";
 
-// Review-gate mode toggle (prompt-review-gate spec): applies to every role
-// (and plain Claude), so it renders in both the "install agents" and normal
-// states below — review mode is meaningful even before agents are installed.
-function ReviewModeToggle({ reviewMode, onToggle }: { reviewMode: boolean; onToggle: (next: boolean) => void }) {
+// Review-gate mode control (prompt-review-gate spec). Three settings, cycled in
+// place: `verb` (the default — park what the registry declares as reviewed),
+// `always`, and `never`. The middle setting exists because "park everything" is
+// what makes people switch the gate off entirely: parking a read-only question,
+// or every turn of a live conversation, is friction with no safety gained.
+const REVIEW_MODES: ReviewMode[] = ["verb", "always", "never"];
+
+const REVIEW_COPY: Record<ReviewMode, { label: string; title: string }> = {
+  verb: {
+    label: "Review: Risky",
+    title:
+      "Requests that write to your project (Build, Finish) and the start of a shaping conversation are parked for Approve/Edit/Cancel. Reading and reviewing dispatch straight away. Click to cycle.",
+  },
+  always: {
+    label: "Review: All",
+    title: "Every request is parked for Approve/Edit/Cancel before Claude sees it. Click to cycle.",
+  },
+  never: {
+    label: "Review: Off",
+    title: "Nothing is parked — every request dispatches immediately. Click to cycle.",
+  },
+};
+
+function ReviewModeControl({
+  reviewMode,
+  onChange,
+}: {
+  reviewMode: ReviewMode;
+  onChange: (next: ReviewMode) => void;
+}) {
+  const copy = REVIEW_COPY[reviewMode] ?? REVIEW_COPY.verb;
+  const next = REVIEW_MODES[(REVIEW_MODES.indexOf(reviewMode) + 1) % REVIEW_MODES.length];
   return (
     <button
       type="button"
-      className={`review-mode-toggle ${reviewMode ? "on" : "off"}`}
-      onClick={() => onToggle(!reviewMode)}
-      title={
-        reviewMode
-          ? "Review mode is ON — briefs are parked for Approve/Edit/Cancel before Claude sees them. Click to turn off."
-          : "Review mode is OFF — briefs dispatch immediately. Click to turn on."
-      }
+      className={`review-mode-toggle ${reviewMode === "never" ? "off" : "on"}`}
+      onClick={() => onChange(next)}
+      title={copy.title}
     >
-      {reviewMode ? <ShieldCheck size={12} /> : <ShieldOff size={12} />}
-      Review {reviewMode ? "On" : "Off"}
+      {reviewMode === "never" ? <ShieldOff size={12} /> : reviewMode === "always" ? <ShieldCheck size={12} /> : <Shield size={12} />}
+      {copy.label}
     </button>
   );
 }
 
 /**
- * PO/DEV agent chips + gate ✓ marks + per-role model popover. Switching roles
- * is a soft gate (confirm dialog on a missing handoff) handled by the caller;
- * this component only renders and calls the passed-in handlers.
+ * What ran last, how far the current change has got, and the review-mode
+ * control.
+ *
+ * There is deliberately **no verb selector here**. Iris chooses a verb per
+ * request from what the user said and from the project's state; a chip that set
+ * a "current role" was the mechanism by which "Iris, build me X" did the wrong
+ * thing whenever the chip happened to be set differently. The model popover
+ * stays, attached to whatever last ran, because changing a model is a real
+ * preference — but it no longer implies a persistent worker.
  */
 export default function PipelineBar({
-  agents,
-  activeAgent,
-  modelPopoverRole,
+  verbs,
+  lastVerb,
+  modelPopoverVerb,
   reviewMode,
-  onChooseAgent,
   onToggleModelPopover,
-  onSetRoleModel,
-  onToggleReviewMode,
+  onSetVerbModel,
+  onSetReviewMode,
 }: {
-  agents: AgentsSnapshot | null;
-  activeAgent: AgentRole | null;
-  modelPopoverRole: AgentRole | null;
-  reviewMode: boolean;
-  onChooseAgent: (role: AgentRole | null) => void;
-  onToggleModelPopover: (role: AgentRole) => void;
-  onSetRoleModel: (role: AgentRole, model: string) => void;
-  onToggleReviewMode: (next: boolean) => void;
+  verbs: VerbsSnapshot | null;
+  lastVerb: Verb | null;
+  modelPopoverVerb: Verb | null;
+  reviewMode: ReviewMode;
+  onToggleModelPopover: (verb: Verb) => void;
+  onSetVerbModel: (verb: Verb, model: string) => void;
+  onSetReviewMode: (next: ReviewMode) => void;
 }) {
+  const info = lastVerb ? verbs?.roster.find((entry) => entry.key === lastVerb) : null;
+  const change = verbs?.change;
 
   return (
     <div className="pipeline-bar">
-      <button
-        className={`agent-chip iris ${activeAgent === null ? "active" : ""}`}
-        onClick={() => onChooseAgent(null)}
-        title="Plain Claude — no pipeline role"
-      >
-        Iris
-      </button>
-      {ALL_ROLES.map((role) => {
-        const info = agents?.roster.find((entry) => entry.key === role);
-        const passed = Boolean(agents?.gates.byRole?.[role]);
-        const currentModel = info?.model ?? null;
-        return (
-          <div
-            key={role}
-            className={`agent-chip ${activeAgent === role ? "active" : ""} ${passed ? "passed" : ""}`}
-            style={{ "--agent-color": AGENT_COLORS[role] } as CSSProperties}
+      {lastVerb ? (
+        <div
+          className="agent-chip active"
+          style={{ "--agent-color": VERB_COLORS[lastVerb] } as CSSProperties}
+        >
+          <span
+            className="agent-chip-label"
+            title={`${info?.description || VERB_LABELS[lastVerb]} — this is what ran most recently, not a mode you are in. Iris picks the verb for each request.`}
           >
-            <button
-              type="button"
-              className="agent-chip-label"
-              onClick={() => onChooseAgent(role)}
-              title={`${info?.description || AGENT_LABELS[role]}${
-                agents?.gates.slug ? ` · feature: ${agents.gates.slug}` : ""
-              } — each role keeps its own Claude conversation (context crosses roles via handoff files; reset with New)`}
-            >
-              {AGENT_LABELS[role]}
-              {passed ? <span className="gate-check">✓</span> : null}
-            </button>
-            <button
-              type="button"
-              className="agent-chip-model"
-              onClick={(event) => {
-                event.stopPropagation();
-                onToggleModelPopover(role);
-              }}
-              title={`${AGENT_LABELS[role]} model: ${modelLabel(currentModel) || "…"} — click to change`}
-            >
-              {modelLabel(currentModel) || "…"}
-            </button>
-            {modelPopoverRole === role ? (
-              <div className="model-popover" onClick={(event) => event.stopPropagation()}>
-                {MODEL_CHOICES.map((choice) => (
-                  <button
-                    key={choice.id}
-                    type="button"
-                    className={`model-option ${currentModel === choice.id ? "selected" : ""}`}
-                    onClick={() => onSetRoleModel(role, choice.id)}
-                  >
-                    {choice.label}
-                    {currentModel === choice.id ? <span className="model-check">✓</span> : null}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-          </div>
-        );
-      })}
-      <ReviewModeToggle reviewMode={reviewMode} onToggle={onToggleReviewMode} />
+            {VERB_LABELS[lastVerb]}
+          </span>
+          <button
+            type="button"
+            className="agent-chip-model"
+            onClick={(event) => {
+              event.stopPropagation();
+              onToggleModelPopover(lastVerb);
+            }}
+            title={`${VERB_LABELS[lastVerb]} model: ${modelLabel(info?.model) || "…"} — click to change`}
+          >
+            {modelLabel(info?.model) || "…"}
+          </button>
+          {modelPopoverVerb === lastVerb ? (
+            <div className="model-popover" onClick={(event) => event.stopPropagation()}>
+              {MODEL_CHOICES.map((choice) => (
+                <button
+                  key={choice.id}
+                  type="button"
+                  className={`model-option ${info?.model === choice.id ? "selected" : ""}`}
+                  onClick={() => onSetVerbModel(lastVerb, choice.id)}
+                >
+                  {choice.label}
+                  {info?.model === choice.id ? <span className="model-check">✓</span> : null}
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : (
+        <span className="agent-chip iris" title="Nothing has run yet in this session. Just say what you want.">
+          Iris
+        </span>
+      )}
+      {change?.slug ? (
+        <span
+          className="pipeline-change"
+          title={`Current OpenSpec change: ${change.slug}${change.shaped ? " · shaped" : ""}${change.built ? " · built" : ""}`}
+        >
+          {change.slug}
+          {change.shaped ? <span className="gate-check">✓</span> : null}
+          {change.built ? <span className="gate-check">✓</span> : null}
+        </span>
+      ) : null}
+      <ReviewModeControl reviewMode={reviewMode} onChange={onSetReviewMode} />
     </div>
   );
 }

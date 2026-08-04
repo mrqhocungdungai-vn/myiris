@@ -89,10 +89,16 @@ describe("canvas capability: promptFragment", () => {
     expect(make({ getPipelineAvailable: () => true }).promptFragment()).toContain("CANVAS");
   });
 
-  it("mentions submit_claude_task and never DEV", () => {
+  // The workaround this capability used to carry — "call submit_claude_task with
+  // no 'agent' parameter (never DEV, which would be refused for lacking an open
+  // OpenSpec change)" — was a drawing feature describing a pipeline gate it has
+  // nothing to do with. A capability that must warn the voice layer away from a
+  // worker on unrelated grounds is being routed around, not served.
+  it("points at the canvas verb and carries no workaround for an unrelated gate", () => {
     const fragment = make().promptFragment();
-    expect(fragment).toContain("submit_claude_task");
-    expect(fragment).toContain("never DEV");
+    expect(fragment).toContain("shape_on_canvas");
+    expect(fragment).not.toContain("submit_claude_task");
+    expect(fragment).not.toMatch(/\bDEV\b|OpenSpec change/);
   });
 });
 

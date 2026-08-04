@@ -105,7 +105,7 @@ expects to find.
 The asymmetry matters. An ordinary test that checks the options it cares about
 cannot catch the failure this one exists for: for months Iris passed
 `appendSystemPrompt` at the top level of `Options`, which is **not a declared
-field**. The SDK's normalizer destructures it away and never reads it, so PO's
+field**. The SDK's normalizer destructures it away and never reads it, so the resident session's
 live-session instruction reached nothing while the code and its tests both
 claimed it was in force. Nothing failed. Asserting the complete key set is what
 turns an option that is added, renamed, or misspelled into a failing test rather

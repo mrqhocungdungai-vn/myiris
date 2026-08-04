@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createPipelineInstall } from "./pipeline-install.mjs";
+import { VERB_NAMES } from "./verbs.mjs";
 
 let homeDir;
 let repoRoot;
@@ -24,15 +25,13 @@ function make(overrides = {}) {
   return createPipelineInstall({
     repoRoot,
     emitEvent: vi.fn(),
-    agentRoster: ["po", "dev"],
     agentPrefix: "iris-",
-    agentLabels: { po: "PO", dev: "DEV" },
-    retiredAgents: ["ba", "test"],
+    retiredAgents: ["ba", "test", "po", "dev"],
     hasOpenSpec: () => false,
     openspecCommand: () => ({ command: "/fake/node", args: ["/fake/openspec.js"], env: { ELECTRON_RUN_AS_NODE: "1" } }),
     findWorkstream: () => null,
     getActiveWorkstreamId: () => null,
-    resolveAgentModel: () => null,
+    resolveVerbModel: () => null,
     ...overrides,
   });
 }
@@ -47,27 +46,29 @@ function writePersonas(personas) {
 
 describe("pipeline-install", () => {
   it("resolves the bundled persona into an SDK agent definition", () => {
-    writePersonas({ "iris-po.md": "---\ndescription: The PO\n---\nPO persona body." });
+    writePersonas({ "stateful.md": "---\ndescription: The conversational one\n---\nStateful persona body." });
     const install = make();
-    expect(install.resolveAgentDefinition("po", null)).toEqual({
-      description: "The PO",
-      prompt: "PO persona body.",
+    expect(install.resolveAgentDefinition("stateful", null)).toEqual({
+      description: "The conversational one",
+      prompt: "Stateful persona body.",
     });
     // Nothing is written outside the app any more.
     expect(fs.existsSync(path.join(homeDir, ".claude", "agents"))).toBe(false);
   });
 
+  // The bundled file is unprefixed; the project-local override keeps `iris-`
+  // because it sits in a directory shared with the user's own agents.
   it("prefers a project-local persona override over the bundled one", () => {
-    writePersonas({ "iris-dev.md": "---\ndescription: Bundled\n---\nBundled body." });
+    writePersonas({ "stateless.md": "---\ndescription: Bundled\n---\nBundled body." });
     const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "iris-install-proj-"));
     try {
       const dir = path.join(projectDir, ".claude", "agents");
       fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(path.join(dir, "iris-dev.md"), "---\ndescription: Local\n---\nLocal body.");
+      fs.writeFileSync(path.join(dir, "iris-stateless.md"), "---\ndescription: Local\n---\nLocal body.");
 
       const install = make();
-      expect(install.resolveAgentDefinition("dev", projectDir).prompt).toBe("Local body.");
-      expect(install.resolveAgentDefinition("dev", null).prompt).toBe("Bundled body.");
+      expect(install.resolveAgentDefinition("stateless", projectDir).prompt).toBe("Local body.");
+      expect(install.resolveAgentDefinition("stateless", null).prompt).toBe("Bundled body.");
     } finally {
       fs.rmSync(projectDir, { recursive: true, force: true });
     }
@@ -75,7 +76,7 @@ describe("pipeline-install", () => {
 
   it("throws when the persona is missing from the bundle", () => {
     const install = make();
-    expect(() => install.resolveAgentDefinition("po", null)).toThrow(/app bundle/);
+    expect(() => install.resolveAgentDefinition("stateful", null)).toThrow(/app bundle/);
   });
 
   it("reports what an older Iris left in ~/.claude without touching it", () => {
@@ -155,12 +156,11 @@ describe("pipeline-install", () => {
     expect(install.pathExists(path.join(homeDir, "nothing-here"))).toBe(false);
   });
 
-  it("agentsSnapshot reports installed roster and project gates", () => {
+  it("verbsSnapshot reports every verb with its model, and how far the change has got", () => {
     writePersonas({
-      "iris-po.md": "---\ndescription: The PO\n---\nPO body.",
-      "iris-dev.md": "---\ndescription: The DEV\n---\nDEV body.",
+      "stateful.md": "---\ndescription: Conversational\n---\nStateful body.",
+      "stateless.md": "---\ndescription: Autonomous\n---\nStateless body.",
     });
-    make({ resolveAgentModel: (_ws, role) => `model-for-${role}` });
 
     const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "iris-install-project-"));
     try {
@@ -169,16 +169,21 @@ describe("pipeline-install", () => {
       fs.writeFileSync(path.join(changeDir, "proposal.md"), "# proposal");
       fs.writeFileSync(path.join(changeDir, "tasks.md"), "- [x] done\n");
 
-      const install2 = make({
-        resolveAgentModel: (_ws, role) => `model-for-${role}`,
+      const install = make({
+        resolveVerbModel: (_ws, verb) => `model-for-${verb}`,
         findWorkstream: (id) => (id === "ws1" ? { id: "ws1", cwd: projectDir } : null),
       });
-      const snapshot = install2.agentsSnapshot("ws1");
-      expect(snapshot.installed).toBe(true);
+      const snapshot = install.verbsSnapshot("ws1");
+      expect(snapshot.loadable).toBe(true);
       expect(snapshot.hasProject).toBe(true);
-      expect(snapshot.gates.byRole.po).toBe(true);
-      expect(snapshot.gates.byRole.dev).toBe(true);
-      expect(snapshot.roster.find((r) => r.key === "po").model).toBe("model-for-po");
+      expect(snapshot.change.slug).toBe("my-change");
+      expect(snapshot.change.shaped).toBe(true);
+      expect(snapshot.change.built).toBe(true);
+      expect(snapshot.roster).toHaveLength(VERB_NAMES.length);
+      expect(snapshot.roster.find((entry) => entry.key === "execute").model).toBe("model-for-execute");
+      // The snapshot is a display surface: it carries no selection state,
+      // because there is nothing to select.
+      expect(snapshot.roster.every((entry) => !("active" in entry))).toBe(true);
     } finally {
       fs.rmSync(projectDir, { recursive: true, force: true });
     }

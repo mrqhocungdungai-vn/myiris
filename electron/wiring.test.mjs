@@ -6,7 +6,7 @@ vi.mock("./po-session.mjs", () => ({
 }));
 
 vi.mock("./run-queue.mjs", () => ({
-  createRunQueue: vi.fn(() => ({ list: vi.fn(() => []) })),
+  createRunQueue: vi.fn(() => ({ list: vi.fn(() => []), submit: vi.fn() })),
   RUN_STATUS: { QUEUED: "queued" },
 }));
 
@@ -35,7 +35,7 @@ vi.mock("./pipeline-install.mjs", () => ({
     legacyClaudeArtifactsStatus: vi.fn(),
     removeLegacyClaudeArtifacts: vi.fn(),
     ensureProjectScaffold: vi.fn(),
-    agentsSnapshot: vi.fn(),
+    verbsSnapshot: vi.fn(),
   })),
 }));
 
@@ -122,7 +122,7 @@ vi.mock("./run-stream.mjs", () => ({
   })),
 }));
 
-const fakeCapabilities = [{ teardown: vi.fn() }, { teardown: vi.fn() }];
+const fakeCapabilities = [{ teardown: vi.fn() }, { teardown: vi.fn(), captureRunOutcome: vi.fn(), notesInboxDir: "/fake/inbox" }];
 
 vi.mock("./wiring-capabilities.mjs", () => ({
   createCapabilitiesWiring: vi.fn(() => ({
@@ -162,6 +162,7 @@ vi.mock("./wiring-live.mjs", () => ({
   }),
 }));
 
+import { createRunQueue as createRunQueueReal } from "./run-queue.mjs";
 import { createWiring } from "./wiring.mjs";
 import { createCapabilitiesWiring as createCapabilitiesWiringReal } from "./wiring-capabilities.mjs";
 import { createLiveWiring as createLiveWiringReal } from "./wiring-live.mjs";
@@ -189,6 +190,41 @@ function makeDeps(overrides = {}) {
 describe("wiring: createWiring", () => {
   it("constructs the whole app without throwing", () => {
     expect(() => createWiring(makeDeps())).not.toThrow();
+  });
+
+  // D5: capture is a plain file append on the queue's own finalize path. It must
+  // not start a run, spend tokens, or hold the execution slot — bookkeeping can
+  // never be allowed to delay the user's next request.
+  describe("every finished run is recorded in the second brain", () => {
+    function finalizeWith(run) {
+      fakeCapabilities[1].captureRunOutcome.mockClear();
+      createWiring(makeDeps());
+      const queueDeps = /** @type {any} */ (createRunQueueReal).mock.calls.at(-1)[0];
+      queueDeps.onFinalized(run);
+      return fakeCapabilities[1].captureRunOutcome;
+    }
+
+    it("records a success", () => {
+      const capture = finalizeWith({ run_id: "r1", verb: "execute", status: "completed", started_at: 1, output: "ok" });
+      expect(capture).toHaveBeenCalledTimes(1);
+      expect(capture.mock.calls[0][0].status).toBe("completed");
+    });
+
+    it("records a failure, a cancellation, and a ceiling on the same terms", () => {
+      for (const status of ["failed", "error", "cancelled", "limited"]) {
+        const capture = finalizeWith({ run_id: "r1", verb: "execute", status, started_at: 1, output: "x" });
+        expect(capture).toHaveBeenCalledTimes(1);
+        expect(capture.mock.calls[0][0].status).toBe(status);
+      }
+    });
+
+    it("starts no run of its own and takes no execution slot", () => {
+      createWiring(makeDeps());
+      const queueDeps = /** @type {any} */ (createRunQueueReal).mock.calls.at(-1)[0];
+      const queue = /** @type {any} */ (createRunQueueReal).mock.results.at(-1).value;
+      queueDeps.onFinalized({ run_id: "r1", verb: "execute", status: "completed", started_at: 1, output: "ok" });
+      expect(queue.submit).not.toHaveBeenCalled();
+    });
   });
 
   it("getMainWindow/getUiMode/getLiveStatus read through to what wiring-live registered", () => {

@@ -25,7 +25,7 @@ export type TaskCard = {
   status: string;
   output?: string;
   error?: string;
-  agent?: AgentRole | null;
+  verb?: Verb | null;
   model?: string | null;
   claudeSessionId?: string | null;
   usage?: TaskUsage | null;

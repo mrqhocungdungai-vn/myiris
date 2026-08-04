@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, ChevronDown, Plus } from "lucide-react";
-import { AGENT_LABELS } from "../lib/agents";
+import { sessionKeyForVerb, verbLabel } from "../lib/verbs";
 
 /**
  * Work Stream chat switcher: shows the workstream Iris is talking in, opens a
  * picker of past workstreams, and starts a fresh one with the + button.
  * Rebound to our `sessions:get/select/new` IPC (design D3) — no Hermes
  * session IPC. The active row also surfaces the active role's Claude Code
- * session id (`who ▸ id`), matching the previous `.claude-session-line`.
+ * session id (`who ▸ id`) for whichever verb ran most recently — there is no
+ * active role to show, because a verb is chosen per request.
  */
 export default function SessionSwitcher({
   session,
@@ -40,9 +41,9 @@ export default function SessionSwitcher({
   }, [open]);
 
   const chipLabel = session?.label ?? "Session 1 (new)";
-  const activeAgent = session?.active_agent ?? null;
-  const claudeId = session?.agent_sessions?.[activeAgent ?? "default"];
-  const who = activeAgent ? AGENT_LABELS[activeAgent] : "Iris";
+  const lastVerb = session?.last_verb_used ?? null;
+  const claudeId = lastVerb ? session?.agent_sessions?.[sessionKeyForVerb(lastVerb)] : undefined;
+  const who = lastVerb ? verbLabel(lastVerb) : "Iris";
 
   return (
     <>

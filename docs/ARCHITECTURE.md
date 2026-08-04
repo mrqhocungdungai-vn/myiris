@@ -125,7 +125,10 @@ Electron-free and importable in a plain vitest file with no harness. See the
 - **`electron/listen-mode.mjs`** — listening mode's enter/exit/rotation sequences and engagement state; drives `live-session.mjs` via named transitions, never raw field writes.
 - **`electron/gemini-tools.mjs`** / **`gemini-prompts.mjs`** — Gemini's function-declaration schemas and system-instruction prose; both compose contributions from registered capabilities rather than hardcoding them.
 - **`electron/session-store.mjs`** — workstreams, the agent roster, and per-role model selection.
-- **`electron/run-dispatch.mjs`** (+ **`run-stream.mjs`**, **`run-exec.mjs`**) — the pre-dispatch review gate and tool-execution surface; run activity/tool-step streaming and the PO live-question relay; driving DEV and PO runs (both via the Agent SDK's `query()`).
+- **`electron/verbs.mjs`** — the verb registry: one record per verb (statefulness, park label, session key, model, skills, MCP servers, budget, parameter schema, persona, clause). Pure, Electron-free, and the single definition every consumer derives from.
+- **`electron/run-dispatch.mjs`** (+ **`run-stream.mjs`**, **`run-exec.mjs`**) — the pre-dispatch review gate and tool-execution surface; run activity/tool-step streaming and the live-question relay; driving both run shapes (stateful and stateless, both via the Agent SDK's `query()`).
+- **`electron/run-context.mjs`** (+ **`untrusted-text.mjs`**) — composes a run's brief from its verb's own parameter schema and attaches the bounded, fenced transcript of what the user actually said.
+- **`electron/run-inbox.mjs`** — appends one record per finished run to the second-brain inbox. A plain `fs` append: no run, no tokens, no execution slot.
 - **`electron/announcements.mjs`** — voice announcements to the Live session, buffered while offline.
 - **`electron/pipeline-probes.mjs`** / **`pipeline-install.mjs`** — Claude/OpenSpec availability probing (binary + credential) and skill installation.
 - **`electron/bundled-binaries.mjs`** — resolves the app's own `claude` and `openspec`, including the `app.asar` → `app.asar.unpacked` rewrite. The only module that knows asar exists.
@@ -136,7 +139,7 @@ Electron-free and importable in a plain vitest file with no harness. See the
 - **`electron/live-config.mjs`** — `buildLiveConfig()`, extracted so the Live session config (converse vs. listening) is testable without booting Electron.
 - **`electron/listen-boundary.mjs`** — the measured chunk-boundary sequence (`runBoundary()`) listening mode's rotations and exit run through; takes an injected session-like driver so it's testable without a live connection.
 - **`electron/role-prompt.mjs`** / **`run-budget.mjs`** / **`run-skills.mjs`** / **`run-hooks.mjs`** / **`run-output-format.mjs`** / **`run-sessions.mjs`** — the per-run policy modules both roles route through, in the same "one policy, so the two can't drift" shape as `worker-env.mjs`: the base system prompt, the turn/spend ceilings, the per-role skill list, the SDK hook callbacks (guard + tool boundary), the structured-decisions schema, and session liveness/naming. All Electron-free, no I/O.
-- **`electron/po-session.mjs`** — the stateful PO module: Agent SDK session lifecycle, streaming user-message channel, and the `canUseTool` callback intercepting `AskUserQuestion`. Isolated so DEV's one-shot path never has to know it exists.
+- **`electron/po-session.mjs`** — the stateful run shape: Agent SDK session lifecycle, streaming user-message channel, and the `canUseTool` callback intercepting `AskUserQuestion`. Isolated so the one-shot path never has to know it exists. Persona-agnostic — it is handed a system prompt and a skill list rather than building either.
 - **`electron/preload.cjs`** — the `window.iris` IPC bridge. Any new renderer↔main channel must be exposed here.
 - **`src/App.tsx`** (by far the largest file in the repo) — renderer: mic capture (WebRTC AEC → 16 kHz PCM), Gemini playback (24 kHz PCM), the "Orbital Deck" UI, keyboard shortcuts, gestures, and the `uiMode` (`deck` | `hud`) switch.
 - **`src/components/HudShell.tsx`** + **`src/styles/hud.css`** — the Glass HUD overlay; pointer-transparent except `.hud-hit` islands (App.tsx reports pointer-over-island via `hud:interactive`; main toggles `setIgnoreMouseEvents`).
@@ -167,7 +170,7 @@ Routing behavior:
 - Quick answer or current fact: **Gemini Search**.
 - Multi-step work or background task: **Claude**.
 - Claude completion: **Gemini proactively announces result**.
-- PO pauses mid-task with a question (`SYSTEM_EVENT_PO_QUESTION`): **Gemini reads it aloud immediately and answers via `answer_po_question`** once the user responds — distinct from the end-of-run "Decisions needed" relay, which still applies to DEV and to PO's lower-stakes calls.
+- A stateful run pauses mid-task with a question (`SYSTEM_EVENT_PO_QUESTION`): **Gemini reads it aloud immediately and answers via `answer_claude_question`** once the user responds — distinct from the end-of-run "Decisions needed" relay, which applies to the stateless verbs and to a stateful run's lower-stakes calls.
 
 ## Listening mode
 
@@ -180,4 +183,4 @@ A toggle (ear icon, tray item, `IRIS_LISTEN_HOTKEY`) that puts the Gemini Live s
   1. Audio streamed outside an explicitly opened activity (`activityStart`) is discarded entirely — there is no "accumulate quietly, answer when asked" shortcut.
   2. Closing the session without first sending `activityEnd` loses the whole current chunk — there is no way to commit context except through a boundary.
   3. No resumption checkpoint is issued while an activity is open. A boundary must wait for a checkpoint issued **after** its own `activityEnd`, not merely check that some handle exists — a stale handle from before the boundary began is instantly non-null and will satisfy a naive check while reproducing total context loss.
-- **User-visible surprises**: voice sleep and voice-triggered delegation don't work while engaged (both need a model turn, and none can complete mid-chunk); a PO question raised while engaged times out to its default, unheard; the mode ends itself if the machine sleeps long enough to drop the connection; and there is no signal if microphone capture silently dies, since silence is the whole point of the mode.
+- **User-visible surprises**: voice sleep and voice-triggered delegation don't work while engaged (both need a model turn, and none can complete mid-chunk); a live question raised while engaged times out to its default, unheard; the mode ends itself if the machine sleeps long enough to drop the connection; and there is no signal if microphone capture silently dies, since silence is the whole point of the mode.

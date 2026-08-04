@@ -10,6 +10,8 @@
 // received injected from main.mjs, one of the four modules allowed to
 // import Electron directly, like any other domain module.
 import { createRunQueue, RUN_STATUS } from "./run-queue.mjs";
+import { getPoSessionState } from "./po-session.mjs";
+import { projectState } from "./verbs.mjs";
 import { createPipelineProbes } from "./pipeline-probes.mjs";
 import { createPipelineInstall } from "./pipeline-install.mjs";
 import { createUserConfig } from "./user-config.mjs";
@@ -67,6 +69,7 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     flushTranscripts,
     appendUserTranscript,
     appendModelTranscript,
+    getRecentUtterances,
     getUiContext: getUiContextSnapshot,
     setUiContext: setUiContextSnapshot,
   } = rendererBridge;
@@ -116,6 +119,14 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
       // run-queue.mjs's queued-cancel path already applies ("a queued run
       // never started, so there is no announcement to make"), generalized here.
       if (!run.started_at) return;
+      // Every finished run is recorded in the second brain before anything is
+      // announced (design.md D5). A plain file append: no run, no tokens, no
+      // execution slot, and it happens for failures on the same terms as
+      // successes. Deliberately NOT gated on started_at's sibling checks below —
+      // wait, it is: a run rejected before it started has nothing to record
+      // beyond the rejection, and the announcement gate above already filters
+      // those out for exactly that reason.
+      secondBrainCapability?.captureRunOutcome?.(run);
       announceClaudeCompletion({
         runId: run.run_id,
         task: run.task,
@@ -127,33 +138,29 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     },
   });
 
-  // Role pipeline: PO (grills the request, proposes an OpenSpec change) and
-  // DEV (implements the open change's tasks, headless) form the build
-  // pipeline PO → DEV, gated on the `claude` binary being detected (see
-  // pipelineAvailable/probePipelineAvailability below; chat-only otherwise).
+  // The project-local persona override still lives at
+  // <cwd>/.claude/agents/iris-<base>.md, so the prefix stays even though the
+  // bundled personas dropped it. Everything gated on the `claude` binary being
+  // detected (see pipelineAvailable/probePipelineAvailability below; chat-only
+  // otherwise).
   const AGENT_PREFIX = "iris-";
-  const AGENT_LABELS = { po: "PO", dev: "DEV" };
-  // Roles removed when the pipeline was collapsed to PO → DEV (and later when
-  // STUDY was removed for the community release); their installed agent files
-  // are cleaned up on install.
-  const RETIRED_AGENTS = ["ba", "test", "devops", "study"];
+  // Personas an older Iris installed into the user's ~/.claude — including the
+  // PO/DEV pair this change replaced. Cleaned up on request, never silently.
+  const RETIRED_AGENTS = ["ba", "test", "devops", "study", "po", "dev"];
 
   const sessionStoreModule = createSessionStore({
     emitEvent,
-    agentLabels: AGENT_LABELS,
     announceWorkspaceUpdate: () => announceWorkspaceUpdate(),
-    announceAgentSelection: (workstream) => announceAgentSelection(workstream),
     abandonPendingQuestion: (workstreamId) => PendingQuestion.abandon(workstreamId),
     abandonPendingReview: (workstreamId) => PendingReview.abandon(workstreamId),
     showOpenDialog: (window, options) => dialog.showOpenDialog(window, options),
     getMainWindow: () => getMainWindow(),
   });
   const {
-    agentRoster: AGENT_ROSTER,
     modelChoices: MODEL_CHOICES,
     getActiveId: getActiveWorkstreamId,
-    resolveAgentModel,
-    agentKey,
+    resolveVerbModel,
+    sessionKeyFor,
     findWorkstream,
     sessionsSnapshot,
     emitSessions,
@@ -162,8 +169,8 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     activeWorkstream,
     selectWorkstream,
     chooseWorkstreamCwd,
-    setWorkstreamAgent,
-    setAgentModel,
+    rememberVerbUsed,
+    setVerbModel,
   } = sessionStoreModule;
 
   // ListenMode (the object live-wiring's listenModeModule owns) doesn't
@@ -184,8 +191,6 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     getLiveSession: () => getLiveSession(),
     isListenModeSuppressing: () => isListenModeSuppressing(),
     emitEvent,
-    agentLabels: AGENT_LABELS,
-    agentKey,
     findWorkstream,
     getActiveWorkstreamId,
     runStatus: RUN_STATUS,
@@ -194,7 +199,6 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     notifyIris,
     fenceUntrustedText,
     drainPendingAnnouncements,
-    announceAgentSelection,
     workspaceInfo,
     workspaceContextLine,
     announceWorkspaceUpdate,
@@ -255,8 +259,7 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     emitEvent,
     notifyIris,
     findWorkstream,
-    agentKey,
-    agentLabels: AGENT_LABELS,
+    sessionKeyFor,
     persistSessionStore,
     emitSessions,
   });
@@ -279,14 +282,19 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     findWorkstream,
     activeWorkstream,
     createWorkstream,
-    setAgentModel,
-    agentRoster: AGENT_ROSTER,
-    agentLabels: AGENT_LABELS,
+    setVerbModel,
     modelChoices: MODEL_CHOICES,
     getPromptReviewMode,
     getPipelineAvailable,
     checkClaudeStatus,
     workspaceInfo,
+    // The state `execute` forks on and Iris reads before choosing a verb.
+    // pipelineProbes is constructed above; the thunk keeps this consistent with
+    // every other cross-module call in this block.
+    projectStateFor: (workstream) => projectState(workstream?.cwd ? openChangesWithTasks(workstream.cwd) : []),
+    // Phase scoping for the review gate (design.md D6): a stateful verb parks
+    // only on the call that OPENS its resident session.
+    hasLiveStatefulSession: (workstreamId) => Boolean(getPoSessionState(workstreamId)),
     getUiContextSnapshot,
     resolvePendingPoQuestion,
   });
@@ -300,15 +308,13 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
   const pipelineInstall = createPipelineInstall({
     repoRoot,
     emitEvent,
-    agentRoster: AGENT_ROSTER,
     agentPrefix: AGENT_PREFIX,
-    agentLabels: AGENT_LABELS,
     retiredAgents: RETIRED_AGENTS,
     hasOpenSpec,
     openspecCommand,
     findWorkstream,
     getActiveWorkstreamId,
-    resolveAgentModel,
+    resolveVerbModel,
   });
   const {
     resolveAgentDefinition,
@@ -316,7 +322,7 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     legacyClaudeArtifactsStatus,
     removeLegacyClaudeArtifacts,
     ensureProjectScaffold,
-    agentsSnapshot,
+    verbsSnapshot,
   } = pipelineInstall;
 
   // Canvas capability, second-brain capability, run-exec, and the Gemini
@@ -336,9 +342,8 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     runQueue,
     findWorkstream,
     persistSessionStore,
-    agentKey,
-    resolveAgentModel,
-    agentLabels: AGENT_LABELS,
+    sessionKeyFor,
+    resolveVerbModel,
     agentPrefix: AGENT_PREFIX,
     claudeWorkdir,
     claudeBinary,
@@ -352,6 +357,7 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     pushToolStart,
     pushToolEnd,
     askUserQuestionViaVoice,
+    recentUtterances: () => getRecentUtterances(),
     modelChoices: MODEL_CHOICES,
     envFlag,
     workspaceContextLine,
@@ -422,9 +428,9 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     selectWorkstream,
     createWorkstream,
     chooseWorkstreamCwd,
-    agentsSnapshot,
-    setWorkstreamAgent,
-    setAgentModel,
+    verbsSnapshot,
+    rememberVerbUsed,
+    setVerbModel,
       legacyClaudeArtifactsStatus,
     removeLegacyClaudeArtifacts,
     resolvePendingPoQuestion,

@@ -2,26 +2,47 @@
 
 [Tiếng Việt →](./PIPELINE_GUIDE.vi.md)
 
-This guide covers the optional, second layer of Iris: the **PO → DEV** build pipeline that lets you delegate real work — coding, research, files, terminal, automation — by voice. If you only want to talk to Iris, you don't need any of this; see the main [README](../README.md) quickstart instead.
+This guide covers the optional, second layer of Iris: the build pipeline that lets you delegate real work — coding, research, files, terminal, automation — by voice. If you only want to talk to Iris, you don't need any of this; see the main [README](../README.md) quickstart instead.
 
 ## 1. What the pipeline is
 
-Iris drives Claude Code through two roles that hand work to each other through an [OpenSpec](https://github.com/Fission-AI/OpenSpec) change on disk — never a shared conversation:
+**You do not operate this pipeline. You talk, and Iris picks the right kind of work.** There is no role to choose, no mode to be in, and no vocabulary you have to learn — "build me X" starts the work.
+
+Underneath, Iris reaches Claude Code through seven named tools, each with its own job, its own model, and its own bounded set of skills:
+
+| What you say | What runs | What it does |
+| --- | --- | --- |
+| "I want to add dark mode" | **Shape** | Grills you to settle the requirements, then writes an [OpenSpec](https://github.com/Fission-AI/OpenSpec) change |
+| "draw that out", "what's on my diagram?" | **Canvas** | The same conversation, on the drawing canvas — it can read and draw on it |
+| "build it", "fix this bug", "rename that file" | **Build** | Does the work. With an open change it implements its tasks; without one it just does what you asked |
+| "wrap that change up", "archive it" | **Finish** | Verifies the tasks are done and folds the change into the living spec |
+| "what's left?", "how does X work?" | **Look** | Reads the project and answers. It cannot change anything |
+| "review what it just did" | **Review** | Judges the work and reports findings |
+| "save what we learned" | **Notes** | Weaves what has happened into your second brain |
+
+Work that goes through the full process still flows the same way — shaping produces a change on disk, and building implements it — but **the ordering follows from the project's own state, not from you enforcing it**:
 
 ```
-You (voice) ──▶ PO (grills the request, proposes an OpenSpec change)
+You (voice) ──▶ Shape (grills you, proposes an OpenSpec change)
                      │
                      ▼  openspec/changes/<name>/  (proposal, design, specs, tasks)
                      │
                      ▼
-                DEV (implements the remaining tasks, verifies, archives)
+                Build (implements the remaining tasks, verifies)
                      │
-                     ▼  openspec/specs/  (the living spec, updated)
+                     ▼
+                Finish (archives it) ──▶ openspec/specs/  (the living spec, updated)
 ```
 
-- **PO** is a live, stateful session — it can pause mid-turn to ask you something by voice.
-- **DEV** is headless and stateless — it never asks; it implements, tests, verifies itself, and reports back.
-- Under the hood, PO runs the `grilling` skill then the OpenSpec **propose** flow (`/opsx:propose`); DEV runs the OpenSpec **apply** flow (`/opsx:apply`) then **archive** (`/opsx:archive`). You never type these commands yourself — Iris's voice layer tells the agents to run them.
+- **Shape and Canvas are live** — they can pause mid-turn to ask you something by voice, and they share one conversation, so moving to the canvas continues what you were already discussing.
+- **The other five are headless** — they never ask; they do the work, verify themselves, and report back.
+- You never type the underlying `/opsx:propose`, `/opsx:apply`, or `/opsx:archive` commands. Iris invokes them.
+
+### Which requests stop for your approval
+
+Two of these write to your project — **Build** and **Finish** — so by default each one is **parked for your review** before anything starts: you see the full brief on screen and approve, edit, or cancel it, and nothing has been sent to Claude until you do. Opening a new shaping conversation is parked once, at the start; steering that conversation afterwards is not, because you already agreed to it. Look, Review, and Notes change nothing, so they run straight away.
+
+The control is on the pipeline bar and cycles through three settings: **Risky** (the default, above), **All**, and **Off**. It is deliberately not something Iris can change for you.
 
 ## 2. Setup
 
@@ -57,24 +78,30 @@ Iris also keeps its own Claude state in `~/.iris/claude-home` rather than
 or memory. The flip side is that Iris cannot use your terminal Claude Code
 login — it needs its own credential, which is what you set above.
 
-Once every row in Settings is green, wake Iris and switch to the PO role from the pipeline bar (or ask by voice).
+Once every row in Settings is green, wake Iris and just say what you want.
 
 ## 3. The voice walkthrough
 
-**Starting a new feature — PO grills you.**
-Say what you want, e.g. *"I want to add dark mode to the settings screen."* Iris forwards this to PO with a short instruction to start grilling. PO pauses and asks you real questions by voice — answer naturally; Iris reads each one aloud and relays your answer back. Keep going until PO has enough.
+**Starting a new feature.**
+Say what you want, e.g. *"I want to add dark mode to the settings screen."* Iris recognizes this as something to settle first, tells you so, and starts a shaping conversation — you don't ask for one. It pauses and asks you real questions by voice; answer naturally, and Iris reads each one aloud and relays your answer back. Keep going until it has enough.
 
-**Telling PO you're done.**
-Say *"That's enough, go ahead and propose it"* (or similar). PO writes the OpenSpec change — proposal, design, specs, and a task list — under `openspec/changes/<name>/`. This is the `/opsx:propose` flow running underneath; you never see or type that command.
+**Saying you're done.**
+Say *"That's enough, go ahead and propose it"* (or similar). It writes the OpenSpec change — proposal, design, specs, and a task list — under `openspec/changes/<name>/`.
 
-**Handing off to DEV.**
-Switch the active role to DEV (pipeline bar, or say *"switch to DEV"*), then say *"implement the remaining tasks."* DEV works headlessly: it implements test-first, runs the test suite and build, verifies every acceptance scenario for real, and — once every task is checked and verification passes — archives the change, syncing the result into `openspec/specs/` (the project's living spec). This is `/opsx:apply` then `/opsx:archive` running underneath.
+**Building it.**
+Say *"implement the remaining tasks"* or just *"go build it."* Iris parks the brief for your approval first; approve it (optionally after editing on screen) and the run starts. It works headlessly: implements test-first, runs the test suite and build, verifies every acceptance scenario for real, and reports back. When you're satisfied, say *"wrap it up"* to archive the change and sync the result into `openspec/specs/`.
+
+**Small things stay small.**
+*"Rename that file"*, *"write me a script that renames these"*, *"look up when the invoice is due"* — these do **not** go through shaping, and they no longer fail for lack of a spec. Iris just does them.
 
 **Checking progress.**
-Ask *"are there tasks left?"* while PO is active, or check the Work Stream panel — it shows DEV's live tool calls and the gate checkmarks (PO proposed ✓ / DEV implemented ✓) per feature.
+Ask *"are there tasks left?"* at any point, or check the Work Stream panel — it shows live tool calls and how far the current change has got.
 
 **Decisions along the way.**
-DEV never blocks — if it hits a real product decision, it applies its recommended default and reports it under "Decisions needed" at the end; Iris reads these aloud and you can send a follow-up with your choice. PO, being live, may instead pause mid-task and ask you directly.
+A headless run never blocks — if it hits a real product decision, it applies its recommended default and reports it under "Decisions needed" at the end; Iris reads these aloud and you can answer by voice. A shaping conversation, being live, may instead pause mid-task and ask you directly.
+
+**Switching models.**
+Ask, e.g. *"put the builder on the stronger model to debug this."* Note that the two shaping tools share one conversation, so changing either one's model changes both — Iris will say so.
 
 ## 4. Appendix: using the agents directly in Claude Code
 
@@ -84,8 +111,10 @@ is deliberate, so Iris never alters your setup. Driving them from a terminal is
 therefore a copy job, not a command you can just run:
 
 ```bash
-# Personas: copy into the project you want to use them in
-cp /Applications/Iris.app/Contents/Resources/personas/iris-*.md .claude/agents/
+# Personas: copy into the project you want to use them in (note the iris- prefix
+# the project-local location expects)
+cp /Applications/Iris.app/Contents/Resources/personas/stateful.md .claude/agents/iris-stateful.md
+cp /Applications/Iris.app/Contents/Resources/personas/stateless.md .claude/agents/iris-stateless.md
 
 # Skills and /opsx commands: point Claude Code at Iris's plugin directory
 claude --plugin-dir /Applications/Iris.app/Contents/Resources/iris-plugin
@@ -104,4 +133,5 @@ the commands are `/iris:opsx:propose`, `/iris:opsx:apply`, `/iris:opsx:archive`.
 | "openspec CLI" row stays red | Broken app bundle — OpenSpec ships with Iris | Reinstall Iris |
 | Skills row says "Damaged" | Broken app bundle — the skills ship with Iris | Reinstall Iris |
 | Runs work in your terminal Claude Code but not in Iris | Iris uses its own state dir and cannot see your terminal login | Add a credential in Settings → Claude pipeline |
-| DEV run fails with "no open change with remaining tasks" | PO hasn't proposed anything yet | Switch to PO and ask it to grill and propose first — DEV never free-codes without a spec |
+| Iris keeps starting a shaping conversation for something small | It read the request as a new feature | Say plainly that you just want it done, e.g. "no need to spec this, just do it" |
+| A build ran without a spec you expected it to follow | With no open change, Build simply does the work rather than refusing | Shape it first if the work needs a spec; the approval prompt before each build is where to catch this |

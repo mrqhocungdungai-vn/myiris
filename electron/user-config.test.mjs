@@ -2,7 +2,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createUserConfig, envFlag, envNumber, parseEnvFile } from "./user-config.mjs";
+import {
+  DEFAULT_PROMPT_REVIEW_MODE,
+  createUserConfig,
+  envFlag,
+  envNumber,
+  parseEnvFile,
+  parsePromptReviewMode,
+} from "./user-config.mjs";
 
 let repoRoot;
 const ORIGINAL_ENV = { ...process.env };
@@ -64,6 +71,51 @@ describe("user-config: env parsing", () => {
   });
 });
 
+describe("user-config: the review-mode flag", () => {
+  it("accepts the three settings by name", () => {
+    for (const mode of ["never", "always", "verb"]) {
+      expect(parsePromptReviewMode(mode)).toBe(mode);
+      expect(parsePromptReviewMode(` ${mode.toUpperCase()} `)).toBe(mode);
+    }
+  });
+
+  // An existing .env must not be silently reinterpreted just because the flag
+  // gained a third setting: 1/true/on meant "park everything" and still does.
+  it("honours the previous boolean values", () => {
+    for (const raw of ["1", "true", "on", "yes"]) expect(parsePromptReviewMode(raw)).toBe("always");
+    for (const raw of ["0", "false", "off", "no"]) expect(parsePromptReviewMode(raw)).toBe("never");
+  });
+
+  it("defaults to `verb` when unset", () => {
+    expect(parsePromptReviewMode(undefined)).toBe(DEFAULT_PROMPT_REVIEW_MODE);
+    expect(parsePromptReviewMode("")).toBe("verb");
+  });
+
+  // The failure mode of a typo must be MORE review, not less — a value that
+  // silently disarmed the gate would be the worst possible reading.
+  it("falls back to the default rather than disabling the gate on a typo", () => {
+    expect(parsePromptReviewMode("nevr")).toBe("verb");
+    expect(parsePromptReviewMode("disabled")).toBe("verb");
+  });
+
+  it("reads the startup default from the environment and persists a change", () => {
+    process.env.IRIS_PROMPT_REVIEW = "always";
+    const config = make();
+    expect(config.getPromptReviewMode()).toBe("always");
+
+    expect(config.setPromptReviewMode("never").reviewMode).toBe("never");
+    expect(config.getPromptReviewMode()).toBe("never");
+    expect(fs.readFileSync(path.join(repoRoot, ".env"), "utf8")).toContain("IRIS_PROMPT_REVIEW=never");
+  });
+
+  it("refuses an unrecognized setting instead of coercing it", () => {
+    const config = make();
+    const before = config.getPromptReviewMode();
+    expect(config.setPromptReviewMode("sometimes").status).toBe("error");
+    expect(config.getPromptReviewMode()).toBe(before);
+  });
+});
+
 describe("user-config: assertConfigValueIsSafe", () => {
   it("rejects values containing control characters or line breaks", () => {
     const config = make();
@@ -99,7 +151,7 @@ describe("user-config: savePoToken", () => {
     expect(process.env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
   });
 
-  it("refuses to save while a PO turn is running", () => {
+  it("refuses to save while a stateful turn is running", () => {
     const config = make({ runQueue: { list: () => [{ agent: "po", status: "running" }] } });
     const result = config.savePoToken("sk-test-token-123");
     expect(result.ok).toBe(false);

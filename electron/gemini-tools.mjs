@@ -20,6 +20,12 @@
 // function-declarations array; gemini-prompts.mjs splices each capability's
 // promptFragment() into the system instruction. Core modules never hardcode
 // a capability-specific declaration or prose string.
+//
+// The Claude-facing surface is no longer one undifferentiated task tool. It is
+// seven named verbs, each with its own parameter schema, derived from the verb
+// registry — because prose is advice a model may ignore and a schema is a
+// contract the calling interface enforces. See electron/verbs.mjs.
+import { STATEFUL_VERBS, VERB_NAMES, resolveAllVerbs } from "./verbs.mjs";
 
 /**
  * @param {{
@@ -30,31 +36,43 @@
  * }} deps
  */
 export function createGeminiTools({ getPipelineAvailable, modelChoices, envFlag, capabilities = [] }) {
+  // The seven verbs, derived from electron/verbs.mjs rather than written out
+  // here. A verb is defined in one place; the declaration, the review gate, and
+  // the run configuration all follow from that one record. Two call sites
+  // independently constructing the same thing, with nothing forcing them to
+  // agree, is what silently dropped an instruction from the run configuration
+  // for months — this is the shape that cannot recur.
+  //
+  // Declarations are built against the EMPTY project state: what a verb is
+  // called for does not change with the project, only how it then runs does.
+  function buildVerbDeclarations() {
+    return resolveAllVerbs().map((verb) => ({
+      name: verb.verb,
+      description: verb.description,
+      parameters: verb.params,
+    }));
+  }
+
   function buildPipelineToolDeclarations() {
     return [
+      ...buildVerbDeclarations(),
       {
         name: "check_claude_status",
-        description: "Check if the Claude Code CLI is installed and ready. Use this for questions about Claude status.",
+        description: "Check if the Claude worker is ready. Use this for questions about Claude status.",
         parameters: { type: "object", properties: {} },
       },
       {
+        // Kept for one release so a Gemini session resumed mid-conversation
+        // does not call a tool that no longer exists. Described as deprecated
+        // so a model reading the list prefers a real verb.
         name: "submit_claude_task",
         description:
-          "Hand actionable work to Claude. Invoke for deals, shopping, research, coding, file work, terminal tasks, summaries, automations, or anything requiring tools. Do not ask the user clarifying questions first. Claude works in ONE continuous session: it remembers previous tasks in the session, and runs tasks one at a time — if it is busy, the new task is queued and starts automatically (the response will say 'queued'). IMPORTANT: Claude cannot hear this voice conversation — the 'task' string is the only new information it gets, so write a complete brief with every concrete detail. If review mode is on (the default), this does NOT start Claude — the brief is parked for the user's Approve/Edit/Cancel and the response says 'parked_for_review'; see the PRE-DISPATCH REVIEW GATE instructions for what to say and do next.",
+          "DEPRECATED — do not call this. Use one of the named verbs instead (execute for work that should get done). Retained only so an older conversation does not break; it dispatches as execute.",
         parameters: {
           type: "object",
           properties: {
-            task: {
-              type: "string",
-              description:
-                "The task for Claude in clear English, shaped to the role per the BRIEF WRITING rules in your instructions. For the PO role: a SHORT control intent (start-and-grill / propose the change / are there tasks left? / archive) plus the concrete details the user gave — never a PRD. For a plain task or the DEV role: a COMPLETE brief with the goal, every concrete detail the user gave (names, numbers, URLs, dates, budgets, constraints), sensible defaults, and the expected output; DEV is told to implement the open OpenSpec change. Claude remembers earlier tasks in this session, so follow-ups may reference previous work, but never omit new details.",
-            },
+            task: { type: "string", description: "The request, in clear English." },
             urgency: { type: "string", description: "low, normal, or high." },
-            agent: {
-              type: "string",
-              description:
-                "Optional role to run the task as: 'po' (Product Owner — grills, then proposes an OpenSpec change) or 'dev' (Developer — implements the open change's remaining tasks and verifies). ONLY set this when the user explicitly names a role (e.g. 'have the PO grill this…', 'cho dev làm…'). Otherwise OMIT it — the session's active agent from the UI is used.",
-            },
           },
           required: ["task"],
         },
@@ -62,7 +80,13 @@ export function createGeminiTools({ getPipelineAvailable, modelChoices, envFlag,
       {
         name: "get_workspace_info",
         description:
-          "Return the current workspace state: the active Claude session, the project folder it works in, and the active pipeline role. ALWAYS call this (never guess) when the user asks which project/folder/directory Claude is working in, what session or role is active, or before describing where work will happen.",
+          "Return the current workspace state: the active Claude session and the project folder it works in. ALWAYS call this (never guess) when the user asks which project/folder/directory Claude is working in, what session is active, or before describing where work will happen.",
+        parameters: { type: "object", properties: {} },
+      },
+      {
+        name: "get_project_state",
+        description:
+          "Return what the project looks like right now: whether an OpenSpec change is open, which ones, whether a shaping conversation is already under way, and which verb ran last. Call this when you are unsure whether to shape or to execute, or when the user asks what state the work is in. Never guess this.",
         parameters: { type: "object", properties: {} },
       },
       {
@@ -100,9 +124,9 @@ export function createGeminiTools({ getPipelineAvailable, modelChoices, envFlag,
         },
       },
       {
-        name: "answer_po_question",
+        name: "answer_claude_question",
         description:
-          "Answer the pending question(s) from the Product Owner after SYSTEM_EVENT_PO_QUESTION. The PO's live session is paused waiting for this — call it only once you have collected every answer by voice, never before.",
+          "Answer the pending question(s) Claude asked after SYSTEM_EVENT_PO_QUESTION. The live shaping session is paused waiting for this — call it only once you have collected every answer by voice, never before.",
         parameters: {
           type: "object",
           properties: {
@@ -118,7 +142,7 @@ export function createGeminiTools({ getPipelineAvailable, modelChoices, envFlag,
                     description:
                       "The option label the user chose. For a question the event marked multi_select, give EVERY label " +
                       "they chose, separated by commas — do not pick just one, that answers a different question " +
-                      "than the one the PO asked.",
+                      "than the one that was asked.",
                   },
                 },
                 required: ["question", "choice"],
@@ -129,25 +153,25 @@ export function createGeminiTools({ getPipelineAvailable, modelChoices, envFlag,
         },
       },
       {
-        name: "set_agent_model",
+        name: "set_verb_model",
         description:
-          "Change which Claude model a role (PO or DEV) runs on for the active session — e.g. switch DEV to a stronger model to debug a hard problem, then switch it back afterwards. Only call this when the user EXPLICITLY asks to change or switch a role's model; never on your own initiative.",
+          `Change which Claude model a verb runs on for the active session — e.g. put execute on a stronger model to debug a hard problem, then put it back afterwards. Only call this when the user EXPLICITLY asks to change or switch a model; never on your own initiative. Note that ${STATEFUL_VERBS.join(" and ")} share one live conversation, so changing either one changes both.`,
         parameters: {
           type: "object",
           properties: {
-            role: { type: "string", description: "'po' or 'dev'." },
+            verb: { type: "string", description: `One of: ${VERB_NAMES.join(", ")}.` },
             model: {
               type: "string",
               description: `One of: ${modelChoices.map((choice) => `${choice.id} (${choice.label})`).join(", ")}.`,
             },
           },
-          required: ["role", "model"],
+          required: ["verb", "model"],
         },
       },
       {
         name: "respond_to_task_review",
         description:
-          "Approve or cancel a brief that submit_claude_task just parked (status 'parked_for_review'). Call this only after the user tells you their decision by voice; if they resolve it from the screen instead, you get SYSTEM_EVENT_TASK_REVIEW_RESOLVED and must NOT also call this. This is separate from answer_po_question: that answers a LIVE, blocking question mid-PO-run; this approves/cancels a PARKED brief that has not started at all. Never call get_claude_task_status for a parked brief — it has no run yet.",
+          "Approve or cancel a request that was just parked (status 'parked_for_review'). Call this only after the user tells you their decision by voice; if they resolve it from the screen instead, you get SYSTEM_EVENT_TASK_REVIEW_RESOLVED and must NOT also call this. This is separate from answer_claude_question: that answers a LIVE, blocking question mid-run; this approves/cancels a PARKED request that has not started at all. Never call get_claude_task_status for a parked request — it has no run yet.",
         parameters: {
           type: "object",
           properties: {
@@ -172,7 +196,7 @@ export function createGeminiTools({ getPipelineAvailable, modelChoices, envFlag,
       {
         name: "control_ui",
         description:
-          "Control the Iris UI directly for UI-only requests — open/close/show a Claude task result, task history, or overlays. Use this instead of submit_claude_task when the request is purely about the interface, not new work.",
+          "Control the Iris UI directly for UI-only requests — open/close/show a Claude task result, task history, or overlays. Use this instead of any verb when the request is purely about the interface, not new work.",
         parameters: {
           type: "object",
           properties: {
@@ -227,5 +251,5 @@ export function createGeminiTools({ getPipelineAvailable, modelChoices, envFlag,
     return [...(envFlag("IRIS_ENABLE_GOOGLE_SEARCH", false) ? [{ googleSearch: {} }] : []), ...buildClaudeTools()];
   }
 
-  return { buildPipelineToolDeclarations, buildAlwaysToolDeclarations, buildClaudeTools, buildLiveTools };
+  return { buildVerbDeclarations, buildPipelineToolDeclarations, buildAlwaysToolDeclarations, buildClaudeTools, buildLiveTools };
 }

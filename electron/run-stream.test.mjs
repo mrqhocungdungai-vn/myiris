@@ -14,7 +14,7 @@ function makeWorkstream(overrides = {}) {
   return {
     id: "ws1",
     agent_sessions: {},
-    last_agent_used: null,
+    last_verb_used: null,
     last_used_at: 0,
     last_task: "",
     ...overrides,
@@ -28,7 +28,7 @@ function make(overrides = {}) {
     emitEvent: vi.fn(),
     notifyIris: vi.fn(),
     findWorkstream: () => workstream,
-    agentKey: (agent) => agent ?? "default",
+    sessionKeyFor: (verb) => (verb === "shape_on_canvas" ? "stateful" : verb),
     persistSessionStore: vi.fn(),
     emitSessions: vi.fn(),
     ...overrides,
@@ -129,9 +129,10 @@ describe("run-stream: activity and tool-step projection", () => {
       persistSessionStore,
       emitSessions,
     });
-    const run = { workstream_id: "ws1", agent: null, task: "do thing" };
+    const run = { workstream_id: "ws1", verb: "execute", task: "do thing" };
     stream.handleClaudeStreamMessage(run, { type: "system", subtype: "init", session_id: "sess-123" });
-    expect(workstream.agent_sessions.default).toBe("sess-123");
+    expect(workstream.agent_sessions.execute).toBe("sess-123");
+    expect(workstream.last_verb_used).toBe("execute");
     expect(persistSessionStore).toHaveBeenCalled();
     expect(emitSessions).toHaveBeenCalled();
   });

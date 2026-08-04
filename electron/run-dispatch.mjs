@@ -1,19 +1,26 @@
-// Task dispatch: the pre-dispatch review gate and the Gemini tool
+// Verb dispatch: the pre-dispatch review gate and the Gemini tool
 // implementations that submit, query, and control Claude runs. Split out of
 // electron/main.mjs (split-main-process-modules): Electron-free — every
 // cross-module effect is injected.
 //
-// Originally one module with run-stream.mjs's content (task 3.5's ~380-line
-// estimate) — split in two once the verbatim move measured at 670 lines,
-// over the 450-line ceiling. run-stream.mjs owns the run activity/tool-step
-// stream and the PO live-question relay; this module owns the review gate
-// and tool-execution surface, taking run-stream's resolvePendingPoQuestion
-// as an injected dependency for answer_po_question below.
+// Originally one module with run-stream.mjs's content — split in two once the
+// verbatim move measured at 670 lines, over the 450-line ceiling. run-stream.mjs
+// owns the run activity/tool-step stream and the live-question relay; this
+// module owns the review gate and tool-execution surface, taking run-stream's
+// resolvePendingPoQuestion as an injected dependency for answer_claude_question
+// below.
 import fs from "node:fs";
 import crypto from "node:crypto";
 import { resolveApprovedTask } from "./task-review.mjs";
 import { RUN_STATUS, TERMINAL_STATUSES } from "./run-queue.mjs";
 import { promptReviewTimeoutMs, sleepDelayMs } from "./user-config.mjs";
+import { PARK, VERB_NAMES, isVerb, resolveVerb } from "./verbs.mjs";
+import { composeBrief, missingRequired } from "./run-context.mjs";
+
+// The deprecated alias, retained for one release. A Gemini session resumed
+// mid-conversation would otherwise call a tool that no longer exists — which is
+// the whole reason two dispatch surfaces are tolerable for one release.
+const DEPRECATED_TASK_TOOL = "submit_claude_task";
 
 /**
  * @param {{
@@ -24,14 +31,14 @@ import { promptReviewTimeoutMs, sleepDelayMs } from "./user-config.mjs";
  *   findWorkstream: (id: string | null) => any,
  *   activeWorkstream: () => any,
  *   createWorkstream: (label?: string) => any,
- *   setAgentModel: (workstreamId: string, role: string, model: string) => any,
- *   agentRoster: string[],
- *   agentLabels: Record<string, string>,
+ *   setVerbModel: (workstreamId: string, verb: string, model: string) => any,
  *   modelChoices: Array<{ id: string, label: string }>,
- *   getPromptReviewMode: () => boolean,
+ *   getPromptReviewMode: () => string,
  *   getPipelineAvailable: () => boolean,
  *   checkClaudeStatus: () => Promise<any>,
  *   workspaceInfo: () => any,
+ *   projectStateFor: (workstream: any) => { hasOpenChange: boolean, changes: string[] },
+ *   hasLiveStatefulSession: (workstreamId: string) => boolean,
  *   getUiContextSnapshot: () => any,
  *   resolvePendingPoQuestion: (answers: any) => any,
  * }} deps
@@ -44,14 +51,14 @@ export function createRunDispatch({
   findWorkstream,
   activeWorkstream,
   createWorkstream,
-  setAgentModel,
-  agentRoster,
-  agentLabels,
+  setVerbModel,
   modelChoices,
   getPromptReviewMode,
   getPipelineAvailable,
   checkClaudeStatus,
   workspaceInfo,
+  projectStateFor,
+  hasLiveStatefulSession,
   getUiContextSnapshot,
   resolvePendingPoQuestion,
 }) {
@@ -60,10 +67,9 @@ export function createRunDispatch({
   // PendingQuestion settle-once + timeout + abandon shape, but deliberately
   // does NOT call runQueue.suspend/resume: a parked review holds no execution
   // slot, and pausing the queue's idle bound would wrongly disable the
-  // watchdog on whatever unrelated run (typically DEV) currently holds it
-  // (design.md D2).
+  // watchdog on whatever unrelated run currently holds it.
   const PendingReview = {
-    current: null, // { workstream_id, task, urgency, agent, timer }
+    current: null, // { workstream_id, task, urgency, verb, timer }
 
     raise(parked, { timeoutMs }) {
       this.clear(); // at most one pending review — a new submit supersedes silently
@@ -92,8 +98,7 @@ export function createRunDispatch({
 
     // Deliberate reset denial, mirroring PendingQuestion.abandon — the parked
     // workstream is going away, so its brief must never become approvable
-    // afterwards (design.md D4: this is what keeps approve's parked workstream
-    // always valid).
+    // afterwards (this is what keeps approve's parked workstream always valid).
     abandon(workstreamId) {
       if (!this.current || this.current.workstream_id !== workstreamId) return;
       const parked = this.clear("abandoned");
@@ -113,27 +118,27 @@ export function createRunDispatch({
       status,
       task: parked.task,
       urgency: parked.urgency,
-      agent: parked.agent,
+      verb: parked.verb,
     });
   }
 
-  // Voice narration on park (D6): a short summary, not the whole brief, plus
-  // "the full brief is on screen" — and explicitly forbids querying run status,
-  // since a parked review has no run_id yet.
+  // Voice narration on park: a short summary, not the whole brief, plus "the
+  // full brief is on screen" — and explicitly forbids querying run status, since
+  // a parked review has no run_id yet.
   function notifyTaskReviewParked(parked) {
     notifyIris([
       "SYSTEM_EVENT_TASK_REVIEW_PARKED",
-      `agent: ${parked.agent ?? "none"}`,
+      `verb: ${parked.verb}`,
       "instructions_to_iris:",
-      "- Review mode is on: the brief you just submitted was parked, not sent to Claude — zero tokens spent so far.",
-      "- Speak a SHORT 1-2 sentence summary of the brief you just wrote (do not read it verbatim), say the full brief is on screen, then wait. Do not say it started or is queued.",
+      "- This request was parked for the user's review, not sent to Claude — zero tokens spent so far.",
+      "- Speak a SHORT 1-2 sentence summary of what you just asked for (do not read it verbatim), say the full brief is on screen, then wait. Do not say it started or is queued.",
       "- Do NOT call get_claude_task_status for this — there is no run yet.",
       "- The user may approve (optionally after editing), or cancel — from the screen, or by telling you so you can call respond_to_task_review. If they resolve it from the screen, you will receive SYSTEM_EVENT_TASK_REVIEW_RESOLVED instead.",
     ]);
   }
 
   // Injected on any resolution the voice layer did NOT itself initiate — a
-  // UI-driven approve/cancel, a timeout, or a reset-abandon (D6, review #5).
+  // UI-driven approve/cancel, a timeout, or a reset-abandon.
   // respond_to_task_review's own synchronous tool return already tells Gemini
   // the outcome when IT resolves the review, so that path never also calls this
   // (see respondToTaskReview below) — this would be a redundant, confusing
@@ -148,27 +153,20 @@ export function createRunDispatch({
     ]);
   }
 
-  // D1: buildRun resolves the workstream/role and produces the run object;
-  // dispatch submits it and shapes the result. Auto mode below calls
-  // dispatch(buildRun(...)) inline — byte-identical to the pre-gate behavior.
-  function buildRun({ task, urgency = "normal", agent, workstream }) {
-    const cleanTask = String(task).trim();
-    // The role is captured at enqueue time: a queued/parked task keeps the
-    // agent it was submitted under even if the user flips the pipeline picker
-    // afterwards. Gemini may name a role explicitly; anything not in the
-    // roster is ignored.
-    const requestedAgent = agent ? String(agent).trim().toLowerCase() : null;
-    if (requestedAgent && !agentRoster.includes(requestedAgent)) {
-      emitEvent({ type: "log", level: "warn", message: `Ignoring unknown agent "${agent}" — using the session's active agent.` });
-    }
-    const runAgent = agentRoster.includes(requestedAgent) ? requestedAgent : workstream.active_agent ?? null;
+  // buildRun produces the run object; dispatch submits it and shapes the result.
+  //
+  // The `active_agent` fallback is gone with the chip that set it. A run carries
+  // the verb it was dispatched as, chosen per call — there is no current role for
+  // it to inherit, and inheriting one was how "Iris, build me X" did the wrong
+  // thing whenever the chip happened to be set differently.
+  function buildRun({ task, urgency = "normal", verb, workstream }) {
     return {
       run_id: crypto.randomUUID(),
       workstream_id: workstream.id,
       session_label: workstream.label,
-      task: cleanTask,
+      task: String(task).trim(),
       urgency,
-      agent: runAgent,
+      verb,
       status: RUN_STATUS.QUEUED,
       output: "",
       activity: [],
@@ -178,8 +176,7 @@ export function createRunDispatch({
   }
 
   function dispatch(run) {
-    const runAgent = run.agent;
-    const agentLabel = runAgent ? `${agentLabels[runAgent]} agent` : "Claude";
+    const label = resolveVerb(run.verb).label;
     const workstream = findWorkstream(run.workstream_id);
     const projectFolder = workstream?.cwd && fs.existsSync(workstream.cwd) ? workstream.cwd : null;
     const whereNote = projectFolder
@@ -191,60 +188,108 @@ export function createRunDispatch({
       return {
         status: "queued",
         run_id: run.run_id,
+        verb: run.verb,
         position: outcome.position,
         project_folder: projectFolder,
-        message: `Claude is still finishing the current task. This one is queued at position ${outcome.position} for the ${agentLabel} and will start automatically. ${whereNote}`,
+        message: `Claude is still finishing the current task. This ${label} request is queued at position ${outcome.position} and will start automatically. ${whereNote}`,
       };
     }
     if (TERMINAL_STATUSES.includes(outcome.status)) {
-      // The run was rejected synchronously during start (e.g. the DEV gate
-      // finding no open change with tasks) — never say "started" for a run
-      // that has already failed. onFinalized is gated on started_at (see
-      // run-queue.mjs), so this is the only channel this rejection reaches
-      // Gemini through.
+      // The run was rejected synchronously during start (an unloadable persona,
+      // an unknown verb) — never say "started" for a run that has already
+      // failed. onFinalized is gated on started_at (see run-queue.mjs), so this
+      // is the only channel this rejection reaches Gemini through.
       return {
         status: outcome.status,
         run_id: run.run_id,
-        agent: runAgent,
+        verb: run.verb,
         project_folder: projectFolder,
-        message: `${runAgent ? `Claude's ${agentLabel}` : "Claude"} did not start the task: ${outcome.output} ${whereNote}`,
+        message: `The ${label} request did not start: ${outcome.output} ${whereNote}`,
       };
     }
     return {
       status: "started",
       run_id: run.run_id,
-      agent: runAgent,
+      verb: run.verb,
       project_folder: projectFolder,
-      message: `${runAgent ? `Claude's ${agentLabel} has started the task.` : "Claude has started the task."} ${whereNote}`,
+      message: `Claude has started the ${label} work. ${whereNote}`,
     };
   }
 
-  /** @param {{ task?: string, urgency?: string, agent?: string }} [params] */
-  async function submitClaudeTask({ task, urgency = "normal", agent } = {}) {
-    if (!task || !String(task).trim()) {
-      return { status: "error", error: "Task is required." };
+  /**
+   * D6 — whether this dispatch is parked, decided in the main process from the
+   * verb registry. It reads the verb's declared label, never the brief's text:
+   * a heuristic over wording fails silently in both directions, and the verb is
+   * the risk signal precisely because it is explicit and enumerable.
+   *
+   * The phase scope is what keeps a spoken interface usable. A stateful verb
+   * parks only on the call that OPENS its resident session; once the user has
+   * agreed to a conversation, every steering turn into it dispatches directly.
+   * Requiring approval per turn of a live grilling conversation would send the
+   * user to the screen mid-sentence and buy no safety — the session is already
+   * alive and already spending. Once that conversation ends, opening a new one
+   * is reviewed again, because `hasLiveStatefulSession` is false by then.
+   */
+  function shouldPark(verb, workstreamId) {
+    const mode = getPromptReviewMode();
+    if (mode === "never") return false;
+    if (mode === "always") return true;
+    const park = resolveVerb(verb).park;
+    if (park === PARK.ALWAYS) return true;
+    if (park === PARK.NEVER) return false;
+    return !hasLiveStatefulSession(workstreamId);
+  }
+
+  /**
+   * The one entry point every verb tool goes through. `args` are the verb's own
+   * schema parameters; the brief is composed from them by run-context.mjs
+   * against that schema, so no verb needs its own formatting code here.
+   * @param {string} verb
+   * @param {Record<string, unknown>} [args]
+   * @param {{ urgency?: string }} [options]
+   */
+  function submitVerb(verb, args = {}, { urgency = "normal" } = {}) {
+    if (!isVerb(verb)) {
+      return { status: "error", error: `Unknown verb: ${verb}. Known verbs: ${VERB_NAMES.join(", ")}.` };
     }
     const workstream = activeWorkstream();
+    const resolved = resolveVerb(verb, projectStateFor(workstream));
+    const missing = missingRequired(resolved, args);
+    if (missing.length) {
+      return { status: "error", error: `${verb} needs ${missing.join(" and ")}.` };
+    }
+    const task = composeBrief(resolved, args);
+    if (!task) return { status: "error", error: `${verb} was called with nothing in it.` };
 
-    // Review gate (prompt-review-gate spec): park instead of dispatching.
-    // Zero tokens spent — no run, no run_id — until the review is approved.
-    if (getPromptReviewMode()) {
-      const parked = {
-        workstream_id: workstream.id,
-        task: String(task).trim(),
-        urgency,
-        agent: agent ? String(agent).trim().toLowerCase() : null,
-      };
+    // Review gate (prompt-review-gate spec): park instead of dispatching. Zero
+    // tokens spent — no run, no run_id — until the review is approved.
+    if (shouldPark(verb, workstream.id)) {
+      const parked = { workstream_id: workstream.id, task, urgency, verb };
       PendingReview.raise(parked, { timeoutMs: promptReviewTimeoutMs() });
       notifyTaskReviewParked(parked);
       return {
         status: "parked_for_review",
+        verb,
         workstream_id: workstream.id,
-        message: "The brief is parked for the user's review — nothing has been sent to Claude yet.",
+        message: "The request is parked for the user's review — nothing has been sent to Claude yet.",
       };
     }
 
-    return dispatch(buildRun({ task, urgency, agent, workstream }));
+    return dispatch(buildRun({ task, urgency, verb, workstream }));
+  }
+
+  // The deprecated alias. A resumed Gemini session may still hold the old
+  // declaration; mapping it to `execute` keeps that session working for one
+  // release rather than failing on a tool that no longer exists.
+  /** @param {{ task?: string, urgency?: string }} [params] */
+  function submitClaudeTask({ task, urgency = "normal" } = {}) {
+    if (!task || !String(task).trim()) return { status: "error", error: "Task is required." };
+    emitEvent({
+      type: "log",
+      level: "warn",
+      message: `${DEPRECATED_TASK_TOOL} is deprecated — dispatched as execute. It is removed in the next release.`,
+    });
+    return submitVerb("execute", { goal: String(task).trim(), details: "(carried over from a deprecated call)" }, { urgency });
   }
 
   function cancelTaskReview({ notify }) {
@@ -256,10 +301,10 @@ export function createRunDispatch({
 
   // Approve dispatches against the PARKED workstream_id, never a fresh
   // activeWorkstream() read — the user may have switched workstreams while the
-  // review sat parked (design.md D4). editedTaskRaw is validated by the pure
-  // helper below: undefined/null falls back to the parked task; an explicitly
-  // empty edit is refused WITHOUT clearing the pending review, so the banner
-  // stays up and the user can fix it.
+  // review sat parked. editedTaskRaw is validated by the pure helper below:
+  // undefined/null falls back to the parked task; an explicitly empty edit is
+  // refused WITHOUT clearing the pending review, so the banner stays up and the
+  // user can fix it.
   function approveTaskReview(editedTaskRaw, { notify }) {
     const pending = PendingReview.current;
     if (!pending) return { status: "error", error: "No task review is pending." };
@@ -276,7 +321,7 @@ export function createRunDispatch({
       if (notify) notifyTaskReviewResolved("error", parked, message);
       return { status: "error", error: message };
     }
-    const result = dispatch(buildRun({ task: finalTask, urgency: parked.urgency, agent: parked.agent, workstream }));
+    const result = dispatch(buildRun({ task: finalTask, urgency: parked.urgency, verb: parked.verb, workstream }));
     if (notify) notifyTaskReviewResolved(result.status, parked, result.message);
     return result;
   }
@@ -284,8 +329,8 @@ export function createRunDispatch({
   // Voice tool `respond_to_task_review` — its own synchronous tool return IS
   // Gemini's notification of the outcome, so this path never also injects
   // SYSTEM_EVENT_TASK_REVIEW_RESOLVED (reserved for channels Gemini did not
-  // initiate). Editing is deck-only (D7): voice can only approve as-is or
-  // cancel, never supply edited text.
+  // initiate). Editing is deck-only: voice can only approve as-is or cancel,
+  // never supply edited text.
   /** @param {{ decision?: string }} [params] */
   function respondToTaskReview({ decision } = {}) {
     const clean = String(decision || "").trim().toLowerCase();
@@ -296,7 +341,7 @@ export function createRunDispatch({
 
   // IPC path for the UI banner (deck Approve/Cancel + edit, HUD Approve/Cancel).
   // Gemini did not initiate this, so the resolution needs the SYSTEM_EVENT to
-  // stay coherent (D6, review #5).
+  // stay coherent.
   /** @param {{ action?: string, editedTask?: string }} [params] */
   function resolvePromptReview({ action, editedTask } = {}) {
     const clean = String(action || "").trim().toLowerCase();
@@ -328,22 +373,46 @@ export function createRunDispatch({
     return { status, run_id };
   }
 
-  // Voice path for switching a role's model — goes through the exact same
-  // setAgentModel() choke point the UI popover uses, so the two can never
-  // diverge. Always targets the active workstream (Gemini never invents ids).
-  /** @param {{ role?: string, model?: string }} [params] */
-  function setAgentModelTool({ role, model } = {}) {
+  // What the project looks like right now, so Iris can answer "what's the state
+  // of this" and choose sensibly between shaping and executing without guessing.
+  function getProjectState() {
     const workstream = activeWorkstream();
-    const result = setAgentModel(workstream.id, role, model);
-    if (result.status === "error") return result;
-    const label = modelChoices.find((choice) => choice.id === model)?.label ?? model;
-    return { status: "ok", message: `${agentLabels[role] ?? role}'s model is now ${label}.` };
+    const state = projectStateFor(workstream);
+    return {
+      status: "ok",
+      project_folder: workstream?.cwd ?? null,
+      open_changes: state.changes,
+      has_open_change: state.hasOpenChange,
+      shaping_conversation_open: hasLiveStatefulSession(workstream.id),
+      last_verb_used: workstream?.last_verb_used ?? null,
+    };
   }
 
-  // Voice-driven UI control (design.md D1/D2, spec voice-ui-control). Single
-  // tool with an action enum — mirrors the {action, target_id?, query?} shape
-  // forwarded verbatim to the renderer over iris:ui-action. Renamed from
-  // upstream's Hermes vocabulary to Claude terms; no other change.
+  // Voice path for switching a verb's model — goes through the exact same
+  // setVerbModel() choke point the UI uses, so the two can never diverge. Always
+  // targets the active workstream (Gemini never invents ids).
+  //
+  // D3: the two shaping verbs share a live session and therefore cannot run on
+  // different models while it is alive. The change applies to both and the reply
+  // says so, rather than appearing to change one and silently changing the other.
+  /** @param {{ verb?: string, model?: string }} [params] */
+  function setVerbModelTool({ verb, model } = {}) {
+    const workstream = activeWorkstream();
+    const result = setVerbModel(workstream.id, verb, model);
+    if (result.status === "error") return result;
+    const label = modelChoices.find((choice) => choice.id === model)?.label ?? model;
+    return {
+      status: "ok",
+      verbs: result.verbs,
+      message: result.shared
+        ? `${result.verbs.join(" and ")} now run on ${label} — they share one live conversation, so changing one changes both.`
+        : `${verb} now runs on ${label}.`,
+    };
+  }
+
+  // Voice-driven UI control (spec voice-ui-control). Single tool with an action
+  // enum — mirrors the {action, target_id?, query?} shape forwarded verbatim to
+  // the renderer over iris:ui-action.
   const UI_ACTIONS = new Set([
     "open_task",
     "open_task_by_query",
@@ -371,33 +440,38 @@ export function createRunDispatch({
   }
 
   // Tools that only make sense when the pipeline is available — declared to
-  // Gemini only when pipelineAvailable is true (see geminiTools.buildClaudeTools). This
-  // guard is a defensive backstop, not the primary gate: Gemini should never
+  // Gemini only when pipelineAvailable is true (see geminiTools.buildClaudeTools).
+  // This guard is a defensive backstop, not the primary gate: Gemini should never
   // call one of these in chat-only mode since it was never given the
   // declaration, but a stray call (e.g. a race right after availability drops)
   // gets a clean error instead of throwing.
   const PIPELINE_ONLY_TOOLS = new Set([
+    ...VERB_NAMES,
+    DEPRECATED_TASK_TOOL,
     "check_claude_status",
-    "submit_claude_task",
     "get_claude_task_status",
     "stop_claude_task",
     "start_new_claude_session",
     "get_workspace_info",
-    "answer_po_question",
-    "set_agent_model",
+    "get_project_state",
+    "answer_claude_question",
+    "set_verb_model",
     "respond_to_task_review",
   ]);
 
   /** @param {string} name @param {any} [args] */
   async function executeClaudeTool(name, args = {}) {
     if (PIPELINE_ONLY_TOOLS.has(name) && !getPipelineAvailable()) {
-      return { status: "error", error: "The Claude pipeline is not available on this machine — install the Claude CLI to enable it (see Settings)." };
+      return { status: "error", error: "The Claude pipeline is not available on this machine — add a Claude credential to enable it (see Settings)." };
     }
+    // Every verb dispatches through one path, so a verb added to the registry
+    // needs no case of its own here.
+    if (isVerb(name)) return submitVerb(name, args, { urgency: args?.urgency });
     switch (name) {
+      case DEPRECATED_TASK_TOOL:
+        return submitClaudeTask(args);
       case "check_claude_status":
         return checkClaudeStatus();
-      case "submit_claude_task":
-        return submitClaudeTask(args);
       case "get_claude_task_status":
         return getClaudeTaskStatus(args);
       case "stop_claude_task":
@@ -406,10 +480,12 @@ export function createRunDispatch({
         return startNewClaudeSession(args);
       case "get_workspace_info":
         return workspaceInfo();
-      case "answer_po_question":
+      case "get_project_state":
+        return getProjectState();
+      case "answer_claude_question":
         return resolvePendingPoQuestion(args.answers);
-      case "set_agent_model":
-        return setAgentModelTool(args);
+      case "set_verb_model":
+        return setVerbModelTool(args);
       case "respond_to_task_review":
         return respondToTaskReview(args);
       case "get_ui_context":
@@ -433,6 +509,8 @@ export function createRunDispatch({
     PendingReview,
     buildRun,
     dispatch,
+    shouldPark,
+    submitVerb,
     submitClaudeTask,
     cancelTaskReview,
     approveTaskReview,
@@ -441,7 +519,8 @@ export function createRunDispatch({
     startNewClaudeSession,
     getClaudeTaskStatus,
     stopClaudeTask,
-    setAgentModelTool,
+    getProjectState,
+    setVerbModelTool,
     getUiContext,
     controlUi,
     executeClaudeTool,

@@ -74,7 +74,8 @@ describe("readRunOutput — structured", () => {
 
 describe("readRunOutput — the prose fallback", () => {
   // A session resumed from before the schema existed cannot produce structured
-  // output, and plain Claude never declares a schema at all.
+  // output, and the verbs that answer a question rather than reporting on work
+  // (`investigate`, `capture_learning`) declare no schema at all.
   it("passes prose straight through", () => {
     const text = "Implemented it.\n\n## Decisions needed\n1. Which colour?";
     const read = readRunOutput({ subtype: "success", result: text });

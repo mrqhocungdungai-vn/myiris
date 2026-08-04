@@ -10,10 +10,10 @@ import {
 } from "./run-budget.mjs";
 
 describe("resolveRunBudget", () => {
-  it("gives each role its measured default", () => {
-    expect(resolveRunBudget("po", {})).toEqual(DEFAULT_RUN_BUDGETS.po);
-    expect(resolveRunBudget("dev", {})).toEqual(DEFAULT_RUN_BUDGETS.dev);
-    expect(resolveRunBudget("plain", {})).toEqual(DEFAULT_RUN_BUDGETS.plain);
+  it("gives each profile its measured default", () => {
+    expect(resolveRunBudget("stateful", {})).toEqual(DEFAULT_RUN_BUDGETS.stateful);
+    expect(resolveRunBudget("worker", {})).toEqual(DEFAULT_RUN_BUDGETS.worker);
+    expect(resolveRunBudget("light", {})).toEqual(DEFAULT_RUN_BUDGETS.light);
   });
 
   // The ceiling is a runaway guard, not a quota: the measured runs (design.md
@@ -21,27 +21,27 @@ describe("resolveRunBudget", () => {
   // would fire during ordinary work, and a cap that fires in ordinary use gets
   // switched off — which is worse than having none.
   it("leaves generous headroom over the measured runs", () => {
-    for (const role of /** @type {const} */ (["po", "dev"])) {
-      expect(resolveRunBudget(role, {}).maxTurns).toBeGreaterThan(29 * 4);
-      expect(resolveRunBudget(role, {}).maxBudgetUsd).toBeGreaterThan(0.97 * 4);
+    for (const profile of /** @type {const} */ (["stateful", "worker"])) {
+      expect(resolveRunBudget(profile, {}).maxTurns).toBeGreaterThan(29 * 4);
+      expect(resolveRunBudget(profile, {}).maxBudgetUsd).toBeGreaterThan(0.97 * 4);
     }
   });
 
-  it("lets the env raise or lower either ceiling for every role at once", () => {
+  it("lets the env raise or lower either ceiling for every profile at once", () => {
     const env = { IRIS_CLAUDE_MAX_TURNS: "12", IRIS_CLAUDE_MAX_BUDGET_USD: "0.5" };
-    expect(resolveRunBudget("dev", env)).toEqual({ maxTurns: 12, maxBudgetUsd: 0.5 });
-    expect(resolveRunBudget("po", env)).toEqual({ maxTurns: 12, maxBudgetUsd: 0.5 });
+    expect(resolveRunBudget("worker", env)).toEqual({ maxTurns: 12, maxBudgetUsd: 0.5 });
+    expect(resolveRunBudget("stateful", env)).toEqual({ maxTurns: 12, maxBudgetUsd: 0.5 });
   });
 
   // A typo must not cap every run at zero turns.
   it("ignores a value that is not a positive number", () => {
     for (const bad of ["", "0", "-3", "abc", undefined]) {
-      expect(resolveRunBudget("dev", { IRIS_CLAUDE_MAX_TURNS: bad })).toEqual(DEFAULT_RUN_BUDGETS.dev);
+      expect(resolveRunBudget("worker", { IRIS_CLAUDE_MAX_TURNS: bad })).toEqual(DEFAULT_RUN_BUDGETS.worker);
     }
   });
 
-  it("falls back to the plain-Claude budget for an unknown role", () => {
-    expect(resolveRunBudget(/** @type {any} */ ("study"), {})).toEqual(DEFAULT_RUN_BUDGETS.plain);
+  it("falls back to the light budget for an unknown profile", () => {
+    expect(resolveRunBudget(/** @type {any} */ ("study"), {})).toEqual(DEFAULT_RUN_BUDGETS.light);
   });
 });
 
