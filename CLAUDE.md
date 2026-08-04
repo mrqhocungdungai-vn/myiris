@@ -36,7 +36,7 @@ resumes its own prior conversation.
 | **Pinned exact identifiers** (Gemini Live model + voice, audio rates, SDK/CLI coupling, vendored WASM assets), the footgun list, and the Agent SDK `Options` audit — what Iris sets and every option deliberately declined | **[docs/REFERENCE.md](docs/REFERENCE.md)** |
 | Using the pipeline as a user (setup, voice walkthrough, troubleshooting) | [docs/PIPELINE_GUIDE.md](docs/PIPELINE_GUIDE.md) |
 | Gesture/hand control (MediaPipe config, gesture→action mapping) | [docs/GESTURES.md](docs/GESTURES.md) |
-| Listening mode (chunked monologue capture, boundary sequence, control surfaces) | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#listening-mode) + `openspec/specs/listening-mode/spec.md` |
+| Listen-only mode (headphone toggle, main-process ownership, silent-reply presentation) | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#listen-only-mode) + `openspec/specs/listen-only-mode/spec.md` |
 | Env vars, packaging, setup from source | [README.md](README.md) + `.env.example` |
 | How the Claude Agent SDK itself works — hooks, subagents, MCP, permissions, sessions, plugins, skills, structured outputs, hosting, cost tracking, TS/Python reference | NotebookLM notebook **`claude-agent-sdk`**, id `b7301ab8-69c2-4cdf-bd28-19931d678aed` — ask it via the `notebooklm` MCP (`notebook_ask`). A **reference library of the upstream SDK docs**, consulted while developing; it holds nothing about Iris and never describes Iris's behavior. |
 

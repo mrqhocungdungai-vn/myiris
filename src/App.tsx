@@ -175,10 +175,19 @@ export default function App() {
   const galaxyPositionsRef = useRef<Map<string, GalaxyNode>>(new Map());
   const [openNote, setOpenNote] = useState<{ id: string; title: string; markdown: string } | null>(null);
 
-  // Listening mode (add-listening-mode design.md D11): main is the sole
-  // owner of this state — this is pure display, seeded from a query on
-  // mount/reload and updated only by main's push. Never asserted back.
-  const [listenModeEngaged, setListenModeEngaged] = useState(false);
+  // Listen-only mode (replace-listening-mode-with-listen-only design.md D3):
+  // main is the sole owner of this state — this is pure display, seeded from
+  // a query on mount/reload and updated only by main's push. Never asserted
+  // back. Feeds the audio pipeline's suppression flag from the same push.
+  const [listenOnlyEngaged, setListenOnlyEngaged] = useState(false);
+  // Records the HUD Comms panel's open/closed state from just before the
+  // mode engaged, so disengaging restores it rather than forcing it shut
+  // (design.md D7). Only the push handler below writes to it, on the
+  // engaging edge.
+  const priorCommsOpenRef = useRef(false);
+  const [commsOpen, setCommsOpen] = useState(false);
+  const commsOpenRef = useRef(commsOpen);
+  commsOpenRef.current = commsOpen;
 
   // Orb micro-expressions + sound cues.
   const [orbThinking, setOrbThinking] = useState(false);
@@ -344,9 +353,9 @@ export default function App() {
     } else if (wasRunning && !sidecarRunning) {
       setOrbThinking(false);
       if (soundsRef.current) uiSounds.sleep();
-      // Server-initiated teardown never calls audio.stop() — reset speaker
-      // mute here too so it doesn't survive into the next wake (design D3).
-      audio.toggleOutputMute(false);
+      // No manual reset needed here: main resets listen-only mode on every
+      // transition to not-running and pushes the change, which this
+      // component's listen-only:state subscription already applies.
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sidecarRunning]);
@@ -506,38 +515,45 @@ export default function App() {
     const offWake = window.iris.onWakeRequest(() => {
       if (!sidecarRunning) start();
     });
-    const offMuteToggle = window.iris.onMuteToggle(() => {
-      if (sidecarRunning) audio.toggleOutputMute();
-    });
     return () => {
       offMode();
       offWake();
-      offMuteToggle();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasBridge, sidecarRunning]);
 
-  // Mirror speaker-mute state to main so the tray label stays accurate —
-  // fires on mount (seeds `false`), on every toggle, and on the ephemeral
-  // reset (stop or the sidecarRunning falling edge below).
-  useEffect(() => {
-    if (!hasBridge) return;
-    window.iris.reportSpeakerMute(audio.outputMuted);
-  }, [hasBridge, audio.outputMuted]);
-
-  // Listening mode: query on mount/reload (so a window opened or reloaded
-  // while the mode is engaged shows the true state — design.md D11) and
+  // Listen-only mode: query on mount/reload (so a window opened or reloaded
+  // while the mode is engaged shows the true state — design.md D3) and
   // subscribe to main's one-way push for every subsequent change. There is
-  // deliberately no report-back call anywhere in this effect.
+  // deliberately no report-back call anywhere in this effect — main owns the
+  // state, the renderer only executes the audio drop and displays it.
   useEffect(() => {
     if (!hasBridge) return;
-    window.iris.getListenModeState().then(({ engaged }) => setListenModeEngaged(engaged));
-    return window.iris.onListenModeState(({ engaged }) => setListenModeEngaged(engaged));
+    window.iris.getListenOnlyState().then(({ engaged }) => {
+      setListenOnlyEngaged(engaged);
+      audio.setOutputMutedValue(engaged);
+    });
+    return window.iris.onListenOnlyState(({ engaged }) => {
+      setListenOnlyEngaged(engaged);
+      audio.setOutputMutedValue(engaged);
+      // The HUD reveal applies on the transition only (design.md D7): every
+      // push here IS a transition (main only pushes on an actual change), so
+      // the engaging edge records the panel's prior state and forces it
+      // open, and the disengaging edge restores what was recorded — a
+      // manual toggle in between is respected rather than re-forced.
+      if (engaged) {
+        priorCommsOpenRef.current = commsOpenRef.current;
+        setCommsOpen(true);
+      } else {
+        setCommsOpen(priorCommsOpenRef.current);
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasBridge]);
 
-  function toggleListenMode() {
+  function toggleListenOnly() {
     if (!hasBridge) return;
-    window.iris.requestListenModeToggle();
+    window.iris.requestListenOnlyToggle();
   }
 
   useEffect(() => {
@@ -711,6 +727,7 @@ export default function App() {
   const reactorState = useMemo(() => {
     if (!sidecarRunning) return "idle" as const;
     if (audioState === "speaking") return "speaking" as const;
+    if (audioState === "replying") return "replying" as const;
     if (audioState === "listening") return "listening" as const;
     if (working) return "working" as const;
     if (geminiStatus === "connected") return "online" as const;
@@ -1527,10 +1544,10 @@ export default function App() {
           wakeWordEnabled={wakeWordEnabled}
           muted={audio.muted}
           onToggleMute={audio.toggleMute}
-          outputMuted={audio.outputMuted}
-          onToggleOutputMute={() => audio.toggleOutputMute()}
-          listenModeEngaged={listenModeEngaged}
-          onToggleListenMode={toggleListenMode}
+          listenOnlyEngaged={listenOnlyEngaged}
+          onToggleListenOnly={toggleListenOnly}
+          commsOpen={commsOpen}
+          onToggleComms={() => setCommsOpen((current) => !current)}
           onWake={start}
           onSleep={stop}
           onExitHud={exitHud}
@@ -1639,10 +1656,8 @@ export default function App() {
             captionDim={caption.dim}
             muted={audio.muted}
             onToggleMute={audio.toggleMute}
-            outputMuted={audio.outputMuted}
-            onToggleOutputMute={() => audio.toggleOutputMute()}
-            listenModeEngaged={listenModeEngaged}
-            onToggleListenMode={toggleListenMode}
+            listenOnlyEngaged={listenOnlyEngaged}
+            onToggleListenOnly={toggleListenOnly}
             onSleep={stop}
             webglHighFidelity={webglHighFidelity}
           />

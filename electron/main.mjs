@@ -46,7 +46,6 @@ const wiring = createWiring({
   getIsPackaged: () => app.isPackaged,
 });
 const {
-  emitToRenderer,
   emitEvent,
   setUiContextSnapshot,
   getMainWindow,
@@ -56,7 +55,6 @@ const {
   updateTrayMenu,
   createTray,
   hudHotkey,
-  muteHotkey,
   listenHotkey,
   installAppMenu,
   setRendererSecurity,
@@ -64,9 +62,8 @@ const {
   stopLive,
   getLiveStatus,
   GreetGate,
-  setSpeakerMuted,
-  toggleListenMode,
-  isListenModeEngaged,
+  toggleListenOnly,
+  isListenOnlyEngaged,
   sendCommand,
   sendAudioChunk,
   sessionsSnapshot,
@@ -143,9 +140,8 @@ app.whenReady().then(() => {
     stopLive,
     getLiveStatus,
     greetGateFire: () => GreetGate.fire(),
-    setSpeakerMuted,
-    toggleListenMode,
-    isListenModeEngaged,
+    toggleListenOnly,
+    isListenOnlyEngaged,
     sendCommand,
     sendAudioChunk,
     sessionsSnapshot,
@@ -181,21 +177,15 @@ app.whenReady().then(() => {
   if (!registered) {
     emitEvent({ type: "log", level: "error", message: `Could not register HUD hotkey ${hudHotkey()}.` });
   }
-  const muteRegistered = globalShortcut.register(muteHotkey(), () => {
-    emitToRenderer("iris:mute-toggle", {});
-  });
-  if (!muteRegistered) {
-    emitEvent({ type: "log", level: "error", message: `Could not register mute hotkey ${muteHotkey()}.` });
-  }
-  // Calls main's toggle directly, not emitToRenderer (design.md Decision
-  // 11) — a modifier+key accelerator, not a media key, so no Accessibility
-  // or Input Monitoring grant is involved. No unregistration code needed:
-  // will-quit already calls globalShortcut.unregisterAll().
+  // Calls main's toggle directly, not emitToRenderer (design.md D3) — a
+  // modifier+key accelerator, not a media key, so no Accessibility or Input
+  // Monitoring grant is involved. No unregistration code needed: will-quit
+  // already calls globalShortcut.unregisterAll().
   const listenRegistered = globalShortcut.register(listenHotkey(), () => {
-    toggleListenMode();
+    toggleListenOnly();
   });
   if (!listenRegistered) {
-    emitEvent({ type: "log", level: "error", message: `Could not register listening-mode hotkey ${listenHotkey()}.` });
+    emitEvent({ type: "log", level: "error", message: `Could not register listen-only hotkey ${listenHotkey()}.` });
   }
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

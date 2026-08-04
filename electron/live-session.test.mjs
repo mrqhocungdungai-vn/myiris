@@ -21,51 +21,6 @@ function fakeGoogleGenAIImpl(connectImpl) {
   };
 }
 
-// Mirrors the real ListenMode object's named transitions (main.mjs, task 4.5)
-// so tests exercise the same accessor/transition shape live-session.mjs
-// actually calls, not raw field access.
-function makeListenMode(overrides = {}) {
-  return {
-    engaged: false,
-    transitioning: false,
-    boundaryInFlight: false,
-    deliberateReconnect: false,
-    segmentRecord: "",
-    synthesizeOnNextConverseConnect: false,
-    ...overrides,
-    isEngaged() { return this.engaged; },
-    isTransitioning() { return this.transitioning; },
-    isBoundaryInFlight() { return this.boundaryInFlight; },
-    consumeDeliberateReconnect() {
-      if (!this.deliberateReconnect) return false;
-      this.deliberateReconnect = false;
-      return true;
-    },
-    captureSegmentForSynthesis() {
-      if (this.segmentRecord.trim()) {
-        this.synthesizeOnNextConverseConnect = true;
-      } else {
-        this.segmentRecord = "";
-      }
-    },
-    settleBoundary() {
-      this.transitioning = false;
-      this.boundaryInFlight = false;
-      this.captureSegmentForSynthesis();
-    },
-    consumeSynthesisSegment() {
-      if (!this.synthesizeOnNextConverseConnect) return null;
-      this.synthesizeOnNextConverseConnect = false;
-      const segment = this.segmentRecord;
-      this.segmentRecord = "";
-      return segment;
-    },
-    appendToSegment(text) {
-      this.segmentRecord += text;
-    },
-  };
-}
-
 function make(overrides = {}) {
   return createLiveSession({
     emitEvent: vi.fn(),
@@ -77,14 +32,7 @@ function make(overrides = {}) {
     userDisplayName: () => "Alex",
     updateTrayMenu: vi.fn(),
     buildLiveTools: () => [],
-    buildListenSystemInstructionText: () => "listen instructions",
     buildSystemInstructionText: () => "converse instructions",
-    buildListenExitSynthesisPrompt: (segment) => `synthesis: ${segment}`,
-    listenMode: makeListenMode(),
-    clearListenRotationTimer: vi.fn(),
-    setListenEngaged: vi.fn(),
-    notifyLiveClosed: vi.fn(),
-    resetListenModeSilently: vi.fn(),
     handleLiveMessage: vi.fn(),
     ...overrides,
   });
@@ -123,6 +71,22 @@ describe("live-session: startLive/connectLive", () => {
     probePipelineAvailability.mockClear();
     await live.startLive();
     expect(probePipelineAvailability).not.toHaveBeenCalled();
+  });
+
+  it("builds the config with no mode parameter — one configuration, no realtimeInputConfig", async () => {
+    /** @type {any} */
+    let capturedConfig;
+    const live = make();
+    const GoogleGenAI = await getMockedGoogleGenAI();
+    GoogleGenAI.mockImplementationOnce(
+      fakeGoogleGenAIImpl(async (args) => {
+        capturedConfig = args.config;
+        return { sendRealtimeInput: vi.fn(), sendClientContent: vi.fn() };
+      }),
+    );
+    await live.startLive();
+    expect(capturedConfig).not.toHaveProperty("realtimeInputConfig");
+    expect(capturedConfig.responseModalities).toEqual(["AUDIO"]);
   });
 });
 
@@ -206,88 +170,124 @@ describe("live-session: scheduleReconnect (via connectLive's onclose)", () => {
   });
 });
 
-describe("live-session: ListenMode named transitions (task 4.5)", () => {
-  /** @returns {Promise<any>} */
-  async function connectAndCapture(live) {
-    /** @type {any} */
-    let callbacks;
+describe("live-session: listen-only mode ownership (design.md D3)", () => {
+  it("toggleListenOnly flips the state and pushes it to the renderer plus the tray", async () => {
+    const emitToRenderer = vi.fn();
+    const updateTrayMenu = vi.fn();
+    const live = make({ emitToRenderer, updateTrayMenu });
     const GoogleGenAI = await getMockedGoogleGenAI();
     GoogleGenAI.mockImplementationOnce(
-      fakeGoogleGenAIImpl(async (config) => {
-        callbacks = config.callbacks;
+      fakeGoogleGenAIImpl(async (args) => {
+        args.callbacks.onopen();
+        return { sendRealtimeInput: vi.fn(), sendClientContent: vi.fn() };
+      }),
+    );
+    await live.startLive();
+    emitToRenderer.mockClear();
+    updateTrayMenu.mockClear();
+
+    expect(live.getListenOnlyEngaged()).toBe(false);
+    live.toggleListenOnly();
+    expect(live.getListenOnlyEngaged()).toBe(true);
+    expect(emitToRenderer).toHaveBeenCalledWith("listen-only:state", { engaged: true });
+    expect(updateTrayMenu).toHaveBeenCalled();
+
+    live.toggleListenOnly();
+    expect(live.getListenOnlyEngaged()).toBe(false);
+  });
+
+  it("neither engaging nor disengaging triggers a connect, disconnect, or config rebuild", async () => {
+    const live = make();
+    const GoogleGenAI = await getMockedGoogleGenAI();
+    const close = vi.fn();
+    GoogleGenAI.mockImplementationOnce(
+      fakeGoogleGenAIImpl(async (args) => {
+        args.callbacks.onopen();
+        return { sendRealtimeInput: vi.fn(), sendClientContent: vi.fn(), close };
+      }),
+    );
+    await live.startLive();
+    const connectCallsBefore = GoogleGenAI.mock.calls.length;
+
+    live.toggleListenOnly();
+    live.toggleListenOnly();
+
+    expect(GoogleGenAI.mock.calls.length).toBe(connectCallsBefore);
+    expect(close).not.toHaveBeenCalled();
+  });
+
+  it("toggling while asleep is a no-op", () => {
+    const live = make();
+    expect(live.getLiveStatus().running).toBe(false);
+    live.toggleListenOnly();
+    expect(live.getListenOnlyEngaged()).toBe(false);
+  });
+
+  it("resets to disengaged on an explicit stop", async () => {
+    const live = make();
+    const GoogleGenAI = await getMockedGoogleGenAI();
+    GoogleGenAI.mockImplementationOnce(
+      fakeGoogleGenAIImpl(async (args) => {
+        args.callbacks.onopen();
         return { sendRealtimeInput: vi.fn(), sendClientContent: vi.fn(), close: vi.fn() };
       }),
     );
-    await live.connectLive({ isReconnect: true, mode: "converse" });
-    return () => callbacks;
-  }
+    await live.startLive();
+    live.toggleListenOnly();
+    expect(live.getListenOnlyEngaged()).toBe(true);
 
-  it("consumeDeliberateReconnect: a deliberate close skips the failure-reconnect path", async () => {
-    const listenMode = makeListenMode({ deliberateReconnect: true });
-    const live = make({ listenMode });
-    const getCallbacks = await connectAndCapture(live);
-    getCallbacks().onclose({ code: 1000, reason: "deliberate" });
-    // Consumed: false afterwards, and settled exactly once (the field itself
-    // reflects the transition's effect, whether read as a field or a method).
-    expect(listenMode.deliberateReconnect).toBe(false);
+    await live.stopLive();
+    expect(live.getListenOnlyEngaged()).toBe(false);
   });
 
-  it("settleBoundary + captureSegmentForSynthesis: an unexpected disconnect while engaged keeps a non-empty segment for recovery", async () => {
-    const listenMode = makeListenMode({ engaged: true, segmentRecord: "we should ship Friday" });
-    const live = make({ listenMode });
-    const getCallbacks = await connectAndCapture(live);
-    getCallbacks().onclose({ code: 1006, reason: "network drop" });
-    expect(listenMode.transitioning).toBe(false);
-    expect(listenMode.boundaryInFlight).toBe(false);
-    expect(listenMode.synthesizeOnNextConverseConnect).toBe(true);
-    expect(listenMode.segmentRecord).toBe("we should ship Friday");
-  });
+  it("resets to disengaged once reconnect attempts are exhausted (server-initiated teardown)", async () => {
+    vi.useFakeTimers();
+    try {
+      /** @type {any} */
+      let callbacks;
+      const live = make();
+      const GoogleGenAI = await getMockedGoogleGenAI();
+      GoogleGenAI.mockImplementationOnce(
+        fakeGoogleGenAIImpl(async (config) => {
+          callbacks = config.callbacks;
+          callbacks.onopen();
+          return { sendRealtimeInput: vi.fn(), sendClientContent: vi.fn(), close: vi.fn() };
+        }),
+      );
+      await live.startLive();
+      live.toggleListenOnly();
+      expect(live.getListenOnlyEngaged()).toBe(true);
 
-  it("settleBoundary + captureSegmentForSynthesis: an unexpected disconnect with nothing captured clears the segment instead", async () => {
-    const listenMode = makeListenMode({ engaged: true, segmentRecord: "   " });
-    const live = make({ listenMode });
-    const getCallbacks = await connectAndCapture(live);
-    getCallbacks().onclose({ code: 1006, reason: "network drop" });
-    expect(listenMode.synthesizeOnNextConverseConnect).toBe(false);
-    expect(listenMode.segmentRecord).toBe("");
-  });
+      for (let attempt = 1; attempt <= 6; attempt++) {
+        callbacks.onclose({ code: 1006, reason: "network drop" });
+        if (attempt < 6) {
+          const g = await getMockedGoogleGenAI();
+          g.mockImplementationOnce(
+            fakeGoogleGenAIImpl(async (config) => {
+              callbacks = config.callbacks;
+              return { sendRealtimeInput: vi.fn(), sendClientContent: vi.fn(), close: vi.fn() };
+            }),
+          );
+        }
+        if (attempt <= 5) {
+          const expectedDelay = Math.min(500 * 2 ** (attempt - 1), 8000);
+          await vi.advanceTimersByTimeAsync(expectedDelay);
+        }
+      }
 
-  it("consumeSynthesisSegment: a pending recovery segment is delivered on the next converse connect, then cleared", async () => {
-    const listenMode = makeListenMode({ synthesizeOnNextConverseConnect: true, segmentRecord: "the recovered chunk" });
-    const buildListenExitSynthesisPrompt = vi.fn((segment) => `synthesis: ${segment}`);
-    const live = make({ listenMode, buildListenExitSynthesisPrompt });
-    const sendClientContent = vi.fn();
-    const GoogleGenAI = await getMockedGoogleGenAI();
-    GoogleGenAI.mockImplementationOnce(
-      fakeGoogleGenAIImpl(async () => ({ sendRealtimeInput: vi.fn(), sendClientContent })),
-    );
-    await live.connectLive({ isReconnect: true, mode: "converse" });
-    expect(buildListenExitSynthesisPrompt).toHaveBeenCalledWith("the recovered chunk");
-    expect(sendClientContent).toHaveBeenCalled();
-    expect(listenMode.synthesizeOnNextConverseConnect).toBe(false);
-    expect(listenMode.segmentRecord).toBe("");
-  });
-
-  it("consumeSynthesisSegment: does nothing when no recovery segment is pending", async () => {
-    const listenMode = makeListenMode();
-    const live = make({ listenMode });
-    const sendClientContent = vi.fn();
-    const GoogleGenAI = await getMockedGoogleGenAI();
-    GoogleGenAI.mockImplementationOnce(
-      fakeGoogleGenAIImpl(async () => ({ sendRealtimeInput: vi.fn(), sendClientContent })),
-    );
-    await live.connectLive({ isReconnect: false, mode: "converse" });
-    expect(sendClientContent).not.toHaveBeenCalled();
+      expect(live.getListenOnlyEngaged()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
 describe("live-session: stopLive", () => {
-  it("resets listen mode silently and marks the session as user-stopped", async () => {
-    const resetListenModeSilently = vi.fn();
-    const live = make({ resetListenModeSilently });
+  it("marks the session as user-stopped and resets listen-only mode", async () => {
+    const live = make();
     const result = await live.stopLive();
-    expect(resetListenModeSilently).toHaveBeenCalled();
     expect(result.running).toBe(false);
+    expect(live.getListenOnlyEngaged()).toBe(false);
     expect(live.getLiveSession()).toBeNull();
   });
 });

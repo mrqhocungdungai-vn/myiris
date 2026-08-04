@@ -9,7 +9,6 @@ function makeLiveSession() {
 function make(overrides = {}) {
   return createAnnouncements({
     getLiveSession: () => null,
-    isListenModeSuppressing: () => false,
     emitEvent: vi.fn(),
     findWorkstream: () => null,
     getActiveWorkstreamId: () => null,
@@ -26,6 +25,17 @@ describe("announcements: notifyIris buffering", () => {
     expect(session.sendRealtimeInput).toHaveBeenCalledWith({ text: "hello" });
   });
 
+  it("delivers immediately regardless of listen-only mode — connection is the only condition", () => {
+    // announcements.mjs no longer reads any listen-only state at all (design.md
+    // D9): a connected session is always deliverable, engaged or not.
+    const session = makeLiveSession();
+    const announcements = make({ getLiveSession: () => session });
+    announcements.notifyIris("reply arrives as text while listen-only is engaged");
+    expect(session.sendRealtimeInput).toHaveBeenCalledWith({
+      text: "reply arrives as text while listen-only is engaged",
+    });
+  });
+
   it("buffers when offline and redelivers everything once a session connects", () => {
     let session = null;
     const announcements = make({ getLiveSession: () => session });
@@ -36,13 +46,6 @@ describe("announcements: notifyIris buffering", () => {
     announcements.drainPendingAnnouncements();
     expect(session.sendRealtimeInput).toHaveBeenCalledWith({ text: "first" });
     expect(session.sendRealtimeInput).toHaveBeenCalledWith({ text: "second" });
-  });
-
-  it("treats a listening-mode-suppressed session as not deliverable, buffering instead", () => {
-    const session = makeLiveSession();
-    const announcements = make({ getLiveSession: () => session, isListenModeSuppressing: () => true });
-    announcements.notifyIris("hello");
-    expect(session.sendRealtimeInput).not.toHaveBeenCalled();
   });
 
   it("drainPendingAnnouncements flushes the buffer once a session exists", () => {

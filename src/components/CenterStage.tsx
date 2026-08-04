@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties, type RefObject } from "react";
-import { Ear, EarOff, Mic, MicOff, Power, Volume2, VolumeX } from "lucide-react";
+import { Headphones, HeadphoneOff, Mic, MicOff, Power } from "lucide-react";
 import ReactorCore, { ORB_ACCENT, ORB_ENERGY } from "./ReactorCore";
 import type { HandoffTone, ReactorState } from "../types";
 
@@ -73,10 +73,8 @@ export default function CenterStage({
   captionDim,
   muted,
   onToggleMute,
-  outputMuted,
-  onToggleOutputMute,
-  listenModeEngaged,
-  onToggleListenMode,
+  listenOnlyEngaged,
+  onToggleListenOnly,
   onSleep,
   webglHighFidelity,
 }: {
@@ -104,12 +102,10 @@ export default function CenterStage({
   captionDim: boolean;
   muted: boolean;
   onToggleMute: () => void;
-  outputMuted: boolean;
-  onToggleOutputMute: () => void;
-  // Listening mode's only affordance (add-listening-mode design.md D11):
-  // pure display of main-owned state, toggled by request only.
-  listenModeEngaged: boolean;
-  onToggleListenMode: () => void;
+  // Listen-only mode's only affordance (replace-listening-mode-with-listen-only
+  // design.md D3): pure display of main-owned state, toggled by request only.
+  listenOnlyEngaged: boolean;
+  onToggleListenOnly: () => void;
   onSleep: () => void;
   /** webgl-quality-mode: high-fidelity path (bloom) vs the light-path default. */
   webglHighFidelity: boolean;
@@ -160,18 +156,11 @@ export default function CenterStage({
             {muted ? <MicOff size={18} /> : <Mic size={18} />}
           </button>
           <button
-            className={`t-btn small ${outputMuted ? "muted" : ""}`}
-            onClick={onToggleOutputMute}
-            title={outputMuted ? "Unmute speaker" : "Mute speaker"}
+            className={`t-btn small ${listenOnlyEngaged ? "" : "muted"}`}
+            onClick={onToggleListenOnly}
+            title={listenOnlyEngaged ? "Disable listen-only mode" : "Enable listen-only mode"}
           >
-            {outputMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}
-          </button>
-          <button
-            className={`t-btn small ${listenModeEngaged ? "" : "muted"}`}
-            onClick={onToggleListenMode}
-            title={listenModeEngaged ? "End listening mode" : "Start listening mode"}
-          >
-            {listenModeEngaged ? <Ear size={18} /> : <EarOff size={18} />}
+            {listenOnlyEngaged ? <Headphones size={18} /> : <HeadphoneOff size={18} />}
           </button>
           <button className="t-btn small danger" onClick={onSleep} title="Sleep (S)">
             <Power size={18} />

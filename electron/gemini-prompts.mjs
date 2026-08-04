@@ -17,7 +17,6 @@
  *   envFlag: (name: string, fallback?: boolean) => boolean,
  *   userDisplayName: () => string,
  *   workspaceContextLine: () => string,
- *   fenceUntrustedText: (text: string, label: string) => string,
  *   capabilities?: Array<{ promptFragment?: () => string }>,
  * }} deps
  */
@@ -27,7 +26,6 @@ export function createGeminiPrompts({
   envFlag,
   userDisplayName,
   workspaceContextLine,
-  fenceUntrustedText,
   capabilities = [],
 }) {
   // One prompt builder with the pipeline sections included only when
@@ -124,58 +122,7 @@ export function createGeminiPrompts({
     return lines.join("\n");
   }
 
-  // Listening mode's system instruction (add-listening-mode design.md Decision
-  // 6/8.2). Deliberately NOT an extension of buildSystemInstructionText: the
-  // listening config's tool set is empty (see buildLiveConfigForMode below), so
-  // the pipeline/routing/UI-control instructions above would describe
-  // capabilities Iris cannot use right now. The one-word boundary reply this
-  // asks for is a cost optimisation only — silence during the chunk itself is
-  // structural (no turn can complete while an activity is open), never a
-  // property of this text. See the "Suppression does not depend on the prompt"
-  // requirement in specs/listening-mode/spec.md.
-  function buildListenSystemInstructionText() {
-    return [
-      `You are Iris, the realtime voice front-end for ${userDisplayName()}.`,
-      "LISTENING MODE is engaged: the user is thinking out loud or presenting for an extended stretch and does not want to be interrupted, no matter how long they pause between sentences. You have no tools available right now, and nothing you say reaches the user until the mode ends.",
-      'From time to time the app forces a checkpoint turn as the session quietly rotates in the background. When that happens, reply with exactly one word — "ok" — and nothing else. A longer reply only costs tokens; it never becomes audible, because the app withholds every checkpoint reply regardless of what it says.',
-      "Do not speak unless explicitly asked to.",
-    ].join("\n");
-  }
-
-  // Driven via sendClientContent right after the listen-config reconnect, and
-  // awaited (driveTurnAndWaitForCompletion) before the first activity opens —
-  // see design.md Decision 9. One short line only; the mechanism does not
-  // depend on its exact wording.
-  function buildListenEntryConfirmationPrompt() {
-    return (
-      "SYSTEM_EVENT_LISTEN_MODE_START: Listening mode was just turned on. Say ONE short sentence, right now, " +
-      "confirming you are listening and will summarize everything once the mode ends. Then say nothing else — " +
-      "no questions, no extra commentary."
-    );
-  }
-
-  // Driven via sendClientContent after the converse reconnect that ends
-  // listening mode (design.md Decision 4) — never at the boundary itself,
-  // where the listening instruction is still in force. `segmentRecord` is the
-  // in-memory recovery path (design.md Decision 7): fenced like any other
-  // third-party text, since spoken content is still untrusted input, before
-  // being handed to the model to summarize.
-  function buildListenExitSynthesisPrompt(segmentRecord) {
-    const trimmed = String(segmentRecord || "").trim();
-    const heard = trimmed
-      ? fenceUntrustedText(trimmed, "what the user said while listening mode was engaged (transcribed, not verbatim)")
-      : "(Nothing was captured — the mode ended before any speech was transcribed.)";
-    return [
-      "SYSTEM_EVENT_LISTEN_MODE_END: Listening mode just ended and ordinary conversation has resumed.",
-      "Speak a warm, concise synthesis of what the user said while listening mode was engaged — the key points, decisions, and any open questions they raised out loud. If nothing meaningful was captured, say so briefly instead of inventing content.",
-      heard,
-    ].join("\n");
-  }
-
   return {
     buildSystemInstructionText,
-    buildListenSystemInstructionText,
-    buildListenEntryConfirmationPrompt,
-    buildListenExitSynthesisPrompt,
   };
 }

@@ -3,8 +3,8 @@
 // prompt-injection sanitization untrusted third-party text goes through
 // before reaching the model, and the workspace-state prose Iris reasons
 // from. Split out of electron/main.mjs (split-main-process-modules):
-// Electron-free, so the Live session and listening-mode state it reads are
-// received as injected accessors.
+// Electron-free, so the Live session it reads is received as an injected
+// accessor.
 import fs from "node:fs";
 import path from "node:path";
 import { fenceUntrustedText } from "./untrusted-text.mjs";
@@ -12,7 +12,6 @@ import { fenceUntrustedText } from "./untrusted-text.mjs";
 /**
  * @param {{
  *   getLiveSession: () => any,
- *   isListenModeSuppressing: () => boolean,
  *   emitEvent: (event: any) => void,
  *   findWorkstream: (id: string | null) => any,
  *   getActiveWorkstreamId: () => string | null,
@@ -21,7 +20,6 @@ import { fenceUntrustedText } from "./untrusted-text.mjs";
  */
 export function createAnnouncements({
   getLiveSession,
-  isListenModeSuppressing,
   emitEvent,
   findWorkstream,
   getActiveWorkstreamId,
@@ -39,16 +37,12 @@ export function createAnnouncements({
   // Single delivery mechanism for every SYSTEM_EVENT_* voice announcement: send
   // immediately if the live session is connected, otherwise buffer (unless the
   // caller opts out) so a state change that lands mid-reconnect is delivered on
-  // reconnect instead of silently lost.
-  //
-  // A session that is connected but in (or transitioning into/out of/across a
-  // rotation of) listening mode is treated as NOT deliverable, same as
-  // offline, per add-listening-mode's MODIFIED session-announcements delta:
-  // injecting text here is not gated by activity detection, so it would either
-  // interrupt the monologue or be silently discarded by the server.
+  // reconnect instead of silently lost. Connection is the only deliverability
+  // condition — listen-only mode leaves activity detection and turn-taking
+  // untouched, so a connected session is always deliverable.
   function notifyIris(lines, { bufferIfOffline = true } = {}) {
     const text = Array.isArray(lines) ? lines.join("\n") : lines;
-    const deliverable = getLiveSession() && !isListenModeSuppressing();
+    const deliverable = Boolean(getLiveSession());
     if (deliverable) {
       getLiveSession().sendRealtimeInput({ text });
     } else if (bufferIfOffline) {

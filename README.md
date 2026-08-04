@@ -279,15 +279,16 @@ island.
 - The tray (menu-bar) icon, which also offers Wake/Sleep without switching to
   the deck first.
 
-**Speaker mute** — silencing Iris's voice on the spot without ending the
-session — has the same three-surface pattern: a button beside the mic-mute
-control (deck and HUD), a tray item, and a global hotkey, `⌥M` by default
-(`IRIS_MUTE_HOTKEY` to change it). It's independent of the mic and resets to
-unmuted on every wake. If you've changed `IRIS_HUD_HOTKEY` to something that
-collides with `⌥M` (or vice versa), pick different combos for each — a
-conflicting `globalShortcut` registration fails silently in the OS and Iris
-just logs it and keeps going, so the control remains reachable via the UI/tray
-even if the hotkey itself doesn't fire.
+**Listen-only mode** — Iris keeps hearing you and keeps replying, but her
+reply arrives as text on screen instead of as sound, with no reconnect on
+either transition — has the same three-surface pattern: a headphone button
+beside the mic-mute control (deck and HUD), a tray item, and a global hotkey,
+`⌥L` by default (`IRIS_LISTEN_HOTKEY` to change it). It's independent of the
+mic and resets to audible on every wake. If you've changed `IRIS_HUD_HOTKEY`
+to something that collides with `⌥L` (or vice versa), pick different combos
+for each — a conflicting `globalShortcut` registration fails silently in the
+OS and Iris just logs it and keeps going, so the control remains reachable
+via the UI/tray even if the hotkey itself doesn't fire.
 
 The app always boots into deck mode (booting straight into a click-through
 overlay with no visible affordance would be a lockout risk). Management

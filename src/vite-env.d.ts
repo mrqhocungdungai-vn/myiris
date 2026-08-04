@@ -309,11 +309,9 @@ type IrisApi = {
   windowControl: (action: "close" | "minimize") => void;
   onHudMode: (callback: (payload: { mode: UiMode }) => void) => () => void;
   onWakeRequest: (callback: () => void) => () => void;
-  onMuteToggle: (callback: () => void) => () => void;
-  reportSpeakerMute: (muted: boolean) => void;
-  requestListenModeToggle: () => void;
-  getListenModeState: () => Promise<{ engaged: boolean }>;
-  onListenModeState: (callback: (payload: { engaged: boolean }) => void) => () => void;
+  requestListenOnlyToggle: () => void;
+  getListenOnlyState: () => Promise<{ engaged: boolean }>;
+  onListenOnlyState: (callback: (payload: { engaged: boolean }) => void) => () => void;
   getConfig: () => Promise<IrisConfig>;
   saveConfig: (updates: Partial<Record<string, string>>) => Promise<IrisConfig>;
   savePoToken: (token: string, key?: ClaudeCredentialKey) => Promise<PoTokenResult>;

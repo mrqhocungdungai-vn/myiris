@@ -67,9 +67,8 @@ function make(overrides = {}) {
     stopVaultGraphWatch: vi.fn(),
     probeSecondBrainAvailability: vi.fn(() => true),
     getLiveStatus: () => ({ running: false }),
-    getSpeakerMuted: () => false,
-    isListenModeEngaged: () => false,
-    toggleListenMode: vi.fn(),
+    isListenOnlyEngaged: () => false,
+    toggleListenOnly: vi.fn(),
     ...overrides,
   });
 }
@@ -161,12 +160,10 @@ describe("window: hotkey readers", () => {
   it("fall back to defaults when no env override is set", () => {
     const originalEnv = { ...process.env };
     delete process.env.IRIS_HUD_HOTKEY;
-    delete process.env.IRIS_MUTE_HOTKEY;
     delete process.env.IRIS_LISTEN_HOTKEY;
     try {
       const win = make();
       expect(win.hudHotkey()).toBe("Alt+Space");
-      expect(win.muteHotkey()).toBe("Alt+M");
       expect(win.listenHotkey()).toBe("Alt+L");
     } finally {
       process.env = originalEnv;

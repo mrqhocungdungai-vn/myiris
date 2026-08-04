@@ -5,11 +5,6 @@
 // module's header comment for why this landed as two files instead of one.
 // Electron-free — the live session is reached through an injected accessor,
 // never imported directly.
-//
-// Task 4.4 moves this block verbatim, including raw reads of the injected
-// `listenMode` object's fields (engaged, transitioning, boundaryInFlight) —
-// task 4.5 converts the write side in live-session.mjs into named
-// transitions; this module only ever reads listenMode, never writes it.
 
 /**
  * @param {{
@@ -22,10 +17,7 @@
  *   appendModelTranscript: (text: string) => void,
  *   executeClaudeTool: (name: string, args: any) => Promise<any>,
  *   submitClaudeTask: (params: any) => any,
- *   listenMode: any,
- *   notifyFreshResumptionHandle: (handle: string) => void,
- *   notifyTurnComplete: () => void,
- *   runListenRotation: () => Promise<void>,
+ *   isListenOnlyEngaged: () => boolean,
  * }} deps
  */
 export function createLiveMessages({
@@ -38,10 +30,7 @@ export function createLiveMessages({
   appendModelTranscript,
   executeClaudeTool,
   submitClaudeTask,
-  listenMode,
-  notifyFreshResumptionHandle,
-  notifyTurnComplete,
-  runListenRotation,
+  isListenOnlyEngaged,
 }) {
   async function handleToolCall(toolCall) {
     const functionResponses = [];
@@ -69,34 +58,22 @@ export function createLiveMessages({
       const { resumable, newHandle } = message.sessionResumptionUpdate;
       if (resumable && newHandle) {
         setResumptionHandle(newHandle);
-        notifyFreshResumptionHandle(newHandle);
       }
     }
 
     if (message.goAway) {
-      // Server warns the connection is about to be dropped (connection lifetime
-      // limit). Rotate immediately rather than betting the rest of the chunk on
-      // an unmeasured goAway.timeLeft (design.md Decision 3) if listening mode
-      // is engaged and idle; otherwise onclose fires shortly after and the
-      // ordinary reconnect handles it.
+      // Server warns the connection is about to be dropped (connection
+      // lifetime limit). No deliberate rotation to trigger any more (the
+      // listening-mode reconnect this once fed was retired by
+      // replace-listening-mode-with-listen-only, design.md D10) — onclose
+      // fires shortly after and the ordinary reconnect handles it.
       console.log("[IRIS][goAway] timeLeft=", message.goAway.timeLeft || "(unknown)");
-      if (listenMode.isEngaged() && !listenMode.isTransitioning()) {
-        runListenRotation().catch((error) => {
-          emitEvent({ type: "log", level: "warn", message: `Listening-mode rotation (goAway) failed: ${error.message}` });
-        });
-      }
     }
 
     if (message.toolCall) {
-      // A boundary turn cannot start background work (spec "A boundary turn
-      // cannot start background work") — the listening config already ships
-      // an empty tool set, so this only guards a stray call arriving folded
-      // into the same batch as the boundary's turnComplete.
-      if (!listenMode.isBoundaryInFlight()) {
-        handleToolCall(message.toolCall).catch((error) => {
-          emitEvent({ type: "fatal", message: "Tool call failed", error: error.message });
-        });
-      }
+      handleToolCall(message.toolCall).catch((error) => {
+        emitEvent({ type: "fatal", message: "Tool call failed", error: error.message });
+      });
     }
 
     const content = message.serverContent;
@@ -111,36 +88,27 @@ export function createLiveMessages({
 
     if (content.inputTranscription?.text) {
       appendUserTranscript(content.inputTranscription.text);
-      // Segment record: the recovery path for the current chunk (design.md
-      // Decision 7). Accumulated whenever the mode is engaged, including
-      // across a rotation's boundary — never written to disk or the vault.
-      if (listenMode.isEngaged()) listenMode.appendToSegment(content.inputTranscription.text);
     }
 
-    // Every boundary turn (rotation or exit alike) is neither heard nor shown
-    // (spec "Every boundary turn is neither heard nor shown") — suppressed
-    // here, in main, before any part of it reaches the renderer. Reusing the
-    // renderer's speaker-mute suppression would be too late: this loop is what
-    // appends to modelTranscriptBuffer and emits "speaking", both before the
-    // renderer sees anything.
-    if (!listenMode.isBoundaryInFlight()) {
-      if (content.outputTranscription?.text) appendModelTranscript(content.outputTranscription.text);
+    if (content.outputTranscription?.text) appendModelTranscript(content.outputTranscription.text);
 
-      for (const part of content.modelTurn?.parts || []) {
-        if (part.text) appendModelTranscript(part.text);
-        const inlineData = part.inlineData;
-        if (!inlineData?.data) continue;
-        const mimeType = inlineData.mimeType || "audio/pcm;rate=24000";
-        if (!mimeType.startsWith("audio/")) continue;
-        emitToRenderer("live:audio", { data: inlineData.data, mimeType });
-        emitEvent({ type: "audio_state", state: "speaking" });
-      }
+    for (const part of content.modelTurn?.parts || []) {
+      if (part.text) appendModelTranscript(part.text);
+      const inlineData = part.inlineData;
+      if (!inlineData?.data) continue;
+      const mimeType = inlineData.mimeType || "audio/pcm;rate=24000";
+      if (!mimeType.startsWith("audio/")) continue;
+      emitToRenderer("live:audio", { data: inlineData.data, mimeType });
+      // A silent reply reads as silent, not as speech (design.md D6):
+      // main's own listen-only flag decides which state to report — never a
+      // value the renderer reported back — so it stays trustworthy even if
+      // the renderer is slow or crashed.
+      emitEvent({ type: "audio_state", state: isListenOnlyEngaged() ? "replying" : "speaking" });
     }
 
     if (content.turnComplete) {
       flushTranscripts();
       emitEvent({ type: "audio_state", state: "listening" });
-      notifyTurnComplete();
     }
   }
 

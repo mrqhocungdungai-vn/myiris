@@ -7,24 +7,16 @@ State-change announcements (workspace change, a run's live question, task comple
 ### Requirement: State-change announcements survive a disconnected voice session
 When the app needs to tell Iris about a workspace/session/role state change (active pipeline role selected — PO or DEV — or workspace/project-folder changed), it SHALL attempt immediate delivery to the live Gemini voice session, and if no voice session is currently connected, it SHALL buffer the announcement for redelivery once the voice session reconnects, rather than dropping it. The buffer SHALL be bounded to a fixed number of the most-recent announcements; if more announcements are buffered than the bound allows while the session is offline, the oldest SHALL be discarded in favour of the most recent, so a prolonged disconnection cannot grow the buffer without limit.
 
-A voice session that is connected but in listening mode SHALL be treated as not currently deliverable: the announcement SHALL be buffered rather than sent. Injecting it would either interrupt the user's monologue — the one thing listening mode exists to prevent — or be discarded by the server and lost. For the same reason, the app SHALL NOT flush buffered announcements when it connects into a listening-mode session or reconnects across a listening-mode chunk rotation; the buffer SHALL be delivered on the first connect that is not in listening mode.
+Connection is the only deliverability condition: a connected voice session SHALL always be treated as deliverable, and buffering SHALL apply to a disconnected session only. There is no app mode that withholds an announcement from a connected session. When `listen-only-mode` is engaged the announcement SHALL be delivered immediately like any other, and reaches the user as transcript text rather than as sound, because that mode leaves activity detection and turn-taking untouched.
 
 #### Scenario: Role selection announced while voice session is connected
-- **WHEN** the user switches the active pipeline role (PO or DEV) while the Gemini voice session is connected and not in listening mode
+- **WHEN** the user switches the active pipeline role (PO or DEV) while the Gemini voice session is connected
 - **THEN** the app immediately sends the role-selection announcement to the voice session
 
-#### Scenario: Announcement raised while listening mode is engaged
-- **WHEN** an announcement is generated while the voice session is connected but listening mode is engaged
-- **THEN** the app buffers the announcement instead of sending it
-- **AND** the user's monologue is not interrupted
-
-#### Scenario: Buffered announcements are not flushed by a listening-mode connect
-- **WHEN** the app connects into a listening-mode session, or reconnects across a listening-mode chunk rotation, while announcements are buffered
-- **THEN** the buffered announcements remain buffered rather than being delivered into the listening session
-
-#### Scenario: Buffered announcements are delivered once listening mode ends
-- **WHEN** listening mode ends and the session returns to ordinary conversation with announcements still buffered
-- **THEN** the buffered announcements are delivered in the order they were generated
+#### Scenario: Announcement raised while listen-only mode is engaged
+- **WHEN** an announcement is generated while the voice session is connected and `listen-only-mode` is engaged
+- **THEN** the app sends it immediately rather than buffering it
+- **AND** it reaches the user as transcript text, with no audio
 
 #### Scenario: Workspace change announced while voice session is disconnected
 - **WHEN** the user changes the active project folder or session while the Gemini voice session is disconnected (e.g. mid-reconnect)
@@ -46,7 +38,7 @@ The app SHALL route every voice-layer state-change announcement (role selection,
 
 #### Scenario: Buffered announcements are delivered in order on reconnect
 - **WHEN** multiple announcements are buffered while the voice session is disconnected
-- **THEN** they are delivered to the voice session in the order they were generated on the first reconnect that is not into a listening-mode session
+- **THEN** they are delivered to the voice session in the order they were generated on the first reconnect
 
 ### Requirement: A completion is announced aloud only for a run that actually started
 

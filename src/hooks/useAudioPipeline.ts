@@ -291,11 +291,14 @@ export function useAudioPipeline({
     setMuted(next);
   }
 
-  function toggleOutputMute(next?: boolean) {
-    const value = next ?? !outputMutedRef.current;
-    outputMutedRef.current = value;
-    setOutputMuted(value);
-    if (value) flushPlayback();
+  // A pure setter, not a renderer-owned toggle: listen-only mode is owned by
+  // main, which pushes the resolved state; the renderer only executes the
+  // drop this flag decides (replace-listening-mode-with-listen-only
+  // design.md D3). flushPlayback() still fires on the engaging edge.
+  function setOutputMutedValue(engaged: boolean) {
+    outputMutedRef.current = engaged;
+    setOutputMuted(engaged);
+    if (engaged) flushPlayback();
   }
 
   async function start(): Promise<string | null> {
@@ -338,6 +341,6 @@ export function useAudioPipeline({
     flushPlayback,
     playGeminiAudio,
     toggleMute,
-    toggleOutputMute,
+    setOutputMutedValue,
   };
 }

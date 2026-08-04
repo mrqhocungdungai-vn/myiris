@@ -1,20 +1,17 @@
 // Gemini Live session config, extracted out of main.mjs so it can be tested
 // without booting Electron (docs/TESTING.md's injected-dependencies
-// convention). See openspec/changes/add-listening-mode/design.md Decision 1.
+// convention).
 //
-// mode: "converse" reproduces today's configuration byte-for-byte — no
-// `realtimeInputConfig` key at all — so the existing conversation path
-// cannot drift. mode: "listen" is the only thing this change adds: it
-// disables server-side automatic activity detection, makes the user's turn
-// include the whole realtime stream (pauses included), and empties the tool
-// set so a forced boundary turn can't start real background work (design.md
-// Decision 6 — `handleLiveMessage` dispatches a tool call before it looks at
-// serverContent, so suppressing audio/text alone would still let a boundary
-// start a real Claude run).
+// This reproduces today's single configuration byte-for-byte — no
+// `realtimeInputConfig` key at all. The change that once added a second
+// "listen" profile here (add-listening-mode) has been retired
+// (replace-listening-mode-with-listen-only): listen-only mode reaches
+// silence by discarding audio at the output instead, so this module never
+// needed a second profile in the first place.
 /**
- * @param {{ mode?: string, resumeHandle?: string, tools?: unknown[], systemInstruction?: string, voice?: string }} options
+ * @param {{ resumeHandle?: string, tools?: unknown[], systemInstruction?: string, voice?: string }} options
  */
-export function buildLiveConfig({ mode = "converse", resumeHandle, tools = [], systemInstruction = "", voice = "Zephyr" } = {}) {
+export function buildLiveConfig({ resumeHandle, tools = [], systemInstruction = "", voice = "Zephyr" } = {}) {
   /** @type {Record<string, unknown>} */
   const config = {
     responseModalities: ["AUDIO"],
@@ -34,19 +31,11 @@ export function buildLiveConfig({ mode = "converse", resumeHandle, tools = [], s
     },
     inputAudioTranscription: {},
     outputAudioTranscription: {},
-    tools: mode === "listen" ? [] : tools,
+    tools,
     systemInstruction: {
       parts: [{ text: systemInstruction }],
     },
   };
-
-  if (mode === "listen") {
-    config.realtimeInputConfig = {
-      automaticActivityDetection: { disabled: true },
-      turnCoverage: "TURN_INCLUDES_ALL_INPUT",
-      activityHandling: "NO_INTERRUPTION",
-    };
-  }
 
   return config;
 }

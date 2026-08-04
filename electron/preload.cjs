@@ -56,21 +56,16 @@ contextBridge.exposeInMainWorld("iris", {
     ipcRenderer.on("iris:wake", handler);
     return () => ipcRenderer.removeListener("iris:wake", handler);
   },
-  onMuteToggle: (callback) => {
-    const handler = () => callback();
-    ipcRenderer.on("iris:mute-toggle", handler);
-    return () => ipcRenderer.removeListener("iris:mute-toggle", handler);
-  },
-  reportSpeakerMute: (muted) => ipcRenderer.send("iris:speaker-mute-state", Boolean(muted)),
-  // Listening mode (add-listening-mode design.md D11): a toggle request and
-  // a boot/reload query — no report-back channel. Main pushes state changes
-  // one-way over "listen-mode:state"; the renderer never asserts the value.
-  requestListenModeToggle: () => ipcRenderer.send("listen-mode:toggle-request"),
-  getListenModeState: () => ipcRenderer.invoke("listen-mode:query"),
-  onListenModeState: (callback) => {
+  // Listen-only mode (replace-listening-mode-with-listen-only design.md D3):
+  // a toggle request and a boot/reload query — no report-back channel. Main
+  // pushes state changes one-way over "listen-only:state"; the renderer
+  // never asserts the value.
+  requestListenOnlyToggle: () => ipcRenderer.send("listen-only:toggle-request"),
+  getListenOnlyState: () => ipcRenderer.invoke("listen-only:query"),
+  onListenOnlyState: (callback) => {
     const handler = (_event, payload) => callback(payload);
-    ipcRenderer.on("listen-mode:state", handler);
-    return () => ipcRenderer.removeListener("listen-mode:state", handler);
+    ipcRenderer.on("listen-only:state", handler);
+    return () => ipcRenderer.removeListener("listen-only:state", handler);
   },
   getConfig: () => ipcRenderer.invoke("config:get"),
   saveConfig: (updates) => ipcRenderer.invoke("config:save", updates),

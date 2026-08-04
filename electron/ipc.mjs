@@ -28,9 +28,8 @@ const { ipcMain } = electron;
  *   stopLive: () => any,
  *   getLiveStatus: () => any,
  *   greetGateFire: () => void,
- *   setSpeakerMuted: (muted: boolean) => void,
- *   toggleListenMode: () => void,
- *   isListenModeEngaged: () => boolean,
+ *   toggleListenOnly: () => void,
+ *   isListenOnlyEngaged: () => boolean,
  *   sendCommand: (command: any) => any,
  *   sendAudioChunk: (chunk: any) => void,
  *   sessionsSnapshot: () => any,
@@ -67,9 +66,8 @@ export function registerIpc(deps) {
     stopLive,
     getLiveStatus,
     greetGateFire,
-    setSpeakerMuted,
-    toggleListenMode,
-    isListenModeEngaged,
+    toggleListenOnly,
+    isListenOnlyEngaged,
     sendCommand,
     sendAudioChunk,
     sessionsSnapshot,
@@ -99,12 +97,12 @@ export function registerIpc(deps) {
   ipcMain.handle("sidecar:start", () => startLive());
   ipcMain.handle("sidecar:stop", () => stopLive());
   ipcMain.handle("sidecar:status", () => getLiveStatus());
-  // Listening mode's narrow bridge (design.md Decision 11): a toggle
-  // request, and a query for boot/reload — no report-back channel. State
-  // pushes to the renderer one-way over "listen-mode:state" from
-  // setListenEngaged, never the reverse.
-  ipcMain.on("listen-mode:toggle-request", () => toggleListenMode());
-  ipcMain.handle("listen-mode:query", () => ({ engaged: isListenModeEngaged() }));
+  // Listen-only mode's narrow bridge (design.md D3): a toggle request, and a
+  // query for boot/reload — no report-back channel. State pushes to the
+  // renderer one-way over "listen-only:state" from setListenOnlyEngaged,
+  // never the reverse.
+  ipcMain.on("listen-only:toggle-request", () => toggleListenOnly());
+  ipcMain.handle("listen-only:query", () => ({ engaged: isListenOnlyEngaged() }));
   ipcMain.handle("sidecar:command", (_event, command) => sendCommand(command));
   ipcMain.handle("sessions:get", () => sessionsSnapshot());
   ipcMain.handle("sessions:select", (_event, id) => selectWorkstream(String(id || "")));
@@ -180,10 +178,6 @@ export function registerIpc(deps) {
     }
   });
   ipcMain.on("live:audio", (_event, chunk) => sendAudioChunk(chunk));
-  ipcMain.on("iris:speaker-mute-state", (_event, muted) => {
-    setSpeakerMuted(muted);
-    updateTrayMenu();
-  });
 
   // Capability composition (design.md D10): each registered capability's own
   // channels, registered by iteration — never by name, so a capability's

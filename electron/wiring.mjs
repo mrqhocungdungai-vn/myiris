@@ -173,23 +173,8 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     setVerbModel,
   } = sessionStoreModule;
 
-  // ListenMode (the object live-wiring's listenModeModule owns) doesn't
-  // exist yet at this point — createLiveWiring runs later in this same
-  // function, after everything below needs to be constructed. Same
-  // forward-reference shape as windowModule/liveSessionModule above:
-  // wiring-live.mjs calls setListenModeObject() once the real object exists,
-  // only ever read here after the app is fully wired and running.
-  let listenModeAccessor = { engaged: false, transitioning: false };
-  function isListenModeSuppressing() {
-    return listenModeAccessor.engaged || listenModeAccessor.transitioning;
-  }
-  function setListenModeObject(obj) {
-    listenModeAccessor = obj;
-  }
-
   const announcements = createAnnouncements({
     getLiveSession: () => getLiveSession(),
-    isListenModeSuppressing: () => isListenModeSuppressing(),
     emitEvent,
     findWorkstream,
     getActiveWorkstreamId,
@@ -197,7 +182,6 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
   });
   const {
     notifyIris,
-    fenceUntrustedText,
     drainPendingAnnouncements,
     workspaceInfo,
     workspaceContextLine,
@@ -361,17 +345,16 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     modelChoices: MODEL_CHOICES,
     envFlag,
     workspaceContextLine,
-    fenceUntrustedText,
   });
   canvasCapability = caps.canvasCapability;
   secondBrainCapability = caps.secondBrainCapability;
   const { startClaudeRun, geminiTools, geminiPrompts } = caps;
   const CAPABILITIES = caps.capabilities;
 
-  // The Live session, listening mode, and window/HUD/tray — split into
-  // wiring-live.mjs for the same line-count reason this file was split from
-  // main.mjs. See its header for why these three stay together in one file
-  // (a genuine three-way mutual dependency).
+  // The Live session and window/HUD/tray — split into wiring-live.mjs for
+  // the same line-count reason this file was split from main.mjs. See its
+  // header for why these two stay together in one file (a mutual
+  // dependency).
   const live = createLiveWiring({
     repoRoot,
     appIcon,
@@ -393,7 +376,6 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     secondBrainCapability,
     setWindowModule,
     setLiveSessionModule,
-    setListenModeObject,
   });
 
   return {
@@ -409,18 +391,16 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     updateTrayMenu: live.updateTrayMenu,
     createTray: live.createTray,
     hudHotkey: live.hudHotkey,
-    muteHotkey: live.muteHotkey,
     listenHotkey: live.listenHotkey,
     installAppMenu: live.installAppMenu,
     setRendererSecurity: live.setRendererSecurity,
-    // Live session / listening mode
+    // Live session / listen-only mode
     startLive: live.startLive,
     stopLive: live.stopLive,
     getLiveStatus,
     GreetGate: live.GreetGate,
-    setSpeakerMuted: live.setSpeakerMuted,
-    toggleListenMode: live.toggleListenMode,
-    isListenModeEngaged: live.isListenModeEngaged,
+    toggleListenOnly: live.toggleListenOnly,
+    isListenOnlyEngaged: live.isListenOnlyEngaged,
     sendCommand: live.sendCommand,
     sendAudioChunk: live.sendAudioChunk,
     // Sessions / agents

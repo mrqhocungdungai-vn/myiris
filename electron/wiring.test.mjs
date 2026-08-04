@@ -86,7 +86,6 @@ vi.mock("./session-store.mjs", () => ({
 vi.mock("./announcements.mjs", () => ({
   createAnnouncements: vi.fn((deps) => ({
     notifyIris: vi.fn(),
-    fenceUntrustedText: vi.fn((text) => text),
     drainPendingAnnouncements: vi.fn(),
     announceAgentSelection: vi.fn(),
     workspaceInfo: vi.fn(),
@@ -139,23 +138,20 @@ vi.mock("./wiring-live.mjs", () => ({
   createLiveWiring: vi.fn((deps) => {
     deps.setWindowModule({ getMainWindow: () => "fake-window", getUiMode: () => "deck" });
     deps.setLiveSessionModule({ getLiveSession: () => null, getLiveStatus: () => ({ running: false }) });
-    deps.setListenModeObject({ engaged: false, transitioning: false });
     return {
       createWindow: vi.fn(),
       toggleHud: vi.fn(),
       updateTrayMenu: vi.fn(),
       createTray: vi.fn(),
       hudHotkey: vi.fn(),
-      muteHotkey: vi.fn(),
       listenHotkey: vi.fn(),
       installAppMenu: vi.fn(),
       setRendererSecurity: vi.fn(),
       startLive: vi.fn(),
       stopLive: vi.fn(),
       GreetGate: { fire: vi.fn() },
-      setSpeakerMuted: vi.fn(),
-      toggleListenMode: vi.fn(),
-      isListenModeEngaged: vi.fn(() => false),
+      toggleListenOnly: vi.fn(),
+      isListenOnlyEngaged: vi.fn(() => false),
       sendCommand: vi.fn(),
       sendAudioChunk: vi.fn(),
     };
@@ -240,12 +236,13 @@ describe("wiring: createWiring", () => {
     expect(result.secondBrainCapability).toBe(fakeCapabilities[1]);
   });
 
-  it("forwards wiring-live's window/live-session/listen-mode surface directly", () => {
+  it("forwards wiring-live's window/live-session/listen-only surface directly", () => {
     const result = createWiring(makeDeps());
     const live = createLiveWiring.mock.results.at(-1).value;
     expect(result.createWindow).toBe(live.createWindow);
     expect(result.startLive).toBe(live.startLive);
-    expect(result.toggleListenMode).toBe(live.toggleListenMode);
+    expect(result.toggleListenOnly).toBe(live.toggleListenOnly);
+    expect(result.isListenOnlyEngaged).toBe(live.isListenOnlyEngaged);
   });
 
   it("passes dialog and getIsPackaged through to the capabilities/user-config wiring", () => {

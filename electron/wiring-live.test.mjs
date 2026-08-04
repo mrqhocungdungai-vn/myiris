@@ -1,22 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
 
-const fakeListenMode = { engaged: false, transitioning: false };
-
-vi.mock("./listen-mode.mjs", () => ({
-  createListenMode: vi.fn((deps) => ({
-    ListenMode: fakeListenMode,
-    setListenEngaged: vi.fn(),
-    clearListenRotationTimer: vi.fn(),
-    resetListenModeSilently: vi.fn(),
-    notifyTurnComplete: vi.fn(),
-    notifyFreshResumptionHandle: vi.fn(),
-    notifyLiveClosed: vi.fn(),
-    runListenRotation: vi.fn(),
-    toggleListenMode: vi.fn(),
-    __deps: deps,
-  })),
-}));
-
 vi.mock("./live-messages.mjs", () => ({
   createLiveMessages: vi.fn((deps) => ({
     handleToolCall: vi.fn(),
@@ -32,8 +15,8 @@ vi.mock("./live-session.mjs", () => ({
     GreetGate: { fire: vi.fn() },
     getLiveSession: vi.fn(() => null),
     getLiveStatus: vi.fn(() => ({ running: false })),
-    getSpeakerMuted: vi.fn(() => false),
-    setSpeakerMuted: vi.fn(),
+    getListenOnlyEngaged: vi.fn(() => false),
+    toggleListenOnly: vi.fn(),
     getUserStopped: vi.fn(() => false),
     setResumptionHandle: vi.fn(),
     logPoBillingPathOnce: vi.fn(),
@@ -56,14 +39,13 @@ vi.mock("./window.mjs", () => ({
     updateTrayMenu: vi.fn(),
     createTray: vi.fn(),
     hudHotkey: vi.fn(() => "Alt+Space"),
-    muteHotkey: vi.fn(() => "Alt+M"),
     listenHotkey: vi.fn(() => "Alt+L"),
     installAppMenu: vi.fn(),
     __deps: deps,
   })),
 }));
 
-import { createListenMode as createListenModeReal } from "./listen-mode.mjs";
+import { createLiveMessages as createLiveMessagesReal } from "./live-messages.mjs";
 import { createLiveSession as createLiveSessionReal } from "./live-session.mjs";
 import { createWindowModule as createWindowModuleReal } from "./window.mjs";
 import { createLiveWiring } from "./wiring-live.mjs";
@@ -71,7 +53,7 @@ import { createLiveWiring } from "./wiring-live.mjs";
 // Cast to the vi.fn() mock shape — the real modules' JSDoc types don't
 // carry `.mock`, but vi.mock() above replaces them with mocks at runtime.
 /** @type {any} */
-const createListenMode = createListenModeReal;
+const createLiveMessages = createLiveMessagesReal;
 /** @type {any} */
 const createLiveSession = createLiveSessionReal;
 /** @type {any} */
@@ -96,41 +78,53 @@ function makeDeps(overrides = {}) {
     submitClaudeTask: vi.fn(),
     geminiTools: { buildLiveTools: vi.fn(() => []) },
     geminiPrompts: {
-      buildListenSystemInstructionText: vi.fn(() => ""),
       buildSystemInstructionText: vi.fn(() => ""),
-      buildListenEntryConfirmationPrompt: vi.fn(() => ""),
-      buildListenExitSynthesisPrompt: vi.fn(() => ""),
     },
     secondBrainCapability: { stopVaultGraphWatch: vi.fn(), probeSecondBrainAvailability: vi.fn(() => false) },
     setWindowModule: vi.fn(),
     setLiveSessionModule: vi.fn(),
-    setListenModeObject: vi.fn(),
     ...overrides,
   };
 }
 
 describe("wiring-live: createLiveWiring", () => {
-  it("constructs listen-mode, live-messages, live-session, and window without throwing", () => {
+  it("constructs live-messages, live-session, and window without throwing", () => {
     expect(() => createLiveWiring(makeDeps())).not.toThrow();
   });
 
-  it("constructs listen-mode first, then live-session last, matching the three-way dependency order", () => {
+  it("constructs live-messages before live-session, and live-session before window", () => {
     createLiveWiring(makeDeps());
-    const listenModeOrder = createListenMode.mock.invocationCallOrder.at(-1);
+    const liveMessagesOrder = createLiveMessages.mock.invocationCallOrder.at(-1);
     const liveSessionOrder = createLiveSession.mock.invocationCallOrder.at(-1);
     const windowOrder = createWindowModule.mock.invocationCallOrder.at(-1);
-    expect(listenModeOrder).toBeLessThan(liveSessionOrder);
+    expect(liveMessagesOrder).toBeLessThan(liveSessionOrder);
     expect(liveSessionOrder).toBeLessThan(windowOrder);
   });
 
   it("registers the constructed window and live-session modules back via the injected setters", () => {
     const setWindowModule = vi.fn();
     const setLiveSessionModule = vi.fn();
-    const setListenModeObject = vi.fn();
-    createLiveWiring(makeDeps({ setWindowModule, setLiveSessionModule, setListenModeObject }));
+    createLiveWiring(makeDeps({ setWindowModule, setLiveSessionModule }));
     expect(setWindowModule).toHaveBeenCalledTimes(1);
     expect(setLiveSessionModule).toHaveBeenCalledTimes(1);
-    expect(setListenModeObject).toHaveBeenCalledWith(fakeListenMode);
+  });
+
+  it("wires live-messages' isListenOnlyEngaged through to live-session's own state", () => {
+    createLiveWiring(makeDeps());
+    const liveMessagesDeps = createLiveMessages.mock.calls.at(-1)[0];
+    const liveSessionInstance = createLiveSession.mock.results.at(-1).value;
+    liveSessionInstance.getListenOnlyEngaged.mockReturnValue(true);
+    expect(liveMessagesDeps.isListenOnlyEngaged()).toBe(true);
+  });
+
+  it("wires window's isListenOnlyEngaged/toggleListenOnly through to live-session", () => {
+    createLiveWiring(makeDeps());
+    const windowDeps = createWindowModule.mock.calls.at(-1)[0];
+    const liveSessionInstance = createLiveSession.mock.results.at(-1).value;
+    liveSessionInstance.getListenOnlyEngaged.mockReturnValue(true);
+    expect(windowDeps.isListenOnlyEngaged()).toBe(true);
+    windowDeps.toggleListenOnly();
+    expect(liveSessionInstance.toggleListenOnly).toHaveBeenCalled();
   });
 
   it("fires logPoBillingPathOnce during construction", () => {
@@ -157,16 +151,14 @@ describe("wiring-live: createLiveWiring", () => {
         "updateTrayMenu",
         "createTray",
         "hudHotkey",
-        "muteHotkey",
         "listenHotkey",
         "installAppMenu",
         "setRendererSecurity",
         "startLive",
         "stopLive",
         "GreetGate",
-        "setSpeakerMuted",
-        "toggleListenMode",
-        "isListenModeEngaged",
+        "toggleListenOnly",
+        "isListenOnlyEngaged",
         "sendCommand",
         "sendAudioChunk",
       ].sort(),

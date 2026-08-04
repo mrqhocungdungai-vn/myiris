@@ -29,7 +29,7 @@ const EXPECTED_HANDLE = [
   "sidecar:start",
   "sidecar:stop",
   "sidecar:status",
-  "listen-mode:query",
+  "listen-only:query",
   "sidecar:command",
   "sessions:get",
   "sessions:select",
@@ -56,13 +56,12 @@ const EXPECTED_HANDLE = [
 ].sort();
 
 const EXPECTED_ON = [
-  "listen-mode:toggle-request",
+  "listen-only:toggle-request",
   "hud:interactive",
   "win:control",
   "iris:boot-done",
   "iris:ui-context",
   "live:audio",
-  "iris:speaker-mute-state",
 ].sort();
 
 function makeDeps(overrides = {}) {
@@ -75,9 +74,8 @@ function makeDeps(overrides = {}) {
     stopLive: vi.fn(),
     getLiveStatus: vi.fn(() => ({ running: false })),
     greetGateFire: vi.fn(),
-    setSpeakerMuted: vi.fn(),
-    toggleListenMode: vi.fn(),
-    isListenModeEngaged: vi.fn(() => false),
+    toggleListenOnly: vi.fn(),
+    isListenOnlyEngaged: vi.fn(() => false),
     sendCommand: vi.fn(),
     sendAudioChunk: vi.fn(),
     sessionsSnapshot: vi.fn(() => ({ sessions: [] })),
@@ -137,17 +135,17 @@ describe("ipc: handlers marshal and delegate", () => {
     expect(deps.startLive).toHaveBeenCalled();
   });
 
-  it("listen-mode:toggle-request delegates to toggleListenMode", () => {
+  it("listen-only:toggle-request delegates to toggleListenOnly", () => {
     const deps = makeDeps();
     registerIpc(deps);
-    electron.__test.onCalls.get("listen-mode:toggle-request")();
-    expect(deps.toggleListenMode).toHaveBeenCalled();
+    electron.__test.onCalls.get("listen-only:toggle-request")();
+    expect(deps.toggleListenOnly).toHaveBeenCalled();
   });
 
-  it("listen-mode:query reports the injected engagement accessor", () => {
-    const deps = makeDeps({ isListenModeEngaged: vi.fn(() => true) });
+  it("listen-only:query reports the injected engagement accessor", () => {
+    const deps = makeDeps({ isListenOnlyEngaged: vi.fn(() => true) });
     registerIpc(deps);
-    expect(electron.__test.handleCalls.get("listen-mode:query")()).toEqual({ engaged: true });
+    expect(electron.__test.handleCalls.get("listen-only:query")()).toEqual({ engaged: true });
   });
 
   it("hud:toggle toggles, refreshes the tray, and reports the new mode", () => {
@@ -169,13 +167,6 @@ describe("ipc: handlers marshal and delegate", () => {
     expect(win.minimize).toHaveBeenCalled();
   });
 
-  it("iris:speaker-mute-state sets the mute flag and refreshes the tray", () => {
-    const deps = makeDeps();
-    registerIpc(deps);
-    electron.__test.onCalls.get("iris:speaker-mute-state")(null, true);
-    expect(deps.setSpeakerMuted).toHaveBeenCalledWith(true);
-    expect(deps.updateTrayMenu).toHaveBeenCalled();
-  });
 });
 
 describe("ipc: capability composition (design.md D10)", () => {

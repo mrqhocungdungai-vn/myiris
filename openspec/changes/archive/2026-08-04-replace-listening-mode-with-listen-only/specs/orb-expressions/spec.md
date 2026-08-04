@@ -1,8 +1,4 @@
-## Purpose
-
-TBD — orb micro-expressions and synthesized interface sound cues for the Orbital Deck UI.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Orb micro-expressions
 
@@ -53,37 +49,3 @@ How the orb's glow is produced SHALL follow the WebGL quality preference (see `w
 
 - **WHEN** rotation and/or scale inputs are provided
 - **THEN** the orb visually rotates/scales accordingly while thinking swirl, wake pulse, ripple, and task flashes continue to render exactly as before
-
-### Requirement: Orb render loop pauses when inactive
-
-The orb's WebGL render loop SHALL stop consuming GPU (no continuous frame advancement) when Iris is asleep, and SHALL resume automatically on wake, without losing its current expressive state. In deck mode the loop SHALL additionally pause when the deck window loses OS focus and resume when focus returns. In HUD mode — the always-on-top overlay the user keeps visible while working in other applications — the overlay orb SHALL pause only when Iris is asleep and SHALL keep rendering while awake even when the OS window is unfocused, because the HUD orb is the ambient liveness indicator and pausing it on blur would defeat the overlay's purpose.
-
-#### Scenario: Pauses on sleep
-
-- **WHEN** Iris transitions to the asleep state (in deck mode or HUD mode)
-- **THEN** the orb's render loop stops advancing frames
-
-#### Scenario: Pauses on unfocus in deck mode
-
-- **WHEN** the deck window loses OS focus
-- **THEN** the orb's render loop stops advancing frames, and resumes advancing when focus returns
-
-#### Scenario: HUD orb keeps rendering while awake and unfocused
-
-- **WHEN** HUD mode is active, Iris is awake, and the OS window is unfocused (the user is working in another app)
-- **THEN** the overlay orb's render loop keeps advancing frames
-- **AND** it stops advancing only when Iris goes asleep, resuming on wake
-
-### Requirement: Synthesized interface sounds with mute
-
-The renderer SHALL play synthesized Web Audio cues (no audio assets) for wake, sleep, task submitted, task completed, task failed, and approval/attention moments, gated by a persisted mute toggle (default: sounds on).
-
-#### Scenario: Task lifecycle cues
-
-- **WHEN** a Claude task is submitted and later completes
-- **THEN** the task-sent cue plays at submission and the task-done (or task-failed) cue plays at completion
-
-#### Scenario: Mute silences everything
-
-- **WHEN** the mute toggle is enabled
-- **THEN** no interface cue plays, and the preference persists across app restarts

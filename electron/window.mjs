@@ -1,8 +1,8 @@
 // The main window, the Glass HUD shape-morph, and the menu-bar tray. Split
 // out of electron/main.mjs (split-main-process-modules): one of the four
 // modules permitted to import Electron directly. Every collaborator this
-// module doesn't own (the renderer bridge, Live status, listening mode, the
-// second-brain vault watcher, the app icon/repo root) is injected.
+// module doesn't own (the renderer bridge, Live status, listen-only mode,
+// the second-brain vault watcher, the app icon/repo root) is injected.
 import electron from "electron";
 import fs from "node:fs";
 import path from "node:path";
@@ -20,9 +20,8 @@ const { app, BrowserWindow, Menu, Tray, screen } = electron;
  *   stopVaultGraphWatch: () => void,
  *   probeSecondBrainAvailability: () => boolean,
  *   getLiveStatus: () => { running: boolean },
- *   getSpeakerMuted: () => boolean,
- *   isListenModeEngaged: () => boolean,
- *   toggleListenMode: () => void,
+ *   isListenOnlyEngaged: () => boolean,
+ *   toggleListenOnly: () => void,
  * }} deps
  */
 export function createWindowModule({
@@ -35,9 +34,8 @@ export function createWindowModule({
   stopVaultGraphWatch,
   probeSecondBrainAvailability,
   getLiveStatus,
-  getSpeakerMuted,
-  isListenModeEngaged,
-  toggleListenMode,
+  isListenOnlyEngaged,
+  toggleListenOnly,
 }) {
   let mainWindow = null;
 
@@ -190,17 +188,12 @@ export function createWindowModule({
           click: () => emitToRenderer(liveStatus.running ? "iris:sleep" : "iris:wake", {}),
         },
         {
-          label: getSpeakerMuted() ? "Unmute speaker" : "Mute speaker",
-          enabled: liveStatus.running,
-          click: () => emitToRenderer("iris:mute-toggle", {}),
-        },
-        {
-          // Main owns this state directly (design.md Decision 11) — calls
-          // toggleListenMode() itself rather than dispatching to the
+          // Main owns this state directly (design.md D3) — calls
+          // toggleListenOnly() itself rather than dispatching to the
           // renderer, so this still works with no window open.
-          label: isListenModeEngaged() ? "End listening mode" : "Start listening mode",
+          label: isListenOnlyEngaged() ? "Disable Listen-only Mode" : "Enable Listen-only Mode",
           enabled: liveStatus.running,
-          click: () => toggleListenMode(),
+          click: () => toggleListenOnly(),
         },
         { label: uiMode === "hud" ? "Exit Glass HUD" : "Enter Glass HUD", click: () => toggleHud() },
         { type: "separator" },
@@ -231,10 +224,6 @@ export function createWindowModule({
 
   function hudHotkey() {
     return process.env.IRIS_HUD_HOTKEY || "Alt+Space";
-  }
-
-  function muteHotkey() {
-    return process.env.IRIS_MUTE_HOTKEY || "Alt+M";
   }
 
   function listenHotkey() {
@@ -277,7 +266,6 @@ export function createWindowModule({
     updateTrayMenu,
     createTray,
     hudHotkey,
-    muteHotkey,
     listenHotkey,
     installAppMenu,
   };

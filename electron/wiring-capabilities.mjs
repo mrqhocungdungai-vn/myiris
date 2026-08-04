@@ -46,7 +46,6 @@ import { createSecondBrainCapability } from "./capabilities/second-brain.mjs";
  *   modelChoices: Array<{ id: string, label: string }>,
  *   envFlag: (name: string, fallback?: boolean) => boolean,
  *   workspaceContextLine: () => string,
- *   fenceUntrustedText: (text: string, label: string) => string,
  * }} deps
  */
 export function createCapabilitiesWiring({
@@ -80,7 +79,6 @@ export function createCapabilitiesWiring({
   modelChoices,
   envFlag,
   workspaceContextLine,
-  fenceUntrustedText,
 }) {
   // Canvas capability (canvas-claude-mcp) and second-brain capability
   // (personal-knowledge-notes, second-brain-galaxy-view), gathered end to end
@@ -147,7 +145,6 @@ export function createCapabilitiesWiring({
     envFlag,
     userDisplayName,
     workspaceContextLine,
-    fenceUntrustedText,
     capabilities,
   });
 

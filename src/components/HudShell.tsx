@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, type CSSProperties, type RefObject } from "react";
 import {
   ChevronDown,
-  Ear,
-  EarOff,
   Hand,
+  Headphones,
+  HeadphoneOff,
   Maximize2,
   MessageSquare,
   Mic,
@@ -12,8 +12,6 @@ import {
   PenTool,
   Power,
   Terminal,
-  Volume2,
-  VolumeX,
 } from "lucide-react";
 import ReactorCore, { ORB_ACCENT, ORB_ENERGY } from "./ReactorCore";
 import WorkCard from "./WorkCard";
@@ -90,10 +88,10 @@ export default function HudShell({
   wakeWordEnabled,
   muted,
   onToggleMute,
-  outputMuted,
-  onToggleOutputMute,
-  listenModeEngaged,
-  onToggleListenMode,
+  listenOnlyEngaged,
+  onToggleListenOnly,
+  commsOpen,
+  onToggleComms,
   onWake,
   onSleep,
   onExitHud,
@@ -148,12 +146,14 @@ export default function HudShell({
   wakeWordEnabled: boolean;
   muted: boolean;
   onToggleMute: () => void;
-  outputMuted: boolean;
-  onToggleOutputMute: () => void;
-  // Listening mode's only affordance (add-listening-mode design.md D11):
-  // pure display of main-owned state, toggled by request only.
-  listenModeEngaged: boolean;
-  onToggleListenMode: () => void;
+  // Listen-only mode's only affordance (replace-listening-mode-with-listen-only
+  // design.md D3): pure display of main-owned state, toggled by request only.
+  listenOnlyEngaged: boolean;
+  onToggleListenOnly: () => void;
+  // Lifted out of this component's local state (design.md D7) so engaging
+  // listen-only mode can force it open, and disengaging can restore it.
+  commsOpen: boolean;
+  onToggleComms: () => void;
   onWake: () => void;
   onSleep: () => void;
   onExitHud: () => void;
@@ -220,9 +220,9 @@ export default function HudShell({
   const visibleTasks = tasks;
   const recentTranscript = transcript.slice(-8);
   // Comms is glanceable, not essential — collapsed by default (the caption
-  // pill by the orb already shows the latest line). Tasks are the core of the
-  // HUD, so they start open but can be tucked away the same way.
-  const [commsOpen, setCommsOpen] = useState(false);
+  // pill by the orb already shows the latest line), and lifted to App.tsx so
+  // engaging listen-only mode can force it open (design.md D7). Tasks are the
+  // core of the HUD, so they start open but can be tucked away the same way.
   const [workOpen, setWorkOpen] = useState(true);
 
   return (
@@ -289,7 +289,7 @@ export default function HudShell({
             <button
               type="button"
               className={`hud-comms-toggle hud-hit ${commsOpen ? "open" : ""}`}
-              onClick={() => setCommsOpen((current) => !current)}
+              onClick={onToggleComms}
               title={commsOpen ? "Collapse conversation" : "Show conversation"}
             >
               <MessageSquare size={12} />
@@ -373,18 +373,11 @@ export default function HudShell({
                 {muted ? <MicOff size={14} /> : <Mic size={14} />}
               </button>
               <button
-                className={`hud-btn ${outputMuted ? "muted" : ""}`}
-                onClick={onToggleOutputMute}
-                title={outputMuted ? "Unmute speaker" : "Mute speaker"}
+                className={`hud-btn ${listenOnlyEngaged ? "" : "muted"}`}
+                onClick={onToggleListenOnly}
+                title={listenOnlyEngaged ? "Disable listen-only mode" : "Enable listen-only mode"}
               >
-                {outputMuted ? <VolumeX size={14} /> : <Volume2 size={14} />}
-              </button>
-              <button
-                className={`hud-btn ${listenModeEngaged ? "" : "muted"}`}
-                onClick={onToggleListenMode}
-                title={listenModeEngaged ? "End listening mode" : "Start listening mode"}
-              >
-                {listenModeEngaged ? <Ear size={14} /> : <EarOff size={14} />}
+                {listenOnlyEngaged ? <Headphones size={14} /> : <HeadphoneOff size={14} />}
               </button>
               <button className="hud-btn danger" onClick={onSleep} title="Sleep">
                 <Power size={14} />
