@@ -30,6 +30,18 @@ describe("isUserNote", () => {
     expect(isUserNote("ingested/paper.md")).toBe(false);
   });
 
+  // vault-write-path design D5: the machine-written spool (run-outcome records
+  // and captures awaiting curation) must never be counted as user notes, or
+  // Iris's own bookkeeping accumulates as apparent knowledge, one node per day.
+  it("excludes the machine-written spool at the vault root", () => {
+    expect(isUserNote("inbox/runs/2026-08-04.md")).toBe(false);
+    expect(isUserNote("inbox/captures/2026-08-04.md")).toBe(false);
+  });
+
+  it("does not exclude a user note nested below a non-root folder named like the spool", () => {
+    expect(isUserNote("Projects/inbox/Idea.md")).toBe(true);
+  });
+
   it("excludes dotfiles and dot-directories", () => {
     expect(isUserNote(".DS_Store")).toBe(false);
     expect(isUserNote(".obsidian/workspace.json")).toBe(false);
@@ -108,6 +120,16 @@ describe("parseVaultFiles", () => {
 
   it("uses the bare basename as id when there is no collision", () => {
     const { nodes } = parseVaultFiles([file("projects/Ideas.md", "")]);
+
+    expect(nodes.map((n) => n.id)).toEqual(["Ideas"]);
+  });
+
+  // The scanner filters by isUserNote before this ever sees a file, but a
+  // regression there would otherwise turn a spool file into a junk node — this
+  // asserts the same filtering the scanner applies end-to-end.
+  it("yields only the real note when a spool file and a real note both pass through the isUserNote filter", () => {
+    const allFiles = [file("inbox/runs/2026-08-04.md", "## a run"), file("Ideas.md", "")];
+    const { nodes } = parseVaultFiles(allFiles.filter((f) => isUserNote(f.relativePath)));
 
     expect(nodes.map((n) => n.id)).toEqual(["Ideas"]);
   });

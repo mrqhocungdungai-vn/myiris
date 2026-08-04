@@ -127,7 +127,8 @@ Electron-free and importable in a plain vitest file with no harness. See the
 - **`electron/verbs.mjs`** — the verb registry: one record per verb (statefulness, park label, session key, model, skills, MCP servers, budget, parameter schema, persona, clause). Pure, Electron-free, and the single definition every consumer derives from.
 - **`electron/run-dispatch.mjs`** (+ **`run-stream.mjs`**, **`run-exec.mjs`**) — the pre-dispatch review gate and tool-execution surface; run activity/tool-step streaming and the live-question relay; driving both run shapes (stateful and stateless, both via the Agent SDK's `query()`).
 - **`electron/run-context.mjs`** (+ **`untrusted-text.mjs`**) — composes a run's brief from its verb's own parameter schema and attaches the bounded, fenced transcript of what the user actually said.
-- **`electron/run-inbox.mjs`** — appends one record per finished run to the second-brain inbox. A plain `fs` append: no run, no tokens, no execution slot.
+- **`electron/vault-write.mjs`** — the one module that owns writing to the second-brain vault: synchronous and async spool-append (`appendSpoolRecordSync`/`appendSpoolRecord`), plus an atomic, title-sanitized note-page writer (`createNotePage`). Electron-free, injected `fs`, never throws.
+- **`electron/run-inbox.mjs`** — appends one record per finished run to the second-brain run-outcome spool, through `vault-write.mjs`. A plain `fs` append: no run, no tokens, no execution slot.
 - **`electron/announcements.mjs`** — voice announcements to the Live session, buffered while offline.
 - **`electron/pipeline-probes.mjs`** / **`pipeline-install.mjs`** — Claude/OpenSpec availability probing (binary + credential) and skill installation.
 - **`electron/bundled-binaries.mjs`** — resolves the app's own `claude` and `openspec`, including the `app.asar` → `app.asar.unpacked` rewrite. The only module that knows asar exists.

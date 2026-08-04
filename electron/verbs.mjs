@@ -291,7 +291,7 @@ const VERBS = Object.freeze({
   capture_learning: {
     label: "Notes",
     description:
-      "Work with the user's second brain: weave what has accumulated into the vault, save something worth keeping, or answer from what is already there. Use for 'save what we learned', 'write that down', 'what do my notes say about X'. Only call this when the user asks — offer it, never run it on your own initiative.",
+      "Curate the user's second brain: weave accumulated captures and run records into linked wiki pages, write something up as a proper page, or answer a question from what is already there. Use for 'weave in what we've learned', 'write that up as a page', 'what do my notes say about X'. Do NOT use this for a plain 'note this down' / 'save that' / 'ghi chú lại' — that is the instant capture_note tool, not this verb. Only call this when the user asks — offer it, never run it on your own initiative.",
     stateful: false,
     park: PARK.NEVER,
     sessionKey: "capture_learning",
@@ -311,13 +311,20 @@ const VERBS = Object.freeze({
           type: "string",
           description: "What to concentrate on. Omit to process whatever has accumulated in the inbox since the last time.",
         },
-        save: { type: "string", description: "Something specific the user asked to record, in their own words." },
+        save: {
+          type: "string",
+          description:
+            "Write this up as a curated, linked wiki page — distinct from a raw capture_note. Only set this for an explicit " +
+            "'write this up as a page' request, in the user's own words.",
+        },
       },
       required: [],
     },
     basePersona: STATELESS,
     clause:
-      "Work in the personal-notes vault. Read the run inbox for what has happened since it was last processed, then crystallize and integrate it — failures are at least as worth keeping as successes.",
+      "Work in the personal-notes vault. Read BOTH run-inbox spools for what has happened since they were last processed — " +
+      "inbox/runs (finished-run outcomes) and inbox/captures (raw captures awaiting curation) — then crystallize and integrate " +
+      "it into linked wiki pages; failures are at least as worth keeping as successes.",
   },
 });
 

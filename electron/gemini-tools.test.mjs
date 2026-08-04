@@ -110,4 +110,19 @@ describe("gemini-tools", () => {
     const names = tools[0].functionDeclarations.map((d) => d.name);
     expect(names).toContain("draw_shape");
   });
+
+  // pipeline-availability spec: "A worker-free local tool still works" — a
+  // capability's tool declarations are concatenated outside the
+  // pipelineAvailable gate, so a tool like capture_note survives chat-only
+  // mode while every verb stays withheld.
+  it("declares a capability's worker-free tool in chat-only mode while withholding every verb", () => {
+    const captureCapability = { toolDeclarations: [{ name: "capture_note", parameters: { type: "object", properties: {} } }] };
+    const names = make({ pipelineAvailable: false, capabilities: [captureCapability] }).buildClaudeTools()[0].functionDeclarations.map(
+      (d) => d.name,
+    );
+    expect(names).toContain("capture_note");
+    for (const verb of VERB_NAMES) {
+      expect(names).not.toContain(verb);
+    }
+  });
 });

@@ -281,6 +281,12 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     hasLiveStatefulSession: (workstreamId) => Boolean(getPoSessionState(workstreamId)),
     getUiContextSnapshot,
     resolvePendingPoQuestion,
+    // secondBrainCapability is constructed further down (see the forward
+    // declaration above) — same thunk-through-a-closure shape as
+    // checkNotesSkillsStatus/ensureNotesVaultReady elsewhere in this file, since
+    // this tool can only actually be called once the live session is up, long
+    // after wiring finishes.
+    captureNote: (args) => secondBrainCapability.captureNote(args),
   });
   const {
     PendingReview,

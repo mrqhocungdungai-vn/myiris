@@ -145,6 +145,15 @@ describe("the verb registry", () => {
     }
   });
 
+  // vault-write-path design D3: without this, wiki-query would search only
+  // the curated wiki and answer "nothing found" about a note the user just
+  // captured through capture_note — the clause naming the spool is what makes
+  // the run actually read it.
+  it("names the capture spool in capture_learning's clause, so a fresh capture is findable", () => {
+    expect(resolveVerb("capture_learning").clause).toMatch(/inbox\/captures/);
+    expect(resolveVerb("capture_learning").clause).toMatch(/inbox\/runs/);
+  });
+
   it("grants the notes vault only to the capture verb", () => {
     expect(resolveVerb("capture_learning").vault).toBe(true);
     for (const name of VERB_NAMES.filter((verb) => verb !== "capture_learning")) {

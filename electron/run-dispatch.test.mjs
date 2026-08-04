@@ -44,6 +44,7 @@ function make(overrides = {}) {
     hasLiveStatefulSession: () => false,
     getUiContextSnapshot: () => ({ uiMode: "deck" }),
     resolvePendingPoQuestion: vi.fn(() => ({ status: "ok" })),
+    captureNote: vi.fn(async () => ({ status: "ok", message: "Saved to your notes.", file: "/vault/inbox/captures/x.md" })),
     ...overrides,
   });
 }
@@ -271,6 +272,17 @@ describe("run-dispatch: executeClaudeTool", () => {
     const dispatchModule = make({ getPipelineAvailable: () => false });
     const result = await dispatchModule.executeClaudeTool("get_ui_context", {});
     expect(result.uiMode).toBe("deck");
+  });
+
+  // vault-write-path design D4/D7: capture is a plain file write, not a verb —
+  // it must reach the capability's handler with no pipeline gate in the way,
+  // the same as any other worker-free tool.
+  it("routes capture_note to the injected handler regardless of pipeline availability", async () => {
+    const captureNote = vi.fn(async () => ({ status: "ok", message: "Saved to your notes.", file: "/vault/x.md" }));
+    const dispatchModule = make({ getPipelineAvailable: () => false, captureNote });
+    const result = await dispatchModule.executeClaudeTool("capture_note", { text: "remember this" });
+    expect(captureNote).toHaveBeenCalledWith({ text: "remember this" });
+    expect(result.status).toBe("ok");
   });
 
   it("routes control_ui only for known actions", async () => {

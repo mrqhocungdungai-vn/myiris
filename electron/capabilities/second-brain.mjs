@@ -8,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { createVaultGraph } from "../vault-graph.mjs";
 import { appendRunRecord, inboxBacklog } from "../run-inbox.mjs";
+import { appendSpoolRecord, captureSpoolDir, runSpoolDir } from "../vault-write.mjs";
 
 // Personal-knowledge-notes capability (see openspec/changes/llm-wiki/): the
 // LLM-Wiki vault is pinned to this fixed, user-level path, independent of any
@@ -17,7 +18,13 @@ const NOTES_VAULT_DIR = path.join(os.homedir(), "iris-second-brain");
 // Where every finished run's record is appended (design.md D5). Inside the
 // vault, so `capture_learning` reaches it through the same granted directory it
 // already has, with nothing extra to wire.
-const NOTES_INBOX_DIR = path.join(NOTES_VAULT_DIR, "inbox", "runs");
+const NOTES_INBOX_DIR = runSpoolDir(NOTES_VAULT_DIR);
+
+// Where a voice capture lands, awaiting curation (vault-write-path design D3).
+// A one-line spoken thought has no title, tags, or links, so it goes to the
+// spool rather than becoming a page — promotion to a linked page is the
+// curator's job.
+const NOTES_CAPTURES_DIR = captureSpoolDir(NOTES_VAULT_DIR);
 
 // How many un-synthesized records make it worth OFFERING to weave them in.
 // Offering too eagerly trains the user to say no; the number is a threshold for
@@ -37,6 +44,33 @@ const INBOX_OFFER_THRESHOLD = 8;
 // ungoverned note format or hallucinate the skill's behavior instead of
 // doing the real LLM-Wiki workflow.
 const NOTES_SKILLS = ["wiki-config", "wiki-ingest", "wiki-query", "wiki-lint", "wiki-integrate", "wiki-crystallize"];
+
+// Capture's own declaration (vault-write-path design D4): it is NOT a verb —
+// it starts no Claude run, so it does not belong in the registry that
+// `capture_learning` (curation) is defined in. Declared unconditionally
+// (gemini-tools.mjs concatenates every capability's toolDeclarations outside
+// the pipelineAvailable gate), so it survives chat-only mode.
+const CAPTURE_NOTE_DECLARATION = {
+  name: "capture_note",
+  description:
+    "Save a thought directly to the user's personal notes vault, right now — a plain file write: no Claude run, no tokens, " +
+    "no execution slot, and it works even with no Claude credential configured. Use for 'note this down', 'save that', " +
+    "'ghi chú lại: …'. Confirm only after this reports status 'ok'; if it reports an error, tell the user the capture failed " +
+    "rather than saying it was saved. This only appends the raw thought — for weaving accumulated captures into the wiki, " +
+    "retrieving from notes, or an explicit 'write this up as a page' request, use the capture_learning verb instead.",
+  parameters: {
+    type: "object",
+    properties: {
+      text: {
+        type: "string",
+        description: "The thought to capture, in the user's own words, as close to verbatim as you can manage.",
+      },
+      title: { type: "string", description: "A short title, only if the user gave one or it is obvious. Optional." },
+      tags: { type: "string", description: "Comma-separated tags, only if obvious from context. Optional." },
+    },
+    required: ["text"],
+  },
+};
 
 // Loose heuristic for the vault-write backstop below — matches common
 // English/Vietnamese phrasing for "save/capture a note" (mirrors the example
@@ -187,34 +221,79 @@ export function createSecondBrainCapability({
     });
   }
 
+  // The capture record's own shape (design D3): a raw voice capture has no
+  // title, tags, or links by default — those are honoured when Gemini supplies
+  // them, but the common case is a bare thought. Owned here, not by
+  // vault-write.mjs, on the same D1 split run-inbox.mjs already uses: that
+  // module owns writing, this capability owns what a record looks like.
+  function renderCaptureRecord({ text, title, tags, now = () => new Date() }) {
+    const tagList = Array.isArray(tags)
+      ? tags
+      : typeof tags === "string" && tags
+        ? tags.split(",").map((t) => t.trim()).filter(Boolean)
+        : [];
+    const lines = [`## ${now().toISOString()}`];
+    if (title) lines.push(`- title: ${title}`);
+    if (tagList.length) lines.push(`- tags: ${tagList.join(", ")}`);
+    lines.push("", text, "");
+    return lines.join("\n");
+  }
+
+  // The capture tool's handler (personal-knowledge-notes, vault-write-path
+  // design D4): a direct file write, not a run. Ensures the vault exists first
+  // (design D7) so a first-ever capture on a machine with no vault yet still
+  // lands, then appends to the capture spool and reports what the filesystem
+  // actually did — never a claim of success before the write settles (spec: "A
+  // capture whose write fails is reported as failed, not confirmed").
+  /** @param {{ text?: string, title?: string, tags?: string | string[] }} [params] */
+  async function captureNote({ text, title, tags } = {}) {
+    const trimmed = String(text ?? "").trim();
+    if (!trimmed) return { status: "error", error: "Nothing to capture — text is required." };
+    ensureNotesVaultReady();
+    const result = await appendSpoolRecord({
+      dir: NOTES_CAPTURES_DIR,
+      content: renderCaptureRecord({ text: trimmed, title, tags }),
+    });
+    if (!result.ok) return { status: "error", error: `Could not save the note: ${result.error}` };
+    return { status: "ok", message: "Saved to your notes.", file: result.file };
+  }
+
   // What is waiting to be synthesized. Read by the voice layer's prose below so
-  // Iris can offer — never so it can act.
+  // Iris can offer — never so it can act. Counts both spools (design D3): a
+  // capture waiting for curation is material too, not just finished-run
+  // records.
   function notesInboxStatus() {
-    const backlog = inboxBacklog({ dir: NOTES_INBOX_DIR });
+    const backlog = inboxBacklog({ dir: [NOTES_INBOX_DIR, NOTES_CAPTURES_DIR] });
     return { ...backlog, worthProcessing: backlog.records >= INBOX_OFFER_THRESHOLD };
   }
 
   function promptFragment() {
-    // Pipeline-availability gate mirrors the pre-split behavior and is a hard
-    // requirement of role-capabilities. Notes-skills gate is additional (not
-    // just pipelineAvailable) — otherwise Iris could offer a save the worker
-    // would refuse (role-capabilities "No offer when notes skills are not
-    // installed").
+    // Capture needs no worker, so this half is NEVER gated on
+    // getPipelineAvailable()/notes-skills (pipeline-availability spec: "A
+    // worker-free local tool still works" in chat-only mode). Curation and
+    // retrieval genuinely run on the worker, through the capture_learning
+    // verb, so that half stays gated exactly as before.
     //
     // What this no longer does is describe how to route note work through a
-    // general-purpose task tool. The second brain has its own verb with its own
-    // schema, so this fragment says only what a schema cannot: when to offer.
-    if (!getPipelineAvailable() || !checkNotesSkillsStatus().ok) return "";
+    // general-purpose task tool. The second brain has its own callable
+    // surfaces (capture_note, capture_learning), so this fragment says only
+    // what a schema cannot: when to offer.
+    const captureGuidance =
+      `SECOND BRAIN — ${userDisplayName()} has a personal notes vault. capture_note saves a thought directly, right now, ` +
+      "with no Claude run and no credential required. After a conversational exchange has produced durable value (a research " +
+      'result, a worked-out decision), you MAY offer ONCE, in a single short line, to save it (e.g. "Want me to save that to ' +
+      'your notes?"). Never auto-save and never repeat the offer for the same exchange; if declined or ignored, drop it ' +
+      "silently. Always honor an explicit save request whether or not you offered.";
+
+    if (!getPipelineAvailable() || !checkNotesSkillsStatus().ok) return captureGuidance;
+
     const backlog = notesInboxStatus();
     const nudge = backlog.worthProcessing
-      ? ` Right now ${backlog.records} finished runs are waiting to be woven in — you MAY mention that once, in one short line, and offer to do it. Never start it unprompted.`
+      ? ` Right now ${backlog.records} items are waiting to be woven in — you MAY mention that once, in one short line, and offer to do it. Never start it unprompted.`
       : "";
     return (
-      `SECOND BRAIN — ${userDisplayName()} has a personal notes vault, reachable through the capture_learning verb. ` +
-      "After a conversational exchange has produced durable value (a research result, a worked-out decision), you MAY offer ONCE, " +
-      'in a single short line, to save it (e.g. "Want me to save that to your notes?"). Never auto-save and never repeat the offer ' +
-      "for the same exchange; if declined or ignored, drop it silently. Always honor an explicit save or retrieve request whether or " +
-      `not you offered.${nudge}`
+      `${captureGuidance} Retrieving from notes ("what do my notes say about X") or weaving accumulated captures into the ` +
+      `wiki goes through the capture_learning verb; always honor an explicit request for either.${nudge}`
     );
   }
 
@@ -282,16 +361,18 @@ export function createSecondBrainCapability({
   }
 
   return {
-    // The second brain contributes no declaration of its own: `capture_learning`
-    // is a verb in the registry, and the registry is the single place a verb is
-    // defined. A capability adding a second, parallel declaration for the same
-    // work is exactly the duplication the registry exists to prevent. What
-    // changed is that it IS reachable as a function now, rather than only as
-    // prose telling the voice layer to describe it correctly to a general tool.
-    toolDeclarations: [],
+    // capture_learning (curation/retrieval) is a verb in the registry, and the
+    // registry is the single place a verb is defined — no parallel declaration
+    // for it here. capture_note is different: it is NOT a verb (design D4), so
+    // its declaration belongs to the capability that owns it, the same way
+    // canvas's MCP tools are declared by a run's `mcpServers`, not a capability
+    // toolDeclaration — this is the one place a non-verb tool is declared.
+    toolDeclarations: [CAPTURE_NOTE_DECLARATION],
     notesVaultDir: NOTES_VAULT_DIR,
     notesInboxDir: NOTES_INBOX_DIR,
+    notesCapturesDir: NOTES_CAPTURES_DIR,
     captureRunOutcome,
+    captureNote,
     notesInboxStatus,
     checkNotesSkillsStatus,
     ensureNotesVaultReady,

@@ -41,6 +41,7 @@ const DEPRECATED_TASK_TOOL = "submit_claude_task";
  *   hasLiveStatefulSession: (workstreamId: string) => boolean,
  *   getUiContextSnapshot: () => any,
  *   resolvePendingPoQuestion: (answers: any) => any,
+ *   captureNote: (args: any) => Promise<any>,
  * }} deps
  */
 export function createRunDispatch({
@@ -61,6 +62,7 @@ export function createRunDispatch({
   hasLiveStatefulSession,
   getUiContextSnapshot,
   resolvePendingPoQuestion,
+  captureNote,
 }) {
   // Parks a Gemini-authored brief for Approve/Edit/Cancel before any Claude
   // tokens are spent (prompt-review-gate spec). Mirrors run-stream.mjs's
@@ -492,6 +494,11 @@ export function createRunDispatch({
         return getUiContext();
       case "control_ui":
         return controlUi(args);
+      case "capture_note":
+        // NOT in PIPELINE_ONLY_TOOLS, deliberately: a plain file write needs no
+        // worker, so it must survive chat-only mode (design D4/D7,
+        // pipeline-availability spec "A worker-free local tool still works").
+        return captureNote(args);
       case "go_to_sleep":
         // Give the goodbye a moment to play before the renderer tears down
         // audio (its stop() flushes playback immediately).

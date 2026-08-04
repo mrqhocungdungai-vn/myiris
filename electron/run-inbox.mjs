@@ -22,12 +22,12 @@
 // Electron-free; `fs` is injected so this is testable without touching disk.
 import fs from "node:fs";
 import path from "node:path";
+import { appendSpoolRecordSync, spoolFileFor } from "./vault-write.mjs";
 
-/** One file per day, so the inbox is trivially readable and trivially bounded. */
-export function inboxFileFor(date = new Date()) {
-  const iso = date.toISOString().slice(0, 10);
-  return `${iso}.md`;
-}
+// This module owns what a run record looks like; electron/vault-write.mjs
+// owns writing it (vault-write-path design D1) — so the date-derived filename
+// is that module's helper, kept under this name here rather than duplicated.
+export const inboxFileFor = spoolFileFor;
 
 // Multi-line values (a run's output) are folded into a blockquote so one record
 // can never be mistaken for the start of the next.
@@ -77,44 +77,45 @@ export function renderInboxRecord(run, maxOutputChars = 2000) {
 /**
  * Appends one record. Never throws: bookkeeping must not be able to disturb a
  * run that has already finished, and a full disk is not a reason to lose the
- * user's result. Reports the failure through `onError` instead.
+ * user's result. Reports the failure through `onError` instead. The write
+ * itself is `vault-write.mjs`'s job (design D1); this keeps only the record's
+ * shape and this function's existing synchronous, never-throws signature.
  *
  * @param {{ dir: string, run: any, now?: () => Date, io?: typeof fs, onError?: (error: Error) => void }} input
  * @returns {{ ok: boolean, file?: string, error?: string }}
  */
-export function appendRunRecord({ dir, run, now = () => new Date(), io = fs, onError }) {
-  const file = path.join(dir, inboxFileFor(now()));
-  try {
-    io.mkdirSync(dir, { recursive: true });
-    io.appendFileSync(file, renderInboxRecord(run), "utf8");
-    return { ok: true, file };
-  } catch (error) {
-    onError?.(/** @type {Error} */ (error));
-    return { ok: false, error: /** @type {Error} */ (error).message };
-  }
+export function appendRunRecord({ dir, run, now, io, onError }) {
+  return appendSpoolRecordSync({ dir, content: renderInboxRecord(run), now, io, onError });
 }
 
 /**
  * How much is waiting to be synthesized, so Iris can OFFER `capture_learning`
  * when there is enough to be worth it — and never run it unprompted. Counts
  * records rather than files, because "three days of one run each" and "one day
- * of three runs" are the same amount of material.
- * @param {{ dir: string, io?: typeof fs }} input
+ * of three runs" are the same amount of material. `dir` may be one spool
+ * directory or several (design D3: the capture spool counts toward the offer
+ * threshold too, not just the run-outcome spool).
+ * @param {{ dir: string | string[], io?: typeof fs }} input
  * @returns {{ records: number, files: string[] }}
  */
 export function inboxBacklog({ dir, io = fs }) {
-  try {
-    const files = io
-      .readdirSync(dir)
-      .filter((name) => /^\d{4}-\d{2}-\d{2}\.md$/.test(name))
-      .sort();
-    let records = 0;
-    for (const name of files) {
-      const text = io.readFileSync(path.join(dir, name), "utf8");
-      records += (String(text).match(/^## /gm) ?? []).length;
+  const dirs = Array.isArray(dir) ? dir : [dir];
+  let records = 0;
+  const files = [];
+  for (const oneDir of dirs) {
+    try {
+      const names = io
+        .readdirSync(oneDir)
+        .filter((name) => /^\d{4}-\d{2}-\d{2}\.md$/.test(name))
+        .sort();
+      for (const name of names) {
+        const text = io.readFileSync(path.join(oneDir, name), "utf8");
+        records += (String(text).match(/^## /gm) ?? []).length;
+        files.push(name);
+      }
+    } catch {
+      // That spool directory does not exist yet — contributes nothing.
     }
-    return { records, files };
-  } catch {
-    return { records: 0, files: [] };
   }
+  return { records, files };
 }

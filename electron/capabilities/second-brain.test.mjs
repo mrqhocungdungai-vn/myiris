@@ -17,6 +17,13 @@ vi.mock("../vault-graph.mjs", () => ({
   })),
 }));
 
+// Real path-helper behavior is kept (captureSpoolDir/runSpoolDir); only the
+// write itself is mocked, so a test can force a failure without touching disk.
+vi.mock("../vault-write.mjs", async () => {
+  const actual = await vi.importActual("../vault-write.mjs");
+  return { ...actual, appendSpoolRecord: vi.fn(async () => ({ ok: true, file: "/mock/inbox/captures/x.md" })) };
+});
+
 // NOTES_VAULT_DIR is a module-top-level const computed once from
 // os.homedir() at import time (a verbatim carry-over of main.mjs's
 // pre-split shape) — so os.homedir() must be mocked and the module
@@ -26,6 +33,8 @@ let homeDir;
 let restoreHome;
 let createSecondBrainCapability;
 let createVaultGraph;
+/** @type {any} */
+let appendSpoolRecord;
 let NOTES_VAULT_DIR;
 
 beforeEach(async () => {
@@ -34,6 +43,8 @@ beforeEach(async () => {
   restoreHome = vi.spyOn(os, "homedir").mockReturnValue(homeDir);
   ({ createSecondBrainCapability } = await import("./second-brain.mjs"));
   ({ createVaultGraph } = await import("../vault-graph.mjs"));
+  ({ appendSpoolRecord } = await import("../vault-write.mjs"));
+  appendSpoolRecord.mockClear();
   NOTES_VAULT_DIR = path.join(homeDir, "iris-second-brain");
 });
 
@@ -138,31 +149,94 @@ describe("second-brain capability: probeSecondBrainAvailability", () => {
 });
 
 describe("second-brain capability: promptFragment", () => {
-  it("is empty when the pipeline is unavailable", () => {
-    expect(make({ getPipelineAvailable: () => false }).promptFragment()).toBe("");
+  // vault-write-path design D4/D7: capture needs no worker, so its guidance is
+  // never withheld — unlike the pre-split behavior where the whole fragment
+  // vanished without a pipeline.
+  it("still offers capture guidance when the pipeline is unavailable", () => {
+    const fragment = make({ getPipelineAvailable: () => false }).promptFragment();
+    expect(fragment).toContain("SECOND BRAIN");
+    expect(fragment).toContain("capture_note");
+    expect(fragment).not.toContain("capture_learning");
   });
 
-  it("is empty when the pipeline is available but the bundle lacks the notes skills", () => {
+  it("still offers capture guidance when the pipeline is available but the bundle lacks the notes skills", () => {
     const emptyPlugin = fs.mkdtempSync(path.join(os.tmpdir(), "iris-empty-plugin-"));
     try {
-      expect(make({ getPipelineAvailable: () => true, irisPluginDir: () => emptyPlugin }).promptFragment()).toBe("");
+      const fragment = make({ getPipelineAvailable: () => true, irisPluginDir: () => emptyPlugin }).promptFragment();
+      expect(fragment).toContain("SECOND BRAIN");
+      expect(fragment).not.toContain("capture_learning");
     } finally {
       fs.rmSync(emptyPlugin, { recursive: true, force: true });
     }
   });
 
-  it("offers the note-save line when the pipeline is available and the bundle has the skills", () => {
-    expect(make().promptFragment()).toContain("SECOND BRAIN");
+  it("adds curation/retrieval guidance only when the pipeline is available and the bundle has the skills", () => {
+    const fragment = make().promptFragment();
+    expect(fragment).toContain("SECOND BRAIN");
+    expect(fragment).toContain("capture_learning");
   });
 
-  // The capability is reachable as a named function now, so its prose says only
+  // The capability is reachable as named functions now, so its prose says only
   // what a schema cannot: when to offer. It no longer has to describe how to
   // route note work through a general-purpose task tool.
-  it("names the verb rather than describing how to shape a general task", () => {
+  it("names capabilities rather than describing how to shape a general task", () => {
     const fragment = make().promptFragment();
-    expect(fragment).toContain("capture_learning");
     expect(fragment).not.toContain("submit_claude_task");
     expect(fragment).not.toMatch(/\bPO\b|\bDEV\b/);
+  });
+});
+
+describe("second-brain capability: capture_note tool", () => {
+  it("contributes the capture_note declaration", () => {
+    const declaration = make().toolDeclarations.find((d) => d.name === "capture_note");
+    expect(declaration).toBeDefined();
+    expect(declaration.parameters.required).toEqual(["text"]);
+  });
+
+  it("ensures the vault exists before writing, even on a machine with no vault yet", async () => {
+    const cap = make();
+    expect(fs.existsSync(NOTES_VAULT_DIR)).toBe(false);
+    const result = await cap.captureNote({ text: "remember this" });
+    expect(result.status).toBe("ok");
+    expect(fs.existsSync(NOTES_VAULT_DIR)).toBe(true);
+  });
+
+  it("appends the trimmed text to the capture spool, not the run spool", async () => {
+    await make().captureNote({ text: "  remember this  " });
+    expect(appendSpoolRecord).toHaveBeenCalledTimes(1);
+    const call = appendSpoolRecord.mock.calls[0][0];
+    expect(call.dir).toBe(path.join(NOTES_VAULT_DIR, "inbox", "captures"));
+    expect(call.content).toContain("remember this");
+  });
+
+  it("names the saved file on a successful write", async () => {
+    const result = await make().captureNote({ text: "remember this" });
+    expect(result.status).toBe("ok");
+    expect(result.file).toBe("/mock/inbox/captures/x.md");
+  });
+
+  // spec: "A capture whose write fails is reported as failed, not confirmed."
+  it("reports a failure, not a save, when the write fails", async () => {
+    appendSpoolRecord.mockResolvedValueOnce({ ok: false, error: "ENOSPC" });
+    const result = await make().captureNote({ text: "remember this" });
+    expect(result.status).toBe("error");
+    expect(result.error).toContain("ENOSPC");
+    expect(result.file).toBeUndefined();
+  });
+
+  it("rejects an empty capture without touching the filesystem", async () => {
+    const result = await make().captureNote({ text: "   " });
+    expect(result.status).toBe("error");
+    expect(appendSpoolRecord).not.toHaveBeenCalled();
+    expect(fs.existsSync(NOTES_VAULT_DIR)).toBe(false);
+  });
+
+  // Capture is a plain file write, not a run (design D4): its result carries no
+  // run_id, unlike every verb dispatch's result — there is no execution slot
+  // for it to occupy in the first place.
+  it("returns a filesystem outcome, never a run-shaped result", async () => {
+    const result = await make().captureNote({ text: "remember this" });
+    expect(result).not.toHaveProperty("run_id");
   });
 });
 

@@ -125,4 +125,27 @@ describe("inboxBacklog", () => {
   it("reports an empty backlog rather than throwing when the inbox does not exist", () => {
     expect(inboxBacklog({ dir: "/definitely/not/here" })).toEqual({ records: 0, files: [] });
   });
+
+  // vault-write-path design D3: the curator's offer threshold must reflect
+  // everything waiting, not just finished-run records — a capture sitting
+  // unprocessed in the other spool is material too.
+  it("sums records across multiple spool directories when dir is an array", () => {
+    withTempDir((runDir) => {
+      withTempDir((captureDir) => {
+        fs.writeFileSync(path.join(runDir, "2026-08-01.md"), "## a\n- run: 1\n");
+        fs.writeFileSync(path.join(captureDir, "2026-08-02.md"), "## b\n- note\n## c\n- note\n");
+
+        const backlog = inboxBacklog({ dir: [runDir, captureDir] });
+        expect(backlog.records).toBe(3);
+        expect(backlog.files.sort()).toEqual(["2026-08-01.md", "2026-08-02.md"]);
+      });
+    });
+  });
+
+  it("tolerates one of several spool directories not existing yet", () => {
+    withTempDir((runDir) => {
+      fs.writeFileSync(path.join(runDir, "2026-08-01.md"), "## a\n");
+      expect(inboxBacklog({ dir: [runDir, "/definitely/not/here"] })).toEqual({ records: 1, files: ["2026-08-01.md"] });
+    });
+  });
 });
