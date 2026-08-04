@@ -11,7 +11,8 @@ subscription path.
 Read this before changing anything in the pipeline modules under `electron/`
 (`verbs.mjs`, `pipeline-probes.mjs`, `pipeline-install.mjs`, `run-dispatch.mjs`,
 `run-stream.mjs`, `run-exec.mjs`, `run-context.mjs`, `run-inbox.mjs`,
-`session-store.mjs`, `user-config.mjs`) or `electron/po-session.mjs`. The
+`vault-write.mjs`, `session-store.mjs`, `user-config.mjs`) or
+`electron/po-session.mjs`. The
 corresponding living specs are in `openspec/specs/` (`verb-tool-surface`,
 `pipeline-availability`, `voice-decision-relay`, `per-role-model-selection`,
 `agent-subscription-auth`, `openspec-native-pipeline`, `run-execution-queue`,
@@ -73,10 +74,57 @@ is when the accumulated context matters most. Two consequences are declared
 rather than hidden: they cannot run on different models while the session is
 alive, and whichever is called first is what opens it.
 
+## Every obligation slot settles exactly once, and within a bound
+
+A cross-cutting invariant, identified in the 2026-07-21 architecture review after
+two separate app-bricking bugs turned out to be one defect wearing two masks:
+
+> **Any slot holding an outstanding obligation must have exactly one settle path,
+> and that path must be reachable from a bounded timer.**
+
+It has two halves, and the second is where the bugs lived. *At most once* — a
+single funnel, so nothing resolves twice — is the easy half. *At least once,
+within a bound* — something fires even if the party that owes the answer never
+speaks again — is the half that gets forgotten, because a slot that merely leaks
+looks correct in every test that exercises the happy path.
+
+The system holds four such slots, each in its own module:
+
+| Slot | Owner | Funnel |
+| --- | --- | --- |
+| A pending voice question | `PendingQuestion` (`electron/run-stream.mjs`) | `settle()` + its own timeout |
+| A stateful verb's in-flight turn | `state.currentTurn` (`electron/po-session.mjs`) | settles on turn end, session end, or cancel |
+| The single execution slot | `active` (`electron/run-queue.mjs`) | `finalize()`, backed by the idle watchdog |
+| A parked prompt review | `electron/run-dispatch.mjs` | settle-once relay, deliberately mirroring `PendingQuestion` |
+
+`PendingQuestion` was the first of the four to be built, and it is the reference
+implementation: every settlement path (answer, expire, abandon) funnels through
+one `settle()`, with a `setTimeout` as the backstop. The other three were brought
+to that shape afterwards, one bug at a time.
+
+**The invariant lives at each slot, never in a central lifecycle manager.** A
+manager would have to couple `run-queue.mjs` to `po-session.mjs`, collapsing
+exactly the module boundary the main-process split exists to maintain. The
+authoritative per-slot requirements are in `openspec/specs/run-execution-queue/`
+and `openspec/specs/prompt-review-gate/`.
+
+Two more invariants came out of the same review. Neither is slot-shaped, and both
+produced bugs that typechecked perfectly:
+
+- **Readiness is an explicit state, never "the handle is non-null."** A field that
+  is *both* the handle you send through *and* the predicate for whether sending is
+  possible cannot be assigned atomically with readiness, so a buffer keyed on it
+  drains at the wrong moment or never.
+- **A function that invokes an injected callback must re-read state before
+  reporting on it.** A synchronously-invoked callback can change the very state
+  the caller is about to describe; a value computed before the call is stale by
+  the time it is returned. Once-guards do not help here — the bug is in the
+  return value, not in double execution.
+
 ## Pipeline availability (chat-only mode)
 
-- `pipelineAvailable` (owned by `electron/pipeline-probes.mjs`) is the single source of truth for whether the Claude pipeline is on. Set by `probePipelineAvailability()`, which reuses `checkClaudeStatus()`'s `claude --version` probe — the `claude` binary resolving is the **only** input; `CLAUDE_CODE_OAUTH_TOKEN` never affects it (that only gates the stateful verbs via `poBillingStatus()`).
-- Probed at app boot (fire-and-forget) and at the top of every `connectLive()` call (fresh connect or Live's periodic reconnect) — Live tool declarations are fixed per session, so a just-installed CLI only takes effect on the next (re)connect. Also re-probed by `checkClaudeHealth()`, the SetupPanel's "Check Claude" / re-check path.
+- `pipelineAvailable` (owned by `electron/pipeline-probes.mjs`) is the single source of truth for whether the Claude pipeline is on. Set by `probePipelineAvailability()`, and it takes **two** inputs together (`pipeline-probes.mjs`): the bundled binary answers a `--version` probe (`checkClaudeStatus().reachable`) **and** at least one credential is configured (`claudeCredentialStatus()` — `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`). The two stay deliberately distinct in what `checkClaudeHealth()` reports: `reachable` is strictly "the bundled binary launched", so the SetupPanel can tell a packaging failure apart from a user who simply has not logged in yet. `poBillingStatus()` answers a third question again — *which* credential pays for the stateful verbs; see "Subscription auth" below.
+- Probed at app boot (fire-and-forget) and at the top of every `connectLive()` call (fresh connect or Live's periodic reconnect) — Live tool declarations are fixed per session, so availability flipping mid-session only changes the declared tool surface on the next (re)connect. Also re-probed by `checkClaudeHealth()`, the SetupPanel's "Check Claude" / re-check path.
 - Gates three things from one flag, no separate toggles: `buildClaudeTools()` only spreads in `buildPipelineToolDeclarations()` — the seven verbs plus the control tools — when true (interface-control tools from `buildAlwaysToolDeclarations()` are always declared); `buildSystemInstructionText()` includes the pipeline paragraphs only when true, with a short chat-only alternative otherwise — one builder, not two maintained prompts; `executeClaudeTool` additionally guards `PIPELINE_ONLY_TOOLS` at call time as a defensive backstop.
 - The renderer learns the value via `window.iris.getPipelineStatus()` (IPC `pipeline:status`, read at mount) and the `pipeline_availability` sidecar event (emitted only when the value changes). `App.tsx` holds it as `pipelineAvailable` state and conditionally renders Work Stream, PipelineBar, the workstream switcher (nested inside WorkStream), TaskChooser, and — inside `HudShell` via a passed-down prop — the HUD tasks column and the live-question banner.
 - See `openspec/specs/pipeline-availability/spec.md` for the full requirement set.
@@ -308,29 +356,58 @@ as one message with nothing behind it.
 - The notes vault is **granted**, not described: `capture_learning` gets it through `additionalDirectories`, and it is the only verb that does. The prose directive that used to stand in for a grant, and the post-hoc `[vault-check: …]` caveat derived from diffing the vault afterwards, are both gone.
 - **Cancellation is lifetime-agnostic.** Every run carries a `cancel`, so `runQueue.stop()` does not need to know whether it is stopping a one-shot query (abort its controller) or a turn inside a resident session (`interrupt()` the turn, keep the session and its context window). An interrupt reports which queued work **survived** it, and Iris says so rather than claiming something was cancelled when it will still run.
 
-## The run inbox and the second brain
+## The vault write path, the run inbox, and the second brain
 
 Nothing used to be learned from what happened: runs succeeded and failed, and the
 second brain — which ships six `wiki-*` skills and exists precisely to accumulate
-knowledge — never saw any of it.
+knowledge — never saw any of it. And capturing the user's own thoughts used to be
+modelled as a Claude run (`capture_learning`), so it cost seconds of latency and
+tokens, and was **unavailable without a Claude credential**.
 
-- On `runQueue.finalize`, `captureRunOutcome` appends one record to a dated file
-  under `~/iris-second-brain/inbox/runs/`: verb, request, result, cost, error, and
-  the tools it used. **Failures are recorded on the same terms as successes** — a
-  failed attempt is at least as worth keeping as a successful one.
-- It is a **plain `fs` append** (`electron/run-inbox.mjs`): no run is started, no
-  tokens are spent, and the single execution slot is not held. Spawning a
-  synthesis run after every run would double the run count and block the user's
-  next request behind bookkeeping. It never throws, either — a full disk is not a
-  reason to lose the user's result.
-- It is **not conditional on the voice layer** choosing to record something.
-  Accumulated knowledge that requires a model to remember to save it is knowledge
-  that will be lost.
-- **Synthesis is the deliberate step.** `capture_learning` reads the inbox and
-  runs the crystallize/integrate skills when called. Iris may *offer* it once the
-  backlog is worth processing (the second-brain capability's prompt fragment says
-  how many records are waiting), and never starts it unprompted. Raw capture is a
-  log; synthesis is the learning.
+- **One module owns writing to the vault: `electron/vault-write.mjs`.**
+  Electron-free, injected `fs`, never throws. It exposes a synchronous spool
+  append (`appendSpoolRecordSync`, for the run-finalize path, which cannot
+  await anything), an async spool append (`appendSpoolRecord`, for the capture
+  tool, whose reply to Gemini must reflect what the filesystem actually did),
+  and an atomic, title-sanitized note-page writer (`createNotePage`) for
+  curated pages. `electron/run-inbox.mjs` no longer writes on its own; it owns
+  only the run record's *shape* (`renderInboxRecord`) and calls into
+  `vault-write.mjs` for the write — two independent writers into the same
+  directory is how a folder ended up missing from the galaxy's user-note
+  exclusion in the first place.
+- **Two spools, one write path.** `~/iris-second-brain/inbox/runs/` gets one
+  dated-file record per finished run (verb, request, result, cost, error, the
+  tools it used); `~/iris-second-brain/inbox/captures/` gets one dated-file
+  record per voice capture. Both are plain markdown, both are excluded from the
+  vault graph as machine-written plumbing (`NOTES_PLUMBING_FOLDERS` in
+  `electron/vault-graph-parse.mjs` includes `inbox`), and both are read by
+  `capture_learning`'s clause, which names both directories explicitly — a
+  fresh capture must be findable in the same turn a curator run reads the
+  vault, and that only holds if the run is actually told to look there.
+- **Capture is a direct write, not a run, and it is not gated on the
+  pipeline.** The second-brain capability declares a `capture_note` tool
+  (params: `text` required, `title`/`tags` optional) whose handler calls
+  `ensureNotesVaultReady()` then `appendSpoolRecord()` and returns the real
+  filesystem outcome — no run is started, no tokens are spent, and the single
+  execution slot is never held. `gemini-tools.mjs` concatenates every
+  capability's `toolDeclarations` **outside** the `pipelineAvailable` gate, so
+  `capture_note` is declared even in chat-only mode; `run-dispatch.mjs`
+  dispatches it outside `PIPELINE_ONLY_TOOLS` for the same reason. Both
+  **failures are recorded/reported on the same terms as successes** — a failed
+  attempt (or a failed capture) is at least as worth keeping/reporting as a
+  successful one, and a capture whose write fails is reported as failed, never
+  as saved.
+- Recording a run outcome is **not conditional on the voice layer** choosing to
+  record something. Accumulated knowledge that requires a model to remember to
+  save it is knowledge that will be lost.
+- **Curation is the deliberate step, and it is what `capture_learning` is now
+  for.** It reads both spools and runs the crystallize/integrate skills when
+  called — weaving accumulated captures and run records into linked wiki pages,
+  or writing something up as a page on explicit request (the `save` parameter).
+  It still requires the Claude pipeline, since curation and retrieval are real
+  judgement, not a filesystem append. Iris may *offer* it once the backlog is
+  worth processing (the second-brain capability's prompt fragment counts
+  records across both spools), and never starts it unprompted.
 
 ## Skills, commands, and isolation from the user's Claude Code
 
