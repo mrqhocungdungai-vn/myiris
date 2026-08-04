@@ -8,3 +8,26 @@
   -webkit-mask-image: radial-gradient(circle, #000 62%, transparent 92%);
   mask-image: radial-gradient(circle, #000 62%, transparent 92%);
 }
+
+/* webgl-quality-mode light path (design.md D3): the orb's glow is normally
+   bloom, a per-frame GPU cost the light path removes. This compositor-drawn
+   layer substitutes it — tinted from the same --orb-accent the ring/radar
+   chrome use, so the orb still reads as lit rather than flat. Sits behind
+   the canvas (first in DOM, no z-index needed against its unpositioned
+   siblings) and its opacity is driven by --orb-glow-energy, the same
+   per-state energy the WebGL scene itself animates toward. */
+.orb-glow {
+  position: absolute;
+  inset: -20%;
+  border-radius: 50%;
+  pointer-events: none;
+  background: radial-gradient(
+    circle,
+    rgba(var(--orb-accent, 63, 208, 176), 0.65) 0%,
+    rgba(var(--orb-accent, 63, 208, 176), 0.28) 42%,
+    rgba(var(--orb-accent, 63, 208, 176), 0) 72%
+  );
+  filter: blur(7px);
+  opacity: calc(0.35 + var(--orb-glow-energy, 0.5) * 0.5);
+  transition: opacity 0.6s ease;
+}

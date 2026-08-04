@@ -112,6 +112,21 @@ entry and walking up.
   an abandoned stranger's code. The unpinned nature is deliberate and documented,
   not an oversight to correct. Behavior is specified in the
   `workflow-quality-gates` capability.
+- **Every WebGL surface renders on one of two paths, chosen by a single
+  preference (`webgl-quality-mode`) — never re-derive a surface's settings at
+  its call site.** `src/lib/webgl-quality.ts`'s `deriveWebglSettings` is the
+  one place that maps the preference to the orb's `gl`/`dpr`, whether the
+  deck backdrop mounts, and whether the galaxy adds its bloom pass; a second
+  hand-written conditional anywhere else is exactly the drift this module
+  exists to prevent. **The light path's device pixel ratio clamp must be
+  `Math.min(devicePixelRatio, 1.5)`, never a bare `1.5`** — on a non-Retina
+  display a bare constant would render *above* native resolution instead of
+  saving pixels. The orb's `<Canvas>` is `key`ed on the preference because
+  `dpr`/`antialias`/`powerPreference` are fixed at WebGL context creation and
+  cannot be changed on a live context; the galaxy is the one surface that
+  does **not** re-key on a live change (its `addBloom` pass is read once at
+  open time), because recreating it would lose settled force-graph node
+  positions its own capability requires be preserved.
 - **`@types/node`'s major must track the Node that *Electron* embeds — not
   `engines.node`.** Modules under `electron/` run on Electron's bundled Node
   (42.5.0 → Node 24.17.0), and `tsconfig.electron.json` typechecks all of them

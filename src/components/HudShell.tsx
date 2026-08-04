@@ -15,7 +15,7 @@ import {
   Volume2,
   VolumeX,
 } from "lucide-react";
-import ReactorCore from "./ReactorCore";
+import ReactorCore, { ORB_ACCENT, ORB_ENERGY } from "./ReactorCore";
 import WorkCard from "./WorkCard";
 import PoQuestionBanner from "./PoQuestionBanner";
 import ReviewBanner from "./ReviewBanner";
@@ -26,14 +26,6 @@ import VaultGalaxy, { type GalaxyNode } from "./VaultGalaxy";
 import type { HandoffTone, ReactorState, TaskCard, TranscriptLine } from "../types";
 import type { HandState } from "../hooks/useHandControl";
 import { acceptedKey } from "../lib/tasks";
-
-const ORB_ACCENT: Record<ReactorState, string> = {
-  idle: "120, 170, 150",
-  online: "18, 163, 148",
-  listening: "40, 205, 170",
-  speaking: "238, 122, 92",
-  working: "120, 180, 120",
-};
 
 function HudCamera({
   stream,
@@ -133,6 +125,7 @@ export default function HudShell({
   onOpenNote,
   onForceCloseSecondBrain,
   readerOpen,
+  webglHighFidelity,
 }: {
   reactorState: ReactorState;
   inputLevelRef: { current: number };
@@ -219,6 +212,8 @@ export default function HudShell({
   // != null`, computed in App.tsx and forwarded so the galaxy's gesture loop
   // can suppress node-dwell + camera nav while a reader is open.
   readerOpen: boolean;
+  /** webgl-quality-mode: high-fidelity path (bloom) vs the light-path default. */
+  webglHighFidelity: boolean;
 }) {
   // Show the full stream (state caps at 20); the column has a fixed max height
   // and palm-scrolls like Comms.
@@ -341,8 +336,14 @@ export default function HudShell({
         <div
           className="orb-stage hud-orb"
           ref={orbStageRef}
-          style={{ "--orb-accent": ORB_ACCENT[reactorState] } as CSSProperties}
+          style={
+            {
+              "--orb-accent": ORB_ACCENT[reactorState],
+              "--orb-glow-energy": ORB_ENERGY[reactorState],
+            } as CSSProperties
+          }
         >
+          {webglHighFidelity ? null : <span className="orb-glow" aria-hidden="true" />}
           <span className="orb-ring" />
           <span className="orb-radar" />
           <ReactorCore
@@ -355,6 +356,7 @@ export default function HudShell({
             running={running}
             rotationRef={orbRotationRef}
             scaleRef={orbScaleRef}
+            highFidelity={webglHighFidelity}
           />
           {orbFlash ? (
             <span key={orbFlash.id} className={`orb-flash ${orbFlash.tone}`} onAnimationEnd={onOrbFlashEnd} />
@@ -432,6 +434,7 @@ export default function HudShell({
           handRef={handRef}
           handControl={handControl}
           readerOpen={readerOpen}
+          highFidelity={webglHighFidelity}
         />
       ) : null}
     </div>

@@ -1,8 +1,9 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
 import { EffectComposer, Bloom } from "@react-three/postprocessing";
 import * as THREE from "three";
 import type { Group, Mesh } from "three";
+import { deriveWebglSettings } from "../lib/webgl-quality";
 import "../styles/reactor.css";
 
 type ReactorState = "idle" | "online" | "listening" | "speaking" | "working";
@@ -27,6 +28,12 @@ function rgbToColor(rgb: string) {
   return new THREE.Color(r, g, b);
 }
 
+// Single source of the per-state accent color (design.md D3) — CenterStage
+// and HudShell both read this instead of each hand-writing their own copy.
+export const ORB_ACCENT: Record<ReactorState, string> = Object.fromEntries(
+  (Object.entries(PALETTES) as [ReactorState, Palette][]).map(([state, palette]) => [state, palette.primary]),
+) as Record<ReactorState, string>;
+
 // Pre-parsed once at module scope so the per-frame render loop never
 // allocates a THREE.Color — see openspec/changes/unstall-render-and-audio.
 const PALETTE_COLORS: Record<ReactorState, { primary: THREE.Color; secondary: THREE.Color; accent: THREE.Color; glow: THREE.Color }> =
@@ -45,12 +52,18 @@ const PALETTE_COLORS: Record<ReactorState, { primary: THREE.Color; secondary: TH
 // Scratch Vector3 reused every frame for the scale lerp (design D2).
 const _scaleVec = new THREE.Vector3();
 
+// Exported so the light path's CSS glow (design.md D3) can vary its opacity
+// with the same per-state energy the scene itself animates toward.
+export const ORB_ENERGY: Record<ReactorState, number> = {
+  idle: 0.18,
+  online: 0.45,
+  listening: 0.72,
+  speaking: 1,
+  working: 0.88,
+};
+
 function targetEnergy(s: ReactorState) {
-  if (s === "speaking") return 1;
-  if (s === "working") return 0.88;
-  if (s === "listening") return 0.72;
-  if (s === "online") return 0.45;
-  return 0.18;
+  return ORB_ENERGY[s];
 }
 
 type Ripple = { start: number; kind: "wake" | "heard" };
@@ -111,6 +124,7 @@ function ArcReactorScene({
   ripplesRef,
   rotationRef,
   scaleRef,
+  unlit,
 }: {
   state: ReactorState;
   inputLevelRef?: { current: number };
@@ -119,6 +133,8 @@ function ArcReactorScene({
   ripplesRef: { current: Ripple[] };
   rotationRef?: { current: { x: number; y: number } };
   scaleRef?: { current: number };
+  /** Light path (design.md D1/D4): rings use materials that need no scene lighting. */
+  unlit: boolean;
 }) {
   const groupRef = useRef<Group>(null);
   const coreRef = useRef<Mesh>(null);
@@ -154,18 +170,30 @@ function ArcReactorScene({
 
     if (ring1Ref.current) {
       ring1Ref.current.rotation.z += delta * (0.5 + energy * 0.6 + inRef.current * 0.8);
-      const mat = ring1Ref.current.material as THREE.MeshStandardMaterial;
-      mat.color.copy(pc.primary);
-      mat.emissive.copy(pc.glow);
-      mat.emissiveIntensity = 1.2 + energy * 1.4 + inRef.current * 1.5;
+      if (unlit) {
+        const mat = ring1Ref.current.material as THREE.MeshBasicMaterial;
+        mat.color.copy(pc.glow);
+        mat.opacity = Math.min(1, 0.55 + energy * 0.25 + inRef.current * 0.3);
+      } else {
+        const mat = ring1Ref.current.material as THREE.MeshStandardMaterial;
+        mat.color.copy(pc.primary);
+        mat.emissive.copy(pc.glow);
+        mat.emissiveIntensity = 1.2 + energy * 1.4 + inRef.current * 1.5;
+      }
     }
 
     if (ring2Ref.current) {
       ring2Ref.current.rotation.x -= delta * (0.3 + energy * 0.4);
-      const mat = ring2Ref.current.material as THREE.MeshStandardMaterial;
-      mat.color.copy(pc.secondary);
-      mat.emissive.copy(pc.glow);
-      mat.emissiveIntensity = 0.8 + energy * 1.1 + outRef.current * 1.6;
+      if (unlit) {
+        const mat = ring2Ref.current.material as THREE.MeshBasicMaterial;
+        mat.color.copy(pc.glow);
+        mat.opacity = Math.min(1, 0.45 + energy * 0.2 + outRef.current * 0.3);
+      } else {
+        const mat = ring2Ref.current.material as THREE.MeshStandardMaterial;
+        mat.color.copy(pc.secondary);
+        mat.emissive.copy(pc.glow);
+        mat.emissiveIntensity = 0.8 + energy * 1.1 + outRef.current * 1.6;
+      }
     }
 
     if (outerRef.current) {
@@ -209,14 +237,15 @@ function ArcReactorScene({
         <meshBasicMaterial transparent opacity={0.9} />
       </mesh>
 
-      {/* Counter-rotating rings */}
+      {/* Counter-rotating rings — unlit materials on the light path need no
+          scene lighting to read as bright (design.md D1). */}
       <mesh ref={ring1Ref} rotation={[0, 0, 0]}>
         <torusGeometry args={[0.62, 0.045, 16, 100]} />
-        <meshStandardMaterial />
+        {unlit ? <meshBasicMaterial transparent opacity={0.9} /> : <meshStandardMaterial />}
       </mesh>
       <mesh ref={ring2Ref} rotation={[Math.PI / 2, 0, 0]}>
         <torusGeometry args={[0.84, 0.02, 16, 100]} />
-        <meshStandardMaterial />
+        {unlit ? <meshBasicMaterial transparent opacity={0.9} /> : <meshStandardMaterial />}
       </mesh>
 
       {/* Outer wireframe boundary sphere, breathes with Iris's voice */}
@@ -254,6 +283,7 @@ export default function ReactorCore({
   running = true,
   rotationRef,
   scaleRef,
+  highFidelity = false,
 }: {
   state: ReactorState;
   /** Mic level — drives the sharp radial-bar "you are talking" signature. */
@@ -272,8 +302,14 @@ export default function ReactorCore({
   rotationRef?: { current: { x: number; y: number } };
   /** Gesture-driven scale, read every frame and lerped in smoothly. */
   scaleRef?: { current: number };
+  /** webgl-quality-mode: high-fidelity path (bloom, uncapped dpr) vs the light-path default. */
+  highFidelity?: boolean;
 }) {
   const ripplesRef = useRef<Ripple[]>([]);
+  const settings = useMemo(
+    () => deriveWebglSettings(highFidelity, window.devicePixelRatio),
+    [highFidelity],
+  );
 
   // Wake: two quick expanding rings + a temporary energy surge.
   useEffect(() => {
@@ -293,13 +329,23 @@ export default function ReactorCore({
 
   return (
     <Canvas
+      // Remount on a quality change (design.md D2): dpr/antialias/powerPreference
+      // are fixed at WebGL context creation, so a running context can't adopt
+      // new ones — a fresh key disposes the old context and creates a new one.
+      // The refs above this Canvas (ripple queue, rotation/scale) are untouched.
+      key={highFidelity ? "high-fidelity" : "light"}
       className="reactor-canvas"
       frameloop={running ? "always" : "never"}
       camera={{ position: [0, 0, 3.2], fov: 42 }}
-      gl={{ antialias: true, alpha: true, powerPreference: "high-performance" }}
+      gl={{ ...settings.orb.gl, alpha: true }}
+      dpr={settings.orb.dpr}
     >
-      <ambientLight intensity={0.5} />
-      <pointLight position={[2, 2, 3]} intensity={1.4} />
+      {settings.orb.unlitMaterials ? null : (
+        <>
+          <ambientLight intensity={0.5} />
+          <pointLight position={[2, 2, 3]} intensity={1.4} />
+        </>
+      )}
       <ArcReactorScene
         state={state}
         inputLevelRef={inputLevelRef}
@@ -308,10 +354,13 @@ export default function ReactorCore({
         ripplesRef={ripplesRef}
         rotationRef={rotationRef}
         scaleRef={scaleRef}
+        unlit={settings.orb.unlitMaterials}
       />
-      <EffectComposer>
-        <Bloom luminanceThreshold={0.15} mipmapBlur intensity={1.4} radius={0.4} />
-      </EffectComposer>
+      {settings.orb.bloom ? (
+        <EffectComposer>
+          <Bloom luminanceThreshold={0.15} mipmapBlur intensity={1.4} radius={0.4} />
+        </EffectComposer>
+      ) : null}
     </Canvas>
   );
 }

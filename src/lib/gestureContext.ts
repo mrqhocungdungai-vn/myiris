@@ -25,3 +25,28 @@ export function resolveGestureContext({
   if (historyOpen) return "history";
   return "deck";
 }
+
+// The orb's fist-rotate / pinch-scale binding is live only on the deck: in
+// the Glass HUD the orb is a small floating puck, not the stage, so the
+// gesture surface belongs to the HUD's content instead (scope-orb-gesture-
+// out-of-hud design.md D1). Shared by the orb rAF loop and the `handAction`
+// indicator so the two conditions can't drift apart again.
+export function orbGestureEngaged({
+  handControl,
+  handPresent,
+  uiMode,
+  readerOpen,
+  drawingActive,
+  secondBrainActive,
+}: {
+  handControl: boolean;
+  handPresent: boolean;
+  uiMode: "deck" | "hud";
+  readerOpen: boolean;
+  drawingActive: boolean;
+  secondBrainActive: boolean;
+}): boolean {
+  return (
+    uiMode === "deck" && handControl && handPresent && !readerOpen && !drawingActive && !secondBrainActive
+  );
+}

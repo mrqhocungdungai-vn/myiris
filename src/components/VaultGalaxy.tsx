@@ -172,6 +172,7 @@ function GalaxyCanvas({
   handControl,
   readerOpen,
   onForceClose,
+  highFidelity,
 }: {
   graph: VaultGraph;
   running: boolean;
@@ -182,6 +183,8 @@ function GalaxyCanvas({
   handControl: boolean;
   readerOpen: boolean;
   onForceClose: () => void;
+  /** webgl-quality-mode: read once at mount (design.md D5) — the galaxy adopts a live preference change only the next time it's opened, so its settled node positions survive. */
+  highFidelity: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const fgRef = useRef<ForceGraph3DInstance<GalaxyNode, GalaxyLink> | null>(null);
@@ -275,7 +278,12 @@ function GalaxyCanvas({
         centerDirtyRef.current = true;
       });
       addStarfield(fg.scene());
-      await addBloom(fg);
+      // webgl-quality-mode design.md D5: read once here at open time. The
+      // galaxy is the app's most expensive surface (bloom on top of a live
+      // force simulation), so the light path skips the pass entirely — the
+      // opaque backdrop/vignette/starfield above are unconditional, painted
+      // inside the scene rather than by this composer pass.
+      if (highFidelity) await addBloom(fg);
       if (disposed) return;
       fgRef.current = fg;
       applyGraph(pendingGraphRef.current);
@@ -490,6 +498,7 @@ export default function VaultGalaxy({
   handRef,
   handControl,
   readerOpen,
+  highFidelity,
 }: {
   running: boolean;
   positionsRef: { current: Map<string, GalaxyNode> };
@@ -499,6 +508,8 @@ export default function VaultGalaxy({
   handRef: { current: HandState };
   handControl: boolean;
   readerOpen: boolean;
+  /** webgl-quality-mode: read once when the galaxy (re)mounts (design.md D5). */
+  highFidelity: boolean;
 }) {
   const [state, setState] = useState<
     { status: "loading" } | { status: "empty" } | { status: "ready"; graph: VaultGraph }
@@ -555,6 +566,7 @@ export default function VaultGalaxy({
         handControl={handControl}
         readerOpen={readerOpen}
         onForceClose={onForceClose}
+        highFidelity={highFidelity}
       />
     </GalaxyErrorBoundary>
   );

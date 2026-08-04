@@ -1,17 +1,7 @@
 import { useEffect, useState, type CSSProperties, type RefObject } from "react";
 import { Ear, EarOff, Mic, MicOff, Power, Volume2, VolumeX } from "lucide-react";
-import ReactorCore from "./ReactorCore";
+import ReactorCore, { ORB_ACCENT, ORB_ENERGY } from "./ReactorCore";
 import type { HandoffTone, ReactorState } from "../types";
-
-// Arc-reactor accent color per state (matches ReactorCore palettes) — drives the
-// surrounding ring/radar so it stays the same color as the orb.
-const ORB_ACCENT: Record<ReactorState, string> = {
-  idle: "120, 170, 150",
-  online: "18, 163, 148",
-  listening: "40, 205, 170",
-  speaking: "238, 122, 92",
-  working: "120, 180, 120",
-};
 
 function Telemetry({
   awake,
@@ -88,6 +78,7 @@ export default function CenterStage({
   listenModeEngaged,
   onToggleListenMode,
   onSleep,
+  webglHighFidelity,
 }: {
   reactorState: ReactorState;
   inputLevelRef: { current: number };
@@ -120,14 +111,22 @@ export default function CenterStage({
   listenModeEngaged: boolean;
   onToggleListenMode: () => void;
   onSleep: () => void;
+  /** webgl-quality-mode: high-fidelity path (bloom) vs the light-path default. */
+  webglHighFidelity: boolean;
 }) {
   return (
     <div className="deck-center">
       <div
         className="orb-stage"
         ref={orbStageRef}
-        style={{ "--orb-accent": ORB_ACCENT[reactorState] } as CSSProperties}
+        style={
+          {
+            "--orb-accent": ORB_ACCENT[reactorState],
+            "--orb-glow-energy": ORB_ENERGY[reactorState],
+          } as CSSProperties
+        }
       >
+        {webglHighFidelity ? null : <span className="orb-glow" aria-hidden="true" />}
         <span className="orb-ring" />
         <span className="orb-radar" />
         <ReactorCore
@@ -140,6 +139,7 @@ export default function CenterStage({
           running={orbRunning}
           rotationRef={orbRotationRef}
           scaleRef={orbScaleRef}
+          highFidelity={webglHighFidelity}
         />
         {orbFlash ? (
           <span key={orbFlash.id} className={`orb-flash ${orbFlash.tone}`} onAnimationEnd={onOrbFlashEnd} />

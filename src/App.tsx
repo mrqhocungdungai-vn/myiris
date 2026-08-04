@@ -11,7 +11,8 @@ import {
   taskKeyFor,
 } from "./lib/tasks";
 import { isVerb, modelLabel, verbLabel } from "./lib/verbs";
-import { resolveGestureContext } from "./lib/gestureContext";
+import { resolveGestureContext, orbGestureEngaged } from "./lib/gestureContext";
+import { readWebglHighFidelity, deriveWebglSettings, WEBGL_QUALITY_STORAGE_KEY } from "./lib/webgl-quality";
 import { uiSounds } from "./lib/sounds";
 import { useAudioPipeline } from "./hooks/useAudioPipeline";
 import { useHandoffFx } from "./hooks/useHandoffFx";
@@ -75,6 +76,14 @@ function loadMicDeviceId(): string {
     return window.localStorage.getItem(MIC_STORAGE_KEY) || SYSTEM_DEFAULT_MIC;
   } catch {
     return SYSTEM_DEFAULT_MIC;
+  }
+}
+
+function loadWebglHighFidelity(): boolean {
+  try {
+    return readWebglHighFidelity(window.localStorage.getItem(WEBGL_QUALITY_STORAGE_KEY));
+  } catch {
+    return false;
   }
 }
 
@@ -180,6 +189,12 @@ export default function App() {
   soundsRef.current = soundsEnabled;
   const [cameraDeviceId, setCameraDeviceIdState] = useState(loadCameraDeviceId);
   const [micDeviceId, setMicDeviceIdState] = useState(loadMicDeviceId);
+  // webgl-quality-mode: defaults to the light path (false/off) — see design.md D6.
+  const [webglHighFidelity, setWebglHighFidelity] = useState(loadWebglHighFidelity);
+  const webglSettings = useMemo(
+    () => deriveWebglSettings(webglHighFidelity, window.devicePixelRatio),
+    [webglHighFidelity],
+  );
   const audioStateRef = useRef(audioState);
   audioStateRef.current = audioState;
 
@@ -224,6 +239,18 @@ export default function App() {
       const next = !current;
       try {
         window.localStorage.setItem(HAND_STORAGE_KEY, next ? "on" : "off");
+      } catch {
+        // Best-effort persistence; the toggle still works for this session.
+      }
+      return next;
+    });
+  }
+
+  function toggleWebglQuality() {
+    setWebglHighFidelity((current) => {
+      const next = !current;
+      try {
+        window.localStorage.setItem(WEBGL_QUALITY_STORAGE_KEY, next ? "on" : "off");
       } catch {
         // Best-effort persistence; the toggle still works for this session.
       }
@@ -1186,14 +1213,16 @@ export default function App() {
     return () => cancelAnimationFrame(raf);
   }, [handControl, expandedTaskId, showHistory, drawingActive, secondBrainActive]);
 
-  // Closed-fist rotates the Arc Reactor orb, pinch scales it — only while the
-  // reader is closed and neither the drawing panel nor the second-brain
-  // galaxy is active (BUG: gesture control leaking through to the orb while
-  // those layers own the HUD's pointer/gesture surface — reported by user,
-  // 2026-07-24), so this never collides with the reader-open fist-close or
-  // two-palm-resize bindings, nor with excalidraw/the galaxy's own input.
-  // Written straight into refs (not React state) every frame, same as the
-  // audio-level refs ReactorCore already reads.
+  // Closed-fist rotates the Arc Reactor orb, pinch scales it — only on the
+  // deck, with the reader closed and neither the drawing panel nor the
+  // second-brain galaxy active. Excluded from the Glass HUD entirely: there
+  // the orb is a small floating puck, not the stage, so the gesture surface
+  // belongs to the HUD's own content instead (scope-orb-gesture-out-of-hud
+  // design.md D1) — this never collides with the reader-open fist-close or
+  // two-palm-resize bindings, nor with excalidraw/the galaxy's own input,
+  // nor with whatever the HUD binds the fist to next. Written straight into
+  // refs (not React state) every frame, same as the audio-level refs
+  // ReactorCore already reads.
   const orbRotationRef = useRef({ x: 0, y: 0 });
   const orbScaleRef = useRef(1);
   useEffect(() => {
@@ -1201,7 +1230,14 @@ export default function App() {
     let prevFistPoint: HandPoint | null = null;
     const loop = () => {
       const h = liveHandRef.current;
-      const engaged = handControl && h?.present && !expandedTaskId && !drawingActive && !secondBrainActive;
+      const engaged = orbGestureEngaged({
+        handControl,
+        handPresent: !!h?.present,
+        uiMode,
+        readerOpen: !!expandedTaskId,
+        drawingActive,
+        secondBrainActive,
+      });
 
       if (engaged && h.fist && h.point) {
         if (prevFistPoint) {
@@ -1231,7 +1267,7 @@ export default function App() {
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [handControl, expandedTaskId, drawingActive, secondBrainActive]);
+  }, [handControl, uiMode, expandedTaskId, drawingActive, secondBrainActive]);
 
   // Single authoritative context for the indicator (second-brain-gesture-nav
   // design.md D9/D10) — reader outranks the galaxy, which outranks the deck.
@@ -1272,7 +1308,7 @@ export default function App() {
     // Deck (and drawing/history, which don't bind their own gestures here).
     if (hand.hands.filter((item) => item.openPalm).length >= 2) return { label: "Two palms · resize", tone: "open" };
     if (hand.fist) {
-      return drawingActive
+      return drawingActive || uiMode === "hud"
         ? { label: "Closed_Fist · idle", tone: "idle" }
         : { label: "Closed_Fist · rotate orb", tone: "fist" };
     }
@@ -1291,6 +1327,7 @@ export default function App() {
     dwellActive,
     drawingActive,
     gestureContext,
+    uiMode,
   ]);
 
   const activeProject = activeSession?.cwd ?? null;
@@ -1536,6 +1573,7 @@ export default function App() {
           onOpenNote={openNoteFromGalaxy}
           onForceCloseSecondBrain={() => setSecondBrainActive(false)}
           readerOpen={openNote != null || expandedTaskId != null}
+          webglHighFidelity={webglHighFidelity}
         />
       ) : (
       <div
@@ -1546,7 +1584,7 @@ export default function App() {
         <div className="hud-nebula" />
         <div className="hud-glow" />
         <div className="hud-vignette" />
-        <HoloBackdrop running={sidecarRunning && windowFocused} />
+        {webglSettings.backdrop.mount ? <HoloBackdrop running={sidecarRunning && windowFocused} /> : null}
 
         <TopBar
           geminiDot={dotState(geminiStatus, ["connected"])}
@@ -1606,6 +1644,7 @@ export default function App() {
             listenModeEngaged={listenModeEngaged}
             onToggleListenMode={toggleListenMode}
             onSleep={stop}
+            webglHighFidelity={webglHighFidelity}
           />
 
           {/* RIGHT — Work (pipeline-only, see pipeline-availability spec) */}
@@ -1705,6 +1744,8 @@ export default function App() {
           config={fullConfig}
           soundsEnabled={soundsEnabled}
           onToggleSounds={toggleSounds}
+          webglHighFidelity={webglHighFidelity}
+          onToggleWebglQuality={toggleWebglQuality}
           cameraDeviceId={cameraDeviceId}
           onChangeCameraDevice={setCameraDeviceId}
           micDeviceId={micDeviceId}

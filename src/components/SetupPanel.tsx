@@ -47,6 +47,8 @@ export default function SetupPanel({
   config,
   soundsEnabled,
   onToggleSounds,
+  webglHighFidelity,
+  onToggleWebglQuality,
   cameraDeviceId,
   onChangeCameraDevice,
   micDeviceId,
@@ -60,6 +62,9 @@ export default function SetupPanel({
   config: IrisConfig;
   soundsEnabled: boolean;
   onToggleSounds: () => void;
+  /** webgl-quality-mode: Off (light path, default) / On (high-fidelity). */
+  webglHighFidelity: boolean;
+  onToggleWebglQuality: () => void;
   cameraDeviceId: string;
   onChangeCameraDevice: (deviceId: string) => void;
   micDeviceId: string;
@@ -663,6 +668,24 @@ export default function SetupPanel({
         />
         <small className="setup-note">
           Subtle audio cues for wake, sleep, task sent, and task done. Synthesized locally — quiet by design.
+        </small>
+      </label>
+      <label className="setup-field">
+        <span>WebGL quality</span>
+        <ThemedSelect
+          ariaLabel="WebGL quality"
+          value={webglHighFidelity ? "true" : "false"}
+          options={[
+            { value: "false", label: "Off" },
+            { value: "true", label: "On" },
+          ]}
+          onChange={(value) => {
+            if ((value === "true") !== webglHighFidelity) onToggleWebglQuality();
+          }}
+        />
+        <small className="setup-note">
+          On restores full visual effects (bloom, sharper rendering) at a materially higher GPU cost. Off by
+          default so Iris runs smoothly on a modest machine. Applies immediately — no Save, no relaunch.
         </small>
       </label>
     </Section>
