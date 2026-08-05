@@ -549,6 +549,13 @@
   color: var(--amber);
 }
 
+/* A run that stopped because a question it needed answered never was
+   (electron/run-queue.mjs). Amber for the same reason as .limited: it is over,
+   it did not fail, and nothing was decided on the user's behalf. */
+.badge.unanswered {
+  color: var(--amber);
+}
+
 /* What a run cost, beside its status badge. Reads as metadata, not as a result. */
 .wcard-cost {
   font-size: 10px;

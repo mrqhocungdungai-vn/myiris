@@ -142,12 +142,38 @@ describe("the verb registry", () => {
     expect(keys).toEqual(stateless);
   });
 
-  // Enforced by configuration, not by instruction.
-  it("denies the question tool to every stateless verb and only those", () => {
+  // Enforced by configuration, not by instruction — and ask-when-unspecified D1:
+  // the WHOLE resolved list for every verb against both project states, so
+  // nothing drifts silently and re-introducing a resolver-side verb-name
+  // conditional fails here rather than passing unnoticed.
+  it("resolves every verb's disallowedTools to exactly this, and only `execute` forks", () => {
+    const resolvedFor = (changes) =>
+      Object.fromEntries(VERB_NAMES.map((name) => [name, resolveVerb(name, changes).disallowedTools]));
+
+    // Unchanged from before this change, for every verb but `execute`.
+    const UNCHANGED = {
+      shape_requirements: [],
+      shape_on_canvas: [],
+      work_on_note: [],
+      finish: ["AskUserQuestion"],
+      investigate: ["AskUserQuestion", "Write", "Edit", "NotebookEdit"],
+      review: ["AskUserQuestion"],
+      capture_learning: ["AskUserQuestion"],
+    };
+
+    // With a settled task list `execute` cannot ask; with none, it can. Nothing
+    // else moves.
+    expect(resolvedFor(["add-thing"])).toEqual({ ...UNCHANGED, execute: ["AskUserQuestion"] });
+    expect(resolvedFor([])).toEqual({ ...UNCHANGED, execute: [] });
+  });
+
+  // The safety property that must survive untouched: not selectable by the
+  // caller. The value is derived from state the voice layer neither supplies nor
+  // controls, so no parameter can ask for a run that blocks on a human.
+  it("declares no verb parameter that could request the question tool", () => {
     for (const name of VERB_NAMES) {
-      const resolved = resolveVerb(name);
-      if (resolved.stateful) expect(resolved.disallowedTools).toEqual([]);
-      else expect(resolved.disallowedTools).toContain("AskUserQuestion");
+      const params = JSON.stringify(resolveVerb(name).params);
+      expect(params).not.toMatch(/stateful|disallowedTools|AskUserQuestion|may_ask|mayAsk/i);
     }
   });
 
@@ -156,6 +182,19 @@ describe("the verb registry", () => {
       expect.arrayContaining(["AskUserQuestion", "Write", "Edit"]),
     );
     expect(resolveVerb("execute").disallowedTools).not.toContain("Write");
+    // Not just with no open change: `investigate` withholds its four either way.
+    expect(resolveVerb("investigate", ["add-thing"]).disallowedTools).toEqual(
+      resolveVerb("investigate", []).disallowedTools,
+    );
+  });
+
+  // A capability bound must never DEFAULT to permissive: a record that forgot to
+  // declare one would resolve to "withholds nothing", which is the one failure
+  // mode this field cannot be allowed to have.
+  it("refuses to resolve a verb that declares no capability bound", () => {
+    for (const name of VERB_NAMES) {
+      expect(Array.isArray(resolveVerb(name).disallowedTools)).toBe(true);
+    }
   });
 
   it("parks the two consequential stateless verbs on every call and nothing else always", () => {

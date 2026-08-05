@@ -30,6 +30,7 @@ import { RUN_STATUS, EMIT_STATUS, toUpdateEvent } from "./run-queue.mjs";
 import { resolveVerb } from "./verbs.mjs";
 import { buildRunPrompt } from "./run-context.mjs";
 import { writeRemovesNothing } from "./note-write-guard.mjs";
+import { QUESTION_EXPIRY } from "./run-stream.mjs";
 
 // A run that terminated because it could not produce valid structured output
 // after the SDK's own retries. Named as its own cause: the work it did may be
@@ -66,6 +67,47 @@ function createStderrBuffer(limit = STDERR_TAIL_LINES) {
       return all.slice(-limit).join("\n").trim();
     },
   };
+}
+
+/**
+ * The tools this run may not use — the verb's own state-resolved bound, narrowed
+ * by whether an answer could actually be delivered (ask-when-unspecified D2).
+ *
+ * Two independent things must hold for a question to be answerable: the work
+ * must be unspecified, so asking is warranted (project state, decided by the
+ * registry), and a voice layer must be connected, so the answer can arrive. If
+ * either fails the tool is absent — the guarantee is structural, and the model
+ * is never offered a tool whose use would abort its run.
+ *
+ * Exported so this composition is assertable on its own, without driving a run.
+ *
+ * @param {{ disallowedTools: string[] }} verb
+ * @param {boolean} canRelay whether anything can currently relay a question
+ * @returns {string[]}
+ */
+export function effectiveDisallowedTools(verb, canRelay) {
+  const list = [...verb.disallowedTools];
+  if (!canRelay && !list.includes("AskUserQuestion")) list.push("AskUserQuestion");
+  return list;
+}
+
+// The user-facing account of a run that stopped because its question was never
+// answered (ask-when-unspecified D3). Names what it needed to know, and says
+// outright that nothing was chosen — this text is what reaches the spoken
+// announcement and the record appended to the notes inbox, and neither may read
+// as though the user had been consulted.
+function describeUnansweredQuestion(questions) {
+  const asked = (questions ?? [])
+    .map((q) => String(q?.question ?? "").trim())
+    .filter(Boolean);
+  return [
+    "This run needed something decided before it could go on, no answer arrived in time, so it stopped " +
+      "without writing anything further.",
+    asked.length
+      ? `What it needed to know: ${asked.map((q) => `"${q}"`).join(" ")}`
+      : "It did not record what it needed to know.",
+    "Nothing was chosen on your behalf and no default was applied. Say what you want and it can pick up from there.",
+  ].join(" ");
 }
 
 // A failure message with the subprocess's own diagnostics behind it. Before
@@ -166,7 +208,8 @@ export function buildNoteWriteGuard({ askUserQuestionViaVoice, workstreamId, not
  *   rememberClaudeSessionId: (run: any, claudeSessionId: string | null) => void,
  *   pushToolStart: (run: any, toolId: string, toolName: string, detail: any) => void,
  *   pushToolEnd: (run: any, toolId: string, isError: boolean) => void,
- *   askUserQuestionViaVoice: (workstreamId: string, questions: any[]) => Promise<any>,
+ *   askUserQuestionViaVoice: (workstreamId: string, questions: any[], options?: { onExpiry?: string }) => Promise<any>,
+ *   canRelayQuestion?: () => boolean,
  *   isSessionAliveImpl?: (sessionId: string, options?: { dir?: string }) => Promise<boolean>,
  *   queryImpl?: typeof query,
  * }} deps
@@ -205,6 +248,13 @@ export function createRunExec({
   pushToolStart,
   pushToolEnd,
   askUserQuestionViaVoice,
+  // Whether the voice layer can currently relay a question and carry an answer
+  // back (ask-when-unspecified D2/2.1). Injected — this module never reads a
+  // live session, Electron, or a global to find out. Defaults to FALSE, and
+  // fails closed on purpose: a wiring that forgot to supply it withholds the
+  // question tool, which is today's behavior, rather than granting a tool whose
+  // answer nothing could deliver.
+  canRelayQuestion = () => false,
   isSessionAliveImpl = isSessionAlive,
   queryImpl = query,
 }) {
@@ -315,7 +365,18 @@ export function createRunExec({
 
   // The stateless shape: one `query()` per run, torn down when it finalizes.
   // Distinct from the resident session in lifetime, not in transport.
-  async function startStatelessRun(run, verb) {
+  async function startStatelessRun(run, resolvedVerb) {
+    // The registry decided whether asking is WARRANTED (from project state);
+    // this decides whether it is DELIVERABLE, and the run is configured from
+    // both (design D2). Narrowed once, here, and everything downstream —
+    // the system prompt included — reads the narrowed value, so the prose can
+    // never promise a tool the run was not given.
+    const verb = {
+      ...resolvedVerb,
+      disallowedTools: effectiveDisallowedTools(resolvedVerb, canRelayQuestion()),
+    };
+    const mayAsk = !verb.disallowedTools.includes("AskUserQuestion");
+
     // Model is resolved at run START (not at submit time), so a model change
     // made while this task was queued still applies. No --fallback-model is ever
     // set: an unavailable model must fail loudly, not silently downgrade.
@@ -383,6 +444,24 @@ export function createRunExec({
     // down the SDK's own subprocess and everything it spawned, so run-queue no
     // longer needs to know a subprocess exists at all.
     const abortController = new AbortController();
+
+    // Reached when the question tool was withheld and the model tried anyway,
+    // and — the case that matters now — when it was GRANTED and the voice layer
+    // has since gone away. This is no longer a belt-and-braces backstop: it is
+    // the only thing standing between a mid-run sleep and a run waiting forever
+    // on the single execution slot (design D2/2.3). Fail loudly: record the
+    // violation, then abort so the run settles now rather than continuing on an
+    // answer it invented.
+    const refuseUndeliverableQuestion = () => {
+      run.askViolation = mayAsk
+        ? `The ${verb.verb} run asked a question, but the voice layer that could have relayed it is no longer ` +
+          "connected, so no answer can arrive. The run was stopped rather than left waiting. Ask again with Iris awake."
+        : `The ${verb.verb} run tried to ask a question, but this run was not permitted to ask and nothing is ` +
+          "listening for it. It must work autonomously; shape the requirements first if a decision is genuinely needed.";
+      abortController.abort();
+      return { behavior: /** @type {const} */ ("deny"), message: run.askViolation };
+    };
+
     /** @type {import("@anthropic-ai/claude-agent-sdk").Options} */
     const options = {
       cwd: run.cwd,
@@ -456,31 +535,53 @@ export function createRunExec({
       // one on it would reshape an answer that has nothing to do with a build.
       options.outputFormat = DECISION_OUTPUT_FORMAT;
     }
-    // A stateless verb's inability to ask is enforced by configuration, not by
-    // instruction — "DEV never asks" was a prompt promise with nothing behind
-    // it. Measured: `AskUserQuestion` is only exposed to the model when a
-    // `canUseTool` callback is present, and `disallowedTools` removes it even
-    // when one is. So the list is the guarantee and the callback below is the
-    // backstop if a future change adds a callback for some other reason.
+    // Whether a run may ask is enforced by configuration, not by instruction —
+    // in both directions. Measured: `AskUserQuestion` is only exposed to the
+    // model when a `canUseTool` callback is present, and `disallowedTools`
+    // removes it even when one is. So the list is the guarantee: a run that may
+    // not ask is not offered the tool, and a run that may ask is.
     // `investigate` carries Write/Edit in the same list: investigating does not
     // modify, and that has to be structural too.
     options.disallowedTools = [...verb.disallowedTools];
     options.canUseTool = async (toolName, input) => {
+      if (toolName === "AskUserQuestion" && mayAsk) {
+        // The permitted branch (ask-when-unspecified 3.1). Routed into the SAME
+        // relay a resident session's question goes through — no second channel,
+        // no second pending-question object. The run is suspended off the idle
+        // bound while it waits and continues, in place, on the answer: pausing
+        // is not residency.
+        //
+        // Re-checked here, not assumed from run start: permission was granted
+        // when the run was configured and the listener can go away while it is
+        // still running (D2).
+        if (!canRelayQuestion()) return refuseUndeliverableQuestion();
+        const questions = Array.isArray(input?.questions) ? input.questions : [];
+        const settled = await askUserQuestionViaVoice(run.workstream_id, questions, {
+          // D3: this run WRITES, so an unanswered question must not resolve to a
+          // fabricated recommendation. It supplies no answer and the run stops.
+          onExpiry: QUESTION_EXPIRY.DENY,
+        });
+        if (settled?.behavior === "deny") {
+          // Nothing further is written. The run is aborted rather than merely
+          // told "no": a denial alone leaves the model free to carry on and
+          // guess, which is the outcome this whole path exists to remove.
+          if (settled.reason === "abandoned") {
+            run.questionAbandoned = "The session was reset before the run's question could be answered.";
+          } else {
+            run.unansweredQuestion = describeUnansweredQuestion(questions);
+          }
+          abortController.abort();
+          return { behavior: "deny", message: settled.message ?? "No answer was supplied." };
+        }
+        return { behavior: "allow", updatedInput: { ...input, answers: settled?.answers ?? {} } };
+      }
       if (!verb.disallowedTools.includes(toolName)) return { behavior: "allow", updatedInput: input };
       if (toolName !== "AskUserQuestion") {
         // A withheld edit tool is refused without ending the run: the model can
         // still answer, which is what it was asked for.
         return { behavior: "deny", message: `${verb.verb} runs cannot use ${toolName}.` };
       }
-      // Nobody is listening on the headless path, so waiting here would hang the
-      // run and the single execution slot with it. Fail loudly instead: record
-      // the violation, then abort so the run settles now rather than continuing
-      // on an answer it invented.
-      run.askViolation =
-        `The ${verb.verb} run tried to ask a question, but nothing is listening on the headless path. ` +
-        "It must work autonomously; shape the requirements first if a decision is genuinely needed.";
-      abortController.abort();
-      return { behavior: "deny", message: run.askViolation };
+      return refuseUndeliverableQuestion();
     };
     if (run.model) options.model = run.model;
     if (mcpRecord) options.mcpServers = { "iris-canvas": mcpRecord };
@@ -519,9 +620,25 @@ export function createRunExec({
         runQueue.finalize(run.run_id, RUN_STATUS.CANCELLED, "Run was stopped before completion.");
         return;
       }
-      // The other reason this path aborts: DEV reached for AskUserQuestion. The
-      // guard aborted deliberately, so report the violation rather than the
-      // generic transport error the abort produced.
+      // This run asked, and no answer came. Its own terminal status
+      // (ask-when-unspecified D3/4.4): it did not FAIL — it did the work it
+      // could and then stopped at a fork it was right not to guess at — and the
+      // user did not CANCEL it, so both of those would be false accounts. The
+      // message names the question rather than claiming a decision.
+      if (run.unansweredQuestion) {
+        runQueue.finalize(run.run_id, RUN_STATUS.UNANSWERED, run.unansweredQuestion);
+        return;
+      }
+      // The question was pending when the user reset the session. That IS a
+      // cancellation by the user, on the same terms as the resident path's
+      // teardown, so it says so rather than blaming an absent answer.
+      if (run.questionAbandoned) {
+        runQueue.finalize(run.run_id, RUN_STATUS.CANCELLED, run.questionAbandoned);
+        return;
+      }
+      // The other reason this path aborts: the run reached for a question it
+      // could not have answered. The guard aborted deliberately, so report the
+      // violation rather than the generic transport error the abort produced.
       if (run.askViolation) {
         runQueue.finalize(run.run_id, RUN_STATUS.FAILED, run.askViolation);
         return;

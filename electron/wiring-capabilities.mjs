@@ -43,6 +43,7 @@ import { createSecondBrainCapability } from "./capabilities/second-brain.mjs";
  *   pushToolStart: any,
  *   pushToolEnd: any,
  *   askUserQuestionViaVoice: any,
+ *   getLiveStatus: () => { running: boolean },
  *   recentUtterances: () => Array<{ text: string, at: number }>,
  *   modelChoices: Array<{ id: string, label: string }>,
  *   envFlag: (name: string, fallback?: boolean) => boolean,
@@ -77,6 +78,7 @@ export function createCapabilitiesWiring({
   pushToolStart,
   pushToolEnd,
   askUserQuestionViaVoice,
+  getLiveStatus,
   recentUtterances,
   modelChoices,
   envFlag,
@@ -138,6 +140,11 @@ export function createCapabilitiesWiring({
     pushToolStart,
     pushToolEnd,
     askUserQuestionViaVoice,
+    // ask-when-unspecified D2/2.1: whether a question can actually reach the
+    // user and be answered. The live session's own status is the existing
+    // source of truth — run-exec receives it as a predicate rather than
+    // learning what a live session is.
+    canRelayQuestion: () => Boolean(getLiveStatus?.()?.running),
   });
   const { startClaudeRun } = runExec;
 

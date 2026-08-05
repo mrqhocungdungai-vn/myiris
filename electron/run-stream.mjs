@@ -18,6 +18,29 @@ import { createTrailingThrottle } from "./coalesce.mjs";
 import { activityEmitIntervalMs } from "./user-config.mjs";
 
 /**
+ * What an unanswered question settles as. **Supplied by the caller that raises
+ * it, never inferred here** (ask-when-unspecified D3): which behavior is right
+ * is a property of the asking run, and inference from the verb or the run is
+ * exactly how the two policies would drift apart.
+ *
+ * - `RECOMMENDED_OPTION` — resolve an *answer* built from the first-listed
+ *   option, by the AskUserQuestion convention that the first option is the
+ *   recommendation. Right where the asking run's output is something the user
+ *   reads and decides on before anything happens to their files: a defaulted
+ *   decision is visible and reversible at no cost.
+ * - `DENY` — supply NO answer, so the asking run stops instead of proceeding.
+ *   Right where the run WRITES. Applying a default there produces the one
+ *   outcome worse than an honest guess: the run acts on a decision the user
+ *   never made, and every downstream account of it — the result, the spoken
+ *   announcement, the record in the notes — reads as though the user had been
+ *   consulted.
+ */
+export const QUESTION_EXPIRY = Object.freeze({
+  RECOMMENDED_OPTION: "recommended_option",
+  DENY: "deny",
+});
+
+/**
  * @param {{
  *   runQueue: any,
  *   emitEvent: (event: any) => void,
@@ -48,15 +71,26 @@ export function createRunStream({
   const PendingQuestion = {
     current: null, // { workstreamId, questions, resolve, timer }
 
-    raise(workstreamId, questions, { timeoutMs }) {
+    // `onExpiry` is the asking caller's declared policy (QUESTION_EXPIRY
+    // above), not a default this object gets to choose for them. It defaults to
+    // RECOMMENDED_OPTION only because that is what every resident-session
+    // caller already relied on before there was a second policy.
+    /**
+     * @param {string} workstreamId
+     * @param {any[]} questions
+     * @param {{ timeoutMs: number, onExpiry?: string }} policy
+     */
+    raise(workstreamId, questions, { timeoutMs, onExpiry = QUESTION_EXPIRY.RECOMMENDED_OPTION }) {
       // The active run is legitimately blocked on a human now, not idle — the
       // idle watchdog (run-queue.mjs) must not count this wait against its
       // bound, or it would kill precisely the turns behaving correctly. See
-      // openspec/changes/add-run-idle-watchdog/design.md D3.
+      // openspec/changes/add-run-idle-watchdog/design.md D3. Run-shape-agnostic
+      // by design: a one-shot headless run that pauses on a question is inside
+      // exactly what run-execution-queue already specifies for "the active run".
       runQueue.suspend();
       return new Promise((resolve) => {
         const timer = setTimeout(() => this.expire(), timeoutMs);
-        this.current = { workstreamId, questions, resolve, timer };
+        this.current = { workstreamId, questions, resolve, timer, onExpiry };
         emitPoQuestionEvent(workstreamId, questions, "pending");
       });
     },
@@ -78,25 +112,48 @@ export function createRunStream({
       this.settle("answered", { behavior: "allow", answers });
     },
 
+    // Both policies land here and both go through the single settle() below, so
+    // neither can miss runQueue.resume() (ask-when-unspecified 4.6).
     expire() {
       if (!this.current) return;
+      const { questions, onExpiry } = this.current;
+      if (onExpiry === QUESTION_EXPIRY.DENY) {
+        // No answer is supplied and no option is chosen on the user's behalf.
+        // The asking run stops here rather than proceeding on a decision that
+        // was never made — see QUESTION_EXPIRY.
+        emitEvent({
+          type: "log",
+          level: "warn",
+          message:
+            "A question from a run that writes went unanswered — supplying no answer, so the run stops " +
+            "instead of proceeding on a default.",
+        });
+        this.settle("timed_out", {
+          behavior: "deny",
+          reason: "unanswered",
+          message: unansweredDenialMessage(questions),
+        });
+        return;
+      }
       emitEvent({
         type: "log",
         level: "warn",
-        message: "The PO's question went unanswered — applying the recommended option for each.",
+        message: "The question went unanswered — applying the recommended option for each.",
       });
-      this.settle("timed_out", { behavior: "allow", answers: defaultPoAnswers(this.current.questions) });
+      this.settle("timed_out", { behavior: "allow", answers: defaultPoAnswers(questions) });
     },
 
     // A deliberate reset denies the question rather than answering it with a
-    // fabricated default — the asking role must not continue and act on a
+    // fabricated default — the asking session must not continue and act on a
     // decision the user never made (e.g. writing into the abandoned cwd). This
-    // is the opposite of expire() above, which legitimately applies the
-    // default for a question left unanswered past the configured wait.
+    // is the opposite of expire()'s RECOMMENDED_OPTION branch, which
+    // legitimately applies the default for a question left unanswered past the
+    // configured wait.
     abandon(workstreamId) {
       if (!this.current || this.current.workstreamId !== workstreamId) return;
       this.settle("abandoned", {
         behavior: "deny",
+        reason: "abandoned",
         message: "The session was reset; this question was abandoned.",
       });
     },
@@ -231,26 +288,63 @@ export function createRunStream({
     return answers;
   }
 
+  // What the asking run is told when its question expires under
+  // QUESTION_EXPIRY.DENY. Names the question rather than gesturing at one, and
+  // says outright that nothing was chosen — this text is the model's only
+  // account of what happened, and "denied" on its own reads like a refusal of
+  // the work rather than an absent answer.
+  function unansweredDenialMessage(questions) {
+    const asked = (questions ?? [])
+      .map((q) => String(q?.question ?? "").trim())
+      .filter(Boolean)
+      .map((q) => `"${q}"`)
+      .join(" ");
+    return (
+      "No answer arrived, and no option was chosen on the user's behalf. " +
+      (asked ? `The question was: ${asked}. ` : "") +
+      "Stop here without writing anything further."
+    );
+  }
+
   // The event type stays `po_question` for renderer/IPC back-compat.
   function emitPoQuestionEvent(workstreamId, questions, status) {
     emitEvent({ type: "po_question", workstream_id: workstreamId, status, questions });
   }
 
-  // canUseTool's onAskUserQuestion callback (electron/po-session.mjs): pauses
-  // the PO's live turn, relays the question(s) to Gemini voice, and resolves
-  // once an answer arrives — via the Gemini tool, the UI IPC channel, or
-  // PendingQuestion's own timeout fallback. Only one run executes globally at a
-  // time, so at most one question is ever pending. See the voice-decision-relay
-  // spec.
-  function askUserQuestionViaVoice(workstreamId, questions) {
-    const promise = PendingQuestion.raise(workstreamId, questions, { timeoutMs: poQuestionTimeoutMs() });
+  // canUseTool's onAskUserQuestion callback: pauses the asking run, relays the
+  // question(s) to Gemini voice, and resolves once an answer arrives — via the
+  // Gemini tool, the UI IPC channel, or PendingQuestion's own timeout fallback.
+  // Only one run executes globally at a time, so at most one question is ever
+  // pending. See the voice-decision-relay spec.
+  //
+  // The ONE relay, for every asking run (ask-when-unspecified 3.1): a resident
+  // session's own question, the open-note write guard's confirmation, and a
+  // one-shot build run's question all arrive here. `onExpiry` is what differs
+  // between them, and it is the caller's to declare.
+  /**
+   * @param {string} workstreamId
+   * @param {any[]} questions
+   * @param {{ onExpiry?: string }} [policy]
+   */
+  function askUserQuestionViaVoice(workstreamId, questions, { onExpiry = QUESTION_EXPIRY.RECOMMENDED_OPTION } = {}) {
+    const promise = PendingQuestion.raise(workstreamId, questions, {
+      timeoutMs: poQuestionTimeoutMs(),
+      onExpiry,
+    });
 
     const lines = [
       "SYSTEM_EVENT_PO_QUESTION",
       "instructions_to_iris:",
-      "- The PO has paused to ask you something. Read each question aloud with its options, in order, and collect the user's answer for each.",
+      "- Claude has paused mid-task to ask you something. Read each question aloud with its options, in order, and collect the user's answer for each.",
       "- Once you have every answer, call answer_claude_question with one entry per question (question text verbatim, and the option label the user chose).",
       "- If asked for your recommendation, suggest the first-listed option, but submit whatever the user actually picks.",
+      // The expiry difference, stated rather than left for Iris to assume
+      // (ask-when-unspecified 5.4). Telling the user a default was applied when
+      // the run in fact stopped — or that it stopped when a default was in fact
+      // applied — is a false account of what happened to their work.
+      onExpiry === QUESTION_EXPIRY.DENY
+        ? "- This question is BLOCKING work that writes: if it goes unanswered, the run STOPS and writes nothing further. No default is applied and nothing is chosen for the user. So get an answer if you can, and if the run does stop, say it stopped for want of an answer — never that a recommended option was used."
+        : "- If this goes unanswered past the wait, the first-listed option is applied as the recommended default and the run continues. If that happens, say plainly that the default was applied.",
       // `header` is the question's own short label. Relayed so Iris can
       // introduce a question by its topic instead of launching into the full
       // text, which is what the label is for.

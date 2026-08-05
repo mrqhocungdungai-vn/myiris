@@ -87,9 +87,9 @@ function makeRun(overrides = {}) {
   };
 }
 
-async function optionsFor(name, changes = ["some-change"]) {
+async function optionsFor(name, changes = ["some-change"], overrides = {}) {
   const queryImpl = fakeQuery();
-  await makeExec(queryImpl).startStatelessRun(makeRun({ verb: name }), resolveVerb(name, changes));
+  await makeExec(queryImpl, overrides).startStatelessRun(makeRun({ verb: name }), resolveVerb(name, changes));
   return queryImpl.calls[0].options;
 }
 
@@ -201,6 +201,56 @@ describe("the options `execute` hands to query()", () => {
     expect(Object.keys(without).sort()).toEqual(Object.keys(withChange).sort());
     expect(without.skills).toEqual([]);
     expect(without.systemPrompt).not.toEqual(withChange.systemPrompt);
+  });
+
+  // ask-when-unspecified: `execute` now resolves to TWO run configurations, so
+  // both get the complete-key-set assertion this file exists for — the key set is
+  // identical either way, and only the contents of one list differ, which is
+  // exactly what should be checked.
+  describe("its second configuration: no open change, and someone listening", () => {
+    const listening = { canRelayQuestion: () => true };
+
+    it("has exactly the same fields, and no others", async () => {
+      expect(Object.keys(await optionsFor("execute", [], listening)).sort()).toEqual([...EXECUTE_KEYS].sort());
+    });
+
+    it("differs from the settled-work configuration only in the question tool, the skills, and the prompt", async () => {
+      const settled = await optionsFor("execute", ["some-change"], listening);
+      const unspecified = await optionsFor("execute", [], listening);
+
+      expect(settled.disallowedTools).toEqual(["AskUserQuestion"]);
+      expect(unspecified.disallowedTools).toEqual([]);
+      expect(unspecified.skills).toEqual([]);
+      expect(unspecified.systemPrompt).not.toEqual(settled.systemPrompt);
+
+      // Everything else is byte-identical, so the fork cannot quietly widen.
+      // The three fields above are excluded because they are what differs; the
+      // rest carry a function or a live object and are asserted by shape above.
+      const FORKED = ["disallowedTools", "skills", "systemPrompt"];
+      const BY_SHAPE = ["canUseTool", "stderr", "hooks", "abortController", "agents", "env"];
+      const rest = (options) =>
+        Object.fromEntries(
+          Object.entries(options).filter(([key]) => !FORKED.includes(key) && !BY_SHAPE.includes(key)),
+        );
+      expect(rest(unspecified)).toEqual(rest(settled));
+    });
+
+    // Both halves of the guarantee, in one place: the tool is present, and the
+    // prompt the same run carries agrees that it is.
+    it("carries a prompt that agrees with the tool the run was actually given", async () => {
+      const unspecified = await optionsFor("execute", [], listening);
+      const settled = await optionsFor("execute", ["some-change"], listening);
+
+      expect(unspecified.systemPrompt.append).toContain("AskUserQuestion");
+      expect(settled.systemPrompt.append).not.toContain("AskUserQuestion");
+    });
+
+    // The listener is the second condition, and it is independent of the first.
+    it("withholds the tool again when nothing can relay an answer", async () => {
+      const asleep = await optionsFor("execute", [], { canRelayQuestion: () => false });
+      expect(asleep.disallowedTools).toEqual(["AskUserQuestion"]);
+      expect(asleep.systemPrompt.append).not.toContain("AskUserQuestion");
+    });
   });
 });
 

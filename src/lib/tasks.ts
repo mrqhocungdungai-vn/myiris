@@ -1,8 +1,18 @@
 import type { TaskCard, TaskStep, TaskUsage } from "../types";
 
 // "limited" is a run that reached its turn or spend ceiling — over, but not
-// failed (see electron/run-budget.mjs).
-export const TERMINAL = new Set(["completed", "failed", "cancelled", "canceled", "error", "limited"]);
+// failed (see electron/run-budget.mjs). "unanswered" is a run that asked a
+// question its work depended on and got no answer — also over, also not failed
+// (see electron/run-queue.mjs's RUN_STATUS).
+export const TERMINAL = new Set([
+  "completed",
+  "failed",
+  "cancelled",
+  "canceled",
+  "error",
+  "limited",
+  "unanswered",
+]);
 
 export function taskKeyFor(task: string): string {
   return `starting:${task.toLowerCase().trim()}`;

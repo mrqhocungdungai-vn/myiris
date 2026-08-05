@@ -165,8 +165,10 @@ call site (full workings in the change's `design.md` D1):
   case — the persona body *is* their base prompt. Only plain-Claude runs get the
   preset. There is no opt-in to inherit it alongside a definition.
 - **`AskUserQuestion` is only exposed when `canUseTool` is set**, and
-  `disallowedTools` removes it even then. That is why a stateless verb cannot ask, and why a stateful one
-  can.
+  `disallowedTools` removes it even then. That list is therefore the whole mechanism: it is why a stateful
+  verb can ask, why a stateless verb working from a settled task list cannot, and why `execute` given no
+  specification at all can — the list is a declared field of the verb resolved against project state
+  (`verbs.mjs`), narrowed again at run start by whether anything can relay an answer (`run-exec.mjs`).
 
 ### Unused, with reasons
 

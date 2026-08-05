@@ -46,6 +46,15 @@ export const RUN_STATUS = Object.freeze({
   // hides which happened. Everything that treats a run as over reads
   // TERMINAL_STATUSES, so this participates automatically.
   LIMITED: "limited",
+  // A run that asked the user a question its work depended on and got no
+  // answer (ask-when-unspecified D3). Its own terminal status for the same
+  // reason LIMITED is: it did not break, and the user did not stop it — it
+  // stopped at a fork it was right not to guess at, and wrote nothing further.
+  // Reporting that as FAILED sends the user looking for a bug; reporting it as
+  // CANCELLED claims they abandoned it; reporting it as COMPLETED is the worst
+  // of the three. Everything that treats a run as over reads TERMINAL_STATUSES,
+  // so this participates automatically.
+  UNANSWERED: "unanswered",
 });
 
 // Superset of RUN_STATUS: adds the event-stream-only lifecycle markers that
@@ -62,6 +71,7 @@ export const TERMINAL_STATUSES = Object.freeze([
   RUN_STATUS.ERROR,
   RUN_STATUS.CANCELLED,
   RUN_STATUS.LIMITED,
+  RUN_STATUS.UNANSWERED,
 ]);
 
 // The binding constraint is a sub-agent `Task` call: from the parent stream
@@ -325,9 +335,13 @@ export function createRunQueue({
   }
 
   // Suspends the idle bound while the active run is legitimately blocked
-  // awaiting a human (design D3) — e.g. a PO turn paused on
-  // AskUserQuestion. Must be paired with resume(); see the interface docs
-  // on PendingQuestion in main.mjs for why that pairing is safe.
+  // awaiting a human (design D3) — a resident turn paused on AskUserQuestion,
+  // or a one-shot run that was permitted to ask and did. Deliberately reads
+  // only `active` and never the run's SHAPE: a paused headless run is the
+  // active run, so it is suspended on identical terms, and this pair needed no
+  // change when ask-when-unspecified made that case reachable. Must be paired
+  // with resume(); see the interface docs on PendingQuestion in run-stream.mjs
+  // for why that pairing is safe.
   function suspend() {
     idleSuspended = true;
     clearIdleTimer();

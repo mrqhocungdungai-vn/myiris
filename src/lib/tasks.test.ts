@@ -64,4 +64,10 @@ describe("TERMINAL", () => {
   it("counts a ceiling termination as terminal", () => {
     expect(TERMINAL.has("limited")).toBe(true);
   });
+
+  // So is a run that stopped for want of an answer (ask-when-unspecified): it is
+  // waiting for nothing, and a card left spinning would say otherwise.
+  it("counts an unanswered question as terminal", () => {
+    expect(TERMINAL.has("unanswered")).toBe(true);
+  });
 });

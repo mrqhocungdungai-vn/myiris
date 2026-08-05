@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createRunExec, buildNoteWriteGuard } from "./run-exec.mjs";
+import { createRunExec, buildNoteWriteGuard, effectiveDisallowedTools } from "./run-exec.mjs";
 import { buildRunInstructions } from "./role-prompt.mjs";
 import { resolveVerb } from "./verbs.mjs";
 import { runUsageFrom } from "./claude-stream.mjs";
@@ -262,7 +262,7 @@ describe("run-exec: the stateless run shape", () => {
       });
     }
 
-    it("keeps a stateless verb structurally unable to ask, and fails loudly if it ever tries", async () => {
+    it("keeps a stateless verb working from settled work unable to ask, and fails loudly if it ever tries", async () => {
       const runQueue = { finalize: vi.fn() };
       const queryImpl = fakeQuery([resultMessage()]);
       await make({ runQueue, queryImpl }).startStatelessRun(makeRun(), verbFor());
@@ -276,6 +276,105 @@ describe("run-exec: the stateless run shape", () => {
       expect(decision.behavior).toBe("deny");
       expect(decision.message).toContain("nothing is listening");
       expect(options.abortController.signal.aborted).toBe(true);
+    });
+
+    // ask-when-unspecified: the implementing verb given no specification MAY
+    // ask, and whether it may is decided by two independent conditions — the
+    // work being unspecified, and something being able to relay the answer.
+    describe("a run given no specification", () => {
+      const unspecified = () => verbFor("execute", []);
+
+      // The composition on its own, without driving a run: a run must never be
+      // offered a tool whose use would abort it.
+      it("composes the effective bound from the verb's own list and the listener", () => {
+        expect(effectiveDisallowedTools({ disallowedTools: [] }, true)).toEqual([]);
+        expect(effectiveDisallowedTools({ disallowedTools: [] }, false)).toEqual(["AskUserQuestion"]);
+        // Already withheld by the verb: not duplicated, and not widened.
+        expect(effectiveDisallowedTools({ disallowedTools: ["AskUserQuestion"] }, false)).toEqual(["AskUserQuestion"]);
+        expect(effectiveDisallowedTools({ disallowedTools: ["AskUserQuestion"] }, true)).toEqual(["AskUserQuestion"]);
+        expect(effectiveDisallowedTools({ disallowedTools: ["Write"] }, false)).toEqual(["Write", "AskUserQuestion"]);
+      });
+
+      it("withholds the question tool when nothing can relay an answer, even though the work is unspecified", async () => {
+        const queryImpl = fakeQuery([resultMessage()]);
+        await make({ queryImpl, canRelayQuestion: () => false }).startStatelessRun(makeRun(), unspecified());
+
+        const { options } = queryImpl.calls[0];
+        expect(options.disallowedTools).toEqual(["AskUserQuestion"]);
+        // And the prompt agrees with the configuration — a run told it may ask
+        // but not given the tool is the same defect as the reverse.
+        expect(options.systemPrompt.append).not.toContain("AskUserQuestion");
+      });
+
+      // Fails closed: a wiring that forgot to supply the predicate withholds the
+      // tool rather than granting one nothing could answer.
+      it("withholds it when no listener predicate was wired at all", async () => {
+        const queryImpl = fakeQuery([resultMessage()]);
+        await make({ queryImpl }).startStatelessRun(makeRun(), unspecified());
+        expect(queryImpl.calls[0].options.disallowedTools).toEqual(["AskUserQuestion"]);
+      });
+
+      it("grants it, and says so in the prompt, when the work is unspecified and someone is listening", async () => {
+        const queryImpl = fakeQuery([resultMessage()]);
+        await make({ queryImpl, canRelayQuestion: () => true }).startStatelessRun(makeRun(), unspecified());
+
+        const { options } = queryImpl.calls[0];
+        expect(options.disallowedTools).toEqual([]);
+        expect(options.systemPrompt.append).toContain("AskUserQuestion");
+      });
+
+      it("routes a permitted question through the one relay and continues the same run on the answer", async () => {
+        const askUserQuestionViaVoice = vi.fn(async () => ({ behavior: "allow", answers: { "Which db?": "Postgres" } }));
+        const runQueue = { finalize: vi.fn() };
+        const queryImpl = fakeQuery([resultMessage()]);
+        await make({ queryImpl, runQueue, askUserQuestionViaVoice, canRelayQuestion: () => true }).startStatelessRun(
+          makeRun(),
+          unspecified(),
+        );
+
+        const { options } = queryImpl.calls[0];
+        const questions = [{ question: "Which db?", options: [{ label: "Postgres" }] }];
+        const decision = await options.canUseTool("AskUserQuestion", { questions });
+
+        // The SAME relay a resident session's question goes through — no second
+        // channel — and this run's own expiry policy travels with it.
+        expect(askUserQuestionViaVoice).toHaveBeenCalledWith("ws1", questions, { onExpiry: "deny" });
+        expect(decision).toEqual({
+          behavior: "allow",
+          updatedInput: { questions, answers: { "Which db?": "Postgres" } },
+        });
+        // The same run continues: not aborted, not finalized twice, not re-dispatched.
+        expect(options.abortController.signal.aborted).toBe(false);
+        expect(runQueue.finalize).toHaveBeenCalledTimes(1);
+        expect(runQueue.finalize.mock.calls[0][1]).toBe("completed");
+      });
+
+      // The case the abort exists for now: permission is granted when the run
+      // starts, and Iris can be put to sleep while it is still running.
+      it("aborts with a diagnostic when the tool was granted and the listener has since gone", async () => {
+        let listening = true;
+        const askUserQuestionViaVoice = vi.fn();
+        const queryImpl = fakeQuery([resultMessage()]);
+        const run = /** @type {any} */ (makeRun());
+        await make({ queryImpl, askUserQuestionViaVoice, canRelayQuestion: () => listening }).startStatelessRun(
+          run,
+          unspecified(),
+        );
+
+        const { options } = queryImpl.calls[0];
+        expect(options.disallowedTools).toEqual([]);
+
+        listening = false; // Iris was put to sleep mid-run.
+        const decision = await options.canUseTool("AskUserQuestion", { questions: [{ question: "Which db?" }] });
+
+        expect(decision.behavior).toBe("deny");
+        expect(decision.message).toContain("no longer");
+        expect(askUserQuestionViaVoice).not.toHaveBeenCalled();
+        // Aborted rather than left waiting: this is the only thing between a
+        // mid-run sleep and a run parking the single execution slot forever.
+        expect(options.abortController.signal.aborted).toBe(true);
+        expect(run.askViolation).toContain("no answer can arrive");
+      });
     });
 
     // Investigating does not modify, and that has to be structural rather than
@@ -385,6 +484,97 @@ describe("run-exec: the stateless run shape", () => {
 
     expect(workstream.agent_sessions.execute).toBe("sess-live");
     expect(persistSessionStore).not.toHaveBeenCalled();
+  });
+
+  // ask-when-unspecified D3: the unanswered outcome on a run that WRITES. The
+  // divergence from the resident path is the point of the change — a defaulted
+  // answer here would put work on disk that reports having been confirmed.
+  describe("an unanswered question on a run that writes", () => {
+    // Mimics the SDK closely enough for the finalization path: the run asks
+    // mid-stream, the guard aborts, and the query throws instead of yielding a
+    // result — which is what an aborted `query()` actually does.
+    function askingQuery(questions) {
+      const calls = [];
+      /** @type {any} */
+      const impl = ({ prompt, options }) => {
+        calls.push({ prompt, options });
+        return {
+          async *[Symbol.asyncIterator]() {
+            calls[0].decision = await options.canUseTool("AskUserQuestion", { questions });
+            if (options.abortController.signal.aborted) throw new Error("AbortError: aborted");
+            yield resultMessage();
+          },
+        };
+      };
+      impl.calls = calls;
+      return impl;
+    }
+
+    function settledWith(settlement, questions = [{ question: "Which database should it use?" }]) {
+      const runQueue = { finalize: vi.fn() };
+      const queryImpl = askingQuery(questions);
+      const run = /** @type {any} */ (makeRun());
+      return make({
+        queryImpl,
+        runQueue,
+        canRelayQuestion: () => true,
+        askUserQuestionViaVoice: async () => settlement,
+      })
+        .startStatelessRun(run, verbFor("execute", []))
+        .then(() => ({ run, runQueue, queryImpl }));
+    }
+
+    it("supplies no answer, stops the run, and finalizes as UNANSWERED naming what it needed", async () => {
+      const { run, runQueue, queryImpl } = await settledWith({
+        behavior: "deny",
+        reason: "unanswered",
+        message: "No answer arrived, and no option was chosen on the user's behalf.",
+      });
+
+      // No answer reaches the model: a denial, never an `updatedInput` carrying
+      // a fabricated recommendation.
+      expect(queryImpl.calls[0].decision.behavior).toBe("deny");
+      expect(queryImpl.calls[0].decision).not.toHaveProperty("updatedInput");
+      // And nothing further is written — the run is over, not merely refused.
+      expect(queryImpl.calls[0].options.abortController.signal.aborted).toBe(true);
+
+      const [, status, output] = runQueue.finalize.mock.calls[0];
+      expect(runQueue.finalize).toHaveBeenCalledTimes(1);
+      // Its own terminal status: it did not fail, and the user did not stop it.
+      expect(status).toBe("unanswered");
+      expect(status).not.toBe("failed");
+      expect(status).not.toBe("cancelled");
+      expect(output).toContain("Which database should it use?");
+      expect(run.unansweredQuestion).toBe(output);
+    });
+
+    // The one thing this outcome must never read as.
+    it("claims no choice was made, anywhere in what the user is told", async () => {
+      const { runQueue } = await settledWith({ behavior: "deny", reason: "unanswered", message: "none" });
+      const [, , output] = runQueue.finalize.mock.calls[0];
+
+      // Every mention of a choice must be a DENIAL of one, never an assertion —
+      // so the negations are required and the affirmatives are forbidden.
+      expect(output).not.toMatch(/\b(you|the user|they) (chose|selected|confirmed|approved|picked)\b/i);
+      expect(output).not.toMatch(/(?<!no )(default|recommended option) was applied/i);
+      expect(output).not.toMatch(/went ahead|proceeded with/i);
+      expect(output).toMatch(/nothing was chosen on your behalf/i);
+      expect(output).toMatch(/no default was applied/i);
+    });
+
+    // A question pending when the user resets the session IS a cancellation by
+    // the user — reporting it as an absent answer would blame the wrong thing.
+    it("reports a session reset as CANCELLED rather than as an absent answer", async () => {
+      const { runQueue } = await settledWith({
+        behavior: "deny",
+        reason: "abandoned",
+        message: "The session was reset; this question was abandoned.",
+      });
+
+      const [, status, output] = runQueue.finalize.mock.calls[0];
+      expect(status).toBe("cancelled");
+      expect(output).toContain("session was reset");
+    });
   });
 
   it("finalizes as ERROR when the query itself throws", async () => {

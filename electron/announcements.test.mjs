@@ -12,7 +12,7 @@ function make(overrides = {}) {
     emitEvent: vi.fn(),
     findWorkstream: () => null,
     getActiveWorkstreamId: () => null,
-    runStatus: { CANCELLED: "cancelled", LIMITED: "limited" },
+    runStatus: { CANCELLED: "cancelled", LIMITED: "limited", UNANSWERED: "unanswered" },
     ...overrides,
   });
 }
@@ -142,6 +142,54 @@ describe("announcements: workspace info and completion", () => {
     const [{ text }] = session.sendRealtimeInput.mock.calls[0];
     expect(text).toContain("did NOT fail");
     expect(text).toContain("ceiling");
+  });
+
+  // ask-when-unspecified D3/4.5: the danger with this status is not misreporting
+  // a failure, it is implying a decision. The run asked, got no answer, stopped —
+  // so nothing in what the user hears may read as though they were consulted.
+  describe("a run that stopped because its question went unanswered", () => {
+    const unanswered = () => {
+      const session = makeLiveSession();
+      make({ getLiveSession: () => session }).announceClaudeCompletion({
+        runId: "r1",
+        task: "set up the deploy script",
+        status: "unanswered",
+        output:
+          'This run needed something decided before it could go on, no answer arrived in time, so it stopped ' +
+          'without writing anything further. What it needed to know: "Which environment should it deploy to?" ' +
+          "Nothing was chosen on your behalf and no default was applied.",
+        verb: "execute",
+      });
+      return session.sendRealtimeInput.mock.calls[0][0].text;
+    };
+
+    it("is still spoken — a run the user did not stop must not go silent", () => {
+      expect(unanswered()).toContain("SYSTEM_EVENT_CLAUDE_COMPLETE");
+      expect(unanswered()).toContain("status: unanswered");
+    });
+
+    it("says it neither failed nor was stopped by the user, and names what it needed", () => {
+      const text = unanswered();
+      expect(text).toContain("did NOT fail");
+      expect(text).toContain("NOT stopped by him");
+      expect(text).toMatch(/names the question/);
+      expect(text).toContain("Which environment should it deploy to?");
+    });
+
+    it("instructs the voice layer never to present it as a decision", () => {
+      const text = unanswered();
+      expect(text).toMatch(/nothing was chosen for him and no default was applied/i);
+      expect(text).toMatch(/do not present this as a decision/i);
+      expect(text).toMatch(/never say it went ahead/i);
+      // And no affirmative claim that a choice was made anywhere in the text.
+      expect(text).not.toMatch(/\b(he|the user) (chose|selected|confirmed|approved|picked)\b/i);
+      expect(text).not.toMatch(/(?<!no )(default|recommended option) was applied/i);
+    });
+
+    // The ceiling instruction is for a different outcome and would be false here.
+    it("does not also claim it reached a ceiling", () => {
+      expect(unanswered()).not.toContain("turn or spend ceiling");
+    });
   });
 
   it("carries the recorded cost so voice never has to estimate one", () => {

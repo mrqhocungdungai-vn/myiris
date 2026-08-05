@@ -206,8 +206,8 @@ describe("wiring: createWiring", () => {
       expect(capture.mock.calls[0][0].status).toBe("completed");
     });
 
-    it("records a failure, a cancellation, and a ceiling on the same terms", () => {
-      for (const status of ["failed", "error", "cancelled", "limited"]) {
+    it("records a failure, a cancellation, a ceiling, and an unanswered question on the same terms", () => {
+      for (const status of ["failed", "error", "cancelled", "limited", "unanswered"]) {
         const capture = finalizeWith({ run_id: "r1", verb: "execute", status, started_at: 1, output: "x" });
         expect(capture).toHaveBeenCalledTimes(1);
         expect(capture.mock.calls[0][0].status).toBe(status);

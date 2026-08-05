@@ -24,6 +24,12 @@
 // is a pure function of `(verb, project state)`, so the whole table is testable
 // without booting anything.
 //
+// `disallowedTools` is one of those fields (ask-when-unspecified D1). It used
+// to be the single exception: computed inside `resolveVerb` from a hardcoded
+// `name === "investigate"` check, which is a verb's capability bound living
+// somewhere other than the verb — a fourth hand-wired copy in miniature. It is
+// declared here now, per verb, like everything else.
+//
 // Electron-free, no I/O, no `process.env`.
 import {
   SHAPING_SKILLS,
@@ -79,6 +85,18 @@ const CHEAPEST = "claude-haiku-4-5-20251001";
 // and role-prompt.mjs, which is the only place prompt text is composed.
 const STATEFUL = "stateful";
 const STATELESS = "stateless";
+
+// The two recurring `disallowedTools` values, named so a record states which
+// policy it takes rather than repeating a literal (ask-when-unspecified D1).
+//
+// A verb that withholds NOTHING is a verb whose whole purpose is the mid-turn
+// question — every stateful verb, and no other.
+const ASKS_FREELY = Object.freeze([]);
+// A one-shot run whose work arrived already settled. The answers were collected
+// upstream, so pausing to re-ask them is redundant — and the inability is
+// enforced by the configuration rather than promised in a prompt, because "DEV
+// never asks" was a prompt promise with nothing behind it.
+const SETTLED_WORK_ASKS_NOTHING = Object.freeze(["AskUserQuestion"]);
 
 // The single resident session the two shaping verbs share (design.md D3). They
 // are the same conversation in two media, and switching to the canvas happens
@@ -143,6 +161,7 @@ const VERBS = Object.freeze({
     mcpServers: [],
     vault: false,
     structuredOutput: true,
+    disallowedTools: ASKS_FREELY,
     params: THIN_PARAMS,
     basePersona: STATEFUL,
     clause: "Settle what to build by talking it through, then turn it into an OpenSpec change with tasks.",
@@ -167,6 +186,7 @@ const VERBS = Object.freeze({
     mcpServers: ["iris-canvas"],
     vault: false,
     structuredOutput: true,
+    disallowedTools: ASKS_FREELY,
     params: THIN_PARAMS,
     basePersona: STATEFUL,
     clause:
@@ -201,6 +221,7 @@ const VERBS = Object.freeze({
     // exactly the condensing the verbatim read-back requirement forbids (see
     // announcements.mjs's note-reading path).
     structuredOutput: false,
+    disallowedTools: ASKS_FREELY,
     // open-note-session D6: the main-process write guard (po-session.mjs's
     // canUseTool seam, wired in run-exec.mjs) applies only to this verb.
     guardOpenNoteWrites: true,
@@ -221,7 +242,7 @@ const VERBS = Object.freeze({
   execute: {
     label: "Build",
     description:
-      "Do the work. Implementing, fixing, writing, automating, looking something up and acting on it — anything the user asks to have DONE. In a project with an open change this implements its remaining tasks; with no open change it simply does the work, so a small request is not refused for lacking a specification. This runs autonomously and CANNOT ask you anything, so its parameters are the whole instruction.",
+      "Do the work. Implementing, fixing, writing, automating, looking something up and acting on it — anything the user asks to have DONE. In a project with an open change this implements its remaining tasks; with no open change it simply does the work, so a small request is not refused for lacking a specification. It runs on its own and never comes back to YOU for more: its parameters are the whole instruction, so a detail you leave out is lost. Where nothing was specified up front it may pause once to ask the USER directly, which reaches you as SYSTEM_EVENT_PO_QUESTION like any other live question — read it out and collect the answer, never decide it yourself.",
     stateful: false,
     park: PARK.ALWAYS,
     sessionKey: "execute",
@@ -234,6 +255,23 @@ const VERBS = Object.freeze({
     mcpServers: [],
     vault: false,
     structuredOutput: true,
+    // The same fork, applied to the one property of this verb that used to
+    // ignore the state everything else reads (ask-when-unspecified D1/D4).
+    //
+    // WITH an open change: withheld, exactly as before. The task list is
+    // settled, the grilling that resolved its ambiguity happened in the shaping
+    // verb before a tasks.md existed, and this is the long unattended path whose
+    // whole value is that the user can walk away — granting the ask here would
+    // let a build stop for minutes at a time waiting for someone who left.
+    //
+    // With NO open change: granted. There is no upstream on that path to have
+    // settled anything, so refusing the question tool does not make the run stop
+    // needing the answer — it makes it invent one and write the result. The
+    // request was spoken moments ago, so the user is almost certainly still
+    // there. Note this is only the FIRST of two conditions: run-exec.mjs
+    // narrows it again when nothing can relay an answer (design D2), so the
+    // model is never offered a tool whose use would abort its run.
+    disallowedTools: (state) => (state.hasOpenChange ? SETTLED_WORK_ASKS_NOTHING : []),
     params: {
       type: "object",
       properties: {
@@ -254,8 +292,20 @@ const VERBS = Object.freeze({
     basePersona: STATELESS,
     clause: (state) =>
       state.hasOpenChange
-        ? "Implement the remaining tasks of the open OpenSpec change, test-first, and verify your own work against the specs' scenarios."
-        : "Do the work you were asked to do, directly. There is no open change and none is wanted: do not propose one, do not create process artifacts, and do not ask for a specification first.",
+        ? // Unchanged, and deliberately silent about asking: this fork genuinely
+          // cannot (its `disallowedTools` above withholds the tool), and the
+          // base clause role-prompt.mjs picks says so once, for every run that
+          // cannot. Saying it twice is how the two drift.
+          "Implement the remaining tasks of the open OpenSpec change, test-first, and verify your own work against the specs' scenarios."
+        : // ask-when-unspecified D5: this fork MAY ask, so the judgement of when
+          // to is stated here. Nothing in a configuration can decide whether a
+          // given ambiguity is worth a question — that is the one part of this
+          // guarantee that lives in the prompt, and it is named as such.
+          "Do the work you were asked to do, directly. There is no open change and none is wanted: do not " +
+          "propose one, do not create process artifacts, and do not ask for a specification first. Where a " +
+          "detail is genuinely unspecified and getting it wrong would mean undoing work, ask the user before " +
+          "you write anything — one question, with options. Where a wrong guess would cost nothing to change " +
+          "later, pick the sensible default, get on with it, and say which default you applied when you report.",
   },
 
   finish: {
@@ -271,6 +321,9 @@ const VERBS = Object.freeze({
     mcpServers: [],
     vault: false,
     structuredOutput: true,
+    // Its input is the open change, which is settled by definition; if it is
+    // not, that is what `investigate` is for (design D4).
+    disallowedTools: SETTLED_WORK_ASKS_NOTHING,
     params: {
       type: "object",
       properties: {
@@ -303,6 +356,12 @@ const VERBS = Object.freeze({
     // summary/decisions schema would reshape an answer that has nothing to do
     // with a pipeline.
     structuredOutput: false,
+    // Investigating does not modify, and that has to be structural too: a verb
+    // that reads and reports has no business holding an edit tool. Nor does it
+    // ask — it cannot write, so a wrong assumption costs a re-ask rather than a
+    // file, and an ambiguous question is better answered by reporting both
+    // readings than by pausing to pick one (design D4).
+    disallowedTools: ["AskUserQuestion", "Write", "Edit", "NotebookEdit"],
     params: {
       type: "object",
       properties: {
@@ -331,6 +390,9 @@ const VERBS = Object.freeze({
     mcpServers: [],
     vault: false,
     structuredOutput: true,
+    // Reports findings, fixes nothing — so a misread costs a re-ask, not a
+    // file, and both readings can simply be reported (design D4).
+    disallowedTools: SETTLED_WORK_ASKS_NOTHING,
     params: {
       type: "object",
       properties: {
@@ -362,6 +424,13 @@ const VERBS = Object.freeze({
     // directory rather than described in prose.
     vault: true,
     structuredOutput: false,
+    // Deliberately left out of ask-when-unspecified, and worth naming why
+    // rather than leaving it looking like an oversight (design D4): it has the
+    // same structural shape as the case that change fixes, but it is declared
+    // CHEAPEST/`light` precisely because it is meant to be cheap bookkeeping
+    // over text that already exists, and making it interactive changes what it
+    // is. Its own decision, taken separately.
+    disallowedTools: SETTLED_WORK_ASKS_NOTHING,
     params: {
       type: "object",
       properties: {
@@ -464,6 +533,16 @@ export function resolveVerb(name, state = NO_PROJECT_STATE) {
   }
   const record = VERBS[name];
   const resolvedState = projectState(state);
+  // A capability bound must never DEFAULT to permissive: a record that forgot
+  // to declare its list would otherwise resolve to "withholds nothing", which
+  // is the one failure mode this field cannot be allowed to have. So it is
+  // resolved and checked rather than defaulted (ask-when-unspecified D1).
+  const disallowedTools = resolveField(record.disallowedTools, resolvedState);
+  if (!Array.isArray(disallowedTools)) {
+    throw new Error(
+      `Verb ${name} declares no disallowedTools. Every verb states its own capability bound — see electron/verbs.mjs.`,
+    );
+  }
   return {
     verb: name,
     label: record.label,
@@ -484,15 +563,12 @@ export function resolveVerb(name, state = NO_PROJECT_STATE) {
     // whether to wire the destructive-write confirmation seam — never a
     // hardcoded verb-name check outside the registry.
     guardOpenNoteWrites: Boolean(record.guardOpenNoteWrites),
-    // A stateless verb's inability to ask is enforced by the run's
-    // configuration, not by instruction — "DEV never asks" was a prompt promise
-    // with nothing behind it. `investigate` additionally cannot modify: a verb
-    // that reads and reports has no business holding an edit tool.
-    disallowedTools: record.stateful
-      ? []
-      : name === "investigate"
-        ? ["AskUserQuestion", "Write", "Edit", "NotebookEdit"]
-        : ["AskUserQuestion"],
+    // Declared on the verb and resolved against project state like every other
+    // field — never a verb-name conditional here (ask-when-unspecified D1).
+    // What this list bounds is what the run may DO; who decides is not
+    // negotiable, and it is not the caller: the value is derived here, from
+    // state the voice layer neither supplies nor controls.
+    disallowedTools,
     params: record.params,
     basePersona: record.basePersona,
     clause: resolveField(record.clause, resolvedState),

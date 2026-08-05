@@ -207,7 +207,9 @@ describe("po-session system prompt", () => {
 
   it("shares the base prompt with the stateless shape, one statefulness clause apart", () => {
     const shape = resolveVerb("shape_requirements");
-    const execute = resolveVerb("execute");
+    // WITH an open change — the fork that genuinely cannot ask, and so the one
+    // that carries STATEFULNESS_CLAUSES.stateless (ask-when-unspecified D1).
+    const execute = resolveVerb("execute", ["add-thing"]);
     const stateful = captureOptions({ systemPrompt: buildSystemPrompt(shape) }).systemPrompt.append;
 
     expect(stateful.replace(STATEFULNESS_CLAUSES.stateful, "<BASE>").replace(shape.clause, "<CLAUSE>")).toEqual(

@@ -33,9 +33,17 @@
 const PREAMBLE = "You are invoked from Iris voice.";
 const CLOSING = "Report concise final results.";
 
-// The one documented statefulness-specific clause. This is the *only* thing the
-// two differ by at the base level, which is what makes "stateful" mean exactly
-// one thing: may pause mid-turn and ask by voice.
+// The one documented statefulness-specific clause. This is the *only* thing two
+// verbs differ by at the base level.
+//
+// There are three, not two, because statelessness and ask-ability are separate
+// properties (ask-when-unspecified): a one-shot run whose work was settled
+// upstream cannot ask, and a one-shot run given no specification at all can.
+// Which base a run gets is read off the run's own EFFECTIVE `disallowedTools`
+// (see `mayAsk` below) — so the prose can never promise a tool the run was not
+// given, nor withhold one it was. A verb told it may ask but not given the tool,
+// and a verb given the tool but told not to ask, are the same defect: a promise
+// in a prompt with nothing behind it.
 export const STATEFULNESS_CLAUSES = {
   stateful:
     "This is a LIVE, continuous session, not a one-shot run: each turn is one exchange in a " +
@@ -45,10 +53,32 @@ export const STATEFULNESS_CLAUSES = {
     "This is a one-shot headless run: nobody is listening for a question, and the question tool " +
     "is not available to you. Work autonomously, never ask for clarification, and use sensible " +
     "defaults, recording them.",
+  // A one-shot run that MAY ask. Still one-shot: pausing on a question is not
+  // residency, and this run ends when the task does. The bar for asking, and the
+  // consequence of an unanswered question, are both stated here because the
+  // configuration can decide whether asking is possible and nothing about
+  // whether it is warranted (design D5).
+  statelessMayAsk:
+    "This is a one-shot headless run, but the user is listening and AskUserQuestion IS available " +
+    "to you: nothing upstream settled what you were asked for, so there is no earlier answer to " +
+    "look up. Use it only where a wrong assumption would have to be undone — ask once, with " +
+    "options, and wait. Everywhere else, apply a sensible default and say which one you applied. " +
+    "Never ask to confirm work you were plainly asked to do. If a question goes unanswered this " +
+    "run stops and writes nothing further, so never ask about something you could reasonably default.",
 };
 
+// Whether this run may ask, read off its own resolved capability bound rather
+// than inferred from its shape. Fails closed: a caller that supplied no list at
+// all gets the prose for a run that cannot ask, never the promise of a tool it
+// may not have.
+/** @param {PromptVerb} verb */
+function mayAsk(verb) {
+  if (verb.stateful) return true;
+  return Array.isArray(verb.disallowedTools) && !verb.disallowedTools.includes("AskUserQuestion");
+}
+
 /**
- * @typedef {{ stateful: boolean, clause: string, vault?: boolean, verb?: string }} PromptVerb
+ * @typedef {{ stateful: boolean, clause: string, vault?: boolean, verb?: string, disallowedTools?: string[] }} PromptVerb
  * The fields of a resolved verb (electron/verbs.mjs) this policy reads. Taking
  * the resolved record rather than a name is what keeps the registry the single
  * definition — this module composes, it does not decide.
@@ -99,7 +129,11 @@ export function buildRunInstructions(verb, { notesVault = null } = {}) {
   if (!verb || typeof verb.clause !== "string" || !verb.clause) {
     throw new Error("role-prompt: a resolved verb with a clause is required — see electron/verbs.mjs.");
   }
-  const base = verb.stateful ? STATEFULNESS_CLAUSES.stateful : STATEFULNESS_CLAUSES.stateless;
+  const base = verb.stateful
+    ? STATEFULNESS_CLAUSES.stateful
+    : mayAsk(verb)
+      ? STATEFULNESS_CLAUSES.statelessMayAsk
+      : STATEFULNESS_CLAUSES.stateless;
   let text = `${PREAMBLE} ${base} ${verb.clause} ${CLOSING}`;
   // Passing a vault for a verb that does not declare one is a caller bug, so it
   // is ignored rather than honoured — the grant and the prose must agree.

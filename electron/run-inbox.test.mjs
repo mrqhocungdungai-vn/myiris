@@ -49,6 +49,27 @@ describe("renderInboxRecord", () => {
     expect(record).toContain("npm test exited 1");
   });
 
+  // ask-when-unspecified 4.5/6.9: the record is the third account of an outcome
+  // (with the structured result and the spoken announcement), and it is the one
+  // the curator later reads back as history. It must not record a decision the
+  // user never made.
+  it("records an unanswered run as its own outcome, claiming no choice was made", () => {
+    const record = renderInboxRecord(
+      makeRun({
+        status: "unanswered",
+        output:
+          'This run needed something decided before it could go on, no answer arrived in time, so it stopped ' +
+          'without writing anything further. What it needed to know: "Which environment?" Nothing was chosen ' +
+          "on your behalf and no default was applied.",
+      }),
+    );
+
+    expect(record).toContain("· execute · unanswered");
+    expect(record).toContain("Which environment?");
+    expect(record).not.toMatch(/\b(you|the user|they) (chose|selected|confirmed|approved|picked)\b/i);
+    expect(record).not.toMatch(/(?<!no )(default|recommended option) was applied/i);
+  });
+
   it("says so plainly when a run reported no cost", () => {
     expect(renderInboxRecord(makeRun({ usage: null }))).toContain("cost: not reported");
   });

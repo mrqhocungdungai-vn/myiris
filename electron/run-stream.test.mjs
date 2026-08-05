@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { createRunStream } from "./run-stream.mjs";
+import { createRunStream, QUESTION_EXPIRY } from "./run-stream.mjs";
 
 function makeRunQueue(overrides = {}) {
   return {
@@ -88,6 +88,115 @@ describe("run-stream: PO question settle-once invariant", () => {
     const stream = make();
     const result = stream.resolvePendingPoQuestion([{ question: "Q", choice: "A" }]);
     expect(result.status).toBe("error");
+  });
+});
+
+// ask-when-unspecified D3: one policy with a declared parameter, supplied by the
+// asking caller rather than inferred here — inference from the verb or the run is
+// exactly how the two behaviors would drift apart.
+describe("run-stream: the caller-supplied expiry policy", () => {
+  const questions = [
+    { question: "Which database?", options: [{ label: "Postgres", description: "p" }, { label: "SQLite", description: "s" }] },
+  ];
+
+  // The regression guard for the divergence: the resident path is untouched, and
+  // its callers pass nothing at all.
+  it("still applies the recommended option when the caller declares no policy", async () => {
+    const stream = make();
+    const pending = stream.askUserQuestionViaVoice("ws1", questions);
+    stream.PendingQuestion.expire();
+    const settled = await pending;
+
+    expect(settled.behavior).toBe("allow");
+    expect(settled.answers["Which database?"]).toBe("Postgres");
+  });
+
+  it("applies it just the same when the caller declares RECOMMENDED_OPTION outright", async () => {
+    const stream = make();
+    const pending = stream.askUserQuestionViaVoice("ws1", questions, {
+      onExpiry: QUESTION_EXPIRY.RECOMMENDED_OPTION,
+    });
+    stream.PendingQuestion.expire();
+    const settled = await pending;
+
+    expect(settled.behavior).toBe("allow");
+    expect(settled.answers["Which database?"]).toBe("Postgres");
+  });
+
+  it("supplies no answer at all under DENY, and names the question it could not get answered", async () => {
+    const stream = make();
+    const pending = stream.askUserQuestionViaVoice("ws1", questions, { onExpiry: QUESTION_EXPIRY.DENY });
+    stream.PendingQuestion.expire();
+    const settled = await pending;
+
+    expect(settled.behavior).toBe("deny");
+    expect(settled.reason).toBe("unanswered");
+    // No fabricated recommendation travels back under any key.
+    expect(settled).not.toHaveProperty("answers");
+    expect(settled.message).toContain("Which database?");
+    expect(settled.message).toMatch(/no option was chosen on the user's behalf/i);
+  });
+
+  // 4.6: both branches funnel through the single settle(), so neither can miss
+  // runQueue.resume() — and the idle bound is suspended for a headless run on
+  // exactly the same terms as for a resident turn.
+  it("suspends and resumes the idle bound under either policy", async () => {
+    for (const onExpiry of [QUESTION_EXPIRY.RECOMMENDED_OPTION, QUESTION_EXPIRY.DENY]) {
+      const runQueue = makeRunQueue();
+      const stream = make({ runQueue });
+      const pending = stream.askUserQuestionViaVoice("ws1", questions, { onExpiry });
+      expect(runQueue.suspend).toHaveBeenCalledTimes(1);
+      expect(runQueue.resume).not.toHaveBeenCalled();
+
+      stream.PendingQuestion.expire();
+      await pending;
+      expect(runQueue.resume).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  // An answered question is answered the same way regardless of policy: the
+  // policy governs only what an ABSENT answer settles as.
+  it("is answered identically under either policy when an answer actually arrives", async () => {
+    for (const onExpiry of [QUESTION_EXPIRY.RECOMMENDED_OPTION, QUESTION_EXPIRY.DENY]) {
+      const stream = make();
+      const pending = stream.askUserQuestionViaVoice("ws1", questions, { onExpiry });
+      stream.resolvePendingPoQuestion([{ question: "Which database?", choice: "SQLite" }]);
+      const settled = await pending;
+
+      expect(settled.behavior).toBe("allow");
+      expect(settled.answers["Which database?"]).toBe("SQLite");
+    }
+  });
+
+  // 5.4: Iris must not tell the user a defaulted answer was applied when the run
+  // in fact stopped, so the relay's own instruction states which one applies.
+  it("tells the voice layer which unanswered outcome this question has", async () => {
+    const notifyIris = vi.fn();
+    const deny = make({ notifyIris });
+    deny.askUserQuestionViaVoice("ws1", questions, { onExpiry: QUESTION_EXPIRY.DENY });
+    const [denyText] = notifyIris.mock.calls[0];
+    expect(denyText).toMatch(/the run STOPS and writes nothing further/);
+    expect(denyText).toMatch(/never that a recommended option was used/i);
+
+    const notifyIris2 = vi.fn();
+    const dflt = make({ notifyIris: notifyIris2 });
+    dflt.askUserQuestionViaVoice("ws1", questions);
+    const [defaultText] = notifyIris2.mock.calls[0];
+    expect(defaultText).toMatch(/first-listed option is applied as the recommended default/);
+    expect(defaultText).not.toMatch(/the run STOPS/);
+  });
+
+  // A session reset settles a denial too, but for a different reason — and the
+  // asking run has to be able to tell them apart.
+  it("distinguishes an abandoned question from an unanswered one", async () => {
+    const stream = make();
+    const pending = stream.askUserQuestionViaVoice("ws1", questions, { onExpiry: QUESTION_EXPIRY.DENY });
+    stream.PendingQuestion.abandon("ws1");
+    const settled = await pending;
+
+    expect(settled.behavior).toBe("deny");
+    expect(settled.reason).toBe("abandoned");
+    expect(settled.message).toContain("session was reset");
   });
 });
 

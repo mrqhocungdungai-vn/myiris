@@ -15,7 +15,7 @@ import { fenceUntrustedText } from "./untrusted-text.mjs";
  *   emitEvent: (event: any) => void,
  *   findWorkstream: (id: string | null) => any,
  *   getActiveWorkstreamId: () => string | null,
- *   runStatus: { CANCELLED: string, LIMITED: string },
+ *   runStatus: { CANCELLED: string, LIMITED: string, UNANSWERED?: string },
  * }} deps
  */
 export function createAnnouncements({
@@ -205,6 +205,16 @@ export function createAnnouncements({
       ...(status === runStatus.LIMITED
         ? [
             "- This run did NOT fail: it reached the turn or spend ceiling Iris puts on every run. Say so plainly, tell him which ceiling and its value (the result text below names both), and that the work it did complete still stands.",
+          ]
+        : []),
+      // ask-when-unspecified D3/4.5: the one terminal status where the danger is
+      // not misreporting a failure but implying a decision. The run asked, got
+      // no answer, and stopped — so nothing was chosen, no default was applied,
+      // and saying otherwise would tell the user their work was confirmed when
+      // it never was.
+      ...(status === runStatus.UNANSWERED
+        ? [
+            "- This run did NOT fail, and it was NOT stopped by him: it needed something decided before it could go on, no answer arrived, so it stopped and wrote nothing further. Tell him plainly what it needed to know — the result text below names the question — and that nothing was chosen for him and no default was applied. Never say it went ahead, never say a recommendation was used, and do not present this as a decision that was made. Offer to run it again once he says which way he wants it.",
           ]
         : []),
       // Cost is recorded, not estimated — the figures below are what the

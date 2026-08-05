@@ -96,7 +96,10 @@ export function createGeminiTools({ getPipelineAvailable, modelChoices, envFlag,
           "(`cost_usd`, `num_turns`, plus per-model detail) — use it to answer 'how much did that cost?' or " +
           "'how long did that take?'. Report those figures verbatim; never estimate a cost yourself. `usage` is " +
           "null until the run finishes. A run whose status is 'limited' did not fail: it reached its turn or " +
-          "spend ceiling, and its output says which one and how to raise it.",
+          "spend ceiling, and its output says which one and how to raise it. A run whose status is 'unanswered' " +
+          "did not fail either, and was not cancelled: it asked a question its work depended on, no answer " +
+          "arrived, so it stopped and wrote nothing further — nothing was chosen for the user and no default " +
+          "was applied, so never report it as done or as decided.",
         parameters: {
           type: "object",
           properties: { run_id: { type: "string" } },
@@ -126,10 +129,11 @@ export function createGeminiTools({ getPipelineAvailable, modelChoices, envFlag,
       {
         name: "answer_claude_question",
         description:
-          "Answer the pending question(s) Claude asked after SYSTEM_EVENT_PO_QUESTION. The resident session that asked — " +
-          "shaping, or working on a note — is paused waiting for this; call it only once you have collected every " +
-          "answer by voice, never before. A destructive edit to a note is asked here too, on the same terms as any " +
-          "other live question — never defer or downplay it as less important.",
+          "Answer the pending question(s) Claude asked after SYSTEM_EVENT_PO_QUESTION. Whichever run asked is " +
+          "paused waiting for this — a shaping conversation, a note-working session, or a build run that was " +
+          "given no specification; call it only once you have collected every answer by voice, never before. A " +
+          "destructive edit to a note and a build run's question are both asked here, on the same terms as any " +
+          "other live question — never defer or downplay either as less important.",
         parameters: {
           type: "object",
           properties: {
