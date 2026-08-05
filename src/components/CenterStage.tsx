@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties, type RefObject } from "react";
-import { Headphones, HeadphoneOff, Mic, MicOff, Power } from "lucide-react";
+import { Headphones, HeadphoneOff, Mic, MicOff, Power, Radio } from "lucide-react";
 import ReactorCore, { ORB_ACCENT, ORB_ENERGY } from "./ReactorCore";
 import type { HandoffTone, ReactorState } from "../types";
 
@@ -75,6 +75,8 @@ export default function CenterStage({
   onToggleMute,
   listenOnlyEngaged,
   onToggleListenOnly,
+  ambientCaptureLive,
+  onStopAmbientCapture,
   onSleep,
   webglHighFidelity,
 }: {
@@ -106,6 +108,11 @@ export default function CenterStage({
   // design.md D3): pure display of main-owned state, toggled by request only.
   listenOnlyEngaged: boolean;
   onToggleListenOnly: () => void;
+  // ambient-memory (design D7): shown only while retention is actually
+  // live — never a settings mirror — with its own stop affordance so
+  // stopping never requires opening Settings.
+  ambientCaptureLive: boolean;
+  onStopAmbientCapture: () => void;
   onSleep: () => void;
   /** webgl-quality-mode: high-fidelity path (bloom) vs the light-path default. */
   webglHighFidelity: boolean;
@@ -162,6 +169,15 @@ export default function CenterStage({
           >
             {listenOnlyEngaged ? <Headphones size={18} /> : <HeadphoneOff size={18} />}
           </button>
+          {ambientCaptureLive ? (
+            <button
+              className="t-btn small ambient-live"
+              onClick={onStopAmbientCapture}
+              title="Recording this conversation to your notes — click to stop"
+            >
+              <Radio size={18} />
+            </button>
+          ) : null}
           <button className="t-btn small danger" onClick={onSleep} title="Sleep (S)">
             <Power size={18} />
           </button>

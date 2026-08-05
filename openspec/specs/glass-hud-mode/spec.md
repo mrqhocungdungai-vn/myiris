@@ -24,7 +24,7 @@ HUD mode SHALL present the upstream Glass HUD layout — orb cluster with mute/w
 
 #### Scenario: Exiting to deck for management actions
 - **WHEN** the user activates the HUD's exit control
-- **THEN** the app returns to deck mode where pipeline roles, model choice, sessions, project folder, and setup remain available (these surfaces do not exist inside the HUD)
+- **THEN** the app returns to deck mode where the pipeline bar, model choice, sessions, project folder, and setup remain available (these surfaces do not exist inside the HUD)
 
 #### Scenario: Drawing toggle lives in the hover-revealed orb control cluster
 - **WHEN** HUD mode is active and the user reveals the bottom-right orb control cluster (hover / focus)

@@ -89,22 +89,6 @@ A stateless verb's inability to ask SHALL be enforced by the run's configuration
 - **WHEN** the voice layer calls any verb
 - **THEN** it cannot request that the run be made stateful
 
-### Requirement: Verbs that continue one conversation share one live session
-
-Verbs that represent the same conversation in different media SHALL share a single resident session, so moving between them continues one conversation with its context intact rather than starting a second one.
-
-The consequences SHALL be declared rather than hidden: verbs sharing a live session cannot run on different models while that session is alive, and whichever is called first is what opens it.
-
-#### Scenario: Switching medium keeps the context
-
-- **WHEN** a conversation that began by voice moves to the shared visual medium
-- **THEN** the run in the new medium has the context of everything already discussed
-
-#### Scenario: The model coupling is declared
-
-- **WHEN** the model is changed for one verb sharing a live session
-- **THEN** the change applies to every verb sharing that session, and the system says so rather than appearing to change one
-
 ### Requirement: The user's own words reach the worker, fenced
 
 Every verb's run SHALL receive the recent verbatim transcript of what the user said, fenced as untrusted input, alongside the parameters the voice layer supplies. The voice layer SHALL NOT be the only channel through which information about the request reaches the worker.
@@ -146,3 +130,35 @@ Offering several verbs creates more ways to select wrongly than one general tool
 
 - **WHEN** a request reaches an unexpected verb
 - **THEN** the selection, the configuration it resolved to, and the project state at that moment are all recorded
+
+### Requirement: Prompt text describes the verb surface that exists
+
+Text the app sends to the voice layer SHALL NOT assert that a current role, a
+current agent, or an active worker exists, and SHALL NOT instruct the model to set
+or withhold a parameter for selecting one. Iris chooses the verb per request from
+the registry, so there is no such state to inherit and no such parameter to fill.
+
+This extends the registry's authority to the prose surface. The declarations,
+the park label, and the `query()` options are already derived from the registry
+and asserted by tests; prompt strings are the only verb-describing surface with
+neither a typechecker nor a runtime failure when they go stale, which is why they
+survived the migration that removed roles.
+
+The prohibition is on **claims**, not on vocabulary. Prose may describe a verb's
+role in the pipeline, and internal identifiers may retain historical names; what
+is forbidden is telling the model that a selectable current worker exists.
+
+#### Scenario: No prompt instructs the model about an agent parameter
+
+- **WHEN** the prompt and announcement text the app can send to the voice layer is examined
+- **THEN** no string instructs the model to set, or to avoid setting, an agent or role parameter — because the verb is the tool being called, not a field within one
+
+#### Scenario: No prompt refers to a currently-active worker
+
+- **WHEN** the same text is examined
+- **THEN** no string tells the model that a role or worker is already active for the session, or that a request will be routed to one
+
+#### Scenario: The prohibition is asserted by a test
+
+- **WHEN** the test suite runs
+- **THEN** a test fails if any prompt or announcement string reintroduces a current-role or agent-parameter instruction, so a relapse is caught without a human reading the file

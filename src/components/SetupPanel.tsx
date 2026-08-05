@@ -49,6 +49,9 @@ export default function SetupPanel({
   onToggleSounds,
   webglHighFidelity,
   onToggleWebglQuality,
+  ambientCaptureEnabled,
+  onToggleAmbientCapture,
+  ambientCaptureForcedOff,
   cameraDeviceId,
   onChangeCameraDevice,
   micDeviceId,
@@ -65,6 +68,11 @@ export default function SetupPanel({
   /** webgl-quality-mode: Off (light path, default) / On (high-fidelity). */
   webglHighFidelity: boolean;
   onToggleWebglQuality: () => void;
+  /** ambient-memory: the PREFERENCE only — off by default (design D1). */
+  ambientCaptureEnabled: boolean;
+  onToggleAmbientCapture: () => void;
+  /** IRIS_AMBIENT_CAPTURE=off (design D3): the row is not offered at all. */
+  ambientCaptureForcedOff: boolean;
   cameraDeviceId: string;
   onChangeCameraDevice: (deviceId: string) => void;
   micDeviceId: string;
@@ -688,6 +696,28 @@ export default function SetupPanel({
           default so Iris runs smoothly on a modest machine. Applies immediately — no Save, no relaunch.
         </small>
       </label>
+      {ambientCaptureForcedOff ? null : (
+        <label className="setup-field">
+          <span>Ambient session capture — retains a transcript of speech near the microphone, which may include other people</span>
+          <ThemedSelect
+            ariaLabel="Ambient session capture"
+            value={ambientCaptureEnabled ? "true" : "false"}
+            options={[
+              { value: "false", label: "Off" },
+              { value: "true", label: "On" },
+            ]}
+            onChange={(value) => {
+              if ((value === "true") !== ambientCaptureEnabled) onToggleAmbientCapture();
+            }}
+          />
+          <small className="setup-note">
+            Off by default. When on, ordinary conversation — text only, never audio, and only while Iris is awake
+            and listening — is saved into your second brain, so it accumulates from what you already talk about
+            instead of only from deliberate notes. A recording indicator with a stop button appears whenever this
+            is actually retaining. Applies immediately — no Save, no relaunch.
+          </small>
+        </label>
+      )}
     </Section>
   );
 

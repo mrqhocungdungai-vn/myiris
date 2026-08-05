@@ -14,6 +14,7 @@
  * @property {string} session_label
  * @property {string} task
  * @property {string} urgency
+ * @property {string} [verb]
  * @property {string|null} agent
  * @property {string|null} [model] - resolved at run start, not submit time
  * @property {string} status - one of RUN_STATUS

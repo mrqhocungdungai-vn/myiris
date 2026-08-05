@@ -82,3 +82,15 @@ export function computeClaudeWorkerEnv(baseEnv, { claudeHome = irisClaudeHome() 
   env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = "1";
   return env;
 }
+
+// Ambient session capture (ambient-memory design D3): this variable can only
+// TIGHTEN the opt-in, never loosen it. There is deliberately no companion
+// variable that force-*enables* retention — a variable that turned on
+// microphone retention with nobody touching the interface would be a worse
+// capability than the feature itself; an admin who wants it on can ask the
+// user to flip the toggle. Takes an injected env, same shape as
+// computeWorkerEnv/computeClaudeWorkerEnv above, so it is testable without
+// touching process.env.
+export function ambientCaptureForcedOff(env = process.env) {
+  return String(env.IRIS_AMBIENT_CAPTURE ?? "").trim().toLowerCase() === "off";
+}

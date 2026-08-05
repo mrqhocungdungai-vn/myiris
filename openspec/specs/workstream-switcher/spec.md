@@ -1,12 +1,12 @@
 ## Purpose
 
-Upstream-styled SessionSwitcher UI for listing, creating, and switching workstreams, rebound to the existing workstream IPC surface and per-role session data model without introducing any Hermes session IPC.
+Upstream-styled SessionSwitcher UI for listing, creating, and switching workstreams, rebound to the existing workstream IPC surface and per-verb session data model without introducing any Hermes session IPC.
 
 ## Requirements
 
 ### Requirement: SessionSwitcher UI bound to workstream IPC
 
-The renderer SHALL replace the workstream `<select>` dropdown with the upstream `SessionSwitcher` component UI (list, create, and switch entries), rebound to the existing workstream IPC surface (`sessions:get`, `sessions:select`, `sessions:new`, `sessions:choose-cwd`) and per-role `agent_sessions` data model. No Hermes session IPC (`hermes:sessions`, `hermes:create-session`, `hermes:history`) SHALL be introduced.
+The renderer SHALL replace the workstream `<select>` dropdown with the upstream `SessionSwitcher` component UI (list, create, and switch entries), rebound to the existing workstream IPC surface (`sessions:get`, `sessions:select`, `sessions:new`, `sessions:choose-cwd`) and per-verb `agent_sessions` data model. No Hermes session IPC (`hermes:sessions`, `hermes:create-session`, `hermes:history`) SHALL be introduced.
 
 #### Scenario: Listing and switching workstreams
 
@@ -19,7 +19,7 @@ The renderer SHALL replace the workstream `<select>` dropdown with the upstream 
 - **WHEN** the user activates the switcher's new-session action
 - **THEN** a new workstream is created via the existing `sessions:new` flow, identical in behavior to the old New button
 
-#### Scenario: Per-role session identity visible
+#### Scenario: Per-verb session identity visible
 
 - **WHEN** a workstream has stored Claude session ids for one or more verbs
 - **THEN** the switcher (or its active-row detail) surfaces that identity consistent with the existing `.claude-session-line` (`who ▸ id`) presentation

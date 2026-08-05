@@ -10,7 +10,7 @@ A workstream `cwd` SHALL be used only for the project's own code and its `opensp
 #### Scenario: Arbitrary project directory works as cwd
 
 - **WHEN** the user points a workstream at an arbitrary project directory
-- **THEN** the roles operate there using globally-installed capabilities, and only that project's `openspec/` is created or read locally
+- **THEN** the run operates there using globally-installed capabilities, and only that project's `openspec/` is created or read locally
 
 ### Requirement: Personas and capabilities ship with the app, not on the machine
 The personas SHALL ship inside the app and be handed to the runtime **by value**, never installed into or read from the user's own agent directory. A project-local override SHALL still win, so a persona customized for one project keeps its customization.
@@ -53,8 +53,13 @@ The policy SHALL emit the prompt on the field the runtime actually reads. An und
 - **WHEN** the policy is called with no verb clause
 - **THEN** it fails loudly rather than producing a prompt that names no job
 
+Whether a stateless verb can actually be *prevented* from asking — not merely told
+not to — is specified by `voice-decision-relay`'s "A stateful verb may ask; a
+stateless verb cannot", not here. This module composes what the prompt says; that
+capability owns the runtime enforcement and its failure handler.
+
 ### Requirement: Every run has a turn ceiling and a spend ceiling
-Every run SHALL be started with a maximum number of agentic turns and a maximum estimated spend. Ceilings SHALL be configurable per role and overridable by environment variable, and SHALL default high enough that no workflow the app supports today reaches them — the ceiling is a runaway guard, not a quota. A ceiling that fires in ordinary use would be switched off, which is worse than having none.
+Every run SHALL be started with a maximum number of agentic turns and a maximum estimated spend. Ceilings SHALL be configurable per verb and overridable by environment variable, and SHALL default high enough that no workflow the app supports today reaches them — the ceiling is a runaway guard, not a quota. A ceiling that fires in ordinary use would be switched off, which is worse than having none.
 
 A run terminated by a ceiling SHALL be reported as a distinct outcome, naming which ceiling fired, the value it fired at, and how to raise it. It SHALL NOT be reported through the generic failure path, because a run that hit a limit and a run that broke need different responses from the user.
 
@@ -74,21 +79,6 @@ Iris SHALL warn while a run is still executing when it crosses a fraction of its
 
 - **WHEN** a run representative of the app's normal workflows executes
 - **THEN** it completes without approaching either ceiling
-
-### Requirement: A role that must not ask is prevented from asking, not merely told not to
-A stateless verb's guarantee that it never pauses for a question SHALL be enforced by the runtime configuration of the run, not only by prompt text. The question tool SHALL be unavailable to a headless run.
-
-Because prevention can be bypassed by a future configuration change, a headless run SHALL additionally carry a handler for the question path that fails the run with a diagnostic. A headless run SHALL NOT be able to reach a state where it waits for an answer nobody is listening for.
-
-#### Scenario: A headless role cannot ask
-
-- **WHEN** a stateless run executes
-- **THEN** the question tool is not available to it
-
-#### Scenario: A question on the headless path fails loudly
-
-- **WHEN** a headless run somehow reaches the question path
-- **THEN** the run fails with a diagnostic naming the violation, rather than waiting for an answer that will never arrive
 
 ### Requirement: Runs are observable through the runtime's own instrumentation
 Iris SHALL capture the runtime's error output for every run and attach it to a failed run's report, so a transport failure is diagnosable rather than reduced to a single message.

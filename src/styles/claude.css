@@ -198,32 +198,6 @@
   color: rgba(var(--agent-color), 0.95);
 }
 
-.agent-install {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 24px;
-  padding: 0 10px;
-  border-radius: var(--r-sm);
-  border: 1px dashed rgba(var(--cyan-rgb), 0.4);
-  color: var(--text-soft);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.1em;
-  cursor: pointer;
-}
-
-.agent-install:hover {
-  color: var(--cyan-bright);
-  border-color: rgba(var(--cyan-rgb), 0.7);
-}
-
-.agent-install:disabled {
-  opacity: 0.6;
-  cursor: wait;
-}
-
 /* ----- Role badge on task cards / expanded reader ----- */
 .agent-badge {
   --agent-color: 120, 170, 150;

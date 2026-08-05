@@ -46,6 +46,9 @@ const SOUNDS_STORAGE_KEY = "iris.soundsEnabled";
 const CAMERA_STORAGE_KEY = "iris.cameraDeviceId";
 const MIC_STORAGE_KEY = "iris.micDeviceId";
 const HAND_STORAGE_KEY = "iris.handControlEnabled";
+// ambient-memory: default OFF, unlike sounds above — this is the one
+// preference whose safer default is off, not on (design D1).
+const AMBIENT_CAPTURE_STORAGE_KEY = "iris.ambientCaptureEnabled";
 
 function loadSoundsEnabled(): boolean {
   try {
@@ -82,6 +85,14 @@ function loadMicDeviceId(): string {
 function loadWebglHighFidelity(): boolean {
   try {
     return readWebglHighFidelity(window.localStorage.getItem(WEBGL_QUALITY_STORAGE_KEY));
+  } catch {
+    return false;
+  }
+}
+
+function loadAmbientCaptureEnabled(): boolean {
+  try {
+    return window.localStorage.getItem(AMBIENT_CAPTURE_STORAGE_KEY) === "on";
   } catch {
     return false;
   }
@@ -200,6 +211,13 @@ export default function App() {
   const [micDeviceId, setMicDeviceIdState] = useState(loadMicDeviceId);
   // webgl-quality-mode: defaults to the light path (false/off) — see design.md D6.
   const [webglHighFidelity, setWebglHighFidelity] = useState(loadWebglHighFidelity);
+  // ambient-memory: this renderer-held value is only ever the PREFERENCE main
+  // was last told about — main is the sole authority on whether retention is
+  // actually happening (design D1), which is `ambientCaptureLive` below.
+  const [ambientCaptureEnabled, setAmbientCaptureEnabled] = useState(loadAmbientCaptureEnabled);
+  const [ambientCaptureLive, setAmbientCaptureLive] = useState(false);
+  // IRIS_AMBIENT_CAPTURE=off (design D3): the toggle is not offered at all.
+  const [ambientCaptureForcedOff, setAmbientCaptureForcedOff] = useState(false);
   const webglSettings = useMemo(
     () => deriveWebglSettings(webglHighFidelity, window.devicePixelRatio),
     [webglHighFidelity],
@@ -265,6 +283,31 @@ export default function App() {
       }
       return next;
     });
+  }
+
+  // ambient-memory: persists the preference AND tells main, on every change —
+  // main is the one thing that decides whether retention is actually live,
+  // so a toggle that only flipped local state would show "on" while nothing
+  // was retained.
+  function setAmbientCapturePreference(next: boolean) {
+    setAmbientCaptureEnabled(next);
+    try {
+      window.localStorage.setItem(AMBIENT_CAPTURE_STORAGE_KEY, next ? "on" : "off");
+    } catch {
+      // Best-effort persistence; the toggle still works for this session.
+    }
+    if (hasBridge) window.iris.setAmbientCaptureEnabled(next);
+  }
+
+  function toggleAmbientCapture() {
+    setAmbientCapturePreference(!ambientCaptureEnabled);
+  }
+
+  // The indicator's stop affordance (spec: "Stopping is reachable from the
+  // indicator, without hunting through settings") — the same action as
+  // switching the settings toggle off.
+  function stopAmbientCapture() {
+    setAmbientCapturePreference(false);
   }
 
   function toggleDrawing() {
@@ -555,6 +598,23 @@ export default function App() {
     if (!hasBridge) return;
     window.iris.requestListenOnlyToggle();
   }
+
+  // ambient-memory: pushes the persisted preference to main at boot — main
+  // defaults to off on every launch (design D1) and stays off until this
+  // arrives — then queries the current live/forcedOff state and subscribes
+  // to every later transition. Mirrors the listen-only effect above.
+  useEffect(() => {
+    if (!hasBridge) return;
+    window.iris.setAmbientCaptureEnabled(loadAmbientCaptureEnabled());
+    window.iris.getAmbientCaptureState().then(({ live, forcedOff }) => {
+      setAmbientCaptureLive(live);
+      setAmbientCaptureForcedOff(forcedOff);
+    });
+    return window.iris.onAmbientCaptureState(({ live }) => {
+      setAmbientCaptureLive(live);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasBridge]);
 
   useEffect(() => {
     document.documentElement.classList.toggle("hud-mode", uiMode === "hud");
@@ -1546,6 +1606,8 @@ export default function App() {
           onToggleMute={audio.toggleMute}
           listenOnlyEngaged={listenOnlyEngaged}
           onToggleListenOnly={toggleListenOnly}
+          ambientCaptureLive={ambientCaptureLive}
+          onStopAmbientCapture={stopAmbientCapture}
           commsOpen={commsOpen}
           onToggleComms={() => setCommsOpen((current) => !current)}
           onWake={start}
@@ -1658,6 +1720,8 @@ export default function App() {
             onToggleMute={audio.toggleMute}
             listenOnlyEngaged={listenOnlyEngaged}
             onToggleListenOnly={toggleListenOnly}
+            ambientCaptureLive={ambientCaptureLive}
+            onStopAmbientCapture={stopAmbientCapture}
             onSleep={stop}
             webglHighFidelity={webglHighFidelity}
           />
@@ -1761,6 +1825,9 @@ export default function App() {
           onToggleSounds={toggleSounds}
           webglHighFidelity={webglHighFidelity}
           onToggleWebglQuality={toggleWebglQuality}
+          ambientCaptureEnabled={ambientCaptureEnabled}
+          onToggleAmbientCapture={toggleAmbientCapture}
+          ambientCaptureForcedOff={ambientCaptureForcedOff}
           cameraDeviceId={cameraDeviceId}
           onChangeCameraDevice={setCameraDeviceId}
           micDeviceId={micDeviceId}

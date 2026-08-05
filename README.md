@@ -104,6 +104,8 @@ Iris runs as **two co-equal modes**:
 
 **Second brain (notes).** With the pipeline enabled, Iris can also capture and retrieve personal notes by voice into a plain-markdown Obsidian vault at `~/iris-second-brain`, independent of whatever project you're working in. After a research exchange or a worked-out decision, Iris may offer once to save it — it never saves without you agreeing, and you can always ask directly to save or recall a note.
 
+**Ambient session capture (optional, off by default).** Turn it on in Settings and Iris also retains a **text** transcript of ordinary conversation — never audio — into the same vault, so the second brain accumulates from what you already talk about rather than only from deliberate notes. It only retains while you're awake and talking to Iris, a recording indicator with a stop button appears whenever it's actually doing so, and it can pick up anyone speaking near the microphone, not just you. Turn it off any time from the same indicator or from Settings; `IRIS_AMBIENT_CAPTURE=off` removes the option entirely on a machine where it must not be available.
+
 **Google Search** is optional and off by default — it's a billed Gemini feature that disconnects a free-tier key with a quota error the moment it's enabled. Turn it on from Settings → Gemini API key, once you have a paid key.
 
 ## App Environment

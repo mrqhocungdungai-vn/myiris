@@ -31,7 +31,11 @@ import { createLiveMessages } from "./live-messages.mjs";
  *   submitClaudeTask: (args: any) => any,
  *   geminiTools: { buildLiveTools: () => any[] },
  *   geminiPrompts: { buildSystemInstructionText: () => string },
- *   secondBrainCapability: { stopVaultGraphWatch: () => void, probeSecondBrainAvailability: () => boolean },
+ *   secondBrainCapability: {
+ *     stopVaultGraphWatch: () => void,
+ *     probeSecondBrainAvailability: () => boolean,
+ *     setAmbientCaptureAwake: (awake: boolean) => Promise<void>,
+ *   },
  *   setWindowModule: (mod: any) => void,
  *   setLiveSessionModule: (mod: any) => void,
  * }} deps
@@ -97,6 +101,11 @@ export function createLiveWiring({
     buildLiveTools: () => geminiTools.buildLiveTools(),
     buildSystemInstructionText: () => geminiPrompts.buildSystemInstructionText(),
     handleLiveMessage,
+    // Ambient session capture (ambient-memory): capture follows the
+    // microphone, so it is main's own wake/sleep transitions — never the
+    // renderer — that decide whether it is live.
+    onAwake: () => secondBrainCapability.setAmbientCaptureAwake(true),
+    onAsleep: () => secondBrainCapability.setAmbientCaptureAwake(false),
   });
   const {
     GreetGate,

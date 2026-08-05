@@ -25,6 +25,7 @@
     "test": "vitest run",
     "lint": "node scripts/lint.mjs",
     "scan:secrets": "node scripts/scan-secrets.mjs --staged",
+    "spec:check": "node scripts/spec-check.mjs",
     "preview": "vite preview",
     "start": "npm run build && node scripts/run-electron.mjs --prod",
     "start:prod": "node scripts/run-electron.mjs --prod",

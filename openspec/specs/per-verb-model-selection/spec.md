@@ -22,7 +22,7 @@ A workstream stored before verbs existed SHALL be migrated forward: a stored cho
 ### Requirement: Model resolution order
 For each verb, the effective model SHALL resolve in this order: the workstream's stored entry for that verb, then the environment default for that verb's persona group, then the verb's own declared default. The selectable model list SHALL be a curated constant of four models: Opus 5 (`claude-opus-5`), Sonnet 5 (`claude-sonnet-5`), Opus 4.8 (`claude-opus-4-8`), and Haiku 4.5 (`claude-haiku-4-5-20251001`), each with a display label.
 
-The environment default SHALL be expressed per **persona group** rather than per verb, because a user setting a model in the environment is expressing how strong the thinking work should be, which is exactly that split. The previously documented role-named variables SHALL continue to be accepted as aliases, so an existing configuration is not silently reinterpreted.
+The environment default SHALL be expressed per **persona group** rather than per verb, because a user setting a model in the environment is expressing how strong the thinking work should be, which is exactly that split. The previously documented `PO`/`DEV`-named variables SHALL continue to be accepted as aliases, so an existing configuration is not silently reinterpreted.
 
 #### Scenario: Fresh workstream uses each verb's declared default
 
@@ -36,7 +36,7 @@ The environment default SHALL be expressed per **persona group** rather than per
 
 #### Scenario: A previously documented variable still applies
 
-- **WHEN** the environment carries one of the role-named model variables and no current-named one
+- **WHEN** the environment carries one of the `PO`/`DEV`-named model variables and no current-named one
 - **THEN** it is honoured for the corresponding persona group rather than ignored
 
 ### Requirement: Every run receives its model at run start

@@ -121,7 +121,7 @@ export function createAnnouncements({
       "- The user just typed/pasted this instead of saying it aloud (voice can't reliably convey links or precise text).",
       "- CRITICAL: be decisive, do not ask for confirmation first.",
       "- Immediately call the verb that fits, with parameters combining the recent conversation with this supplement (e.g. `execute` to research the linked repo for a feature relevant to what you were just discussing and report whether/how it applies here).",
-      "- Do not set the agent field, let it route to whichever role is already active for this session.",
+      "- Choose that verb from what the user is asking now, not from whichever verb last ran.",
     ].join("\n");
     notifyIris(lines, { bufferIfOffline: false });
     return { status: "ok" };
@@ -143,10 +143,21 @@ export function createAnnouncements({
       .join("\n");
   }
 
+  // Where a deferred-decisions follow-up should land. The producing run's verb
+  // is the addressee (design.md D3) — named concretely rather than gestured at,
+  // because "the same role" has no referent once a verb is chosen per request.
+  // Runs from before `verb` was threaded through here are the one case with
+  // nothing to name; that gets said plainly instead of guessed at.
+  function decisionsAddressee(verb) {
+    return verb
+      ? `\`${verb}\``
+      : "the verb that produced them — not recorded for this run, so ask which one before submitting anything back";
+  }
+
   /**
-   * @param {{ runId: string, task: string, status: string, output: string, usage?: { cost_usd: number|null, num_turns: number|null }|null, decisions?: Array<{ question: string, recommendation?: string, options?: Array<{ label: string, description?: string }> }>|null }} params
+   * @param {{ runId: string, task: string, status: string, output: string, verb?: string|null, usage?: { cost_usd: number|null, num_turns: number|null }|null, decisions?: Array<{ question: string, recommendation?: string, options?: Array<{ label: string, description?: string }> }>|null }} params
    */
-  function announceClaudeCompletion({ runId, task, status, output, usage, decisions }) {
+  function announceClaudeCompletion({ runId, task, status, output, verb = null, usage, decisions }) {
     // The UI card is correct for any terminal status, so this always emits,
     // only the voice delivery below is conditional.
     emitEvent({
@@ -182,10 +193,10 @@ export function createAnnouncements({
       // the schema existed, or plain Claude, which has no schema at all).
       ...(decisions?.length
         ? [
-            `- This run deferred ${decisions.length} decision${decisions.length === 1 ? "" : "s"} to the user, listed below as data. Read each one aloud with its options and the recommended default, collect the choice, then submit a follow-up task to the SAME role stating what was chosen.`,
+            `- This run deferred ${decisions.length} decision${decisions.length === 1 ? "" : "s"} to the user, listed below as data. Read each one aloud with its options and the recommended default, collect the choice, then submit a follow-up task to ${decisionsAddressee(verb)} stating what was chosen.`,
           ]
         : [
-            "- If the result contains a 'Decisions needed' section, read each decision aloud with its numbered options and the recommendation, collect the user's choice, then submit a follow-up task to the SAME role stating the chosen options.",
+            `- If the result contains a 'Decisions needed' section, read each decision aloud with its numbered options and the recommendation, collect the user's choice, then submit a follow-up task to ${decisionsAddressee(verb)} stating the chosen options.`,
           ]),
       "- Ask whether he wants to go through the details before continuing the current conversation.",
       "- Do not say you personally did the work; Claude did.",

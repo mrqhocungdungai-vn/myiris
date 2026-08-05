@@ -1,6 +1,6 @@
 ## Purpose
 
-Credential handling for both role runs. Either `CLAUDE_CODE_OAUTH_TOKEN` (subscription billing) or `ANTHROPIC_API_KEY` (metered) authenticates a run; when both are present the subscription token wins and the metered keys are stripped from the run's environment, so a stray key cannot silently change the billing path. Both roles run on the Agent SDK against the binary the app ships, so neither has a host `/login` credential store to fall back on and both go through one policy.
+Credential handling for every verb's runs. Either `CLAUDE_CODE_OAUTH_TOKEN` (subscription billing) or `ANTHROPIC_API_KEY` (metered) authenticates a run; when both are present the subscription token wins and the metered keys are stripped from the run's environment, so a stray key cannot silently change the billing path. Every verb runs on the Agent SDK against the binary the app ships, so none has a host `/login` credential store to fall back on and all go through one policy.
 ## Requirements
 ### Requirement: Auth requirements are documented
 
@@ -51,71 +51,70 @@ Because the live stateful session captures its environment at session creation, 
 
 ### Requirement: A worker subprocess receives only the credentials it needs
 
-A role subprocess or SDK session SHALL NOT inherit credentials it has no use for. The environment handed to a worker SHALL be derived by removing unrelated secrets from the parent environment, not by passing the parent environment through unchanged.
+A verb's subprocess or SDK session SHALL NOT inherit credentials it has no use for. The environment handed to a worker SHALL be derived by removing unrelated secrets from the parent environment, not by passing the parent environment through unchanged.
 
 This is a least-privilege requirement, distinct from the billing-scoped handling of `ANTHROPIC_API_KEY` and not a replacement for it. The rationale here is exfiltration, not billing: a worker runs with `bypassPermissions`, has shell and network access with no approval prompt, and routinely processes content it did not author — files, repositories, and web pages that can carry instructions. Any secret sitting in its environment is one `echo $VAR` away from leaving the machine, with nothing in the run to stop it.
 
-`GEMINI_API_KEY` SHALL be excluded from every role worker's environment. No role has a use for the voice provider's credential.
+`GEMINI_API_KEY` SHALL be excluded from every verb's worker environment. No verb has a use for the voice provider's credential.
 
-Both roles SHALL derive their environment through a single shared policy, so the two cannot drift apart as they did when each maintained its own exclusion list.
+Every verb SHALL derive its environment through a single shared policy, so runs cannot drift apart as they did when each maintained its own exclusion list.
 
-#### Scenario: The voice credential does not reach a stateless role worker
-- **WHEN** a stateless role run starts while a voice API key is configured
+#### Scenario: The voice credential does not reach a stateless verb's worker
+- **WHEN** a stateless verb's run starts while a voice API key is configured
 - **THEN** that key is absent from the run's environment
 
-#### Scenario: The voice credential does not reach the stateful role session
-- **WHEN** the stateful role session is created while a voice API key is configured
+#### Scenario: The voice credential does not reach the stateful session
+- **WHEN** the stateful session is created while a voice API key is configured
 - **THEN** that key is absent from the session's environment
 
 #### Scenario: Existing billing behavior is unchanged
-- **WHEN** the stateful role session is created with a subscription token configured
+- **WHEN** the stateful session is created with a subscription token configured
 - **THEN** `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` are still excluded, and the session still authenticates against the subscription token
 
-#### Scenario: Roles keep the credentials they do need
-- **WHEN** a role worker starts
-- **THEN** the credentials that role actually authenticates with remain present, and the run succeeds as before
+#### Scenario: Every verb keeps the credentials it does need
+- **WHEN** a verb's worker starts
+- **THEN** the credentials that run actually authenticates with remain present, and the run succeeds as before
 
-### Requirement: Both role runs authenticate from one credential set
+### Requirement: Every verb authenticates from one credential set
 
-Both roles SHALL authenticate through the same credential set, since both now run on the Agent SDK against a binary that ships with the app and therefore has no host `/login` credential store to fall back on.
+Every verb SHALL authenticate through the same credential set, since all now run on the Agent SDK against a binary that ships with the app and therefore have no host `/login` credential store to fall back on.
 
-The app SHALL accept either credential: `CLAUDE_CODE_OAUTH_TOKEN` (billing against the Claude subscription) or `ANTHROPIC_API_KEY` (metered). When both are present the subscription token SHALL win. When neither is present, no role run SHALL be attempted, and the pipeline SHALL be unavailable (see `pipeline-availability`).
+The app SHALL accept either credential: `CLAUDE_CODE_OAUTH_TOKEN` (billing against the Claude subscription) or `ANTHROPIC_API_KEY` (metered). When both are present the subscription token SHALL win. When neither is present, no run SHALL be attempted, and the pipeline SHALL be unavailable (see `pipeline-availability`).
 
 A credential SHALL come from the app's own configuration. A run SHALL NOT authenticate from the credential store of a separately-installed Claude Code, because that would make the app depend on the user's own install and would hide, on a machine that happens to have one, the failure a machine without one would hit.
 
-#### Scenario: A role session uses the subscription token
+#### Scenario: A run uses the subscription token
 
-- **WHEN** a role run starts and `CLAUDE_CODE_OAUTH_TOKEN` is set
+- **WHEN** a run starts and `CLAUDE_CODE_OAUTH_TOKEN` is set
 - **THEN** the Agent SDK run authenticates with that token and bills against the subscription
 
-#### Scenario: An API-key-only user can run both roles
+#### Scenario: An API-key-only user can run every verb
 
-- **WHEN** a role run starts with only `ANTHROPIC_API_KEY` set
+- **WHEN** a run starts with only `ANTHROPIC_API_KEY` set
 - **THEN** the run proceeds and bills per token, rather than being refused for lack of a subscription token
 
 #### Scenario: A host Claude Code login is not borrowed
 
-- **WHEN** a role run starts with no credential configured in the app, on a machine whose separately-installed Claude Code is logged in
+- **WHEN** a run starts with no credential configured in the app, on a machine whose separately-installed Claude Code is logged in
 - **THEN** the run fails to authenticate rather than succeeding on that login
 
 #### Scenario: Missing credential is reported clearly
 
-- **WHEN** a role run is attempted with no usable credential
+- **WHEN** a run is attempted with no usable credential
 - **THEN** the app surfaces an actionable error pointing at the Setup panel's credential fields, rather than failing silently
 
-### Requirement: The metered API key yields to a subscription token, for every role
+### Requirement: The metered API key yields to a subscription token, for every verb
 
-When a subscription token is present, the app SHALL remove `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` from the environment of **every** role worker, so a stray API key cannot silently move usage onto metered billing. When no subscription token is present, `ANTHROPIC_API_KEY` SHALL be left in place as the only credential that user has.
+When a subscription token is present, the app SHALL remove `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` from the environment of **every** verb's worker, so a stray API key cannot silently move usage onto metered billing. When no subscription token is present, `ANTHROPIC_API_KEY` SHALL be left in place as the only credential that user has.
 
 Exclusion by environment subtraction is deliberately stronger than relying on the SDK's own auth precedence.
 
 #### Scenario: Stray API key is stripped when a token exists
 
-- **WHEN** both `CLAUDE_CODE_OAUTH_TOKEN` and `ANTHROPIC_API_KEY` are present and any role run starts
+- **WHEN** both `CLAUDE_CODE_OAUTH_TOKEN` and `ANTHROPIC_API_KEY` are present and any run starts
 - **THEN** the API key is absent from that run's environment and billing goes to the subscription
 
 #### Scenario: API key survives when it is the only credential
 
-- **WHEN** only `ANTHROPIC_API_KEY` is present and a role run starts
+- **WHEN** only `ANTHROPIC_API_KEY` is present and a run starts
 - **THEN** the key is present in that run's environment and the run authenticates with it
-

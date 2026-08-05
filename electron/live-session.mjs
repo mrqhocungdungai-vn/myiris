@@ -35,6 +35,8 @@ import { buildLiveConfig } from "./live-config.mjs";
  *   buildLiveTools: () => any[],
  *   buildSystemInstructionText: () => string,
  *   handleLiveMessage: (message: any) => void,
+ *   onAwake?: () => void,
+ *   onAsleep?: () => void,
  * }} deps
  */
 export function createLiveSession({
@@ -49,6 +51,16 @@ export function createLiveSession({
   buildLiveTools,
   buildSystemInstructionText,
   handleLiveMessage,
+  // Ambient session capture (ambient-memory): capture follows the
+  // microphone, so it has to know when Iris is actually awake and listening
+  // — never a heuristic read off some other state, the same discipline the
+  // park gate in run-dispatch.mjs already applies. Deliberately narrow:
+  // "awake" fires on a real connection (onopen), "asleep" fires only where a
+  // reconnect is NOT about to recover it (an explicit stop, or reconnect
+  // attempts exhausted) — a transient ~10-minute session-refresh reconnect is
+  // not a user-perceived sleep and must not flicker the retention indicator.
+  onAwake = () => {},
+  onAsleep = () => {},
 }) {
   let liveSession = null;
   let ai = null;
@@ -213,6 +225,7 @@ export function createLiveSession({
           emitEvent({ type: "gemini_status", status: "connected", model });
           emitEvent({ type: "audio_state", state: "listening" });
           updateTrayMenu();
+          onAwake();
           // The resumed session keeps its context; greeting again mid-conversation
           // every ~10 minutes would be jarring.
           if (!isReconnect) GreetGate.arm();
@@ -253,8 +266,11 @@ export function createLiveSession({
       liveStatus = { running: false, pid: null };
       // A server-initiated teardown — reconnect attempts exhausted — is a
       // transition to not-running, so listen-only mode resets here too
-      // (spec "Listen-only mode is ephemeral per session").
+      // (spec "Listen-only mode is ephemeral per session"), and ambient
+      // capture stops on the same terms it does for an explicit sleep — no
+      // further reconnect is coming, so the mic is genuinely not listening.
       setListenOnlyEngaged(false);
+      onAsleep();
       emitEvent({
         type: "fatal",
         message: `Gemini Live reconnect failed after ${MAX_RECONNECT_ATTEMPTS} attempts.`,
@@ -282,8 +298,11 @@ export function createLiveSession({
 
   async function stopLive() {
     // Explicit stop is a transition to not-running — listen-only mode
-    // resets here too (spec "Listen-only mode is ephemeral per session").
+    // resets here too (spec "Listen-only mode is ephemeral per session"),
+    // and ambient capture stops and flushes on the same terms (called
+    // directly, not left to onclose, since liveSession may already be null).
     setListenOnlyEngaged(false);
+    onAsleep();
     userStopped = true;
     resumptionHandle = null;
     reconnectAttempts = 0;

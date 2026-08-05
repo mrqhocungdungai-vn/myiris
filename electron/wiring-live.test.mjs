@@ -80,7 +80,11 @@ function makeDeps(overrides = {}) {
     geminiPrompts: {
       buildSystemInstructionText: vi.fn(() => ""),
     },
-    secondBrainCapability: { stopVaultGraphWatch: vi.fn(), probeSecondBrainAvailability: vi.fn(() => false) },
+    secondBrainCapability: {
+      stopVaultGraphWatch: vi.fn(),
+      probeSecondBrainAvailability: vi.fn(() => false),
+      setAmbientCaptureAwake: vi.fn(() => Promise.resolve()),
+    },
     setWindowModule: vi.fn(),
     setLiveSessionModule: vi.fn(),
     ...overrides,

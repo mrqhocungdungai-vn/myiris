@@ -291,3 +291,113 @@ describe("live-session: stopLive", () => {
     expect(live.getLiveSession()).toBeNull();
   });
 });
+
+// ambient-memory: capture follows the microphone, so these two callbacks are
+// the ONLY signal ambient session capture gets about whether Iris is
+// actually listening — never a heuristic read off some other state.
+describe("live-session: onAwake/onAsleep (ambient session capture)", () => {
+  it("calls onAwake on a real connection", async () => {
+    const onAwake = vi.fn();
+    const onAsleep = vi.fn();
+    const live = make({ onAwake, onAsleep });
+    const GoogleGenAI = await getMockedGoogleGenAI();
+    GoogleGenAI.mockImplementationOnce(
+      fakeGoogleGenAIImpl(async (args) => {
+        args.callbacks.onopen();
+        return { sendRealtimeInput: vi.fn(), sendClientContent: vi.fn() };
+      }),
+    );
+    await live.startLive();
+    expect(onAwake).toHaveBeenCalledTimes(1);
+    expect(onAsleep).not.toHaveBeenCalled();
+  });
+
+  it("calls onAsleep on an explicit stop, even with no session ever having connected", async () => {
+    const onAwake = vi.fn();
+    const onAsleep = vi.fn();
+    const live = make({ onAwake, onAsleep });
+    await live.stopLive();
+    expect(onAsleep).toHaveBeenCalledTimes(1);
+    expect(onAwake).not.toHaveBeenCalled();
+  });
+
+  it("does not call onAsleep on a transient disconnect that goes on to reconnect", async () => {
+    vi.useFakeTimers();
+    try {
+      const onAwake = vi.fn();
+      const onAsleep = vi.fn();
+      /** @type {any} */
+      let callbacks;
+      const live = make({ onAwake, onAsleep });
+      const connect = async (_opts) => {
+        const GoogleGenAI = await getMockedGoogleGenAI();
+        GoogleGenAI.mockImplementationOnce(
+          fakeGoogleGenAIImpl(async (config) => {
+            callbacks = config.callbacks;
+            callbacks.onopen();
+            return { sendRealtimeInput: vi.fn(), sendClientContent: vi.fn(), close: vi.fn() };
+          }),
+        );
+        return live.connectLive(_opts);
+      };
+      await connect({ isReconnect: false });
+      onAwake.mockClear();
+
+      callbacks.onclose({ code: 1006, reason: "network drop" });
+      const GoogleGenAI = await getMockedGoogleGenAI();
+      GoogleGenAI.mockImplementationOnce(
+        fakeGoogleGenAIImpl(async (config) => {
+          callbacks = config.callbacks;
+          callbacks.onopen();
+          return { sendRealtimeInput: vi.fn(), sendClientContent: vi.fn(), close: vi.fn() };
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(onAsleep).not.toHaveBeenCalled();
+      expect(onAwake).toHaveBeenCalledTimes(1); // the reconnect's own onopen
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("calls onAsleep once reconnect attempts are exhausted", async () => {
+    vi.useFakeTimers();
+    try {
+      const onAsleep = vi.fn();
+      /** @type {any} */
+      let callbacks;
+      const live = make({ onAsleep });
+      const GoogleGenAI = await getMockedGoogleGenAI();
+      GoogleGenAI.mockImplementationOnce(
+        fakeGoogleGenAIImpl(async (config) => {
+          callbacks = config.callbacks;
+          callbacks.onopen();
+          return { sendRealtimeInput: vi.fn(), sendClientContent: vi.fn(), close: vi.fn() };
+        }),
+      );
+      await live.startLive();
+
+      for (let attempt = 1; attempt <= 6; attempt++) {
+        callbacks.onclose({ code: 1006, reason: "network drop" });
+        if (attempt < 6) {
+          const g = await getMockedGoogleGenAI();
+          g.mockImplementationOnce(
+            fakeGoogleGenAIImpl(async (config) => {
+              callbacks = config.callbacks;
+              return { sendRealtimeInput: vi.fn(), sendClientContent: vi.fn(), close: vi.fn() };
+            }),
+          );
+        }
+        if (attempt <= 5) {
+          const expectedDelay = Math.min(500 * 2 ** (attempt - 1), 8000);
+          await vi.advanceTimersByTimeAsync(expectedDelay);
+        }
+      }
+
+      expect(onAsleep).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

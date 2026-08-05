@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import path from "node:path";
-import { computeWorkerEnv, computeClaudeWorkerEnv, irisClaudeHome } from "./worker-env.mjs";
+import { computeWorkerEnv, computeClaudeWorkerEnv, irisClaudeHome, ambientCaptureForcedOff } from "./worker-env.mjs";
 
 describe("computeWorkerEnv", () => {
   it("derives by subtraction, leaving the base environment untouched", () => {
@@ -110,5 +110,26 @@ describe("computeClaudeWorkerEnv: keeping out of the user's ~/.claude", () => {
     expect(first).toBe(path.join("/home/x", ".iris", "claude-home"));
     expect(second).toBe(first);
     expect(first).not.toContain(`${path.sep}.claude`);
+  });
+});
+
+describe("ambientCaptureForcedOff", () => {
+  it("is forced off only when the variable is exactly 'off'", () => {
+    expect(ambientCaptureForcedOff({ IRIS_AMBIENT_CAPTURE: "off" })).toBe(true);
+    expect(ambientCaptureForcedOff({ IRIS_AMBIENT_CAPTURE: "OFF" })).toBe(true);
+    expect(ambientCaptureForcedOff({ IRIS_AMBIENT_CAPTURE: "  off  " })).toBe(true);
+  });
+
+  it("is not forced off when absent", () => {
+    expect(ambientCaptureForcedOff({})).toBe(false);
+  });
+
+  // D3: there is no companion variable that force-*enables* it — any value
+  // other than "off" leaves the decision entirely to the renderer's toggle,
+  // never auto-enabling retention on its own.
+  it("has no value that forces it on", () => {
+    expect(ambientCaptureForcedOff({ IRIS_AMBIENT_CAPTURE: "on" })).toBe(false);
+    expect(ambientCaptureForcedOff({ IRIS_AMBIENT_CAPTURE: "1" })).toBe(false);
+    expect(ambientCaptureForcedOff({ IRIS_AMBIENT_CAPTURE: "true" })).toBe(false);
   });
 });
