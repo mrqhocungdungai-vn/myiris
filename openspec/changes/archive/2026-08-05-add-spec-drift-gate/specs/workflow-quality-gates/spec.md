@@ -1,3 +1,21 @@
+## MODIFIED Requirements
+
+### Requirement: The existing build and test gates are not extended
+
+Adding these gates SHALL NOT change what `npm run build` or `npm test` do. The typecheck gate SHALL remain a typecheck, and the test runner SHALL remain a test runner, each runnable on its own.
+
+Gate logic SHALL have a single definition that both the standalone command and the workflow binding invoke, so the two cannot diverge into checking different things.
+
+#### Scenario: The typecheck gate is unchanged
+
+- **WHEN** the build command is run
+- **THEN** it performs its configured TypeScript checks and the bundle build, and does not run the lint, secret-scanning, or spec-drift gates
+
+#### Scenario: One definition, two callers
+
+- **WHEN** a gate is invoked by hand and when it is invoked by its workflow binding
+- **THEN** both execute the same definition, so a change to the gate's rules takes effect in both without a second edit
+
 ## ADDED Requirements
 
 ### Requirement: A fifth gate checks the living spec for drift

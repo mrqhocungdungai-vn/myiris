@@ -2,13 +2,13 @@
 
 [← Back to README](../README.md)
 
-Iris has **four independent automated checks**. Two living specs are
+Iris has **five independent automated checks**. Two living specs are
 authoritative: `openspec/specs/test-harness/spec.md` for the runner and
 testability conventions, and `openspec/specs/workflow-quality-gates/spec.md` for
 which check runs when. Read them before adding tests or gates; this page is the
 practical summary.
 
-## The four gates
+## The five gates
 
 | Command | What it is | Notes |
 | --- | --- | --- |
@@ -16,9 +16,56 @@ practical summary.
 | `npm test` | Behavioral gate — `vitest run` | vitest pinned at `4.1.10` |
 | `npm run lint` | Lint gate — `oxlint`, zero-warning | oxlint pinned at `1.76.0`; rules in `.oxlintrc.json` |
 | `npm run scan:secrets` | Secret gate — `gitleaks` over the staged changes | Requires `brew install gitleaks`; **not** lockfile-pinned |
+| `npm run spec:check` | Spec-drift gate — `scripts/check-spec-drift.mjs` over `openspec/specs/` | The only gate that checks something other than code (below) |
 
-Each is runnable on its own, and `build` deliberately runs neither of the last
-two — nothing here may make a typecheck depend on anything else.
+Each is runnable on its own, and `build` deliberately runs none of the last
+three — nothing here may make a typecheck depend on anything else.
+
+## The spec-drift gate
+
+Four gates check code. The living spec is what CLAUDE.md names as the source of
+truth and what the next change is authored *from*, and until this gate it was the
+one artifact with no automated check at all. `openspec validate --specs --strict`
+is structural, not semantic: it reported **43 capabilities passing** while the tree
+carried retired vocabulary from a concept deleted the same day, seven Purposes
+reading `TBD`, one requirement duplicated verbatim across two capabilities, and a
+requirement whose own scenarios mandated the thing it forbade. That last one
+shipped as a real user-facing defect — `pipeline-availability` forbade "offering an
+install command that could not fix it" while its scenarios mandated a one-click
+install action, and the renderer implemented the scenarios.
+
+Four checks, all lexical or structural — none of them attempts to decide whether a
+requirement is *true*, which no checker can:
+
+- **Retired vocabulary** — a registered term list, each term with its own matching
+  rule. `PO`/`DEV` match case-sensitively with word boundaries (a spec citing
+  `IRIS_PO_QUESTION_TIMEOUT_MS` is correct, not drifting); `role`/`Hermes` match
+  case-insensitively, because the previous sweep's uppercase-only criterion is
+  exactly what let 72 lowercase occurrences through a check reporting zero.
+  Retiring a concept means **registering its name** — the gate cannot infer it.
+- **Placeholder text** — `TBD`, `TODO`, `FIXME`, "after archive".
+- **Self-contradiction** — narrowly: a requirement forbidding that something be
+  *offered/provided/presented*, whose own scenario's `THEN` line then asserts it
+  without negating it. The wider "any `SHALL NOT`" form was implemented, measured
+  against the real tree, and rejected at dozens of findings and zero true positives.
+- **Emptiness** — a capability with no requirements, a requirement with no scenarios.
+
+`openspec/changes/` (including `archive/`) is never walked — structurally, since
+the walk is rooted at `openspec/specs/`. The archive is history and must keep its
+retired vocabulary.
+
+A legitimate occurrence needs an **explicit allowance with a stated reason**, keyed
+by (file, term, line anchor) in `scripts/check-spec-drift.mjs`. Reword the line
+enough to drop the anchor and the occurrence is re-flagged for review, which is the
+intended behavior. A requirement that forbids a term has to be able to name it.
+
+Two residual weaknesses, recorded rather than papered over. **Nothing forces
+someone deleting a concept to add its name to the term list** — a concept deleted
+and not registered produces a silent pass, indistinguishable from a clean tree.
+The list going stale is visible in review and nowhere else. And the gate reads
+`openspec/specs/` **only**, so retired vocabulary in `docs/`, `README.md`, or
+`CLAUDE.md` is uncaught; two such occurrences in this very file were found by hand
+while editing it for an unrelated reason.
 
 ## Where the gates are bound
 
@@ -28,7 +75,7 @@ check reads**, not what it costs:
 | Event | Runs | Measured |
 | --- | --- | --- |
 | `PostToolUse` (`Edit`/`Write`) | secret scan of the written file | 168ms |
-| `Stop` (end of turn) | lint, then the typecheck projects whose files changed | 92ms when nothing relevant changed, up to 5.4s |
+| `Stop` (end of turn) | lint, the spec-drift check if spec files changed, then the typecheck projects whose files changed | 92ms when nothing relevant changed, up to 5.4s |
 | `PreToolUse` (`Bash`) | secret scan of staged content, when the command is a `git commit` | 70ms |
 
 A **per-file** check reads only the file just written, so it is never wrong about
@@ -37,6 +84,18 @@ is necessarily wrong partway through a multi-edit sequence — lint was briefly
 bound per-edit and blocked a refactor over an import the next edit consumed.
 Deferring costs no detection: the same condition is still caught at the end of
 the turn.
+
+The spec-drift check is whole-tree for the same reason and lands in the same
+place: mid-sweep, a term rewritten in one spec while its allowance still names the
+old wording is exactly that intermediate state. Like lint and typecheck it is
+scoped off the per-session ledger, and runs only when the turn touched
+`openspec/specs/` or `scripts/check-spec-drift.mjs` itself — editing an allowance
+is the other way to change what the gate reports.
+
+Note that `.claude/settings.json` binds three **hook scripts**, not individual
+gates; which gates run inside each is decided in `scripts/hooks/*.mjs`, and the
+gates themselves are defined once in `scripts/gates.mjs` so the hand-run check and
+the automatic one cannot drift apart.
 
 Two behaviors worth knowing before they surprise you:
 
@@ -98,9 +157,9 @@ section before (add-electron-test-signal).
 
 ## The SDK options test
 
-`electron/sdk-options.test.mjs` asserts the **exact `Options` object** each role
-hands to `query()` — the complete key set, field by field, not just the fields it
-expects to find.
+`electron/sdk-options.test.mjs` asserts the **exact `Options` object** each run
+shape hands to `query()` — the complete key set, field by field, not just the
+fields it expects to find.
 
 The asymmetry matters. An ordinary test that checks the options it cares about
 cannot catch the failure this one exists for: for months Iris passed
@@ -117,8 +176,8 @@ every field Iris sets is one of them — with `appendSystemPrompt` asserted
 **absent** as the control. So an SDK upgrade that renames or drops a field is
 caught on the next `npm ci`, not in a user's run.
 
-Add a field to a role's options ⇒ add it to that role's key list in this file.
-That friction is the point.
+Add a field to a run shape's options ⇒ add it to that shape's key list in this
+file. That friction is the point.
 
 ## The import-graph test
 

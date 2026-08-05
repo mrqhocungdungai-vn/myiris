@@ -221,6 +221,22 @@ const ALLOWANCES = [
     anchor: "Rules for the Hermes worker survived two renames",
     reason: "Historical rationale for why the dead-CSS check (this repo's other allowance-bearing gate) exists.",
   },
+  // This gate's own requirement. Design D1: "a gate that could not express this
+  // would fail its own installation" — the requirement stating which terms are
+  // retired, and why each one's matching rule is what it is, cannot avoid
+  // naming them.
+  {
+    file: "workflow-quality-gates/spec.md",
+    term: "PO",
+    anchor: "cannot be right for all of them: `PO` matches",
+    reason: "The requirement defining the retired-term list must name a term to state its matching rule.",
+  },
+  {
+    file: "workflow-quality-gates/spec.md",
+    term: "role",
+    anchor: "the noun `role` matches case-insensitively",
+    reason: "The requirement defining the retired-term list must name a term to state its matching rule.",
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -232,6 +248,35 @@ const PLACEHOLDER_PATTERNS = [
   { name: "TODO", pattern: /\bTODO\b/g },
   { name: "FIXME", pattern: /\bFIXME\b/g },
   { name: "a note to a future reader", pattern: /\bafter archive\b/gi },
+];
+
+// Placeholder allowances, same (file, name, anchor, reason) shape as the
+// vocabulary ones. This list exists because of a case found by running the
+// gate against a simulation of its own archived state: the requirement that
+// DEFINES the placeholder check has to quote `TBD` and "update after archive"
+// to say what it forbids, so without this the gate failed on the very
+// requirement that installs it — the same "a requirement forbidding a term has
+// to be able to name it" argument design D5 makes for vocabulary, which the
+// original implementation applied to vocabulary and contradictions only.
+const PLACEHOLDER_ALLOWANCES = [
+  {
+    file: "workflow-quality-gates/spec.md",
+    name: "TBD",
+    anchor: "**Placeholder text SHALL fail.**",
+    reason: "The requirement defining the placeholder check must quote the token it rejects.",
+  },
+  {
+    file: "workflow-quality-gates/spec.md",
+    name: "a note to a future reader",
+    anchor: 'such as "update after archive"',
+    reason: "The requirement defining the placeholder check must quote the note shape it rejects.",
+  },
+  {
+    file: "workflow-quality-gates/spec.md",
+    name: "TBD",
+    anchor: "a capability's `Purpose` is `TBD`",
+    reason: "Scenario for the requirement above; must name the token to describe the case.",
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -281,8 +326,13 @@ function parseSpec(content) {
   return { requirements };
 }
 
-function relativePath(filePath) {
-  return path.relative(SPECS_ROOT, filePath);
+// Relative to the root actually being checked, not the module-level default.
+// Every allowance is keyed by this path, so resolving it against the constant
+// would make an injected root silently match no allowance at all — the check
+// would still report findings, which is what makes the mistake survivable and
+// therefore easy to miss.
+function relativePath(root, filePath) {
+  return path.relative(root, filePath);
 }
 
 // ---------------------------------------------------------------------------
@@ -295,10 +345,10 @@ function isAllowed(relFile, term, lineText) {
   );
 }
 
-function checkRetiredVocabulary(files) {
+function checkRetiredVocabulary(root, files) {
   const findings = [];
   for (const file of files) {
-    const rel = relativePath(file);
+    const rel = relativePath(root, file);
     const lines = fs.readFileSync(file, "utf8").split("\n");
     for (const { term, pattern } of RETIRED_TERMS) {
       lines.forEach((lineText, index) => {
@@ -316,15 +366,23 @@ function checkRetiredVocabulary(files) {
 // Check 2: placeholder text
 // ---------------------------------------------------------------------------
 
-function checkPlaceholders(files) {
+function isPlaceholderAllowed(relFile, name, lineText) {
+  return PLACEHOLDER_ALLOWANCES.some(
+    (a) => a.file === relFile && a.name === name && lineText.includes(a.anchor),
+  );
+}
+
+function checkPlaceholders(root, files) {
   const findings = [];
   for (const file of files) {
-    const rel = relativePath(file);
+    const rel = relativePath(root, file);
     const lines = fs.readFileSync(file, "utf8").split("\n");
     lines.forEach((lineText, index) => {
       for (const { name, pattern } of PLACEHOLDER_PATTERNS) {
         pattern.lastIndex = 0;
-        if (pattern.test(lineText)) findings.push({ file: rel, line: index + 1, name, text: lineText.trim() });
+        if (!pattern.test(lineText)) continue;
+        if (isPlaceholderAllowed(rel, name, lineText)) continue;
+        findings.push({ file: rel, line: index + 1, name, text: lineText.trim() });
       }
     });
   }
@@ -395,10 +453,10 @@ function extractProhibitions(bodyText) {
   return phrases;
 }
 
-function checkContradictions(files) {
+function checkContradictions(root, files) {
   const findings = [];
   for (const file of files) {
-    const rel = relativePath(file);
+    const rel = relativePath(root, file);
     const { requirements } = parseSpec(fs.readFileSync(file, "utf8"));
     for (const req of requirements) {
       const bodyText = req.bodyLines.join(" ");
@@ -439,10 +497,10 @@ function checkContradictions(files) {
 // Check 4: emptiness
 // ---------------------------------------------------------------------------
 
-function checkEmptiness(files) {
+function checkEmptiness(root, files) {
   const findings = [];
   for (const file of files) {
-    const rel = relativePath(file);
+    const rel = relativePath(root, file);
     const { requirements } = parseSpec(fs.readFileSync(file, "utf8"));
     if (requirements.length === 0) {
       findings.push({ file: rel, kind: "empty-capability" });
@@ -467,10 +525,10 @@ export function checkSpecDrift({ specsRoot = SPECS_ROOT } = {}) {
     return { ok: false, output: `${TAG} could not read ${specsRoot}: ${error.message}` };
   }
 
-  const vocabulary = checkRetiredVocabulary(files);
-  const placeholders = checkPlaceholders(files);
-  const contradictions = checkContradictions(files);
-  const emptiness = checkEmptiness(files);
+  const vocabulary = checkRetiredVocabulary(specsRoot, files);
+  const placeholders = checkPlaceholders(specsRoot, files);
+  const contradictions = checkContradictions(specsRoot, files);
+  const emptiness = checkEmptiness(specsRoot, files);
 
   const total = vocabulary.length + placeholders.length + contradictions.length + emptiness.length;
   if (total === 0) return { ok: true, output: "" };
@@ -495,7 +553,20 @@ export function checkSpecDrift({ specsRoot = SPECS_ROOT } = {}) {
         : `${TAG} ${f.file} requirement "${f.requirement}" has no scenarios`,
     );
   }
-  lines.push(`${TAG} ${total} finding${total === 1 ? "" : "s"}. If genuinely legitimate, add an allowance in scripts/check-spec-drift.mjs's ALLOWANCES with a stated reason.`);
+  // Names the specific list per finding class: there are three, and pointing at
+  // the wrong one invites widening a pattern instead of recording an exemption.
+  const lists = [
+    vocabulary.length && "ALLOWANCES (retired terms)",
+    placeholders.length && "PLACEHOLDER_ALLOWANCES (placeholders)",
+    contradictions.length && "CONTRADICTION_ALLOWANCES (contradictions)",
+  ].filter(Boolean);
+  lines.push(`${TAG} ${total} finding${total === 1 ? "" : "s"}.`);
+  if (lists.length > 0) {
+    lines.push(`${TAG} If an occurrence is genuinely legitimate, add it to ${lists.join(" / ")} in scripts/check-spec-drift.mjs with a stated reason — an exemption is a decision in the diff, never a widened pattern.`);
+  }
+  if (emptiness.length > 0) {
+    lines.push(`${TAG} Empty capabilities and requirements have no allowance list: write the missing content.`);
+  }
 
   return { ok: false, output: lines.join("\n") };
 }

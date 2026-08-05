@@ -32,7 +32,7 @@ resumes its own prior conversation.
 | **What each verb is, and everything that follows from it** | `electron/verbs.mjs` — the single registry the tool declarations, the review gate, and the run configuration all derive from |
 | Module/file map, end-to-end audio + delegation flow, component responsibilities, Gemini tool surface | **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** |
 | Pipeline internals: availability gating, the verb registry and dispatch, voice relay, sessions/context ownership, subscription auth, prompt/budget policy, hooks, skill scoping, the run inbox | **[docs/PIPELINE_INTERNALS.md](docs/PIPELINE_INTERNALS.md)** |
-| Test harness: the four gates, what vitest picks up, the SDK options test, typecheck projects, testability conventions | **[docs/TESTING.md](docs/TESTING.md)** + `openspec/specs/test-harness/spec.md` |
+| Test harness: the five gates, what vitest picks up, the SDK options test, typecheck projects, testability conventions | **[docs/TESTING.md](docs/TESTING.md)** + `openspec/specs/test-harness/spec.md` |
 | **Pinned exact identifiers** (Gemini Live model + voice, audio rates, SDK/CLI coupling, vendored WASM assets), the footgun list, and the Agent SDK `Options` audit — what Iris sets and every option deliberately declined | **[docs/REFERENCE.md](docs/REFERENCE.md)** |
 | Using the pipeline as a user (setup, voice walkthrough, troubleshooting) | [docs/PIPELINE_GUIDE.md](docs/PIPELINE_GUIDE.md) |
 | Gesture/hand control (MediaPipe config, gesture→action mapping) | [docs/GESTURES.md](docs/GESTURES.md) |
@@ -49,6 +49,7 @@ npm run build          # tsc --noEmit (src) + tsc -p tsconfig.electron.json (ele
 npm test               # vitest run (behavioral gate)
 npm run lint           # oxlint, zero-warning (whole-tree)
 npm run scan:secrets   # gitleaks over the staged changes
+npm run spec:check     # drift check over openspec/specs/ (the living spec)
 npm start              # build then launch Electron from dist/ (production-like)
 npm run start:prod     # launch prod build without rebuilding
 npm run package:mac    # build + both mac arches (x64 + arm64) as unpacked .app
@@ -56,11 +57,13 @@ npm run package:mac:host # build + host arch only (skips the ~250 MB arm64 fetch
 npm run dist:mac       # build + full macOS distributable
 ```
 
-The first four are **four independent gates** — run all of them to verify a
-change; `lint` and `scan:secrets` are deliberately kept out of `build` so a
-typecheck stays runnable on its own. They are also bound to editing events by
-`.claude/settings.json`, and **fail closed** if `gitleaks` is missing
-(`brew install gitleaks`; `IRIS_SKIP_HOOKS=1` is the one-off bypass).
+`build`, `test`, `lint`, `scan:secrets`, and `spec:check` are **five independent
+gates** — run all of them to verify a change; the last three are deliberately kept
+out of `build` so a typecheck stays runnable on its own. They are also bound to
+editing events by `.claude/settings.json`, and **fail closed** if `gitleaks` is
+missing (`brew install gitleaks`; `IRIS_SKIP_HOOKS=1` is the one-off bypass).
+`spec:check` is the only one that checks something other than code: the living
+spec, which is otherwise the source of truth with nothing checking it.
 Details: [docs/TESTING.md](docs/TESTING.md) and the `workflow-quality-gates` spec.
 
 **The build toolchain requires Node.js `>=24.0.0`** (`engines.node` +

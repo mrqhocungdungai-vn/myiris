@@ -15,6 +15,13 @@
 // PostToolUse hook is what makes that decision possible — the Stop event itself
 // does not report which files changed.
 //
+// The spec-drift gate joins them here for the same reason and not for cost: it
+// reads the whole of `openspec/specs/` and a multi-file spec edit is mid-flight
+// until the turn ends — a term rewritten in one file while its allowance still
+// names the old wording is the same wrong-about-an-intermediate-state failure
+// lint had. It is scoped the same way lint and typecheck are, off the ledger:
+// a turn that touched no spec file does not pay for it.
+//
 // A turn that wrote no files finds an empty ledger and costs nothing, which is
 // the common case for a question-answering turn.
 //
@@ -23,7 +30,7 @@ import { readFileSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { LINTABLE_EXTENSIONS, REPO_ROOT, isBypassed, runLint } from "../gates.mjs";
+import { LINTABLE_EXTENSIONS, REPO_ROOT, isBypassed, runLint, runSpecDrift } from "../gates.mjs";
 import { block, ledgerPath, readHookInput } from "./lib.mjs";
 
 const TAG = "[gate:turn]";
@@ -65,9 +72,17 @@ const neededProjects = PROJECTS.filter(({ prefix }) =>
 
 const lintNeeded = changed.some((file) => LINTABLE_EXTENSIONS.has(path.extname(file)));
 
-// Files outside both projects and outside lint's reach (docs, configuration)
-// leave nothing for this gate to do.
-if (neededProjects.length === 0 && !lintNeeded) {
+// The living spec, plus the checker itself: editing an allowance or a term is
+// the one other way to change what the gate reports, and skipping it there
+// would let an allowance be widened without the tree it exempts being re-read.
+const SPEC_TRIGGERS = ["openspec/specs", "scripts/check-spec-drift.mjs"];
+const specNeeded = changed.some((file) =>
+  SPEC_TRIGGERS.some((prefix) => file === prefix || file.startsWith(`${prefix}/`)),
+);
+
+// Files outside both projects, outside lint's reach, and outside the spec tree
+// (other docs, configuration) leave nothing for this gate to do.
+if (neededProjects.length === 0 && !lintNeeded && !specNeeded) {
   rmSync(ledger, { force: true });
   process.exit(0);
 }
@@ -77,6 +92,11 @@ const failures = [];
 if (lintNeeded) {
   const lint = runLint();
   if (!lint.ok) failures.push(`${TAG} Lint failed:`, lint.output);
+}
+
+if (specNeeded) {
+  const spec = runSpecDrift();
+  if (!spec.ok) failures.push(`${TAG} Spec-drift check failed:`, spec.output);
 }
 
 if (neededProjects.length > 0) {

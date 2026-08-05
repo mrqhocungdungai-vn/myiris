@@ -55,7 +55,7 @@ gesture → action mapping.
 Working on the bridge itself? **[docs/PIPELINE_INTERNALS.md](docs/PIPELINE_INTERNALS.md)**
 is the implementation-level reference for pipeline availability gating, the
 delegation flow, the verb registry, the voice question relay, session/context
-ownership, and subscription auth. Test harness and the two verification gates:
+ownership, and subscription auth. Test harness and the five verification gates:
 **[docs/TESTING.md](docs/TESTING.md)**.
 
 ## Claude pipeline — optional, advanced
