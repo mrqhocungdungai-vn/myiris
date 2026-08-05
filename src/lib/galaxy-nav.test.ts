@@ -8,6 +8,7 @@ import {
   INITIAL_POSE_DRIVE_STATE,
   orbitStep,
   radiusStep,
+  focusNeighborhood,
   type DwellState,
   type GalaxyNavNode,
 } from "./galaxy-nav";
@@ -183,42 +184,132 @@ describe("driveFor", () => {
     expect(driveFor(makeHand({ pinchDistance: 0.5 })).drive).toBeNull();
   });
 
-  it("engages zoom on an explicit pinch and applies hysteresis at the boundary", () => {
-    const engaged = driveFor(makeHand({ pinchDistance: 0.05 }), INITIAL_POSE_DRIVE_STATE);
-    expect(engaged.drive).toBe("zoom");
+  // Steps driveFor forward in 10ms increments, holding a pinch engaged, until
+  // it crosses into zoom — mirrors dwellStep's own chargeToFire helper above.
+  function holdPinchToZoom(pinchDistance = 0.05) {
+    let state = INITIAL_POSE_DRIVE_STATE;
+    for (let t = 0; t <= 2000; t += 10) {
+      const step = driveFor(makeHand({ pinchDistance }), state, t);
+      state = step.state;
+      if (step.drive === "zoom") return { drive: step.drive, state, t };
+    }
+    throw new Error("pinch never crossed into zoom");
+  }
 
-    // Between engage and release thresholds: stays zooming once engaged...
-    const holding = driveFor(makeHand({ pinchDistance: 0.13 }), engaged.state);
-    expect(holding.drive).toBe("zoom");
+  // design.md D3 of shared-focus: "the camera SHALL NOT move" and "no zoom is
+  // emitted" while a pinch is still being discriminated as a possible tap.
+  it("drives nothing while a pinch is still being discriminated, and never newly engages from a mid-range distance", () => {
+    const engaging = driveFor(makeHand({ pinchDistance: 0.05 }), INITIAL_POSE_DRIVE_STATE, 0);
+    expect(engaging.drive).toBeNull();
+    const stillDiscriminating = driveFor(makeHand({ pinchDistance: 0.05 }), engaging.state, 50);
+    expect(stillDiscriminating.drive).toBeNull();
+    // A mid-range distance (between the engage and release thresholds) does
+    // not newly engage anything from rest.
+    expect(driveFor(makeHand({ pinchDistance: 0.13 }), INITIAL_POSE_DRIVE_STATE, 0).drive).toBeNull();
+  });
 
-    // ...but the same mid-range distance does NOT newly engage from rest.
-    const notYetEngaged = driveFor(makeHand({ pinchDistance: 0.13 }), INITIAL_POSE_DRIVE_STATE);
-    expect(notYetEngaged.drive).toBeNull();
+  it("no zoom is emitted during the whole discrimination window", () => {
+    let state = INITIAL_POSE_DRIVE_STATE;
+    for (let t = 0; t < 250; t += 10) {
+      const step = driveFor(makeHand({ pinchDistance: 0.05 }), state, t);
+      expect(step.drive).not.toBe("zoom");
+      state = step.state;
+    }
+  });
+
+  it("a pinch released quickly (inside the window) yields a tap for exactly one frame", () => {
+    let state = driveFor(makeHand({ pinchDistance: 0.05 }), INITIAL_POSE_DRIVE_STATE, 0).state;
+    state = driveFor(makeHand({ pinchDistance: 0.05 }), state, 50).state;
+    const released = driveFor(makeHand({ pinchDistance: 0.3 }), state, 80);
+    expect(released.drive).toBe("tap");
+    // Not sticky: the very next frame, even mid-release, is not a tap again.
+    const next = driveFor(makeHand({ pinchDistance: 0.3 }), released.state, 90);
+    expect(next.drive).not.toBe("tap");
+  });
+
+  it("a pinch held past the window yields zoom and never a tap", () => {
+    expect(holdPinchToZoom().drive).toBe("zoom");
+  });
+
+  it("releasing a zoom never fires a tap, however slowly the release happens", () => {
+    let { state } = holdPinchToZoom();
+    // Hold well past the window, so this pinch has unambiguously become a zoom.
+    for (let i = 0; i < 5; i++) state = driveFor(makeHand({ pinchDistance: 0.05 }), state, 1000 + i * 10).state;
+    let last: ReturnType<typeof driveFor> = { drive: "zoom", state };
+    for (let i = 0; i < 10; i++) {
+      last = driveFor(makeHand({ pinchDistance: 0.3 }), last.state, 2000 + i * 10);
+      expect(last.drive).not.toBe("tap");
+    }
+    expect(last.drive).toBeNull(); // the sustained release ended the zoom, not a tap
+  });
+
+  it("a pinch drifting while Pointing_Up yields neither a zoom nor a tap", () => {
+    let state = INITIAL_POSE_DRIVE_STATE;
+    for (let t = 0; t < 500; t += 10) {
+      const pinchDistance = t % 20 === 0 ? 0.05 : 0.3; // drifts across the engage threshold as a side effect of the pose
+      const step = driveFor(makeHand({ pointing: true, pinchDistance }), state, t);
+      expect(step.drive).toBe("dwell");
+      state = step.state;
+    }
   });
 
   it("survives a single noisy frame above the release threshold instead of dropping the drive", () => {
-    let step = driveFor(makeHand({ pinchDistance: 0.05 }), INITIAL_POSE_DRIVE_STATE);
+    let step: ReturnType<typeof driveFor> = holdPinchToZoom();
     expect(step.drive).toBe("zoom");
 
     // Raw pinchDistance has no source-level debounce (unlike the canned
     // fist/pointing gestures) — one tremor frame past PINCH_RELEASE must
     // not wipe the seeded zoom reference.
-    step = driveFor(makeHand({ pinchDistance: 0.3 }), step.state);
+    step = driveFor(makeHand({ pinchDistance: 0.3 }), step.state, 3000);
     expect(step.drive).toBe("zoom");
 
     // Recovering below the release threshold clears the release streak.
-    step = driveFor(makeHand({ pinchDistance: 0.13 }), step.state);
+    step = driveFor(makeHand({ pinchDistance: 0.13 }), step.state, 3010);
     expect(step.drive).toBe("zoom");
   });
 
   it("disengages zoom only after a sustained release, not a single frame", () => {
-    let step = driveFor(makeHand({ pinchDistance: 0.05 }), INITIAL_POSE_DRIVE_STATE);
+    let step: ReturnType<typeof driveFor> = holdPinchToZoom();
     expect(step.drive).toBe("zoom");
 
     for (let i = 0; i < 10; i++) {
-      step = driveFor(makeHand({ pinchDistance: 0.3 }), step.state);
+      step = driveFor(makeHand({ pinchDistance: 0.3 }), step.state, 3000 + i * 10);
     }
     expect(step.drive).toBeNull();
+  });
+
+  // design.md D3 of shared-focus: "A zoom's reference SHALL be seeded when
+  // the hold window elapses, not when the pinch first engaged, so the
+  // discrimination window contributes no accumulated delta." A caller that
+  // seeded at engage time instead would carry forward however much the pinch
+  // distance drifted while merely being discriminated as a possible tap,
+  // producing a camera jump the instant zoom took over.
+  it("seeding the zoom reference on the elapse frame (not the engage frame) produces no radius jump, however much the pinch drifted while discriminating", () => {
+    let state = INITIAL_POSE_DRIVE_STATE;
+    const startRadius = 100;
+
+    // A real hand's pinch distance is not perfectly still while held during
+    // the discrimination window — it drifts a little, all comfortably inside
+    // TAP_MAX_MS (250ms in galaxy-nav.ts).
+    const drifting = [0.05, 0.04, 0.06, 0.05, 0.03];
+    for (let i = 0; i < drifting.length; i++) {
+      const step = driveFor(makeHand({ pinchDistance: drifting[i] }), state, i * 10);
+      state = step.state;
+      expect(step.drive).not.toBe("zoom"); // still discriminating
+    }
+
+    // The window elapses on this frame (t=250 >= TAP_MAX_MS since it engaged
+    // at t=0) — seeding happens HERE, using this frame's live pinch distance,
+    // never the one recorded back when the pinch first engaged.
+    const elapsePinchDistance = 0.05;
+    const elapseStep = driveFor(makeHand({ pinchDistance: elapsePinchDistance }), state, 250);
+    expect(elapseStep.drive).toBe("zoom");
+    const zoomReference = { pinch: elapsePinchDistance, radius: startRadius };
+
+    // The delta on this very frame is measured against the reference that
+    // was just seeded from it, so it is zero — the radius does not jump.
+    const radiusOnTakeover = radiusStep(zoomReference.radius, elapsePinchDistance - zoomReference.pinch, 600, 15, 2500);
+    expect(radiusOnTakeover).toBe(startRadius);
   });
 });
 
@@ -239,5 +330,50 @@ describe("radiusStep", () => {
     expect(radiusStep(50, -1000, 1, 10, 500)).toBe(10);
     expect(radiusStep(50, 1000, 1, 10, 500)).toBe(500);
     expect(radiusStep(50, 5, 1, 10, 500)).toBe(55);
+  });
+});
+
+describe("focusNeighborhood", () => {
+  it("returns an empty set when nothing is focused (no filtering)", () => {
+    const result = focusNeighborhood([], [{ source: "a", target: "b" }]);
+    expect(result.size).toBe(0);
+  });
+
+  it("includes the focused ids plus every direct (one-hop) neighbor, in either direction", () => {
+    const links = [
+      { source: "a", target: "b" }, // a -> b, a focused
+      { source: "c", target: "a" }, // c -> a, reverse direction into the focus
+      { source: "b", target: "d" }, // b -> d, two hops from a — must NOT be included
+    ];
+    const result = focusNeighborhood(["a"], links);
+    expect(result).toEqual(new Set(["a", "b", "c"]));
+    expect(result.has("d")).toBe(false);
+  });
+
+  it("does not cascade to a second hop regardless of link array order", () => {
+    // Same topology as above (a -> b -> d), but b -> d listed BEFORE a -> b.
+    // A naive single pass that grows its own membership set while iterating
+    // would let "d" leak in here, since by the time it reaches "b -> d" a
+    // buggy implementation might already have added "b".
+    const linksReversed = [
+      { source: "b", target: "d" },
+      { source: "a", target: "b" },
+    ];
+    const result = focusNeighborhood(["a"], linksReversed);
+    expect(result).toEqual(new Set(["a", "b"]));
+  });
+
+  it("unions neighbors across multiple focused ids", () => {
+    const links = [
+      { source: "a", target: "x" },
+      { source: "b", target: "y" },
+    ];
+    const result = focusNeighborhood(["a", "b"], links);
+    expect(result).toEqual(new Set(["a", "b", "x", "y"]));
+  });
+
+  it("a focused id with no links resolves to just itself", () => {
+    const result = focusNeighborhood(["lonely"], [{ source: "a", target: "b" }]);
+    expect(result).toEqual(new Set(["lonely"]));
   });
 });

@@ -223,12 +223,38 @@ type SecondBrainAvailability = {
   available: boolean;
 };
 
+// ambient-memory: `enabled` is the renderer's own last-sent preference,
+// `live` is whether retention is actually happening right now (enabled AND
+// awake), and `forcedOff` mirrors IRIS_AMBIENT_CAPTURE=off — when true the
+// toggle is not offered at all.
+type AmbientCaptureState = {
+  enabled: boolean;
+  live: boolean;
+  forcedOff: boolean;
+};
+
 type SecondBrainGraphResult = {
   graph: VaultGraph;
   available: boolean;
 };
 
 type SecondBrainReadNoteResult = { ok: true; content: string } | { ok: false };
+
+// second-brain-focus (design D1/D2): resolved fresh against the live graph on
+// every read — never a cached title/tag snapshot, so a renamed or deleted
+// note just resolves differently the next time this is read.
+type FocusedNote = {
+  id: string;
+  title: string;
+  tags: string[];
+};
+
+type SecondBrainFocusState = {
+  ids: string[];
+  notes: FocusedNote[];
+};
+
+type SecondBrainToggleFocusResult = { ok: false } | ({ ok: true } & SecondBrainFocusState);
 
 // canvas-claude-mcp (design.md D3/D4): a Claude-originated write, applied to
 // the live scene while the panel is mounted. Always the FULL post-write
@@ -334,6 +360,18 @@ type IrisApi = {
   activateSecondBrain: () => void;
   deactivateSecondBrain: () => void;
   onSecondBrainGraphUpdated: (callback: (graph: VaultGraph) => void) => () => void;
+  // second-brain-focus: toggles one node's membership in the shared focus —
+  // the hand's tap and a mouse click both call this the same way.
+  toggleSecondBrainFocus: (id: string) => Promise<SecondBrainToggleFocusResult>;
+  getSecondBrainFocus: () => Promise<SecondBrainFocusState>;
+  clearSecondBrainFocus: () => Promise<SecondBrainFocusState>;
+  // ambient-memory: the renderer's persisted preference is the only way main
+  // ever turns retention on (design D1) — a one-way send, mirroring
+  // requestListenOnlyToggle's shape. Whether it is actually LIVE right now
+  // (also gated on being awake) arrives over the query/push pair below.
+  setAmbientCaptureEnabled: (enabled: boolean) => void;
+  getAmbientCaptureState: () => Promise<AmbientCaptureState>;
+  onAmbientCaptureState: (callback: (payload: { live: boolean }) => void) => () => void;
 };
 
 interface Window {

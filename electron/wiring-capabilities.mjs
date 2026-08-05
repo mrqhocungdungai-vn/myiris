@@ -19,6 +19,7 @@ import { createSecondBrainCapability } from "./capabilities/second-brain.mjs";
  *   canvasStoreFile: string,
  *   emitToRenderer: (channel: string, payload: any) => void,
  *   emitEvent: (event: any) => void,
+ *   notifyIris: (lines: string | string[], opts?: { bufferIfOffline?: boolean }) => void,
  *   getMainWindow: () => any,
  *   getPipelineAvailable: () => boolean,
  *   userDisplayName: () => string,
@@ -52,6 +53,7 @@ export function createCapabilitiesWiring({
   canvasStoreFile,
   emitToRenderer,
   emitEvent,
+  notifyIris,
   getMainWindow,
   getPipelineAvailable,
   userDisplayName,
@@ -96,9 +98,15 @@ export function createCapabilitiesWiring({
   const secondBrainCapability = createSecondBrainCapability({
     emitEvent,
     emitToRenderer,
+    notifyIris,
     irisPluginDir,
     userDisplayName,
     getPipelineAvailable,
+    // Ambient session capture's flush reads the SAME ring runExec's own
+    // prompt composition already reads below — no second buffer, no new
+    // recording path (ambient-memory spec: "Only already-retained text is
+    // captured").
+    recentUtterances,
   });
 
   const runExec = createRunExec({
@@ -121,6 +129,7 @@ export function createCapabilitiesWiring({
     notesVaultDir: secondBrainCapability.notesVaultDir,
     notesInboxDir: secondBrainCapability.notesInboxDir,
     recentUtterances,
+    resolveFocusForPrompt: () => secondBrainCapability.resolveFocusForRun(),
     handleClaudeStreamMessage,
     pushActivity,
     rememberClaudeSessionId,

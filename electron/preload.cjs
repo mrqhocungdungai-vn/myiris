@@ -119,4 +119,19 @@ contextBridge.exposeInMainWorld("iris", {
     ipcRenderer.on("secondbrain:graph-updated", handler);
     return () => ipcRenderer.removeListener("secondbrain:graph-updated", handler);
   },
+  // second-brain-focus: toggles one node's membership in the shared focus —
+  // the hand's tap and a mouse click both call this the same way.
+  toggleSecondBrainFocus: (id) => ipcRenderer.invoke("secondbrain:set-focus", id),
+  getSecondBrainFocus: () => ipcRenderer.invoke("secondbrain:get-focus"),
+  clearSecondBrainFocus: () => ipcRenderer.invoke("secondbrain:clear-focus"),
+  // ambient-memory: a one-way send (main is the sole authority on whether
+  // retention is actually live — design D1), plus a boot-time pull and a
+  // push for every later live/not-live transition.
+  setAmbientCaptureEnabled: (enabled) => ipcRenderer.send("ambient-capture:set-enabled", { enabled }),
+  getAmbientCaptureState: () => ipcRenderer.invoke("ambient-capture:query"),
+  onAmbientCaptureState: (callback) => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on("ambient-capture:state", handler);
+    return () => ipcRenderer.removeListener("ambient-capture:state", handler);
+  },
 });

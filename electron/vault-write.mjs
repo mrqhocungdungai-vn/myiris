@@ -41,6 +41,11 @@ export function runSpoolDir(vaultDir) {
   return path.join(vaultDir, "inbox", "runs");
 }
 
+/** Where ambient session capture's flushed conversation text lands (ambient-memory). */
+export function sessionsSpoolDir(vaultDir) {
+  return path.join(vaultDir, "inbox", "sessions");
+}
+
 /**
  * Appends `content` to today's spool file under `dir`, synchronously. Never
  * throws: bookkeeping must not be able to disturb work that has already
@@ -119,6 +124,143 @@ export async function createNotePage({ vaultDir, title, tags = [], body = "", no
     await fs.promises.mkdir(resolvedVault, { recursive: true });
     await writeFileAtomicAsync(resolvedFile, content, "utf8");
     return { ok: true, file: resolvedFile };
+  } catch (error) {
+    return { ok: false, error: /** @type {Error} */ (error).message };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Structural edits between existing notes (shared-focus design D7): three
+// enumerated named operations, each backed by a pure text transform so it is
+// testable against a string with no filesystem involved — never a general
+// "write this content to this note" primitive, which would be an arbitrary-
+// write surface reachable from a model. The caller (electron/capabilities/
+// second-brain.mjs) resolves note identities to paths and re-asserts the
+// vault boundary before any of these ever see a path.
+
+/** Escapes `text` for use inside a RegExp literal. */
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Matches a `[[targetId]]` wikilink, with or without a `|alias` or
+// `#heading` suffix — the same shapes vault-graph-parse.mjs's own
+// WIKILINK_RE resolves, so a link this module writes (or removes) is the
+// exact shape the graph already parses. Target only, case-insensitive: note
+// identities are matched case-insensitively when the graph builds them.
+function wikilinkPattern(targetId, flags = "i") {
+  return new RegExp(`\\[\\[${escapeRegExp(targetId)}(?:#[^\\]|]*)?(?:\\|[^\\]]*)?\\]\\]`, flags);
+}
+
+/** True when `markdown` already contains a wikilink to `targetId`. */
+export function hasWikilink(markdown, targetId) {
+  return wikilinkPattern(targetId).test(markdown);
+}
+
+/**
+ * Appends `[[targetId]]` to `markdown`, unless a link to it is already
+ * present — a repeated link request is not an error and must not duplicate
+ * text (spec: "An already-present link is not duplicated").
+ */
+export function withLinkedNote(markdown, targetId) {
+  if (hasWikilink(markdown, targetId)) return markdown;
+  const trimmed = markdown.replace(/\s+$/, "");
+  return `${trimmed}\n\n[[${targetId}]]\n`;
+}
+
+/** Removes every wikilink to `targetId` from `markdown`, tidying up the blank lines it leaves behind. */
+export function withoutLinkedNote(markdown, targetId) {
+  return markdown
+    .replace(wikilinkPattern(targetId, "gi"), "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n");
+}
+
+/**
+ * Rewrites `markdown`'s frontmatter `tags` field to `tags`, preserving the
+ * body and every other frontmatter field untouched. Malformed frontmatter is
+ * reported rather than guessed at or corrupted (spec: "a note with malformed
+ * frontmatter is reported rather than corrupted").
+ * @returns {{ ok: true, content: string } | { ok: false, error: string }}
+ */
+export function withTags(markdown, tags) {
+  let parsed;
+  try {
+    parsed = matter(markdown);
+  } catch (error) {
+    return { ok: false, error: `Malformed frontmatter: ${/** @type {Error} */ (error).message}` };
+  }
+  const data = { ...parsed.data, tags: [...tags] };
+  return { ok: true, content: matter.stringify(parsed.content, data) };
+}
+
+/** Reads `filePath`, resolving `{ ok: false, error }` instead of rejecting. */
+async function readNote(filePath) {
+  try {
+    return { ok: true, content: await fs.promises.readFile(filePath, "utf8") };
+  } catch (error) {
+    return { ok: false, error: /** @type {Error} */ (error).message };
+  }
+}
+
+/**
+ * Links two existing notes to each other: inserts `[[idB]]` into `pathA` and
+ * `[[idA]]` into `pathB`, atomically, idempotently. Both files are read
+ * before either is written, so a note that cannot be read leaves the other
+ * untouched rather than producing a one-directional link.
+ * @param {{ pathA: string, idA: string, pathB: string, idB: string }} input
+ * @returns {Promise<{ ok: boolean, error?: string }>}
+ */
+export async function linkNotes({ pathA, idA, pathB, idB }) {
+  const [a, b] = await Promise.all([readNote(pathA), readNote(pathB)]);
+  if (!a.ok) return { ok: false, error: a.error };
+  if (!b.ok) return { ok: false, error: b.error };
+  try {
+    await Promise.all([
+      writeFileAtomicAsync(pathA, withLinkedNote(a.content, idB), "utf8"),
+      writeFileAtomicAsync(pathB, withLinkedNote(b.content, idA), "utf8"),
+    ]);
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: /** @type {Error} */ (error).message };
+  }
+}
+
+/**
+ * Removes the link between two notes in both directions. Mirrors
+ * `linkNotes`'s all-or-nothing read, and reports success when the link was
+ * already absent (nothing to do, not an error).
+ * @param {{ pathA: string, idA: string, pathB: string, idB: string }} input
+ * @returns {Promise<{ ok: boolean, error?: string }>}
+ */
+export async function unlinkNotes({ pathA, idA, pathB, idB }) {
+  const [a, b] = await Promise.all([readNote(pathA), readNote(pathB)]);
+  if (!a.ok) return { ok: false, error: a.error };
+  if (!b.ok) return { ok: false, error: b.error };
+  try {
+    await Promise.all([
+      writeFileAtomicAsync(pathA, withoutLinkedNote(a.content, idB), "utf8"),
+      writeFileAtomicAsync(pathB, withoutLinkedNote(b.content, idA), "utf8"),
+    ]);
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: /** @type {Error} */ (error).message };
+  }
+}
+
+/**
+ * Replaces a note's tags in place.
+ * @param {{ path: string, tags: string[] }} input
+ * @returns {Promise<{ ok: boolean, error?: string }>}
+ */
+export async function setNoteTags({ path: notePath, tags }) {
+  const note = await readNote(notePath);
+  if (!note.ok) return { ok: false, error: note.error };
+  const rewritten = withTags(note.content, tags);
+  if (!rewritten.ok) return rewritten;
+  try {
+    await writeFileAtomicAsync(notePath, rewritten.content, "utf8");
+    return { ok: true };
   } catch (error) {
     return { ok: false, error: /** @type {Error} */ (error).message };
   }

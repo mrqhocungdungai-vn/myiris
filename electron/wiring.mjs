@@ -132,6 +132,7 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
         task: run.task,
         status: run.status,
         output: String(run.output || "").slice(0, 2500),
+        verb: run.verb ?? null,
         usage: run.usage ?? null,
         decisions: run.decisions ?? null,
       });
@@ -287,6 +288,7 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     // this tool can only actually be called once the live session is up, long
     // after wiring finishes.
     captureNote: (args) => secondBrainCapability.captureNote(args),
+    mutateVaultNotes: (args) => secondBrainCapability.mutateVaultNotes(args),
   });
   const {
     PendingReview,
@@ -324,6 +326,7 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     canvasStoreFile,
     emitToRenderer,
     emitEvent,
+    notifyIris,
     getMainWindow: () => getMainWindow(),
     getPipelineAvailable: () => getPipelineAvailable(),
     userDisplayName,

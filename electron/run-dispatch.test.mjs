@@ -45,6 +45,7 @@ function make(overrides = {}) {
     getUiContextSnapshot: () => ({ uiMode: "deck" }),
     resolvePendingPoQuestion: vi.fn(() => ({ status: "ok" })),
     captureNote: vi.fn(async () => ({ status: "ok", message: "Saved to your notes.", file: "/vault/inbox/captures/x.md" })),
+    mutateVaultNotes: vi.fn(async () => ({ status: "ok", message: "Linked." })),
     ...overrides,
   });
 }
@@ -282,6 +283,17 @@ describe("run-dispatch: executeClaudeTool", () => {
     const dispatchModule = make({ getPipelineAvailable: () => false, captureNote });
     const result = await dispatchModule.executeClaudeTool("capture_note", { text: "remember this" });
     expect(captureNote).toHaveBeenCalledWith({ text: "remember this" });
+    expect(result.status).toBe("ok");
+  });
+
+  // personal-knowledge-notes: a structural edit is a direct write, not a
+  // verb — it must reach the capability's handler with no pipeline gate in
+  // the way, the same as capture_note.
+  it("routes mutate_vault_notes to the injected handler regardless of pipeline availability", async () => {
+    const mutateVaultNotes = vi.fn(async () => ({ status: "ok", message: "Linked." }));
+    const dispatchModule = make({ getPipelineAvailable: () => false, mutateVaultNotes });
+    const result = await dispatchModule.executeClaudeTool("mutate_vault_notes", { operation: "link" });
+    expect(mutateVaultNotes).toHaveBeenCalledWith({ operation: "link" });
     expect(result.status).toBe("ok");
   });
 

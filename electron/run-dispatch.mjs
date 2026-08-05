@@ -42,6 +42,7 @@ const DEPRECATED_TASK_TOOL = "submit_claude_task";
  *   getUiContextSnapshot: () => any,
  *   resolvePendingPoQuestion: (answers: any) => any,
  *   captureNote: (args: any) => Promise<any>,
+ *   mutateVaultNotes: (args: any) => Promise<any>,
  * }} deps
  */
 export function createRunDispatch({
@@ -63,6 +64,7 @@ export function createRunDispatch({
   getUiContextSnapshot,
   resolvePendingPoQuestion,
   captureNote,
+  mutateVaultNotes,
 }) {
   // Parks a Gemini-authored brief for Approve/Edit/Cancel before any Claude
   // tokens are spent (prompt-review-gate spec). Mirrors run-stream.mjs's
@@ -499,6 +501,12 @@ export function createRunDispatch({
         // worker, so it must survive chat-only mode (design D4/D7,
         // pipeline-availability spec "A worker-free local tool still works").
         return captureNote(args);
+      case "mutate_vault_notes":
+        // Also NOT in PIPELINE_ONLY_TOOLS, for the identical reason: a
+        // structural edit is a direct write, not a run (personal-knowledge-
+        // notes: "no Claude run, no tokens... available without a Claude
+        // credential").
+        return mutateVaultNotes(args);
       case "go_to_sleep":
         // Give the goodbye a moment to play before the renderer tears down
         // audio (its stop() flushes playback immediately).

@@ -18,6 +18,34 @@ export type GalaxyNavNode = {
 
 export type ScreenRect = { left: number; top: number; width: number; height: number };
 
+export type GalaxyLinkRef = { source: string; target: string };
+
+/**
+ * The focused ids plus every node exactly one link away from them, in either
+ * direction — a declutter aid for a large galaxy (second-brain-focus
+ * follow-on): as the vault grows the graph converges into a dense mass, so
+ * whatever ISN'T reachable from the current focus in one hop can be dimmed
+ * rather than changing what data is fetched, simulated, or positioned.
+ *
+ * Deliberately one hop, computed against the ORIGINAL focus set rather than
+ * the growing result — checking membership against a set that is itself
+ * being extended mid-loop would let a 2-hop (or further) node sneak in
+ * whenever link order happened to visit its 1-hop bridge first.
+ *
+ * Returns an empty set when nothing is focused, which callers should read as
+ * "no filtering" (dim nothing) rather than "everything is irrelevant".
+ */
+export function focusNeighborhood(focusIds: Iterable<string>, links: Iterable<GalaxyLinkRef>): Set<string> {
+  const focus = new Set(focusIds);
+  const relevant = new Set(focus);
+  if (focus.size === 0) return relevant;
+  for (const link of links) {
+    if (focus.has(link.source)) relevant.add(link.target);
+    if (focus.has(link.target)) relevant.add(link.source);
+  }
+  return relevant;
+}
+
 // A candidate must beat the current target by more than this many pixels
 // before nearestNodeAt even offers it as a switch (design.md M14) — repaint
 // is O(n) with per-node material dispose/allocate, so a result that flips
@@ -152,11 +180,23 @@ export function dwellStep(
   return { state: next, target: state.target, fire: false };
 }
 
-export type GalaxyDrive = "dwell" | "orbit" | "zoom" | null;
+export type GalaxyDrive = "dwell" | "orbit" | "zoom" | "tap" | null;
 
-export type PoseDriveState = { zooming: boolean; releaseStreak: number };
+export type PoseDriveState = {
+  zooming: boolean;
+  releaseStreak: number;
+  /** When the current pinch engaged, or null while no pinch is being discriminated/held (design.md D3 of shared-focus). */
+  pinchEngagedAt: number | null;
+  /** Whether THIS pinch already crossed into zoom — so a slow release at the end of a zoom is never mistaken for a tap. */
+  becameZoom: boolean;
+};
 
-export const INITIAL_POSE_DRIVE_STATE: PoseDriveState = { zooming: false, releaseStreak: 0 };
+export const INITIAL_POSE_DRIVE_STATE: PoseDriveState = {
+  zooming: false,
+  releaseStreak: 0,
+  pinchEngagedAt: null,
+  becameZoom: false,
+};
 
 // Explicit pinch predicate with hysteresis (design.md D4/H3): MediaPipe
 // publishes no pinch class, only a continuous pinchDistance, so treating
@@ -178,17 +218,31 @@ const PINCH_RELEASE = 0.16;
 // consecutive above-release frames before actually disengaging.
 const RELEASE_STREAK_TO_DISENGAGE = 5;
 
+// Tap-vs-hold discrimination window (design.md D3 of shared-focus): a pinch
+// that engages and releases before this elapses is a tap (toggles a node's
+// focus); one still engaged past it becomes a zoom. A guess, tunable here
+// alone — beside the pinch's other tuning constants.
+const TAP_MAX_MS = 250;
+
 type DriveHand = Pick<HandState, "pointing" | "fist" | "openPalm" | "pinchDistance" | "hands">;
 
 /**
  * Partitions the frame's hand pose into exactly one galaxy drive, with no
- * overlap (design.md D4): `Pointing_Up` -> dwell targeting only, `Closed_Fist`
- * -> orbit only, an explicitly-detected pinch -> zoom only, anything else
- * (open palm, two open palms, an unrecognized pose, a resting hand) -> null.
+ * overlap (design.md D4, extended by shared-focus design.md D3): `Pointing_Up`
+ * -> dwell targeting only, `Closed_Fist` -> orbit only, an explicitly-detected
+ * pinch -> a tap (released inside `TAP_MAX_MS`) or a zoom (held past it), and
+ * anything else (open palm, two open palms, an unrecognized pose, a resting
+ * hand) -> null.
+ *
+ * `now` must be a monotonically increasing clock reading (e.g.
+ * `performance.now()`) — it is what times the tap/hold discrimination window
+ * and is otherwise unused, so a caller with no meaningful clock (existing
+ * tests for the other poses) can pass a constant.
  */
 export function driveFor(
   hand: DriveHand,
   state: PoseDriveState = INITIAL_POSE_DRIVE_STATE,
+  now: number = 0,
 ): { drive: GalaxyDrive; state: PoseDriveState } {
   if (hand.pointing) return { drive: "dwell", state: INITIAL_POSE_DRIVE_STATE };
   if (hand.fist) return { drive: "orbit", state: INITIAL_POSE_DRIVE_STATE };
@@ -196,15 +250,32 @@ export function driveFor(
   const pinchEligible = hand.hands.length === 1 && !hand.openPalm;
   if (!pinchEligible) return { drive: null, state: INITIAL_POSE_DRIVE_STATE };
 
-  if (!state.zooming) {
-    return hand.pinchDistance < PINCH_ENGAGE
-      ? { drive: "zoom", state: { zooming: true, releaseStreak: 0 } }
-      : { drive: null, state: INITIAL_POSE_DRIVE_STATE };
+  if (state.zooming) {
+    if (hand.pinchDistance < PINCH_RELEASE) return { drive: "zoom", state: { ...state, releaseStreak: 0 } };
+    const releaseStreak = state.releaseStreak + 1;
+    if (releaseStreak < RELEASE_STREAK_TO_DISENGAGE) return { drive: "zoom", state: { ...state, releaseStreak } };
+    // A sustained release ends the zoom. `becameZoom` was true, so this is
+    // never mistaken for a tap however slowly the release happened.
+    return { drive: null, state: INITIAL_POSE_DRIVE_STATE };
   }
 
-  if (hand.pinchDistance < PINCH_RELEASE) return { drive: "zoom", state: { zooming: true, releaseStreak: 0 } };
-  const releaseStreak = state.releaseStreak + 1;
-  if (releaseStreak < RELEASE_STREAK_TO_DISENGAGE) return { drive: "zoom", state: { zooming: true, releaseStreak } };
+  if (hand.pinchDistance < PINCH_ENGAGE) {
+    const engagedAt = state.pinchEngagedAt ?? now;
+    if (now - engagedAt >= TAP_MAX_MS) {
+      return { drive: "zoom", state: { zooming: true, releaseStreak: 0, pinchEngagedAt: engagedAt, becameZoom: true } };
+    }
+    // Still discriminating: no camera motion this frame, but remember when
+    // this pinch engaged so a later frame can tell how long it has been held.
+    return { drive: null, state: { zooming: false, releaseStreak: 0, pinchEngagedAt: engagedAt, becameZoom: false } };
+  }
+
+  // Pinch distance is above the engage threshold. If a pinch was mid-
+  // discrimination (engaged, never became a zoom), this is its release
+  // inside the window — a tap. Otherwise (no pinch was engaged) there is
+  // nothing to release.
+  if (state.pinchEngagedAt !== null && !state.becameZoom) {
+    return { drive: "tap", state: INITIAL_POSE_DRIVE_STATE };
+  }
   return { drive: null, state: INITIAL_POSE_DRIVE_STATE };
 }
 

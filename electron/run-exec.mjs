@@ -96,6 +96,7 @@ function withStderr(message, tail) {
  *   notesVaultDir: string,
  *   notesInboxDir: string,
  *   recentUtterances: () => Array<{ text: string, at: number }>,
+ *   resolveFocusForPrompt?: () => Array<{ id: string, title: string, tags: string[] }> | null,
  *   handleClaudeStreamMessage: (run: any, message: any) => void,
  *   pushActivity: (run: any, line: string) => void,
  *   rememberClaudeSessionId: (run: any, claudeSessionId: string | null) => void,
@@ -126,6 +127,9 @@ export function createRunExec({
   notesVaultDir,
   notesInboxDir,
   recentUtterances,
+  // second-brain-focus D5: no focus means no block at all — a capability that
+  // hasn't wired this in (or a test that doesn't care) just sees no notes.
+  resolveFocusForPrompt = () => null,
   handleClaudeStreamMessage,
   pushActivity,
   rememberClaudeSessionId,
@@ -419,9 +423,13 @@ export function createRunExec({
     emitEvent(toUpdateEvent(run, EMIT_STATUS.STARTED, { urgency: run.urgency }));
 
     try {
-      // The brief plus the fenced transcript of what the user actually said —
-      // so the voice layer's summary is no longer the only thing this run sees.
-      handle = queryImpl({ prompt: buildRunPrompt(verb, { brief: run.task, utterances: recentUtterances() }), options });
+      // The brief plus the fenced transcript of what the user actually said,
+      // plus the fenced focus (second-brain-focus D5) — so the voice layer's
+      // summary is no longer the only thing this run sees.
+      handle = queryImpl({
+        prompt: buildRunPrompt(verb, { brief: run.task, utterances: recentUtterances(), focus: resolveFocusForPrompt() }),
+        options,
+      });
       for await (const message of handle) {
         handleClaudeStreamMessage(run, message);
       }
@@ -621,12 +629,20 @@ export function createRunExec({
 
     Promise.all([modelReady, mcpReady])
       .then(() =>
-        deliverPoTurn(state, buildRunPrompt(verb, { brief: `${verb.clause}\n\n${run.task}`, utterances: recentUtterances() }), {
-          onActivity: (line) => pushActivity(run, line),
-          onSessionId: (sessionId) => rememberClaudeSessionId(run, sessionId),
-          onToolStart: (toolId, toolName, detail) => pushToolStart(run, toolId, toolName, detail),
-          onToolEnd: (toolId, isError) => pushToolEnd(run, toolId, isError),
-        }),
+        deliverPoTurn(
+          state,
+          buildRunPrompt(verb, {
+            brief: `${verb.clause}\n\n${run.task}`,
+            utterances: recentUtterances(),
+            focus: resolveFocusForPrompt(),
+          }),
+          {
+            onActivity: (line) => pushActivity(run, line),
+            onSessionId: (sessionId) => rememberClaudeSessionId(run, sessionId),
+            onToolStart: (toolId, toolName, detail) => pushToolStart(run, toolId, toolName, detail),
+            onToolEnd: (toolId, isError) => pushToolEnd(run, toolId, isError),
+          },
+        ),
       )
       .then((result) => {
         // po-session.mjs reports the raw subtype and usage without interpreting

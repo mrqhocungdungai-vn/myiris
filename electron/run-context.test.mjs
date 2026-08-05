@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   TRANSCRIPT_MAX_CHARS,
   TRANSCRIPT_MAX_UTTERANCES,
+  FOCUS_MAX_NOTES,
   boundTranscript,
   buildRunPrompt,
   composeBrief,
@@ -128,5 +129,55 @@ describe("buildRunPrompt", () => {
   it("stays bounded however long the conversation gets", () => {
     const prompt = buildRunPrompt(execute, { brief: "Goal: x", utterances: utterances(500, "z".repeat(200)) });
     expect(prompt.length).toBeLessThan(TRANSCRIPT_MAX_CHARS + 1500);
+  });
+
+  // second-brain-focus design D5: a run's prompt carries the focused notes as
+  // one more block composed at this same point — not a new per-verb parameter.
+  describe("the focus block", () => {
+    const focus = [
+      { id: "a", title: "Alpha", tags: ["x"] },
+      { id: "b", title: "Beta", tags: [] },
+    ];
+
+    it("carries the focused notes' identities, titles, and tags, fenced as untrusted", () => {
+      const prompt = buildRunPrompt(execute, { brief: "Goal: x", utterances: [], focus });
+      expect(prompt).toContain("Alpha");
+      expect(prompt).toContain("Beta");
+      expect(prompt).toContain("untrusted content");
+      expect(prompt).toMatch(/<<<IRIS_UNTRUSTED_[0-9a-f]+>>>/);
+    });
+
+    it("emits no block at all when nothing is focused", () => {
+      expect(buildRunPrompt(execute, { brief: "Goal: x", utterances: [] })).toBe("Goal: x");
+      expect(buildRunPrompt(execute, { brief: "Goal: x", utterances: [], focus: [] })).toBe("Goal: x");
+      expect(buildRunPrompt(execute, { brief: "Goal: x", utterances: [], focus: null })).toBe("Goal: x");
+    });
+
+    it("does not carry a note's body — only its identity, title, and tags", () => {
+      const withBody = [{ id: "a", title: "Alpha", tags: [], body: "SECRET BODY TEXT" }];
+      const prompt = buildRunPrompt(execute, { brief: "Goal: x", utterances: [], focus: withBody });
+      expect(prompt).not.toContain("SECRET BODY TEXT");
+    });
+
+    it("stays bounded independently of how many notes are focused", () => {
+      const many = Array.from({ length: 50 }, (_, i) => ({ id: `n${i}`, title: `Note ${i}`, tags: [] }));
+      const prompt = buildRunPrompt(execute, { brief: "Goal: x", utterances: [], focus: many });
+      // Only the most recently-focused FOCUS_MAX_NOTES survive into the prompt.
+      expect(prompt).toContain(`- n${many.length - 1}:`);
+      expect(prompt).not.toContain("- n0:");
+      const noteMentions = many.filter((n) => prompt.includes(`- ${n.id}:`)).length;
+      expect(noteMentions).toBe(FOCUS_MAX_NOTES);
+    });
+
+    it("keeps the brief first, ahead of the focus block", () => {
+      expect(buildRunPrompt(execute, { brief: "Goal: x", utterances: [], focus }).startsWith("Goal: x")).toBe(true);
+    });
+
+    it("composes alongside the transcript, both fenced", () => {
+      const prompt = buildRunPrompt(execute, { brief: "Goal: x", utterances: utterances(1), focus });
+      expect(prompt).toContain("Alpha");
+      expect(prompt).toContain("something the user said");
+      expect(prompt.match(/<<<IRIS_UNTRUSTED_[0-9a-f]+>>>/g)?.length).toBe(4); // two blocks, each fenced with a start+end delimiter
+    });
   });
 });

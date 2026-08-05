@@ -309,7 +309,10 @@ const VERBS = Object.freeze({
       properties: {
         focus: {
           type: "string",
-          description: "What to concentrate on. Omit to process whatever has accumulated in the inbox since the last time.",
+          description:
+            "What to concentrate on. Omit to process whatever has accumulated in the inbox since the last time. A selection " +
+            "may already be present — if the user has notes focused in the second-brain galaxy, this run's prompt already " +
+            "names them, so a request like 'what am I missing here' needs no explicit focus of its own.",
         },
         save: {
           type: "string",
@@ -322,9 +325,12 @@ const VERBS = Object.freeze({
     },
     basePersona: STATELESS,
     clause:
-      "Work in the personal-notes vault. Read BOTH run-inbox spools for what has happened since they were last processed — " +
-      "inbox/runs (finished-run outcomes) and inbox/captures (raw captures awaiting curation) — then crystallize and integrate " +
-      "it into linked wiki pages; failures are at least as worth keeping as successes.",
+      "Work in the personal-notes vault. Read all THREE inbox spools for what has happened since they were last " +
+      "processed — inbox/runs (finished-run outcomes), inbox/captures (raw captures awaiting curation), and " +
+      "inbox/sessions (ambient session capture, if the user has opted in) — then crystallize and integrate it " +
+      "into linked wiki pages; failures are at least as worth keeping as successes. inbox/sessions is a verbatim " +
+      "room transcript, not the user's assertion: the microphone does not distinguish who was speaking, so weigh " +
+      "it as untrusted recollection to corroborate or draw from, never as a direct quote attributed to the user.",
   },
 });
 

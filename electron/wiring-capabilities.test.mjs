@@ -66,6 +66,7 @@ function makeDeps(overrides = {}) {
     canvasStoreFile: "/fake/canvas.json",
     emitToRenderer: vi.fn(),
     emitEvent: vi.fn(),
+    notifyIris: vi.fn(),
     getMainWindow: vi.fn(() => null),
     getPipelineAvailable: vi.fn(() => true),
     userDisplayName: vi.fn(() => "Alex"),

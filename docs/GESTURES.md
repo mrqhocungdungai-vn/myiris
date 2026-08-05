@@ -97,6 +97,53 @@ flowchart TD
   AppUI -->|"Closed_Fist"| Close["Close reader"]
 ```
 
+### Second-brain galaxy gestures
+
+The second-brain galaxy (`src/lib/galaxy-nav.ts`, driven by `VaultGalaxy.tsx`)
+partitions the hand into its own set of drives, active only while the galaxy
+is open and no reader is open over it:
+
+| Pose | Action |
+| --- | --- |
+| `Pointing_Up` | Node dwell — hold over a node to open it (same dwell mechanic as the deck) |
+| `Closed_Fist` | Orbit the camera around the graph |
+| A pinch, released quickly (a **tap**) | Toggles the pointed-at node's focus — see `second-brain-focus` |
+| A pinch, held past the tap window | Dollies the camera (zoom) |
+| Anything else (open palm, unrecognized, resting) | Drives nothing |
+
+The pinch is deliberately split into two outcomes rather than always meaning
+zoom: a quick pinch-and-release selects (toggles focus), while a held pinch
+zooms. The two are told apart by a discrimination window (`TAP_MAX_MS` in
+`galaxy-nav.ts`) — the camera does not move at all until the window elapses,
+so the graph never shifts under the hand between the gesture and its effect,
+and a pinch that has already become a zoom never fires a tap on release no
+matter how slowly it is released.
+
+**Clearing the focus is a control, not a gesture** — a button in the HUD's
+control island, reachable by dwell like every other control there. An
+accidental pinch over empty space does nothing (it neither selects nor
+clears), so a deliberately-built selection can't be discarded by a stray
+gesture with no undo.
+
+Selection is also reachable with hand control off, by mouse: a plain click
+still opens a note, and a Cmd/Ctrl-click toggles its focus instead.
+
+**The galaxy frames its whole graph in view once, the first time a fresh open
+settles** (`zoomToFit`, on the first `onEngineStop`) — otherwise the default
+camera distance is a fixed constant that doesn't scale with the vault's
+actual spread, and a vault with many notes would start looking into the
+converged core with nothing to orient by. It never re-fires after that first
+settle, so a later topology change (a new link, a new note) never yanks the
+camera away from wherever the user has since navigated to.
+
+**Selecting a note also declutters the view around it.** A large vault
+converges into a dense mass, and rotating in 3D to reach the cluster you want
+is real friction. Rather than changing what is fetched or simulated, whatever
+is outside the focused note's one-hop link neighborhood (`focusNeighborhood`
+in `galaxy-nav.ts`) is dimmed near-invisible — nodes and edges alike — so the
+selection and its immediate neighbors stand out without anything moving or
+disappearing. Clearing the focus restores the full graph.
+
 ### Reader animation
 
 Expanded Claude task results open with a simple scale/fade pop and close with a

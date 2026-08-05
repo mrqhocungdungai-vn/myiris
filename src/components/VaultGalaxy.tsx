@@ -8,6 +8,7 @@ import {
   orbitStep,
   radiusStep,
   nearestNodeAt,
+  focusNeighborhood,
   INITIAL_DWELL_STATE,
   INITIAL_POSE_DRIVE_STATE,
   type DwellState,
@@ -78,14 +79,76 @@ const ZOOM_SENSITIVITY = 600;
 const ZOOM_MIN_RADIUS = 15;
 const ZOOM_MAX_RADIUS = 2500;
 const DWELL_HIGHLIGHT_COLOR = "#fff2a8";
+// second-brain-focus 5.1: distinguishes a focused node from an ordinary one —
+// distinct from every TAG_COLORS entry, the ghost gray, and the dwell color,
+// so a focused node reads unambiguously regardless of its tag.
+const FOCUS_HIGHLIGHT_COLOR = "#39ff88";
+// A large galaxy converges into a dense mass as the vault grows, and
+// rotating in 3D to reach the cluster around whatever is focused is a real
+// cost (a shared-focus follow-on). Rather than changing what data is
+// simulated or positioned, everything outside the focus's one-hop
+// neighborhood (focusNeighborhood, galaxy-nav.ts) is dimmed near-invisible —
+// decluttering the view around a selection without moving or hiding a
+// single node.
+const DIM_NODE_ALPHA = 0.08;
+const DIM_LINK_ALPHA = 0.05;
+const LINK_BASE_COLOR = "rgba(140, 170, 255, 0.35)";
+
+// Both node and link colors above are CSS color strings, some already
+// carrying their own alpha (colorForNode's ghost gray, LINK_BASE_COLOR) —
+// three-forcegraph reads that alpha and multiplies it into the material's
+// final opacity (nodeOpacity/linkOpacity are a single graph-wide constant,
+// not a per-element accessor, so alpha-in-the-color-string is the only lever
+// for dimming one element differently from another). This re-expresses any
+// color as an rgba string at a new alpha, discarding whatever alpha it had.
+const alphaCache = new Map<string, string>();
+function withAlpha(color: string, alpha: number): string {
+  const key = `${color}|${alpha}`;
+  const cached = alphaCache.get(key);
+  if (cached) return cached;
+  const c = new THREE.Color(color);
+  const result = `rgba(${Math.round(c.r * 255)}, ${Math.round(c.g * 255)}, ${Math.round(c.b * 255)}, ${alpha})`;
+  alphaCache.set(key, result);
+  return result;
+}
 
 // Re-assigning `nodeColor` (rather than mutating a ref the existing accessor
 // closes over) is what forces 3d-force-graph to re-digest and repaint
 // (design.md D2/M6) — a fresh closure each call is simplest since the caller
 // only invokes this on an actual target change, already debounced by
-// dwellStep's own dead-band/hold (M14).
-function makeNodeColor(targetId: string | null) {
-  return (node: GalaxyNode) => (node.id === targetId ? DWELL_HIGHLIGHT_COLOR : colorForNode(node));
+// dwellStep's own dead-band/hold (M14). The dwell highlight wins over the
+// focus highlight when both apply to the same node — dwell is a momentary
+// pre-open indicator, not a second selection state. `relevantIds` is null
+// (never dims anything) while nothing is focused, and the focus/neighborhood
+// set while something is — a focused or directly-linked node is never
+// dimmed, only nodes outside that one-hop neighborhood are.
+function makeNodeColor(targetId: string | null, focusIds: Set<string>, relevantIds: Set<string> | null) {
+  return (node: GalaxyNode) => {
+    if (node.id === targetId) return DWELL_HIGHLIGHT_COLOR;
+    if (focusIds.has(node.id)) return FOCUS_HIGHLIGHT_COLOR;
+    const base = colorForNode(node);
+    if (relevantIds && !relevantIds.has(node.id)) return withAlpha(base, DIM_NODE_ALPHA);
+    return base;
+  };
+}
+
+// three-forcegraph mutates a link's source/target from the id string we
+// supply into a reference to the actual node object, once the simulation
+// initializes (documented in its own LinkObject type) — so an endpoint here
+// may be either shape depending on whether a tick has run yet.
+function linkEndpointId(endpoint: string | GalaxyNode): string {
+  return typeof endpoint === "string" ? endpoint : endpoint.id;
+}
+
+// Mirrors makeNodeColor's dimming for the edges themselves — otherwise a
+// dense mesh of undimmed link lines would still read as clutter even with
+// the nodes they connect dimmed.
+function makeLinkColor(relevantIds: Set<string> | null) {
+  return (link: GalaxyLink) => {
+    if (!relevantIds) return LINK_BASE_COLOR;
+    const touchesRelevant = relevantIds.has(linkEndpointId(link.source)) || relevantIds.has(linkEndpointId(link.target));
+    return touchesRelevant ? LINK_BASE_COLOR : withAlpha(LINK_BASE_COLOR, DIM_LINK_ALPHA);
+  };
 }
 
 // 3d-force-graph types `controls()` as `object` (it's a TrackballControls
@@ -173,6 +236,8 @@ function GalaxyCanvas({
   readerOpen,
   onForceClose,
   highFidelity,
+  focusIds,
+  onToggleNode,
 }: {
   graph: VaultGraph;
   running: boolean;
@@ -185,12 +250,25 @@ function GalaxyCanvas({
   onForceClose: () => void;
   /** webgl-quality-mode: read once at mount (design.md D5) — the galaxy adopts a live preference change only the next time it's opened, so its settled node positions survive. */
   highFidelity: boolean;
+  /** second-brain-focus: ids of the currently-focused notes, for the ring highlight. */
+  focusIds: string[];
+  /** Toggles one node's focus — called by a pinch-tap and by a modifier-click alike. */
+  onToggleNode: (id: string) => void;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const fgRef = useRef<ForceGraph3DInstance<GalaxyNode, GalaxyLink> | null>(null);
   const topologyKeyRef = useRef("");
   const pendingGraphRef = useRef(graph);
   pendingGraphRef.current = graph;
+  // Frames the WHOLE graph in view exactly once, on this mount's first
+  // settle — otherwise the default camera distance is a fixed constant that
+  // doesn't scale with the graph's actual spread, so a vault with many notes
+  // starts looking into the converged core with no sense of what else is
+  // out there or which direction to head. Never re-fires after that first
+  // settle (a later topology change — e.g. "connect these two" adding a
+  // link — must not yank the camera away from wherever the user has since
+  // navigated to).
+  const hasFramedOnceRef = useRef(false);
 
   // Props mirrored into refs so the gesture loop's rAF closure — created
   // once per [handControl, running] pair, not per render — always reads the
@@ -201,6 +279,19 @@ function GalaxyCanvas({
   onOpenNoteRef.current = onOpenNote;
   const onForceCloseRef = useRef(onForceClose);
   onForceCloseRef.current = onForceClose;
+  const onToggleNodeRef = useRef(onToggleNode);
+  onToggleNodeRef.current = onToggleNode;
+  // Mirrored into a ref (not read as a plain Set prop) for the identical
+  // reason readerOpenRef exists: the rAF closure below is created once per
+  // [handControl, running] pair and must see the LATEST focus, not the one
+  // captured at that time.
+  const focusIdsRef = useRef(new Set(focusIds));
+  focusIdsRef.current = new Set(focusIds);
+  // The one-hop declutter set (focusNeighborhood) — null while nothing is
+  // focused (no dimming). Recomputed by repaintFocus() below, whenever the
+  // focus OR the graph's own links change, from whichever is current at that
+  // moment (never stale — see repaintFocus's own callers).
+  const relevantIdsRef = useRef<Set<string> | null>(null);
 
   // Orbit center (design.md D3/6.1): recomputed from positionsRef at most
   // once per dirty flag, never inside applyGraph's own position-free moment.
@@ -253,6 +344,21 @@ function GalaxyCanvas({
       fg.cooldownTicks(Infinity); // 3d-force-graph's own default — let new/changed topology settle
       fg.graphData({ nodes, links });
     }
+    repaintFocus();
+  }
+
+  // Recomputes the one-hop declutter set from whatever is CURRENT in both
+  // refs (never stale) and repaints both node and link colors from it. The
+  // single place both applyGraph (graph changed — e.g. a fresh link from
+  // "connect these two") and the focus-change effect below funnel through,
+  // so the two can never compute it differently.
+  function repaintFocus() {
+    const fg = fgRef.current;
+    if (!fg) return;
+    const focus = focusIdsRef.current;
+    relevantIdsRef.current = focus.size ? focusNeighborhood(focus, pendingGraphRef.current.links) : null;
+    fg.nodeColor(makeNodeColor(lastHighlightedRef.current, focus, relevantIdsRef.current));
+    fg.linkColor(makeLinkColor(relevantIdsRef.current));
   }
 
   useEffect(() => {
@@ -267,15 +373,27 @@ function GalaxyCanvas({
         .nodeOpacity(0.95)
         .linkColor(() => "rgba(140, 170, 255, 0.35)")
         .linkOpacity(0.5)
-        .onNodeClick((node) => {
+        .onNodeClick((node, event) => {
           if (node.ghost) return; // unresolved wikilink target — no backing file to open (D8)
-          onOpenNote(node.id, node.title);
+          // second-brain-gesture-nav "Focus is reachable without hands": a
+          // Cmd/Ctrl-click toggles focus instead of opening the note, so
+          // selection stays reachable by mouse without breaking the existing
+          // plain-click-opens-the-note behavior.
+          if (event.metaKey || event.ctrlKey) {
+            onToggleNodeRef.current(node.id);
+            return;
+          }
+          onOpenNoteRef.current(node.id, node.title);
         });
       // The other half of the dirty-flag center (design.md D3/6.1): the sim
       // settling long after applyGraph last ran (cooldownTicks(Infinity) on
       // fresh topology) must also invalidate the cached orbit center.
       fg.onEngineStop(() => {
         centerDirtyRef.current = true;
+        if (!hasFramedOnceRef.current) {
+          hasFramedOnceRef.current = true;
+          fg.zoomToFit(800, 80);
+        }
       });
       addStarfield(fg.scene());
       // webgl-quality-mode design.md D5: read once here at open time. The
@@ -286,6 +404,10 @@ function GalaxyCanvas({
       if (highFidelity) await addBloom(fg);
       if (disposed) return;
       fgRef.current = fg;
+      // applyGraph's own repaintFocus() call paints the ring/dimming on
+      // whatever is already focused (second-brain-focus "survives a
+      // remount") — the focus-change effect below only fires on a LATER
+      // change, so the very first paint has to happen here too.
       applyGraph(pendingGraphRef.current);
       if (!running) fg.pauseAnimation();
     });
@@ -313,6 +435,18 @@ function GalaxyCanvas({
     if (running) fg.resumeAnimation();
     else fg.pauseAnimation();
   }, [running]);
+
+  // second-brain-focus 4.2/4.4: repaints the focus ring and the declutter
+  // dimming whenever the selection changes — independent of the gesture loop
+  // below, which is gated on handControl, so a mouse-only selection (no hand
+  // control at all) still renders. `focusIds.join(",")` gives this a
+  // primitive dependency key for an array that is a fresh reference on every
+  // parent render.
+  const focusIdsKey = focusIds.join(",");
+  useEffect(() => {
+    repaintFocus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusIdsKey]);
 
   // Gesture drive (design.md D4b/D5): a thin driver over the pure policy in
   // src/lib/galaxy-nav.ts. Schedules NOTHING while gestures are off or the
@@ -373,7 +507,7 @@ function GalaxyCanvas({
         }
 
         const hand = handRef.current;
-        const { drive, state: poseState } = driveFor(hand, poseStateRef.current);
+        const { drive, state: poseState } = driveFor(hand, poseStateRef.current, performance.now());
         poseStateRef.current = poseState;
 
         // Node-dwell: dwellStep runs every frame (candidate null when the
@@ -394,9 +528,25 @@ function GalaxyCanvas({
         dwellStateRef.current = dwellResult.state;
         if (dwellResult.target !== lastHighlightedRef.current) {
           lastHighlightedRef.current = dwellResult.target;
-          fg.nodeColor(makeNodeColor(dwellResult.target));
+          fg.nodeColor(makeNodeColor(dwellResult.target, focusIdsRef.current, relevantIdsRef.current));
         }
         if (dwellResult.fire && candidate) onOpenNoteRef.current(candidate.id, candidate.title);
+
+        // second-brain-focus 4.1: a pinch tap resolves its target the same
+        // way the dwell does (same hit-testing, same depth filter) — a tap
+        // that resolves to no node, or (by construction of nearestNodeAt,
+        // which already skips ghosts) a ghost node, does nothing.
+        if (drive === "tap" && hand.point && containerRef.current) {
+          const tapped = nearestNodeAt(
+            positionsRef.current.values(),
+            fg.camera(),
+            containerRef.current.getBoundingClientRect(),
+            hand.point,
+            DWELL_THRESHOLD_PX,
+            null,
+          );
+          if (tapped) onToggleNodeRef.current(tapped.id);
+        }
 
         // Camera drive: orbit and zoom share one spherical — re-derived from
         // the LIVE camera on every engage (fist<->zoom switch or mouse-drag
@@ -499,6 +649,8 @@ export default function VaultGalaxy({
   handControl,
   readerOpen,
   highFidelity,
+  focus,
+  onFocusChanged,
 }: {
   running: boolean;
   positionsRef: { current: Map<string, GalaxyNode> };
@@ -510,6 +662,9 @@ export default function VaultGalaxy({
   readerOpen: boolean;
   /** webgl-quality-mode: read once when the galaxy (re)mounts (design.md D5). */
   highFidelity: boolean;
+  /** second-brain-focus: owned by HudShell (shared with the chip and the clear control), not by this component. */
+  focus: SecondBrainFocusState;
+  onFocusChanged: (next: SecondBrainFocusState) => void;
 }) {
   const [state, setState] = useState<
     { status: "loading" } | { status: "empty" } | { status: "ready"; graph: VaultGraph }
@@ -533,6 +688,15 @@ export default function VaultGalaxy({
         window.iris.activateSecondBrain();
       })
       .catch(() => setState({ status: "empty" }));
+    // second-brain-focus "The focus SHALL survive the galaxy layer
+    // remounting" — main is the sole owner, so a (re)mount always rehydrates
+    // from it rather than assuming empty.
+    window.iris
+      .getSecondBrainFocus()
+      .then((result) => {
+        if (!cancelled) onFocusChanged(result);
+      })
+      .catch(() => {});
     const unsubscribe = window.iris.onSecondBrainGraphUpdated((graph) => {
       if (cancelled) return;
       const hasNotes = graph.nodes.some((n) => !n.ghost);
@@ -543,7 +707,13 @@ export default function VaultGalaxy({
       unsubscribe();
       window.iris.deactivateSecondBrain();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  async function toggleFocusNode(id: string) {
+    const result = await window.iris.toggleSecondBrainFocus(id);
+    if (result.ok) onFocusChanged({ ids: result.ids, notes: result.notes });
+  }
 
   if (state.status === "loading") return <div className="hud-galaxy-loading hud-hit">Loading galaxy…</div>;
   if (state.status === "empty") {
@@ -567,6 +737,8 @@ export default function VaultGalaxy({
         readerOpen={readerOpen}
         onForceClose={onForceClose}
         highFidelity={highFidelity}
+        focusIds={focus.ids}
+        onToggleNode={toggleFocusNode}
       />
     </GalaxyErrorBoundary>
   );

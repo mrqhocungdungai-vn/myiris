@@ -113,9 +113,19 @@ app.whenReady().then(() => {
   // updates the renderer whenever this resolves, and connectLive() re-probes
   // before the Gemini session that actually consumes the value is built.
   probePipelineAvailability().catch(() => {});
+  // The vault used to be created lazily, on a user's first capture — so the
+  // HUD's second-brain toggle stayed hidden (and the galaxy/focus/structural-
+  // edit tools unreachable) until then, with no other affordance to create it.
+  // Ensuring it here means the toggle is available from first launch, like
+  // every other HUD control. Synchronous and idempotent (a no-op once the
+  // directory and its config already exist), so it costs nothing on every
+  // later boot.
+  secondBrainCapability.ensureNotesVaultReady();
   // Cheap synchronous existsSync check — establishes the initial value so
   // the boot-time secondbrain:availability read (below) isn't just the
-  // `false` default before the toggle has ever been checked.
+  // `false` default before the toggle has ever been checked. Run AFTER
+  // ensureNotesVaultReady() so this reflects "available" on a first-ever
+  // boot too, not one boot behind it.
   secondBrainCapability.probeSecondBrainAvailability();
 
   // Renderer content security (renderer-content-security capability, design.md

@@ -259,6 +259,35 @@ so an unbounded one would grow the cost of a long conversation turn after turn.
 **This narrows the bottleneck; it does not remove it.** Gemini still picks the
 verb and writes the summary line.
 
+## The shared focus reaches the run beside the transcript
+
+The second-brain galaxy is the one surface where the voice is blind: it has no
+idea which note the user is pointing at. `second-brain-focus` fixes this with
+one main-owned focus — the set of vault notes currently selected in the
+galaxy (by a pinch-tap or a modifier-click), produced by the renderer and read
+by both the voice layer and a run.
+
+`electron/focus.mjs` holds the pure state (`{ ids, at }`, bounded, with
+`toggle`/`set`/`clear` and `resolve(focus, graph)`); the one instance lives in
+`electron/capabilities/second-brain.mjs`, resolved against whatever graph the
+galaxy watcher last saw. `electron/run-context.mjs`'s `buildRunPrompt` composes
+one more fenced block beside the transcript — ids, titles, and tags only,
+never a note's body — using the exact same `untrusted-text.mjs` mechanism,
+because a note's title can originate from the web (`wiki-ingest`) just as
+readily as the transcript can carry a second voice in the room. No verb
+declares a parameter for it: it arrives purely by composition, so a future
+verb cannot start re-declaring it (the one grandfathered exception is
+`capture_learning`'s own pre-existing `focus` string, which predates this
+mechanism and means something broader — "what to concentrate on").
+
+The voice layer's own system instruction is built once per Live connect, not
+per turn, so a fact that changes as often as a gesture selection needs a
+second delivery path: `announceFocusUpdate()` pushes a `SYSTEM_EVENT_FOCUS_UPDATE`
+(mirroring `announceWorkspaceUpdate()`'s identical staleness fix for workspace
+state) on every toggle/clear, including "nothing is focused now" so a stale
+referent is never left standing after the selection changes or the galaxy
+closes.
+
 ## One system-prompt policy, one budget policy
 
 Both run shapes route through the same two modules, for the same reason
@@ -375,15 +404,18 @@ tokens, and was **unavailable without a Claude credential**.
   `vault-write.mjs` for the write — two independent writers into the same
   directory is how a folder ended up missing from the galaxy's user-note
   exclusion in the first place.
-- **Two spools, one write path.** `~/iris-second-brain/inbox/runs/` gets one
+- **Three spools, one write path.** `~/iris-second-brain/inbox/runs/` gets one
   dated-file record per finished run (verb, request, result, cost, error, the
   tools it used); `~/iris-second-brain/inbox/captures/` gets one dated-file
-  record per voice capture. Both are plain markdown, both are excluded from the
-  vault graph as machine-written plumbing (`NOTES_PLUMBING_FOLDERS` in
-  `electron/vault-graph-parse.mjs` includes `inbox`), and both are read by
-  `capture_learning`'s clause, which names both directories explicitly — a
-  fresh capture must be findable in the same turn a curator run reads the
-  vault, and that only holds if the run is actually told to look there.
+  record per voice capture; `~/iris-second-brain/inbox/sessions/` gets the
+  opt-in ambient session capture's flushed conversation text (see below). All
+  three are plain markdown, all three are excluded from the vault graph as
+  machine-written plumbing (`NOTES_PLUMBING_FOLDERS` in
+  `electron/vault-graph-parse.mjs` includes `inbox`), and all three are read by
+  `capture_learning`'s clause, which names all three directories explicitly —
+  a fresh capture (or a recent conversation) must be findable in the same turn
+  a curator run reads the vault, and that only holds if the run is actually
+  told to look there.
 - **Capture is a direct write, not a run, and it is not gated on the
   pipeline.** The second-brain capability declares a `capture_note` tool
   (params: `text` required, `title`/`tags` optional) whose handler calls
@@ -407,7 +439,47 @@ tokens, and was **unavailable without a Claude credential**.
   It still requires the Claude pipeline, since curation and retrieval are real
   judgement, not a filesystem append. Iris may *offer* it once the backlog is
   worth processing (the second-brain capability's prompt fragment counts
-  records across both spools), and never starts it unprompted.
+  records across all three spools), and never starts it unprompted.
+
+## What Iris retains, and ambient session capture
+
+Beyond the run/capture spools above, Iris can retain a **text** transcript of
+ordinary conversation — never audio — so the second brain accumulates from what
+the user already talks about, not only from deliberate captures. This is the
+only mechanism in Iris that writes what was said near the microphone to disk,
+so it is **opt-in, default off, and reviewed as its own thing**
+(`ambient-session-capture` capability spec has the authoritative behavior;
+this is the mechanism behind it).
+
+- **`electron/session-capture.mjs`** owns the policy: the enabled flag, a
+  per-session watermark, and the room-transcript rendering. Electron-free,
+  injected `fs`/clock, never throws. It knows nothing about *why* it is
+  enabled — the fail-closed gate lives entirely in its callers.
+- **The gate fails closed by construction.** `electron/capabilities/
+  second-brain.mjs` holds the actual enabled flag, defaulted to **off on every
+  launch**, and it only ever goes live when BOTH the renderer's persisted
+  preference (`ambient-capture:set-enabled`, mirrored from `localStorage` like
+  every sibling device preference) AND Iris being awake (main's own
+  `setAmbientCaptureAwake`, driven by the Live session's `onopen`/explicit-stop/
+  reconnect-exhausted hooks — never a renderer signal) are both true.
+  `IRIS_AMBIENT_CAPTURE=off` can additionally force it off and hide the
+  toggle; there is deliberately no variable that force-*enables* it.
+- **What is captured is exactly what the utterance ring already holds** — the
+  same `recentUtterances()` every run's prompt already reads (see "The user's
+  own words reach the run" above) — spooled progressively on a timer, on sleep,
+  and on quit, watermarked so a flush never duplicates and a crash loses only
+  what happened since the last flush. Enabling mid-conversation does NOT sweep
+  up what the ring already held — the watermark starts at the enable moment.
+- **The spool is self-describing.** Each flushed block is headed as a verbatim
+  microphone record with its time span, entries as quoted lines — a reader (and
+  a curator run) can tell it apart from an authored note at a glance.
+  `capture_learning`'s clause now names `inbox/sessions` alongside the other
+  two spools, and explicitly weighs it as untrusted recollection rather than
+  the user's own assertion, since the microphone does not distinguish who was
+  speaking.
+- **The interface indicates it whenever it is actually live**, with a stop
+  affordance right there — a preference agreed to once is not standing
+  consent for an indefinite, unindicated microphone log.
 
 ## Skills, commands, and isolation from the user's Claude Code
 

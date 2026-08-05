@@ -11,7 +11,9 @@ import {
   Network,
   PenTool,
   Power,
+  Radio,
   Terminal,
+  XCircle,
 } from "lucide-react";
 import ReactorCore, { ORB_ACCENT, ORB_ENERGY } from "./ReactorCore";
 import WorkCard from "./WorkCard";
@@ -90,6 +92,8 @@ export default function HudShell({
   onToggleMute,
   listenOnlyEngaged,
   onToggleListenOnly,
+  ambientCaptureLive,
+  onStopAmbientCapture,
   commsOpen,
   onToggleComms,
   onWake,
@@ -150,6 +154,9 @@ export default function HudShell({
   // design.md D3): pure display of main-owned state, toggled by request only.
   listenOnlyEngaged: boolean;
   onToggleListenOnly: () => void;
+  // ambient-memory (design D7): shown only while retention is actually live.
+  ambientCaptureLive: boolean;
+  onStopAmbientCapture: () => void;
   // Lifted out of this component's local state (design.md D7) so engaging
   // listen-only mode can force it open, and disengaging can restore it.
   commsOpen: boolean;
@@ -224,6 +231,22 @@ export default function HudShell({
   // engaging listen-only mode can force it open (design.md D7). Tasks are the
   // core of the HUD, so they start open but can be tucked away the same way.
   const [workOpen, setWorkOpen] = useState(true);
+
+  // second-brain-focus: owned here (not lifted to App.tsx) — the chip and the
+  // clear control both live in this component's own tree, alongside the
+  // galaxy that produces the selection. Mirrors the note-reader-clearing
+  // pattern below it: cleared on exactly the terms the galaxy itself goes
+  // inactive, so a stale selection never lingers in this local mirror after
+  // main's own authoritative copy has already been cleared.
+  const [secondBrainFocus, setSecondBrainFocus] = useState<SecondBrainFocusState>({ ids: [], notes: [] });
+  useEffect(() => {
+    if (!secondBrainActive) setSecondBrainFocus({ ids: [], notes: [] });
+  }, [secondBrainActive]);
+
+  async function clearSecondBrainFocus() {
+    const result = await window.iris.clearSecondBrainFocus();
+    setSecondBrainFocus(result);
+  }
 
   return (
     <div className={`hud-shell ${awake ? "awake" : "asleep"}`}>
@@ -379,6 +402,15 @@ export default function HudShell({
               >
                 {listenOnlyEngaged ? <Headphones size={14} /> : <HeadphoneOff size={14} />}
               </button>
+              {ambientCaptureLive ? (
+                <button
+                  className="hud-btn ambient-live"
+                  onClick={onStopAmbientCapture}
+                  title="Recording this conversation to your notes — click to stop"
+                >
+                  <Radio size={14} />
+                </button>
+              ) : null}
               <button className="hud-btn danger" onClick={onSleep} title="Sleep">
                 <Power size={14} />
               </button>
@@ -411,15 +443,35 @@ export default function HudShell({
               <Network size={14} />
             </button>
           ) : null}
+          {/* second-brain-focus 5.2: not [data-no-dwell] — clearing a
+              selection is not destructive, so it stays dwell-reachable like
+              every other control in this island. */}
+          {secondBrainActive && secondBrainFocus.notes.length > 0 ? (
+            <button className="hud-btn" onClick={clearSecondBrainFocus} title="Clear focused notes">
+              <XCircle size={14} />
+            </button>
+          ) : null}
           <button className="hud-btn" onClick={onExitHud} title="Back to deck (⌥Space)">
             <Maximize2 size={14} />
           </button>
         </div>
+        {/* second-brain-focus 5.1: named so the user can confirm what "these"
+            refers to before speaking — shown only while the galaxy is active
+            and something is focused. React escapes note.title as ordinary
+            text content (never HTML), which is what the galaxy's own
+            untrusted-title rule requires here too. */}
+        {secondBrainActive && secondBrainFocus.notes.length > 0 ? (
+          <div className="hud-focus-chip hud-hit">
+            Focused: {secondBrainFocus.notes.map((note) => note.title).join(", ")}
+          </div>
+        ) : null}
       </div>
 
       {drawingActive ? <DrawingCanvas /> : null}
       {secondBrainActive ? (
         <VaultGalaxy
+          focus={secondBrainFocus}
+          onFocusChanged={setSecondBrainFocus}
           running={running}
           positionsRef={galaxyPositionsRef}
           onOpenNote={onOpenNote}

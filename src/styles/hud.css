@@ -120,6 +120,25 @@ html:not(.hud-mode) .setup-backdrop {
   color: #c3cfe0;
 }
 
+/* second-brain-focus 5.1: names the focused notes so the user can confirm
+   what "these" refers to before speaking. Same glass-pill language as
+   .hud-caption, tuned smaller since it is secondary to it. */
+.hud-focus-chip {
+  max-width: 360px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(57, 255, 136, 0.18), rgba(10, 16, 28, 0.72));
+  border: 1px solid rgba(57, 255, 136, 0.4);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  font-size: 11px;
+  line-height: 1.4;
+  text-align: center;
+  color: #eafff2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .hud-controls {
   display: flex;
   gap: 8px;
@@ -168,6 +187,13 @@ html:not(.hud-mode) .setup-backdrop {
 .hud-btn.muted {
   color: var(--amber);
   box-shadow: inset 0 0 0 1px rgba(var(--amber-rgb), 0.45);
+}
+
+/* ambient-memory: shown only while retention is actually live (design D7). */
+.hud-btn.ambient-live {
+  color: var(--coral);
+  box-shadow: inset 0 0 0 1px rgba(var(--coral-rgb), 0.5);
+  animation: ambient-live-pulse 2.2s ease-in-out infinite;
 }
 
 .hud-btn.active {

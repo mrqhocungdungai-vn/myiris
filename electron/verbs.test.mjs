@@ -154,6 +154,16 @@ describe("the verb registry", () => {
     expect(resolveVerb("capture_learning").clause).toMatch(/inbox\/runs/);
   });
 
+  // ambient-memory design D6/D8: the curator's scope widens to the session
+  // spool, and it must be told a room transcript is not the same kind of
+  // evidence as the user's own capture — this is the guard against that
+  // widening silently regressing.
+  it("names the session spool in capture_learning's clause, and weighs it as untrusted recollection", () => {
+    const clause = resolveVerb("capture_learning").clause;
+    expect(clause).toMatch(/inbox\/sessions/);
+    expect(clause.toLowerCase()).toContain("untrusted recollection");
+  });
+
   it("grants the notes vault only to the capture verb", () => {
     expect(resolveVerb("capture_learning").vault).toBe(true);
     for (const name of VERB_NAMES.filter((verb) => verb !== "capture_learning")) {
@@ -209,5 +219,24 @@ describe("the verb registry", () => {
 
   it("resolves all seven verbs in declaration order", () => {
     expect(resolveAllVerbs().map((resolved) => resolved.verb)).toEqual(VERB_NAMES);
+  });
+
+  // second-brain-focus design D5/D6: "It SHALL NOT be delivered as a new
+  // parameter added to each verb's schema" — the shared focus reaches a run
+  // through run-context.mjs's composition instead, so a future verb cannot
+  // start re-declaring it. capture_learning's own `focus` string is the one
+  // pre-existing exception: it predates this feature and already means "what
+  // to concentrate on" (D6), reused rather than duplicated — so this checks
+  // every OTHER verb has no such field, and that capture_learning's kept its
+  // original shape (free text) rather than becoming a note-id list.
+  it("no verb other than capture_learning declares a focus parameter, and capture_learning's stays a free-text string", () => {
+    for (const name of VERB_NAMES) {
+      const verb = resolveVerb(name);
+      if (name === "capture_learning") {
+        expect(verb.params.properties.focus.type).toBe("string");
+        continue;
+      }
+      expect(verb.params.properties).not.toHaveProperty("focus");
+    }
   });
 });

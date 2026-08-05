@@ -40,16 +40,28 @@ Retrieval — reading the vault to answer a question — and curation — turnin
 
 ### Requirement: The vault's machine-written spool is not user notes
 
-Iris SHALL write vault content it generates on its own initiative — captures awaiting curation, and the per-run outcome records — into a dedicated spool area of the vault, distinct from curated note pages. That spool area SHALL NOT be treated as a user note by anything that enumerates the vault's notes.
+Iris SHALL write vault content it generates on its own initiative — captures awaiting curation, the per-run outcome records, and (when ambient session capture is enabled) the retained conversation text — into a dedicated spool area of the vault, distinct from curated note pages. That spool area SHALL NOT be treated as a user note by anything that enumerates the vault's notes.
 
-Iris appends to the spool without being asked, once per finished run and once per capture. Anything that counts, renders, or reasons over "the user's notes" must therefore exclude it, or Iris's own bookkeeping accumulates as apparent knowledge — one entry per day of use, forever, growing without bound and without the user ever having written it.
+Iris appends to the spool without being asked, once per finished run, once per capture, and repeatedly through a conversation while ambient capture is on. Anything that counts, renders, or reasons over "the user's notes" must therefore exclude it, or Iris's own bookkeeping accumulates as apparent knowledge — one entry per day of use, forever, growing without bound and without the user ever having written it. Ambient capture makes this sharper rather than adding a new problem: it is the highest-volume writer of the three, and the exclusion is what keeps its volume free of consequence for the graph.
+
+Each kind of spooled content SHALL be distinguishable from the others, so the curator can weave a deliberate capture and a passively-retained conversation on different terms rather than treating a room transcript as if the user had chosen to record it.
 
 The spool SHALL remain plain markdown inside the vault (not a database and not a hidden location), so the user can read and prune it with any editor, and so the curator reaches it through the same granted directory it already has.
 
 #### Scenario: Spooled records are not counted as user notes
 
-- **WHEN** the vault contains spooled capture and run-outcome files alongside curated pages
+- **WHEN** the vault contains spooled capture, run-outcome, and session files alongside curated pages
 - **THEN** anything enumerating the vault's user notes returns only the curated pages, and no spool file is presented as a note
+
+#### Scenario: Session volume does not reach the graph
+
+- **WHEN** ambient capture has been running across many long conversations
+- **THEN** no node appears for any of it, and the galaxy is unchanged by the volume
+
+#### Scenario: The kinds of spooled content are distinguishable
+
+- **WHEN** the curator reads the spool
+- **THEN** it can tell a deliberate capture from a run-outcome record from a passively-retained conversation
 
 #### Scenario: A curated page is a user note
 
@@ -171,23 +183,99 @@ Capture SHALL NOT depend on the voice layer choosing to record something. Accumu
 - **THEN** the outcome is still captured
 
 ### Requirement: Synthesis is deliberate, and offered rather than imposed
-Turning captured records into structured knowledge — distilling and weaving them into the vault — SHALL happen when the second-brain verb is called, not automatically after each run.
+Turning captured records into structured knowledge — distilling and weaving them into the vault — SHALL happen when the second-brain verb is called, not automatically after each run and not automatically because a conversation ended.
 
-Iris SHALL be able to notice that enough has accumulated to be worth synthesizing and offer it. It SHALL NOT run synthesis unprompted.
+Iris SHALL be able to notice that enough has accumulated across **all** of the spool — deliberate captures, run-outcome records, and retained conversation alike — to be worth synthesizing, and offer it. It SHALL NOT run synthesis unprompted.
 
-Raw capture is a log; synthesis is the learning. Separating them means the log is never lost to a busy queue, and the expensive step happens when there is enough material to justify it.
+Raw capture is a log; synthesis is the learning. Separating them means the log is never lost to a busy queue, and the expensive step happens when there is enough material to justify it. Ambient capture raises the stakes of that separation rather than changing it: a conversation ending is exactly the moment an automatic synthesis would feel natural and would be wrong, because it would spend the user's money and rewrite their vault on the strength of them having stopped talking.
 
 #### Scenario: Synthesis runs when asked
 
 - **WHEN** the second-brain verb is called for synthesis
-- **THEN** the accumulated records are read and woven into the vault
+- **THEN** the accumulated records across every kind of spooled content are read and woven into the vault
 
 #### Scenario: Synthesis is offered, not imposed
 
 - **WHEN** enough records have accumulated to be worth synthesizing
 - **THEN** Iris offers to do it and waits, rather than starting it
 
+#### Scenario: The offer accounts for retained conversation
+
+- **WHEN** ambient capture has accumulated conversation but few runs have finished
+- **THEN** the backlog Iris measures reflects that material, so the offer is made on what is actually waiting
+
 #### Scenario: No synthesis run follows an ordinary run
 
 - **WHEN** an ordinary run finalizes
 - **THEN** no synthesis run is started as a consequence
+
+#### Scenario: No synthesis run follows a conversation ending
+
+- **WHEN** a conversation ends with retained material waiting and the user says nothing about their notes
+- **THEN** no synthesis run is started
+
+### Requirement: Structural edits between existing notes are direct writes
+
+Linking two existing notes to each other, removing such a link, and changing a note's tags SHALL be direct file writes on the same terms as capture: no Claude run, no tokens, no execution slot, and available without a Claude credential. A link SHALL be written in **both** directions, so connecting two notes produces a link the graph can traverse from either end rather than a one-way reference the other note has no record of.
+
+These operations carry no judgement. Which two notes to connect is the user's decision, and inserting a `[[wikilink]]` into two files is a text transform — routing it through a worker would give an instant, deterministic edit a run's latency, cost, and credential requirement, exactly as capture suffered before it became a write.
+
+Work that **does** carry judgement — merging two notes, splitting one, summarizing a set, deciding what a set is missing — SHALL remain worker work through the existing notes verb. That verb already takes a parameter naming what to concentrate on; it SHALL NOT be duplicated by a second verb for the same kind of work.
+
+#### Scenario: Linking two notes is instant and free
+
+- **WHEN** the user asks Iris to connect two existing notes
+- **THEN** a `[[wikilink]]` is written into each note pointing at the other, with no Claude run started and no tokens spent
+
+#### Scenario: A link is traversable from both ends
+
+- **WHEN** two notes have just been linked
+- **THEN** the vault graph shows the connection, and each note's own text records the other
+
+#### Scenario: Structural edits work with no Claude credential
+
+- **WHEN** no Claude credential is configured and the user asks to link two notes or retag one
+- **THEN** the edit is applied and confirmed
+
+#### Scenario: An already-present link is not duplicated
+
+- **WHEN** the user asks to connect two notes that already link to each other
+- **THEN** the notes are not given a second copy of the same link, and the operation reports success rather than an error
+
+#### Scenario: Judgement work still goes to the verb
+
+- **WHEN** the user asks Iris to merge two notes, or what a set of notes is missing
+- **THEN** that is handled by the notes verb as a run, not by a direct write
+
+#### Scenario: No second notes verb is introduced
+
+- **WHEN** the verb registry is inspected
+- **THEN** curation over a focused set is served by the existing notes verb rather than by an additional verb declared for it
+
+### Requirement: A structural edit targets a note by identity, never by a supplied path
+
+An operation that edits the vault SHALL name its target by the note identity the vault graph already assigns, and Iris SHALL resolve that identity to a file itself. It SHALL NOT accept a filesystem path from the renderer or from a model, and it SHALL re-assert — after resolving symlinks — that the file is inside the vault before writing, on exactly the terms reading a note already requires.
+
+The read side of the vault is already guarded this way because note content may originate from the web. A write is the stronger capability of the two, so it SHALL NOT be guarded more weakly than the read it mirrors.
+
+The operations Iris will perform SHALL be an enumerated set. A general "apply this content to this note" primitive would make every future caller — including a model — able to write arbitrary bytes anywhere the vault reaches, which is not a bound that can be audited.
+
+#### Scenario: A supplied path is refused
+
+- **WHEN** an edit request names a filesystem path rather than a note identity
+- **THEN** no file is written
+
+#### Scenario: A note symlinked outside the vault is not writable
+
+- **WHEN** an edit targets a note whose file, after following symlinks, resolves outside the vault directory
+- **THEN** the write is refused and the file is not modified
+
+#### Scenario: An unknown identity is reported, not guessed
+
+- **WHEN** an edit targets a note identity the graph does not know, or a ghost node with no backing file
+- **THEN** the operation reports that the target was not found and writes nothing
+
+#### Scenario: Only enumerated operations exist
+
+- **WHEN** the vault write surface is inspected
+- **THEN** it exposes a fixed set of named structural operations and no general arbitrary-content write

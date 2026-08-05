@@ -13,6 +13,10 @@ import {
   spoolFileFor,
   captureSpoolDir,
   runSpoolDir,
+  sessionsSpoolDir,
+  linkNotes,
+  unlinkNotes,
+  setNoteTags,
 } from "./vault-write.mjs";
 
 async function withTempDir(body) {
@@ -30,10 +34,11 @@ describe("spoolFileFor", () => {
   });
 });
 
-describe("captureSpoolDir / runSpoolDir", () => {
-  it("place the two spools at fixed paths under the vault root", () => {
+describe("captureSpoolDir / runSpoolDir / sessionsSpoolDir", () => {
+  it("place the three spools at fixed paths under the vault root", () => {
     expect(captureSpoolDir("/vault")).toBe(path.join("/vault", "inbox", "captures"));
     expect(runSpoolDir("/vault")).toBe(path.join("/vault", "inbox", "runs"));
+    expect(sessionsSpoolDir("/vault")).toBe(path.join("/vault", "inbox", "sessions"));
   });
 });
 
@@ -137,6 +142,102 @@ describe("createNotePage", () => {
       expect(result.ok).toBe(true);
       const resolvedVault = path.resolve(dir);
       expect(path.resolve(result.file).startsWith(resolvedVault + path.sep)).toBe(true);
+    });
+  });
+});
+
+// Structural vault edits (shared-focus design D7): enumerated named
+// operations over markdown text — never a general content-write primitive.
+describe("linkNotes", () => {
+  it("inserts [[B]] into A and [[A]] into B", async () => {
+    await withTempDir(async (dir) => {
+      const pathA = path.join(dir, "A.md");
+      const pathB = path.join(dir, "B.md");
+      fs.writeFileSync(pathA, "# Alpha\nSome content.\n");
+      fs.writeFileSync(pathB, "# Beta\nOther content.\n");
+      const result = await linkNotes({ pathA, idA: "A", pathB, idB: "B" });
+      expect(result.ok).toBe(true);
+      expect(fs.readFileSync(pathA, "utf8")).toContain("[[B]]");
+      expect(fs.readFileSync(pathB, "utf8")).toContain("[[A]]");
+    });
+  });
+
+  it("is idempotent when the link already exists — no duplicate, still reports success", async () => {
+    await withTempDir(async (dir) => {
+      const pathA = path.join(dir, "A.md");
+      const pathB = path.join(dir, "B.md");
+      fs.writeFileSync(pathA, "# Alpha\nAlready linked: [[B]]\n");
+      fs.writeFileSync(pathB, "# Beta\nAlready linked: [[A]]\n");
+      const result = await linkNotes({ pathA, idA: "A", pathB, idB: "B" });
+      expect(result.ok).toBe(true);
+      const textA = fs.readFileSync(pathA, "utf8");
+      const textB = fs.readFileSync(pathB, "utf8");
+      expect(textA.match(/\[\[B\]\]/g)).toHaveLength(1);
+      expect(textB.match(/\[\[A\]\]/g)).toHaveLength(1);
+    });
+  });
+
+  it("reports failure without touching the other file when one note cannot be read", async () => {
+    await withTempDir(async (dir) => {
+      const pathA = path.join(dir, "A.md");
+      const pathB = path.join(dir, "missing.md");
+      fs.writeFileSync(pathA, "# Alpha\n");
+      const result = await linkNotes({ pathA, idA: "A", pathB, idB: "missing" });
+      expect(result.ok).toBe(false);
+      expect(fs.readFileSync(pathA, "utf8")).not.toContain("[[missing]]");
+    });
+  });
+});
+
+describe("unlinkNotes", () => {
+  it("removes the link in both directions", async () => {
+    await withTempDir(async (dir) => {
+      const pathA = path.join(dir, "A.md");
+      const pathB = path.join(dir, "B.md");
+      fs.writeFileSync(pathA, "# Alpha\nSee [[B]] for more.\n");
+      fs.writeFileSync(pathB, "# Beta\nSee [[A]] for more.\n");
+      const result = await unlinkNotes({ pathA, idA: "A", pathB, idB: "B" });
+      expect(result.ok).toBe(true);
+      expect(fs.readFileSync(pathA, "utf8")).not.toContain("[[B]]");
+      expect(fs.readFileSync(pathB, "utf8")).not.toContain("[[A]]");
+    });
+  });
+
+  it("reports success when the link was already absent", async () => {
+    await withTempDir(async (dir) => {
+      const pathA = path.join(dir, "A.md");
+      const pathB = path.join(dir, "B.md");
+      fs.writeFileSync(pathA, "# Alpha\n");
+      fs.writeFileSync(pathB, "# Beta\n");
+      const result = await unlinkNotes({ pathA, idA: "A", pathB, idB: "B" });
+      expect(result.ok).toBe(true);
+    });
+  });
+});
+
+describe("setNoteTags", () => {
+  it("rewrites frontmatter tags without disturbing the body", async () => {
+    await withTempDir(async (dir) => {
+      const notePath = path.join(dir, "A.md");
+      fs.writeFileSync(notePath, "---\ntitle: Alpha\ntags:\n  - old\n---\nThe body text stays put.\n");
+      const result = await setNoteTags({ path: notePath, tags: ["new", "tags"] });
+      expect(result.ok).toBe(true);
+      const text = fs.readFileSync(notePath, "utf8");
+      expect(text).toContain("The body text stays put.");
+      expect(text).toContain("new");
+      expect(text).toContain("tags");
+      expect(text).not.toMatch(/- old/);
+    });
+  });
+
+  it("reports a note with malformed frontmatter rather than corrupting it", async () => {
+    await withTempDir(async (dir) => {
+      const notePath = path.join(dir, "A.md");
+      const original = "---\ntitle: [unclosed\n---\nBody.\n";
+      fs.writeFileSync(notePath, original);
+      const result = await setNoteTags({ path: notePath, tags: ["x"] });
+      expect(result.ok).toBe(false);
+      expect(fs.readFileSync(notePath, "utf8")).toBe(original);
     });
   });
 });
