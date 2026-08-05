@@ -220,7 +220,9 @@ Linking two existing notes to each other, removing such a link, and changing a n
 
 These operations carry no judgement. Which two notes to connect is the user's decision, and inserting a `[[wikilink]]` into two files is a text transform — routing it through a worker would give an instant, deterministic edit a run's latency, cost, and credential requirement, exactly as capture suffered before it became a write.
 
-Work that **does** carry judgement — merging two notes, splitting one, summarizing a set, deciding what a set is missing — SHALL remain worker work through the existing notes verb. That verb already takes a parameter naming what to concentrate on; it SHALL NOT be duplicated by a second verb for the same kind of work.
+Work that **does** carry judgement — merging two notes, splitting one, summarizing a set, deciding what a set is missing — SHALL remain worker work. Curation of that kind, over a focused set or over whatever has accumulated, SHALL be served by the existing notes verb; that verb already takes a parameter naming what to concentrate on, and SHALL NOT be duplicated by a second verb for the same kind of work.
+
+What is **not** the same kind of work is a conversation about one note with the user in the loop — reading it back, then removing, adding, and rewriting parts of it across turns. That differs in **lifetime**, not in subject: it requires a resident session, because a follow-up naming a part of the note is only resolvable by whatever identified those parts and still remembers doing so, and a one-shot run re-derives that division on every turn. A verb for it is therefore not a duplicate of the curation verb, and the two SHALL be distinguished by lifetime and by whether the user is in the loop rather than by what they operate on. See `open-note-session`.
 
 #### Scenario: Linking two notes is instant and free
 
@@ -247,10 +249,15 @@ Work that **does** carry judgement — merging two notes, splitting one, summari
 - **WHEN** the user asks Iris to merge two notes, or what a set of notes is missing
 - **THEN** that is handled by the notes verb as a run, not by a direct write
 
-#### Scenario: No second notes verb is introduced
+#### Scenario: No second curation verb is introduced
 
 - **WHEN** the verb registry is inspected
 - **THEN** curation over a focused set is served by the existing notes verb rather than by an additional verb declared for it
+
+#### Scenario: A resident note-working session is not a duplicate curation verb
+
+- **WHEN** the verb registry is inspected and it declares both a stateless curation verb and a stateful verb for working on one open note
+- **THEN** that is not a duplication: the two differ in lifetime and in whether the user is in the loop, and the curation verb remains the only route for weaving accumulated material into pages
 
 ### Requirement: A structural edit targets a note by identity, never by a supplied path
 

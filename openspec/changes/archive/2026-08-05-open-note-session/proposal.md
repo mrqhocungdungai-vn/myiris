@@ -14,6 +14,7 @@ Editing a note by conversation is judgement work, which `personal-knowledge-note
 - **One conversation per note.** The session key is derived from the note's identity, so returning to a note resumes what was already said about it rather than starting over. One session is resident at a time; switching notes yields the resident slot and stores the outgoing session's id for later resumption. Closing the note ends nothing.
 - **The note's body never enters the voice layer's per-turn context.** The session that will edit the note is the one that reads it; the voice layer speaks that rendering aloud rather than producing its own. This keeps `second-brain-focus`'s "identities, titles, and tags — not note bodies" reasoning intact instead of carving an exception into it.
 - **A verbatim announcement path.** The existing completion announcement instructs the voice layer to summarize in 1–3 sentences (`announcements.mjs:188`), which would destroy a note reading. This verb needs a path that is read out as written.
+- **Destroying is confirmed; adding is not.** An edit that only adds is applied and then reported. An edit that removes or replaces existing text names the text about to go — the text, not its position — and waits for the user's answer before writing. The vault has no version history, so a removal is the one edit that is neither visible nor recoverable when the reference resolved wrongly. The confirmation happens inside the conversation, is enforced by the main process rather than only asked for in the prompt, and defaults to writing nothing when it goes unanswered. Deliberately **not** the pre-dispatch review gate: that gate fires before any edit has been decided, and can be switched off entirely.
 - **`mutate_vault_notes` targets the open note when there is one**, falling back to the focus as it does today.
 - **BREAKING (documentation):** Iris gains an eighth verb. `CLAUDE.md` and `docs/PIPELINE_INTERNALS.md` say "seven named verbs" in four places.
 
@@ -26,6 +27,7 @@ Editing a note by conversation is judgement work, which `personal-knowledge-note
 ### Modified Capabilities
 
 - `personal-knowledge-notes`: the "No second notes verb is introduced" rule is narrowed to what it was written to prevent — a duplicate verb for the *same kind* of work — so that a verb differing in **lifetime** (a resident session with the user in the loop, versus one-shot bookkeeping) is permitted and its boundary against `capture_learning` is stated.
+- `stateful-verb-session`: its lifecycle requirement says the resident session "SHALL NOT be torn down automatically between turns" and resets "only on the existing triggers" — three user actions, none of which is opening a different note. Yielding the resident slot is not a reset (the conversation survives and is resumable), but residency does end on a trigger that requirement does not admit, so the requirement is split: the **conversation** resets only on the three user triggers, while **residency** may be handed over automatically and costs nothing but the subprocess. It also states what the current code does not check — that a turn is never delivered into whichever session happens to be resident.
 
 Deliberately **not** modified: `second-brain-focus`. Change `two-palm-galaxy-zoom` already holds a delta on its "One authoritative focus…" requirement, and a second concurrent delta on the same requirement would have to be written against a main spec that has not absorbed the first yet. The referent-precedence rule lives in the new capability instead — which is also where it belongs, since it is about the work object, not about the focus.
 
@@ -33,19 +35,25 @@ Deliberately **not** modified: `second-brain-focus`. Change `two-palm-galaxy-zoo
 
 **Code**
 
-- `electron/capabilities/second-brain.mjs` — open-note state, its IPC handlers, the referent precedence in `promptFragment()`, a `SYSTEM_EVENT` push mirroring `announceFocusUpdate()`, and `mutateVaultNotes`'s target resolution.
+- `electron/capabilities/second-brain.mjs` — open-note state, its IPC handlers, the referent precedence in `promptFragment()`, a `SYSTEM_EVENT` push mirroring `announceFocusUpdate()`, `mutateVaultNotes`'s target resolution, and the open note's path for the write guard.
 - `electron/preload.cjs` — the open/close channels.
-- `electron/verbs.mjs` — the new verb record.
+- `electron/verbs.mjs` — the new `work_on_note` record.
 - `electron/run-context.mjs` — the open note joins the single composition point, alongside the focus and the transcript.
 - `electron/announcements.mjs` — the verbatim read-back path.
-- `electron/run-exec.mjs` / session keying — a per-note session key and the resident-slot handoff.
+- `electron/po-session.mjs` — `getOrCreatePoSession` must compare `sessionKey` before reusing the incumbent (today it does not), plus the injected write-confirmation seam in `canUseTool`.
+- `electron/run-exec.mjs` / session keying — a per-note session key, and wiring the write guard for this verb only.
+- `electron/gemini-prompts.mjs`, `electron/gemini-tools.mjs` — the live-question prose describes `SYSTEM_EVENT_PO_QUESTION` as coming from "a shaping run"; an eighth verb also asks, and its questions are the costliest to mis-frame.
 - `src/App.tsx` — report open/close over IPC from the existing `openNote` lifecycle.
 - `CLAUDE.md`, `docs/PIPELINE_INTERNALS.md` — the verb count.
 
 **Ordering**
 
-Independent of `two-palm-galaxy-zoom` at the code level (they share only `App.tsx`, in different regions). Archive `two-palm-galaxy-zoom` first regardless, so the living spec is settled before this one's delta is validated against it.
+`two-palm-galaxy-zoom` is **already archived** (`openspec/changes/archive/2026-08-05-two-palm-galaxy-zoom`, commit `8e93e81`) and its delta is absorbed into the living `second-brain-focus` spec, so the ordering constraint this change was written under is satisfied and nothing here waits on it.
+
+`ask-when-unspecified` also holds a `stateful-verb-session` delta, on a **different** requirement ("A stateless verb remains a one-shot headless run" versus this change's "The live session's lifecycle is user-controlled"), so the two coexist. **Archive this change first**: its decision is the older one and it is further along. Whichever archives second merges into a spec the first has already changed, and must be re-validated against the merged file rather than against today's.
 
 **Risk**
 
-A resident session per note means the resident slot changes hands whenever the user switches notes, which costs latency on the switch. `live-session.mjs` holds exactly one resident session today (`let liveSession = null`, not a map) — this change preserves that invariant rather than relaxing it, and pays for it in switch cost.
+A resident session per note means the resident slot changes hands whenever the user switches notes, which costs latency on the switch. `po-session.mjs` holds one resident session per workstream today (a `Map` keyed by `workstream.id`) — this change preserves the single-resident invariant rather than relaxing it, and pays for it in switch cost.
+
+The write guard is deliberately incomplete: it inspects the SDK's file tools, not `Bash`, and the session runs with the vault granted under `bypassPermissions`. It is a guard against the confirmation being skipped, not containment, and must not be described otherwise anywhere in the interface or the docs — the same terms the `PreToolUse` denylist already carries.

@@ -130,6 +130,8 @@ export function createCapabilitiesWiring({
     notesInboxDir: secondBrainCapability.notesInboxDir,
     recentUtterances,
     resolveFocusForPrompt: () => secondBrainCapability.resolveFocusForRun(),
+    resolveOpenNoteForRun: () => secondBrainCapability.resolveOpenNoteForRun(),
+    openNoteWritePath: () => secondBrainCapability.openNoteWritePath(),
     handleClaudeStreamMessage,
     pushActivity,
     rememberClaudeSessionId,

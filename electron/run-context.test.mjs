@@ -180,4 +180,42 @@ describe("buildRunPrompt", () => {
       expect(prompt.match(/<<<IRIS_UNTRUSTED_[0-9a-f]+>>>/g)?.length).toBe(4); // two blocks, each fenced with a start+end delimiter
     });
   });
+
+  // open-note-session design D4: the open note joins the focus and the
+  // transcript at this same composition point — never a new per-verb parameter.
+  describe("the open note block", () => {
+    const openNote = { id: "n1", title: "Grocery list", tags: ["home"], relativePath: "Grocery list.md" };
+
+    it("carries the open note's identity, title, tags, and vault-relative path, fenced as untrusted", () => {
+      const prompt = buildRunPrompt(execute, { brief: "Goal: x", utterances: [], openNote });
+      expect(prompt).toContain("Grocery list");
+      expect(prompt).toContain("Grocery list.md");
+      expect(prompt).toContain("untrusted content");
+      expect(prompt).toMatch(/<<<IRIS_UNTRUSTED_[0-9a-f]+>>>/);
+    });
+
+    it("emits no block at all when no note is open", () => {
+      expect(buildRunPrompt(execute, { brief: "Goal: x", utterances: [] })).toBe("Goal: x");
+      expect(buildRunPrompt(execute, { brief: "Goal: x", utterances: [], openNote: null })).toBe("Goal: x");
+    });
+
+    it("does not carry the note's body — only its identity, title, tags, and path", () => {
+      const withBody = { ...openNote, body: "SECRET NOTE BODY" };
+      const prompt = buildRunPrompt(execute, { brief: "Goal: x", utterances: [], openNote: withBody });
+      expect(prompt).not.toContain("SECRET NOTE BODY");
+    });
+
+    it("keeps the brief first, ahead of the open-note block", () => {
+      expect(buildRunPrompt(execute, { brief: "Goal: x", utterances: [], openNote }).startsWith("Goal: x")).toBe(true);
+    });
+
+    it("composes alongside the focus block, both fenced, open note first", () => {
+      const focus = [{ id: "a", title: "Alpha", tags: [] }];
+      const prompt = buildRunPrompt(execute, { brief: "Goal: x", utterances: [], openNote, focus });
+      expect(prompt).toContain("Grocery list");
+      expect(prompt).toContain("Alpha");
+      expect(prompt.indexOf("Grocery list")).toBeLessThan(prompt.indexOf("Alpha"));
+      expect(prompt.match(/<<<IRIS_UNTRUSTED_[0-9a-f]+>>>/g)?.length).toBe(4);
+    });
+  });
 });

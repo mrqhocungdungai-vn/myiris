@@ -27,10 +27,11 @@ const shippedSkills = fs
 const WITH_CHANGE = { hasOpenChange: true, changes: ["add-thing"] };
 
 describe("the verb registry", () => {
-  it("declares exactly the seven verbs the surface offers", () => {
+  it("declares exactly the eight verbs the surface offers", () => {
     expect(VERB_NAMES).toEqual([
       "shape_requirements",
       "shape_on_canvas",
+      "work_on_note",
       "execute",
       "finish",
       "investigate",
@@ -87,20 +88,49 @@ describe("the verb registry", () => {
   it("accepts a raw openChangesWithTasks() array as project state", () => {
     expect(resolveVerb("execute", ["add-thing"]).skills).toEqual(IMPLEMENTATION_SKILLS);
     expect(resolveVerb("execute", []).skills).toEqual(ORDINARY_SKILLS);
-    expect(projectState(["a", "b"])).toEqual({ hasOpenChange: true, changes: ["a", "b"] });
-    expect(projectState(null)).toEqual({ hasOpenChange: false, changes: [] });
+    expect(projectState(["a", "b"])).toEqual({ hasOpenChange: true, changes: ["a", "b"], openNoteId: null });
+    expect(projectState(null)).toEqual({ hasOpenChange: false, changes: [], openNoteId: null });
   });
 
   // D3: the two shaping verbs are the same conversation in two media.
-  it("gives both stateful verbs the one shared resident session", () => {
-    expect(STATEFUL_VERBS).toEqual(["shape_requirements", "shape_on_canvas"]);
-    for (const name of STATEFUL_VERBS) {
+  // work_on_note is ALSO stateful (open-note-session D2) but deliberately does
+  // NOT share this session — it gets its own test below.
+  it("gives both shaping verbs the one shared resident session", () => {
+    expect(STATEFUL_VERBS).toEqual(["shape_requirements", "shape_on_canvas", "work_on_note"]);
+    for (const name of ["shape_requirements", "shape_on_canvas"]) {
       const resolved = resolveVerb(name);
       expect(resolved.stateful).toBe(true);
       expect(resolved.sessionKey).toBe(STATEFUL_SESSION_KEY);
       expect(resolved.basePersona).toBe("stateful");
     }
     expect(resolveVerb("shape_requirements").sessionKey).toBe(resolveVerb("shape_on_canvas").sessionKey);
+  });
+
+  // open-note-session D2: a resident session, but NOT the shaping one — its
+  // own key, derived per note, so returning to a note resumes its own
+  // conversation instead of accumulating several notes in one window.
+  it("gives work_on_note its own per-note session, distinct from the shared shaping one", () => {
+    const resolved = resolveVerb("work_on_note");
+    expect(resolved.stateful).toBe(true);
+    expect(resolved.basePersona).toBe("stateful");
+    expect(resolved.park).toBe(PARK.ON_OPEN);
+    expect(resolved.vault).toBe(true);
+    expect(resolved.structuredOutput).toBe(false);
+    expect(resolved.guardOpenNoteWrites).toBe(true);
+    expect(resolved.sessionKey).not.toBe(STATEFUL_SESSION_KEY);
+
+    const forNoteA = resolveVerb("work_on_note", { changes: [], openNoteId: "note-a" });
+    const forNoteB = resolveVerb("work_on_note", { changes: [], openNoteId: "note-b" });
+    expect(forNoteA.sessionKey).not.toBe(forNoteB.sessionKey);
+    expect(forNoteA.sessionKey).toContain("note-a");
+    // Returning to the same note resolves to the same key.
+    expect(resolveVerb("work_on_note", { changes: [], openNoteId: "note-a" }).sessionKey).toBe(forNoteA.sessionKey);
+  });
+
+  it("declares guardOpenNoteWrites only for work_on_note", () => {
+    for (const name of VERB_NAMES) {
+      expect(resolveVerb(name).guardOpenNoteWrites).toBe(name === "work_on_note");
+    }
   });
 
   it("keeps every stateless verb on its own conversation", () => {
@@ -136,6 +166,9 @@ describe("the verb registry", () => {
     for (const name of ["investigate", "review", "capture_learning"]) {
       expect(resolveVerb(name).park).toBe(PARK.NEVER);
     }
+    // park is NOT what makes work_on_note's writes safe (design.md D6) — the
+    // main-process write guard is (guardOpenNoteWrites, tested above).
+    expect(resolveVerb("work_on_note").park).toBe(PARK.ON_OPEN);
   });
 
   it("wires the canvas tool server only for the canvas verb", () => {
@@ -164,9 +197,10 @@ describe("the verb registry", () => {
     expect(clause.toLowerCase()).toContain("untrusted recollection");
   });
 
-  it("grants the notes vault only to the capture verb", () => {
+  it("grants the notes vault only to the two verbs that work in it", () => {
     expect(resolveVerb("capture_learning").vault).toBe(true);
-    for (const name of VERB_NAMES.filter((verb) => verb !== "capture_learning")) {
+    expect(resolveVerb("work_on_note").vault).toBe(true);
+    for (const name of VERB_NAMES.filter((verb) => verb !== "capture_learning" && verb !== "work_on_note")) {
       expect(resolveVerb(name).vault).toBe(false);
     }
   });
@@ -183,7 +217,7 @@ describe("the verb registry", () => {
   });
 
   // The scoping is the substance, the verb table is the vehicle: without it,
-  // seven verbs would be seven names for one agent.
+  // eight verbs would be eight names for one agent.
   it("keeps unrelated workflows out of each other's verbs", () => {
     const execute = resolveVerb("execute", WITH_CHANGE).skills;
     expect(execute).not.toContain("iris:grilling");
@@ -217,7 +251,7 @@ describe("the verb registry", () => {
     }
   });
 
-  it("resolves all seven verbs in declaration order", () => {
+  it("resolves all eight verbs in declaration order", () => {
     expect(resolveAllVerbs().map((resolved) => resolved.verb)).toEqual(VERB_NAMES);
   });
 

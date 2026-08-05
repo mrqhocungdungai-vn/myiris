@@ -312,6 +312,95 @@ describe("the options the resident session hands to query()", () => {
   });
 });
 
+// open-note-session: work_on_note is ALSO a resident session, but with an
+// explicit `outputFormat: false` (its reading must not be squeezed through
+// the decisions schema's "keep it to a few sentences" summary) and its own
+// per-note sessionKey rather than the shared shaping one.
+describe("the options work_on_note hands to query()", () => {
+  const noteVerb = resolveVerb("work_on_note", { changes: [], openNoteId: "note-1" });
+  // Same shape as PO_KEYS, minus outputFormat: run-exec.mjs passes `false`
+  // explicitly for this verb, and po-session.mjs omits the key entirely
+  // rather than falling back to its default.
+  const NOTE_KEYS = [
+    "agent",
+    "cwd",
+    "abortController",
+    "permissionMode",
+    "allowDangerouslySkipPermissions",
+    "settingSources",
+    "skills",
+    "env",
+    "canUseTool",
+    "systemPrompt",
+    "maxTurns",
+    "maxBudgetUsd",
+    "stderr",
+    "hooks",
+    "agents",
+    "plugins",
+    "pathToClaudeCodeExecutable",
+    "model",
+    "title",
+  ];
+
+  function noteOptions(overrides = {}) {
+    /** @type {any} */
+    let captured;
+    getOrCreatePoSession(
+      { id: `ws-${Math.random()}` },
+      {
+        agent: "iris-stateful",
+        agentDefinition: { description: "stateful", prompt: "You are stateful." },
+        plugins: [{ type: "local", path: "/bundle/iris-plugin" }],
+        cwd: "/tmp/project",
+        sessionKey: noteVerb.sessionKey,
+        claudeExecutable: "/bundled/claude",
+        model: "claude-opus-5",
+        budget: resolveRunBudget("stateful", {}),
+        stderr: () => {},
+        skills: noteVerb.skills,
+        systemPrompt: buildSystemPrompt(noteVerb),
+        outputFormat: noteVerb.structuredOutput ? DECISION_OUTPUT_FORMAT : false,
+        buildHooks: () => ({ PreToolUse: [] }),
+        title: "Iris · Note",
+        onAskUserQuestion: async () => ({ behavior: "allow", answers: {} }),
+        query: /** @type {any} */ (({ options }) => {
+          captured = options;
+          return { async *[Symbol.asyncIterator]() {} };
+        }),
+        ...overrides,
+      },
+    );
+    return captured;
+  }
+
+  it("has exactly these fields, and no others — outputFormat is absent, not just falsy", async () => {
+    const options = noteOptions();
+    expect(Object.keys(options).sort()).toEqual([...NOTE_KEYS].sort());
+    expect(options).not.toHaveProperty("outputFormat");
+    await closeAllPoSessions();
+  });
+
+  it("resolves to its own per-note session key, distinct from the shared shaping one", () => {
+    expect(noteVerb.sessionKey).not.toBe(resolveVerb("shape_requirements").sessionKey);
+    expect(noteVerb.sessionKey).toContain("note-1");
+  });
+
+  it("is granted the vault and scoped to note-keeping skills, on the same terms as capture_learning", () => {
+    expect(noteVerb.vault).toBe(true);
+    expect(noteVerb.skills).toEqual(resolveVerb("capture_learning").skills);
+  });
+
+  it("is not locked out of asking, and can hold a write via the injected confirmWrite seam", async () => {
+    const confirmWrite = async () => ({ behavior: "deny", message: "hold" });
+    const options = noteOptions({ confirmWrite });
+    expect(options).not.toHaveProperty("disallowedTools");
+    const decision = await options.canUseTool("Edit", { file_path: "/x", old_string: "a", new_string: "b" });
+    expect(decision).toEqual({ behavior: "deny", message: "hold" });
+    await closeAllPoSessions();
+  });
+});
+
 // The check that makes the above more than a snapshot of our own beliefs: every
 // field name we set must exist on the SDK's declared `Options` type. This is
 // exactly what would have caught the original failure — `appendSystemPrompt` is

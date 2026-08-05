@@ -92,9 +92,11 @@ export function createSessionStore({
   // Which stored conversation a verb resumes. The two shaping verbs share one
   // (design.md D3); every other verb has its own. Continuity is not
   // statefulness: a stateless verb resumes too, which is what makes a follow-up
-  // request intelligible.
-  function sessionKeyFor(verb) {
-    return isVerb(verb) ? resolveVerb(verb).sessionKey : verb;
+  // request intelligible. `state` (open-note-session D2) is how a caller that
+  // already resolved a verb against a specific open note gets the SAME
+  // per-note key back — omitted, this resolves against no open note.
+  function sessionKeyFor(verb, state) {
+    return isVerb(verb) ? resolveVerb(verb, state).sessionKey : verb;
   }
 
   // Bring a stored workstream up to the current shape.
@@ -441,7 +443,14 @@ export function createSessionStore({
     if (!MODEL_IDS.has(cleanModel)) {
       return { status: "error", error: `Unknown model: ${model}` };
     }
-    const shared = resolveVerb(cleanVerb).sessionKey === STATEFUL_SESSION_KEY ? STATEFUL_VERBS : [cleanVerb];
+    // Sharing means "resolves to the SAME session key", not merely "is
+    // stateful" — work_on_note is stateful too (open-note-session D2) but
+    // deliberately does not share the shaping verbs' key, and its own key is
+    // per-note rather than a fixed constant, so it can never collide with
+    // another verb's here.
+    const targetKey = resolveVerb(cleanVerb).sessionKey;
+    const sharing = STATEFUL_VERBS.filter((name) => resolveVerb(name).sessionKey === targetKey);
+    const shared = sharing.length > 1 ? sharing : [cleanVerb];
     const changed = [];
     for (const target of shared) {
       if (workstream.agent_models[target] === cleanModel) continue;

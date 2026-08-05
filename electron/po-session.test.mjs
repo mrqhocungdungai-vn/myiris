@@ -3,7 +3,7 @@
 // stream that just stops on its own). Driven through the Wave 0.0 injected
 // `query` seam — a fake async iterator, no subprocess, no Electron. See
 // openspec/changes/settle-and-attribute-po-turn/design.md D1/D2/D5.
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   getOrCreatePoSession,
   deliverPoTurn,
@@ -339,6 +339,180 @@ describe("cancelPoTurn", () => {
     const state = getOrCreatePoSession(makeWorkstream(), { query: () => source.query });
     state.ended = true;
     await expect(cancelPoTurn(state)).resolves.toBeUndefined();
+  });
+});
+
+// open-note-session design D2a: the regression 4.2 fixes — before this,
+// getOrCreatePoSession returned any live session for the workstream without
+// checking which conversation it belonged to.
+describe("getOrCreatePoSession: sessionKey mismatch yields the resident slot", () => {
+  it("delivers a turn for a different sessionKey into a NEW session, not the resident one", () => {
+    const first = createFakeQuerySource();
+    const second = createFakeQuerySource();
+    const queries = [first.query, second.query];
+    const workstream = makeWorkstream();
+
+    const shaping = getOrCreatePoSession(workstream, { sessionKey: "stateful", query: () => queries.shift() });
+    const note = getOrCreatePoSession(workstream, { sessionKey: "note:abc", query: () => queries.shift() });
+
+    expect(note).not.toBe(shaping);
+    expect(note.sessionKey).toBe("note:abc");
+  });
+
+  it("closes (yields) the incumbent rather than reusing it for a mismatched key", () => {
+    const first = createFakeQuerySource();
+    const second = createFakeQuerySource();
+    const queries = [first.query, second.query];
+    const workstream = makeWorkstream();
+
+    const shaping = getOrCreatePoSession(workstream, { sessionKey: "stateful", query: () => queries.shift() });
+    getOrCreatePoSession(workstream, { sessionKey: "note:abc", query: () => queries.shift() });
+
+    // The outgoing conversation is torn down through the SAME path closePoSession
+    // always uses (endReason set synchronously; `ended` itself flips once
+    // pump's `for await` unwinds on a later microtask) — a handoff, not a
+    // reset: `agent_sessions` is left untouched, so it stays resumable.
+    expect(shaping.endReason).toEqual({ kind: "teardown" });
+  });
+
+  it("returns the SAME session on a matching sessionKey — no unnecessary churn", () => {
+    const source = createFakeQuerySource();
+    const workstream = makeWorkstream();
+
+    const first = getOrCreatePoSession(workstream, { sessionKey: "note:abc", query: () => source.query });
+    const second = getOrCreatePoSession(workstream, { sessionKey: "note:abc", query: () => source.query });
+
+    expect(second).toBe(first);
+  });
+
+  it("two different notes yield two different sessions, keyed by their own note id", () => {
+    const first = createFakeQuerySource();
+    const second = createFakeQuerySource();
+    const queries = [first.query, second.query];
+    const workstream = makeWorkstream();
+
+    const noteA = getOrCreatePoSession(workstream, { sessionKey: "note:a", query: () => queries.shift() });
+    const noteB = getOrCreatePoSession(workstream, { sessionKey: "note:b", query: () => queries.shift() });
+
+    expect(noteA).not.toBe(noteB);
+    expect(noteA.sessionKey).toBe("note:a");
+    expect(noteB.sessionKey).toBe("note:b");
+  });
+
+  // D2a: "note→note, note→shaping and shaping→note are one mechanism, not
+  // three cases" — the handoff logic never checks WHAT kind of key it is,
+  // only whether it matches, so all three directions behave identically.
+  it("is symmetric: shaping→note, note→shaping, and note→note all yield the resident slot the same way", () => {
+    const sources = [createFakeQuerySource(), createFakeQuerySource(), createFakeQuerySource()];
+    const queries = sources.map((s) => s.query);
+    const workstream = makeWorkstream();
+
+    const shaping = getOrCreatePoSession(workstream, { sessionKey: "stateful", query: () => queries.shift() });
+    const note = getOrCreatePoSession(workstream, { sessionKey: "note:a", query: () => queries.shift() });
+    expect(note).not.toBe(shaping);
+    expect(shaping.endReason).toEqual({ kind: "teardown" }); // shaping→note yielded
+
+    const backToShaping = getOrCreatePoSession(workstream, { sessionKey: "stateful", query: () => queries.shift() });
+    expect(backToShaping).not.toBe(note);
+    expect(note.endReason).toEqual({ kind: "teardown" }); // note→shaping yielded, on the same terms
+  });
+
+  it("returning to note A's key after B took the slot resumes A's session identity, not B's", () => {
+    const first = createFakeQuerySource();
+    const second = createFakeQuerySource();
+    const third = createFakeQuerySource();
+    const queries = [first.query, second.query, third.query];
+    const workstream = makeWorkstream();
+
+    getOrCreatePoSession(workstream, { sessionKey: "note:a", resumeSessionId: "stored-a", query: () => queries.shift() });
+    getOrCreatePoSession(workstream, { sessionKey: "note:b", query: () => queries.shift() });
+    const backToA = getOrCreatePoSession(workstream, { sessionKey: "note:a", resumeSessionId: "stored-a", query: () => queries.shift() });
+
+    expect(backToA.sessionKey).toBe("note:a");
+    expect(backToA.sessionId).toBe("stored-a");
+  });
+});
+
+// open-note-session design D6/8.2: the injected confirmWrite seam alongside
+// onAskUserQuestion — po-session.mjs stays ignorant of notes/vaults/paths, it
+// only forwards Edit/Write calls to whatever the caller supplied.
+describe("po-session confirmWrite seam", () => {
+  it("allows Edit/Write through canUseTool when confirmWrite is absent", async () => {
+    const source = createFakeQuerySource();
+    /** @type {any} */
+    let options;
+    getOrCreatePoSession(makeWorkstream(), {
+      query: (args) => {
+        options = args.options;
+        return source.query;
+      },
+    });
+    const result = await options.canUseTool("Edit", { file_path: "/x", old_string: "a", new_string: "b" });
+    expect(result).toEqual({ behavior: "allow", updatedInput: { file_path: "/x", old_string: "a", new_string: "b" } });
+  });
+
+  it("calls the injected confirmWrite for Edit/Write and denies on its verdict", async () => {
+    const source = createFakeQuerySource();
+    const confirmWrite = async () => ({ behavior: "deny", message: "hold on" });
+    /** @type {any} */
+    let options;
+    getOrCreatePoSession(makeWorkstream(), {
+      confirmWrite,
+      query: (args) => {
+        options = args.options;
+        return source.query;
+      },
+    });
+    const result = await options.canUseTool("Write", { file_path: "/x", content: "y" });
+    expect(result).toEqual({ behavior: "deny", message: "hold on" });
+  });
+
+  it("never calls confirmWrite for a tool other than Edit/Write", async () => {
+    const source = createFakeQuerySource();
+    const confirmWrite = vi.fn();
+    /** @type {any} */
+    let options;
+    getOrCreatePoSession(makeWorkstream(), {
+      confirmWrite,
+      query: (args) => {
+        options = args.options;
+        return source.query;
+      },
+    });
+    await options.canUseTool("Bash", { command: "ls" });
+    expect(confirmWrite).not.toHaveBeenCalled();
+  });
+});
+
+// open-note-session: the decisions schema's own "keep it to a few sentences"
+// instruction would condense exactly what a verbatim reading must not
+// condense — work_on_note opts out via an explicit `outputFormat: false`.
+describe("po-session outputFormat override", () => {
+  it("defaults to DECISION_OUTPUT_FORMAT when the caller passes nothing", async () => {
+    const source = createFakeQuerySource();
+    /** @type {any} */
+    let options;
+    getOrCreatePoSession(makeWorkstream(), {
+      query: (args) => {
+        options = args.options;
+        return source.query;
+      },
+    });
+    expect(options.outputFormat).toBeDefined();
+  });
+
+  it("omits outputFormat entirely when the caller passes false", async () => {
+    const source = createFakeQuerySource();
+    /** @type {any} */
+    let options;
+    getOrCreatePoSession(makeWorkstream(), {
+      outputFormat: false,
+      query: (args) => {
+        options = args.options;
+        return source.query;
+      },
+    });
+    expect(options).not.toHaveProperty("outputFormat");
   });
 });
 

@@ -119,6 +119,11 @@ contextBridge.exposeInMainWorld("iris", {
     ipcRenderer.on("secondbrain:graph-updated", handler);
     return () => ipcRenderer.removeListener("secondbrain:graph-updated", handler);
   },
+  // open-note-session: the renderer reports open/close from the note
+  // reader's existing lifecycle — main is the single authority on which note
+  // is open.
+  reportNoteOpened: (id) => ipcRenderer.send("secondbrain:note-opened", id),
+  reportNoteClosed: () => ipcRenderer.send("secondbrain:note-closed"),
   // second-brain-focus: toggles one node's membership in the shared focus —
   // the hand's tap and a mouse click both call this the same way.
   toggleSecondBrainFocus: (id) => ipcRenderer.invoke("secondbrain:set-focus", id),

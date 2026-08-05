@@ -108,8 +108,9 @@ const MUTATE_VAULT_NOTES_DECLARATION = {
   name: "mutate_vault_notes",
   description:
     "Link two existing vault notes to each other, unlink them, or set a note's tags — a direct file write: no Claude run, " +
-    "no tokens. Defaults to whatever the user currently has focused/selected in the second-brain galaxy (pointed at with " +
-    "their hand, or clicked) when note_titles is omitted — use this for 'connect these two', 'unlink these', 'tag these'. " +
+    "no tokens. When note_titles is omitted, defaults to the note currently open in the reader if one is open, otherwise " +
+    "to whatever is focused/selected in the second-brain galaxy (pointed at with their hand, or clicked) — use this for " +
+    "'tag this', 'connect these two', 'unlink these'. " +
     "Pass note_titles only when the user named specific notes by title instead of pointing at them. link/unlink need " +
     "exactly two notes (focused or named); set_tags needs exactly one. If this reports an error, tell the user the edit " +
     "did not happen rather than confirming it.",
@@ -306,6 +307,13 @@ This note is just a starting point — edit it, retag it, or delete it whenever 
   // for its own rendering, so the focus rides the same freshness for free).
   let focusState = INITIAL_FOCUS;
   let latestGraph = { nodes: [], links: [] };
+  // open-note-session: which note is open in the reader, owned here on the
+  // same terms as the focus above — identity only, never a metadata snapshot
+  // (spec: "stored as a note identity only... resolved... against the live
+  // vault graph"). Reported by the renderer's openNote lifecycle; read by
+  // promptFragment()/announceNoteOpened() below, by mutateVaultNotes's target
+  // precedence, and by run-exec.mjs's per-note session key and write guard.
+  let openNoteId = null;
   // Whether the galaxy layer is the currently-active view (design D6/D7 of
   // second-brain-focus): gates the focus line in promptFragment() (a focus
   // that outlived its view must not keep talking about itself) and is what
@@ -326,6 +334,41 @@ This note is just a starting point — edit it, retag it, or delete it whenever 
       .map((n) => `- ${n.title}${n.tags.length ? ` (tags: ${n.tags.join(", ")})` : ""}`)
       .join("\n");
     return fenceUntrustedText(bullets, "titles/tags of the notes currently focused in the second-brain galaxy");
+  }
+
+  // The open note's own line (open-note-session: "identity, title, and tags —
+  // not its body"), fenced on the same terms as focusLine — titles/tags are
+  // untrusted because vault content may originate from the web.
+  function openNoteLine(note) {
+    const bullet = `- ${note.title}${note.tags.length ? ` (tags: ${note.tags.join(", ")})` : ""}`;
+    return fenceUntrustedText(bullet, "title/tags of the note currently open in the reader");
+  }
+
+  // Live push mirroring announceFocusUpdate (open-note-session: "The voice
+  // layer SHALL be told when the open note changes, rather than only at
+  // connect"), fired on open, on close, and on switch. A close tells Gemini
+  // the referent is gone rather than leaving it believing a note that no
+  // longer exists is still open — the focus (if any) becomes the referent
+  // again the instant this fires with nothing open.
+  function announceNoteOpened() {
+    const note = resolveOpenNote();
+    if (note) {
+      notifyIris([
+        "SYSTEM_EVENT_NOTE_OPENED",
+        openNoteLine(note),
+        "instructions_to_iris:",
+        "- Silently remember this as the note currently open in the reader. Do NOT speak or respond to this message.",
+        '- While a note is open, a deictic request ("this", "this note") refers to it, not to whatever is focused in the second-brain galaxy.',
+      ]);
+    } else {
+      notifyIris([
+        "SYSTEM_EVENT_NOTE_CLOSED",
+        "No note is open in the reader anymore.",
+        "instructions_to_iris:",
+        "- Silently forget the open note as a deictic referent. Do NOT speak or respond to this message.",
+        "- A deictic request now resolves against whatever is focused in the second-brain galaxy, if anything.",
+      ]);
+    }
   }
 
   // Live push (mirrors announceWorkspaceUpdate, for the identical reason: the
@@ -552,6 +595,19 @@ This note is just a starting point — edit it, retag it, or delete it whenever 
     // snapshot as of the last connect — announceFocusUpdate() above is what
     // keeps Gemini current with a focus that changes mid-session.
     if (!galaxyActive) return base;
+
+    // open-note-session: the open note outranks the focus as the described
+    // referent — exactly one is ever described, never both (D1). A note can
+    // only be open while the galaxy is active, so this sits ahead of the
+    // focus check below rather than beside it.
+    const openNote = resolveOpenNote();
+    if (openNote) {
+      return (
+        `${base} Right now the user has a note open in the reader — ${openNoteLine(openNote)} A deictic request like ` +
+        '"this" or "this note" refers to it; act on it without asking which note is meant.'
+      );
+    }
+
     const focused = resolveFocus(focusState, latestGraph, FOCUS_PROMPT_BOUND);
     if (!focused.length) return base;
     return (
@@ -567,6 +623,24 @@ This note is just a starting point — edit it, retag it, or delete it whenever 
   function resolveFocusForRun() {
     const notes = resolveFocus(focusState, latestGraph, FOCUS_PROMPT_BOUND);
     return notes.length ? notes : null;
+  }
+
+  // What a run's prompt receives for the open note (design D4): identity,
+  // title, tags, and the vault-relative path — never the body, and never the
+  // absolute filesystem path (that stays internal to this module; see
+  // openNoteWritePath below). Null when nothing is open, so the composition
+  // point emits no block at all.
+  function resolveOpenNoteForRun() {
+    const note = resolveOpenNote();
+    return note ? { id: note.id, title: note.title, tags: note.tags, relativePath: note.relativePath } : null;
+  }
+
+  // The open note's real, vault-checked absolute path — for run-exec.mjs's
+  // write-confirmation guard only (design D6/8.3). Never sent to the model or
+  // the renderer; resolved through the same resolveVaultNotePath every other
+  // write already goes through, never a path the caller supplies.
+  function openNoteWritePath() {
+    return resolveOpenNote()?.absolutePath ?? null;
   }
 
   // Resolves a renderer- or model-supplied note **identity** to a real,
@@ -594,13 +668,54 @@ This note is just a starting point — edit it, retag it, or delete it whenever 
     return withinVault ? realNotePath : null;
   }
 
+  // Late-resolves the open note against the live graph, mirroring resolveFocus
+  // (open-note-session spec: "resolved to a title, tags, and a file at the
+  // moment of use... never as a snapshot"). A renamed note resolves to its
+  // current title; a deleted one resolves to nothing rather than a phantom.
+  // `absolutePath` is for this module's own internal use (the write guard) —
+  // never handed to the model or the renderer; the run-facing shape below
+  // carries only `relativePath` (design D4).
+  function resolveOpenNote() {
+    if (!openNoteId) return null;
+    const node = (latestGraph.nodes ?? []).find((n) => n.id === openNoteId && !n.ghost);
+    if (!node) return null;
+    const absolutePath = resolveVaultNotePath(openNoteId);
+    if (!absolutePath) return null;
+    // resolveVaultNotePath's absolutePath is realpath'd (symlinks resolved);
+    // NOTES_VAULT_DIR is not, so it must be realpath'd here too before the
+    // two are compared — otherwise a symlinked tmp/vault root (macOS's
+    // /var -> /private/var, for one) turns this into a long ../../.. chain
+    // instead of a clean vault-relative path.
+    let realVaultDir;
+    try {
+      realVaultDir = fs.realpathSync(NOTES_VAULT_DIR);
+    } catch {
+      realVaultDir = NOTES_VAULT_DIR;
+    }
+    return {
+      id: node.id,
+      title: node.title,
+      tags: node.tags ?? [],
+      relativePath: path.relative(realVaultDir, absolutePath),
+      absolutePath,
+    };
+  }
+
   // Resolves the target note ids for a structural edit: explicit titles when
   // the model named them (comma-separated, matched case-insensitively
   // against the live graph), otherwise whatever is currently focused — the
   // shared-focus thesis: the hand supplies the noun, the voice the verb.
   function resolveMutationTargets(noteTitles) {
     const raw = String(noteTitles ?? "").trim();
-    if (!raw) return { ok: true, ids: focusState.ids };
+    if (!raw) {
+      // open-note-session: "Structural edits target the open note when there
+      // is one" — explicit titles > open note > focus. The open note is
+      // resolved fresh (drops out if deleted/renamed away), never assumed
+      // live from the stored id alone.
+      const openNote = resolveOpenNote();
+      if (openNote) return { ok: true, ids: [openNote.id] };
+      return { ok: true, ids: focusState.ids };
+    }
     const wanted = raw.split(",").map((t) => t.trim()).filter(Boolean);
     const ids = [];
     for (const title of wanted) {
@@ -710,13 +825,18 @@ This note is just a starting point — edit it, retag it, or delete it whenever 
       kind: "on",
       fn: () => {
         const hadFocus = focusState.ids.length > 0;
+        const hadOpenNote = openNoteId !== null;
         galaxyActive = false;
         focusState = clearFocusState();
+        // open-note-session: "the reader cannot outlive the galaxy" — cleared
+        // on exactly the terms the focus already is above.
+        openNoteId = null;
         // Tell Gemini the referent it may have last heard about is gone —
         // otherwise a deictic request after the galaxy closes would resolve
         // against notes the user can no longer see (second-brain-focus:
         // "No focus, no focus talk").
         if (hadFocus) announceFocusUpdate();
+        if (hadOpenNote) announceNoteOpened();
         notesVaultGraph.stop();
       },
     },
@@ -769,6 +889,29 @@ This note is just a starting point — edit it, retag it, or delete it whenever 
         focusState = clearFocusState();
         if (hadFocus) announceFocusUpdate();
         return { ok: true, ids: focusState.ids, notes: [] };
+      },
+    },
+    // open-note-session: the renderer reports open/close from the note
+    // reader's existing lifecycle; main is the single authority every
+    // consumer (promptFragment, mutateVaultNotes, run-context, the write
+    // guard) reads. Type/bound-checked like set-focus's id — a renderer XSS
+    // or a stray call could pass anything.
+    {
+      channel: "secondbrain:note-opened",
+      kind: "on",
+      fn: (_event, id) => {
+        if (typeof id !== "string" || id.length === 0 || id.length > 512) return;
+        openNoteId = id;
+        announceNoteOpened();
+      },
+    },
+    {
+      channel: "secondbrain:note-closed",
+      kind: "on",
+      fn: () => {
+        if (openNoteId === null) return;
+        openNoteId = null;
+        announceNoteOpened();
       },
     },
     // Ambient session capture (ambient-memory): the renderer's persisted
@@ -825,6 +968,8 @@ This note is just a starting point — edit it, retag it, or delete it whenever 
     stopVaultGraphWatch: () => notesVaultGraph.stop(),
     promptFragment,
     resolveFocusForRun,
+    resolveOpenNoteForRun,
+    openNoteWritePath,
     mutateVaultNotes,
     // Ambient session capture (ambient-memory): setAmbientCaptureAwake is
     // called from the live session's own wake/sleep hooks (wiring-live.mjs),

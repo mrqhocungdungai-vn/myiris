@@ -19,6 +19,7 @@ type LiveAudioChunk = {
 type Verb =
   | "shape_requirements"
   | "shape_on_canvas"
+  | "work_on_note"
   | "execute"
   | "finish"
   | "investigate"
@@ -360,6 +361,10 @@ type IrisApi = {
   activateSecondBrain: () => void;
   deactivateSecondBrain: () => void;
   onSecondBrainGraphUpdated: (callback: (graph: VaultGraph) => void) => () => void;
+  // open-note-session: reports the note reader's open/close lifecycle to
+  // main, which is the single authority on which note is open.
+  reportNoteOpened: (id: string) => void;
+  reportNoteClosed: () => void;
   // second-brain-focus: toggles one node's membership in the shared focus —
   // the hand's tap and a mouse click both call this the same way.
   toggleSecondBrainFocus: (id: string) => Promise<SecondBrainToggleFocusResult>;

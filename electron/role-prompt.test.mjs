@@ -76,7 +76,7 @@ describe("buildRunInstructions", () => {
     // `additionalDirectories`, so telling it about a vault would describe access
     // it does not have.
     it("is never added to a verb that does not declare a vault, even if a caller passes one", () => {
-      for (const name of VERB_NAMES.filter((verb) => verb !== "capture_learning")) {
+      for (const name of VERB_NAMES.filter((verb) => verb !== "capture_learning" && verb !== "work_on_note")) {
         const verb = resolveVerb(name);
         expect(buildRunInstructions(verb, { notesVault: vault })).toEqual(buildRunInstructions(verb));
       }

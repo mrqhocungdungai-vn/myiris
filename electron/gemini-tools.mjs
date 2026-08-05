@@ -22,10 +22,10 @@
 // a capability-specific declaration or prose string.
 //
 // The Claude-facing surface is no longer one undifferentiated task tool. It is
-// seven named verbs, each with its own parameter schema, derived from the verb
+// eight named verbs, each with its own parameter schema, derived from the verb
 // registry — because prose is advice a model may ignore and a schema is a
 // contract the calling interface enforces. See electron/verbs.mjs.
-import { STATEFUL_VERBS, VERB_NAMES, resolveAllVerbs } from "./verbs.mjs";
+import { SHARED_SESSION_VERBS, VERB_NAMES, resolveAllVerbs } from "./verbs.mjs";
 
 /**
  * @param {{
@@ -36,7 +36,7 @@ import { STATEFUL_VERBS, VERB_NAMES, resolveAllVerbs } from "./verbs.mjs";
  * }} deps
  */
 export function createGeminiTools({ getPipelineAvailable, modelChoices, envFlag, capabilities = [] }) {
-  // The seven verbs, derived from electron/verbs.mjs rather than written out
+  // The eight verbs, derived from electron/verbs.mjs rather than written out
   // here. A verb is defined in one place; the declaration, the review gate, and
   // the run configuration all follow from that one record. Two call sites
   // independently constructing the same thing, with nothing forcing them to
@@ -126,7 +126,10 @@ export function createGeminiTools({ getPipelineAvailable, modelChoices, envFlag,
       {
         name: "answer_claude_question",
         description:
-          "Answer the pending question(s) Claude asked after SYSTEM_EVENT_PO_QUESTION. The live shaping session is paused waiting for this — call it only once you have collected every answer by voice, never before.",
+          "Answer the pending question(s) Claude asked after SYSTEM_EVENT_PO_QUESTION. The resident session that asked — " +
+          "shaping, or working on a note — is paused waiting for this; call it only once you have collected every " +
+          "answer by voice, never before. A destructive edit to a note is asked here too, on the same terms as any " +
+          "other live question — never defer or downplay it as less important.",
         parameters: {
           type: "object",
           properties: {
@@ -155,7 +158,7 @@ export function createGeminiTools({ getPipelineAvailable, modelChoices, envFlag,
       {
         name: "set_verb_model",
         description:
-          `Change which Claude model a verb runs on for the active session — e.g. put execute on a stronger model to debug a hard problem, then put it back afterwards. Only call this when the user EXPLICITLY asks to change or switch a model; never on your own initiative. Note that ${STATEFUL_VERBS.join(" and ")} share one live conversation, so changing either one changes both.`,
+          `Change which Claude model a verb runs on for the active session — e.g. put execute on a stronger model to debug a hard problem, then put it back afterwards. Only call this when the user EXPLICITLY asks to change or switch a model; never on your own initiative. Note that ${SHARED_SESSION_VERBS.join(" and ")} share one live conversation, so changing either one changes both.`,
         parameters: {
           type: "object",
           properties: {

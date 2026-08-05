@@ -2,7 +2,7 @@
 
 The open note as a shared work object between the user and Iris: while a note is open in the reader, both sides attend to that one note — it is what a deictic request resolves to, and it has its own resident working session that reads it aloud and edits it by conversation. Closing it returns attention to the vault as a whole.
 
-## ADDED Requirements
+## Requirements
 
 ### Requirement: The open note is owned by the main process
 
@@ -87,7 +87,7 @@ Curation — weaving accumulated spool into linked pages, writing something up a
 #### Scenario: A follow-up resolves against the earlier turn
 
 - **WHEN** the session has read a note back with its paragraphs identified and the user then says "drop the second one"
-- **THEN** it removes the paragraph it itself identified as the second, without re-deriving or asking
+- **THEN** it resolves that to the paragraph it itself identified as the second, without re-deriving the division and without asking which note or which reading is meant
 
 #### Scenario: The conversation survives an unrelated turn
 
@@ -109,6 +109,8 @@ Curation — weaving accumulated spool into linked pages, writing something up a
 Each note SHALL have its own conversation. Returning to a note SHALL resume what was already said about it rather than starting over.
 
 Exactly one session SHALL be resident at a time. Opening a different note SHALL yield the resident slot: the outgoing conversation is retained so it can be resumed, and the incoming note's own conversation is resumed if it has one or started if it does not. Closing a note SHALL end nothing — glancing at the galaxy and reopening the same note SHALL find the conversation exactly as it was.
+
+Yielding the slot SHALL apply to **whatever conversation is resident**, not only to another note's. A conversation about something else entirely holds the same single slot, and SHALL be retained and resumable on exactly these terms when a note session takes it — and SHALL take it back on the same terms. A resident conversation SHALL NEVER be handed a turn belonging to a different conversation: a turn about a note delivered into a conversation about something else would run with the wrong context, the wrong model, and the wrong scoped skills, and would be recorded against the wrong stored conversation.
 
 A single conversation spanning every note would accumulate several notes' context in one window, which is the opposite of knowing what is being worked on. Discarding a conversation on every switch would punish moving between two notes, which is ordinary.
 
@@ -132,6 +134,16 @@ A single conversation spanning every note would accumulate several notes' contex
 - **WHEN** the user has worked on several notes in turn
 - **THEN** only the current note's session is resident; the others are retained as resumable rather than kept alive
 
+#### Scenario: A note session takes the slot from an unrelated conversation
+
+- **WHEN** a conversation about something other than a note is resident and the user opens a note and asks for work on it
+- **THEN** the note gets its own conversation, and the unrelated one is retained and resumable rather than being handed the note's turn
+
+#### Scenario: The unrelated conversation is resumable afterwards
+
+- **WHEN** the user returns to that other conversation after working on a note
+- **THEN** it continues with its own context intact, having lost only its residency
+
 ### Requirement: The note is read back verbatim, by the session that will edit it
 
 When the user asks to hear a note, the working session SHALL produce the reading and the voice layer SHALL speak it **as written** — it SHALL NOT be summarized, condensed, or re-rendered.
@@ -154,6 +166,64 @@ A reading SHALL identify the note's parts in a way the user can refer back to, s
 
 - **WHEN** a note has been read back and the user names one of its parts
 - **THEN** that part is identified without the user being asked to describe it again
+
+### Requirement: An edit that destroys is confirmed first; an edit that only adds is not
+
+Whether the user is asked before an edit lands SHALL depend on whether the edit destroys anything.
+
+An edit that only **adds** SHALL be applied and then reported — what was added, in one line. Nothing already in the note is at risk, a wrong addition is visible and trivially removed, and a confirmation between the user and every sentence they dictate would make dictating a note worse than typing one.
+
+An edit that **removes or replaces** existing text SHALL name what is about to go and SHALL wait for the user's answer before writing anything. It SHALL NOT be applied and then reported.
+
+Naming it SHALL be specific enough that the user can recognize the text without looking at the screen. A positional reference alone — "the second paragraph" — SHALL NOT be treated as naming it, because the whole failure this guards against is the session having resolved a position to the wrong text, and repeating the position back cannot reveal that.
+
+The asymmetry is the point. The vault is plain files with no version history: a paragraph removed because a reference resolved to the wrong text is not recoverable by undoing anything, only by the user noticing and dictating it back from memory. Addition and removal therefore carry unequal cost and SHALL NOT be treated alike.
+
+The confirmation SHALL be asked **inside the conversation**, at the moment the edit is about to happen. It SHALL NOT be satisfied by the pre-dispatch review of the request that opened the session: that review happens before any edit has been decided, so it cannot describe one, and it can be switched off entirely — so it SHALL NOT be what stands between a mis-resolved reference and the user's file.
+
+An unanswered confirmation SHALL leave the note unchanged. Wherever an unanswered question resolves to a default, that default SHALL be the answer that writes nothing.
+
+The confirmation SHALL be enforced by the main process, not only asked for in the session's instructions. An instruction that the runtime does not enforce is a promise with nothing behind it, which this system has already been burned by once. What that enforcement covers SHALL be described as a **guard against the step being skipped, never as containment**: the session has the vault granted as a working directory and can reach a file by routes the guard does not inspect.
+
+#### Scenario: An addition is applied and then reported
+
+- **WHEN** the user asks for a sentence to be added to the open note
+- **THEN** it is added and Iris says what was added, without having asked first
+
+#### Scenario: A removal is confirmed before it happens
+
+- **WHEN** the user asks for a part of the open note to be removed
+- **THEN** Iris names the text that is about to go and waits, and the note is unchanged until the user agrees
+
+#### Scenario: Naming the text, not its position
+
+- **WHEN** a removal is confirmed
+- **THEN** what Iris says back identifies the text itself, not only where it sits in the note
+
+#### Scenario: A rewrite is confirmed on the same terms as a removal
+
+- **WHEN** the user asks for a part of the open note to be rewritten
+- **THEN** it is confirmed before anything is written, because the text it replaces is gone either way
+
+#### Scenario: An unanswered confirmation changes nothing
+
+- **WHEN** a confirmation is left unanswered until it expires
+- **THEN** the note is unchanged, and what the user is told is that nothing was removed
+
+#### Scenario: Declining leaves the note untouched
+
+- **WHEN** the user declines a proposed removal
+- **THEN** nothing is written, and the session learns which part it named wrongly, so the next turn can act on the right one
+
+#### Scenario: The confirmation survives the pre-dispatch review being off
+
+- **WHEN** review mode is set so that nothing is parked before dispatch
+- **THEN** a destructive edit is still confirmed inside the conversation before it is applied
+
+#### Scenario: The confirmation is not left to the instruction alone
+
+- **WHEN** the session attempts a write to the open note that removes existing text without having confirmed it
+- **THEN** the main process holds that write until the confirmation is answered
 
 ### Requirement: Structural edits target the open note when there is one
 

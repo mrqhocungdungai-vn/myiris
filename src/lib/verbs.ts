@@ -11,6 +11,7 @@
 export const ALL_VERBS: Verb[] = [
   "shape_requirements",
   "shape_on_canvas",
+  "work_on_note",
   "execute",
   "finish",
   "investigate",
@@ -22,6 +23,7 @@ export const ALL_VERBS: Verb[] = [
 export const VERB_LABELS: Record<Verb, string> = {
   shape_requirements: "Shape",
   shape_on_canvas: "Canvas",
+  work_on_note: "Note",
   execute: "Build",
   finish: "Finish",
   investigate: "Look",
@@ -31,10 +33,13 @@ export const VERB_LABELS: Record<Verb, string> = {
 
 // Per-verb identity colors, expressed as references to Deep Space's rgb tokens
 // (rgba(var(--x), alpha) accepts a nested var()) so they stay themed. The two
-// shaping verbs share a hue because they share a conversation.
+// shaping verbs share a hue because they share a conversation. work_on_note
+// gets the same hue as capture_learning — singular against plural, but both
+// second-brain work.
 export const VERB_COLORS: Record<Verb, string> = {
   shape_requirements: "var(--violet-rgb)",
   shape_on_canvas: "var(--violet-rgb)",
+  work_on_note: "var(--amber-rgb)",
   execute: "var(--mint-rgb)",
   finish: "var(--mint-rgb)",
   investigate: "var(--cyan-rgb)",
@@ -68,7 +73,10 @@ export function verbLabel(value: unknown): string {
 
 // Which stored Claude conversation a verb resumes. Mirrors the registry's
 // `sessionKey`: the two shaping verbs share one, because they are the same
-// conversation in two media.
+// conversation in two media. work_on_note's real key is derived per note
+// (main-process only, "note:<id>"-shaped) — the renderer has no note id to
+// derive it with, so this names the bare fallback key the registry resolves
+// to with no note open, which is a display convenience only.
 export function sessionKeyForVerb(verb: Verb): string {
   return verb === "shape_requirements" || verb === "shape_on_canvas" ? "stateful" : verb;
 }

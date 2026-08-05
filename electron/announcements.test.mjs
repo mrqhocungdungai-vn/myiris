@@ -182,3 +182,45 @@ describe("announcements: workspace info and completion", () => {
     expect(text).toContain("SYSTEM_EVENT_CLAUDE_COMPLETE");
   });
 });
+
+// open-note-session design D3/5.1: a verbatim read-back path, scoped to
+// work_on_note, that is read AS WRITTEN rather than through the 1-3 sentence
+// summary instruction announceClaudeCompletion carries.
+describe("announcements: the note-working verbatim read-back path", () => {
+  it("emits the UI event unconditionally and skips voice for a cancelled run", () => {
+    const emitEvent = vi.fn();
+    const announcements = make({ emitEvent });
+    announcements.announceNoteWorkingResult({ runId: "r1", task: "read it", status: "cancelled", output: "" });
+    expect(emitEvent).toHaveBeenCalledWith(expect.objectContaining({ type: "claude_completion", status: "cancelled" }));
+  });
+
+  it("instructs the voice layer to read the result exactly as written, never summarized", () => {
+    const session = makeLiveSession();
+    const announcements = make({ getLiveSession: () => session });
+    const reading = "Paragraph one is about the deadline.\n\nParagraph two is about the budget.";
+    announcements.announceNoteWorkingResult({ runId: "r1", task: "read it", status: "completed", output: reading });
+
+    const [{ text }] = session.sendRealtimeInput.mock.calls[0];
+    expect(text).toContain("SYSTEM_EVENT_CLAUDE_COMPLETE");
+    expect(text).toContain("EXACTLY AS WRITTEN");
+    expect(text).not.toMatch(/1-3 sentences/);
+    expect(text).toContain("Paragraph one is about the deadline.");
+    expect(text).toContain("Paragraph two is about the budget.");
+  });
+
+  it("carries no decisions payload — this verb never defers a decision through the summary schema", () => {
+    const emitEvent = vi.fn();
+    const announcements = make({ emitEvent });
+    announcements.announceNoteWorkingResult({ runId: "r1", task: "read it", status: "completed", output: "text" });
+    const [event] = emitEvent.mock.calls[0];
+    expect(event.decisions).toBeNull();
+  });
+
+  it("says plainly when a ceiling, not a failure, cut the run short", () => {
+    const session = makeLiveSession();
+    const announcements = make({ getLiveSession: () => session });
+    announcements.announceNoteWorkingResult({ runId: "r1", task: "read it", status: "limited", output: "partial reading" });
+    const [{ text }] = session.sendRealtimeInput.mock.calls[0];
+    expect(text).toContain("did NOT fail");
+  });
+});

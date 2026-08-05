@@ -29,6 +29,7 @@ import { computeClaudeWorkerEnv } from "./worker-env.mjs";
 import { RUN_STATUS, EMIT_STATUS, toUpdateEvent } from "./run-queue.mjs";
 import { resolveVerb } from "./verbs.mjs";
 import { buildRunPrompt } from "./run-context.mjs";
+import { writeRemovesNothing } from "./note-write-guard.mjs";
 
 // A run that terminated because it could not produce valid structured output
 // after the SDK's own retries. Named as its own cause: the work it did may be
@@ -75,13 +76,74 @@ function withStderr(message, tail) {
   return diagnostics ? `${message}\n\n--- claude stderr (last ${STDERR_TAIL_LINES} lines) ---\n${diagnostics}` : message;
 }
 
+// open-note-session D6/8.2-8.6: the destructive-edit confirmation, wired only
+// for the verb that declares `guardOpenNoteWrites`. Reuses the SAME voice
+// relay a session's own AskUserQuestion already goes through (task 8.4) — no
+// second question channel — and fires independently of whether the session
+// remembered to ask on its own, deciding for itself (via writeRemovesNothing)
+// whether anything is actually at risk. This is a guard against the
+// confirmation being skipped, never containment: the session has the vault
+// granted under bypassPermissions and could reach the file through Bash,
+// which this does not inspect (design.md Risks).
+export function buildNoteWriteGuard({ askUserQuestionViaVoice, workstreamId, notePath }) {
+  if (!notePath) return undefined;
+  const KEEP = "Keep it, don't remove";
+  const REMOVE = "Yes, remove it";
+  return async function confirmWrite(toolName, input) {
+    const filePath = String(input?.file_path ?? "");
+    // A write aimed elsewhere is not this guard's business (task 8.3).
+    if (filePath !== notePath) return { behavior: "allow" };
+
+    let currentContent = "";
+    try {
+      currentContent = fs.readFileSync(notePath, "utf8");
+    } catch {
+      // Nothing on disk yet to remove from (a fresh page).
+      return { behavior: "allow" };
+    }
+
+    if (writeRemovesNothing({ toolName, input, currentContent })) {
+      return { behavior: "allow" };
+    }
+
+    const removedText = toolName === "Edit" ? String(input?.old_string ?? "").trim() : currentContent.trim();
+    const named = removedText.length > 300 ? `${removedText.slice(0, 300)}…` : removedText;
+    const question = {
+      question: `This would remove: "${named}". Go ahead?`,
+      header: "Confirm removal",
+      // The first option MUST write nothing (task 8.5): the relay's own
+      // unanswered-question default resolves to options[0], so an unanswered
+      // confirmation must never be the one that deletes something.
+      options: [
+        { label: KEEP, description: "Leave the note exactly as it is" },
+        { label: REMOVE, description: "Go ahead and remove it" },
+      ],
+    };
+
+    const result = await askUserQuestionViaVoice(workstreamId, [question]);
+    if (result?.behavior === "deny") {
+      return { behavior: "deny", message: result.message ?? "This write is held pending confirmation." };
+    }
+    if (result?.answers?.[question.question] === REMOVE) {
+      return { behavior: "allow" };
+    }
+    // A decline (or the safe timeout default) denies with a message the
+    // session can act on — which part it named wrongly — so the next turn
+    // corrects rather than retries (task 8.6).
+    return {
+      behavior: "deny",
+      message: `The user did not confirm removing: "${named}". Ask what they actually want changed, or leave this text as is.`,
+    };
+  };
+}
+
 /**
  * @param {{
  *   runQueue: any,
  *   emitEvent: (event: any) => void,
  *   findWorkstream: (id: string | null) => any,
  *   persistSessionStore: () => void,
- *   sessionKeyFor: (verb: string) => string,
+ *   sessionKeyFor: (verb: string, state?: any) => string,
  *   resolveVerbModel: (workstream: any, verb: string) => string | null,
  *   agentPrefix: string,
  *   claudeWorkdir: () => string,
@@ -97,6 +159,8 @@ function withStderr(message, tail) {
  *   notesInboxDir: string,
  *   recentUtterances: () => Array<{ text: string, at: number }>,
  *   resolveFocusForPrompt?: () => Array<{ id: string, title: string, tags: string[] }> | null,
+ *   resolveOpenNoteForRun?: () => { id: string, title: string, tags: string[], relativePath: string } | null,
+ *   openNoteWritePath?: () => string | null,
  *   handleClaudeStreamMessage: (run: any, message: any) => void,
  *   pushActivity: (run: any, line: string) => void,
  *   rememberClaudeSessionId: (run: any, claudeSessionId: string | null) => void,
@@ -130,6 +194,11 @@ export function createRunExec({
   // second-brain-focus D5: no focus means no block at all — a capability that
   // hasn't wired this in (or a test that doesn't care) just sees no notes.
   resolveFocusForPrompt = () => null,
+  // open-note-session D4/8.3: same default-to-nothing shape as the focus
+  // above. openNoteWritePath is for this module's own write guard only —
+  // never sent to a run's prompt.
+  resolveOpenNoteForRun = () => null,
+  openNoteWritePath = () => null,
   handleClaudeStreamMessage,
   pushActivity,
   rememberClaudeSessionId,
@@ -176,16 +245,21 @@ export function createRunExec({
 
     // The project is read HERE, at run start, not at submit time: a change
     // proposed while this run sat queued should be seen by it. This is the state
-    // `execute` forks on (design.md D4).
+    // `execute` forks on (design.md D4). openNoteId rides the same resolved
+    // state (open-note-session D2) so work_on_note's sessionKey/vault/etc.
+    // resolve against whichever note is open at THIS moment, not at submit time.
     let verb;
     try {
-      verb = resolveVerb(run.verb, openChangesWithTasks(run.cwd));
+      verb = resolveVerb(run.verb, {
+        changes: openChangesWithTasks(run.cwd),
+        openNoteId: resolveOpenNoteForRun()?.id ?? null,
+      });
     } catch (error) {
       runQueue.finalize(run.run_id, RUN_STATUS.FAILED, error.message);
       return;
     }
     run.verbConfig = verb;
-    // Every dispatch records why it happened: offering seven verbs creates more
+    // Every dispatch records why it happened: offering eight verbs creates more
     // ways to select wrongly than one general tool did, and that trade is only
     // acceptable while every selection is inspectable afterwards. The brief
     // itself is deliberately absent — it is the user's content, not diagnostics.
@@ -275,7 +349,7 @@ export function createRunExec({
     // own: context resets only when the USER asks for it (the "New" session
     // button, an explicit voice new-session request, or picking a different
     // project folder, since Claude stores conversations per directory).
-    const key = sessionKeyFor(verb.verb);
+    const key = sessionKeyFor(verb.verb, verb.projectState);
     const storedSession = workstream?.agent_sessions?.[key] ?? null;
     // Checked before the run starts, not guessed from the error it would
     // otherwise fail with. Only a positive "this session does not exist" drops
@@ -334,7 +408,7 @@ export function createRunExec({
       // picks up the settings of the repository it is working in.
       settingSources: /** @type {Array<"project">} */ (["project"]),
       // Not "all": a run sees only the skills its own work needs, declared by
-      // its verb. Without this, seven verbs would be seven names for one agent —
+      // its verb. Without this, eight verbs would be eight names for one agent —
       // the scoping is the substance and the verb table is the vehicle. The
       // lists and the evidence behind each entry live in run-skills.mjs.
       skills: verb.skills,
@@ -427,7 +501,12 @@ export function createRunExec({
       // plus the fenced focus (second-brain-focus D5) — so the voice layer's
       // summary is no longer the only thing this run sees.
       handle = queryImpl({
-        prompt: buildRunPrompt(verb, { brief: run.task, utterances: recentUtterances(), focus: resolveFocusForPrompt() }),
+        prompt: buildRunPrompt(verb, {
+          brief: run.task,
+          utterances: recentUtterances(),
+          focus: resolveFocusForPrompt(),
+          openNote: resolveOpenNoteForRun(),
+        }),
         options,
       });
       for await (const message of handle) {
@@ -533,7 +612,7 @@ export function createRunExec({
       return;
     }
 
-    const sessionKey = sessionKeyFor(verb.verb);
+    const sessionKey = sessionKeyFor(verb.verb, verb.projectState);
     // Resolved at run start (not submit time) so a model change made while this
     // task was queued still applies.
     run.model = resolveVerbModel(workstream, verb.verb);
@@ -556,6 +635,12 @@ export function createRunExec({
     // cumulatively, which is the behaviour a runaway guard wants.
     const budget = resolveRunBudget(verb.budget);
     const { collect: collectStderr, tail: stderrTail } = createStderrBuffer();
+    // open-note-session D6/8.3: wired only for the verb that declares it,
+    // built from the capability's own resolved absolute path — never a path
+    // supplied by the model.
+    const confirmWrite = verb.guardOpenNoteWrites
+      ? buildNoteWriteGuard({ askUserQuestionViaVoice, workstreamId: workstream.id, notePath: openNoteWritePath() })
+      : undefined;
 
     /** @type {any} */
     let state;
@@ -569,18 +654,25 @@ export function createRunExec({
         resumeSessionId: workstream.agent_sessions?.[sessionKey] ?? null,
         claudeExecutable: claudeBinary(),
         onAskUserQuestion: (workstreamId, questions) => askUserQuestionViaVoice(workstreamId, questions),
+        confirmWrite,
         model: run.model,
         mcpServers,
         budget,
         stderr: collectStderr,
         skills: verb.skills,
+        // A spoken reading, not a build report, for the verb that declares so
+        // (open-note-session: the decisions schema's own "keep it to a few
+        // sentences" instruction would condense exactly what must not be
+        // condensed). `false`, never `undefined`, so po-session.mjs's default
+        // does not silently reapply it.
+        outputFormat: verb.structuredOutput ? DECISION_OUTPUT_FORMAT : false,
         // Set once, when the session opens. Because the session is SHARED, the
         // clause baked in here is whichever verb opened it — which is why each
         // turn also carries its own verb's clause in its prompt below. A session
         // opened by voice must still be told, on the turn that moves to the
         // canvas, that this turn is canvas work.
         systemPrompt: buildSystemPrompt(verb),
-        title: [workstream.label, "Shaping"].filter(Boolean).join(" · "),
+        title: [workstream.label, verb.label].filter(Boolean).join(" · "),
         // The session supplies the per-turn seams; the policy (thresholds,
         // denylist, what a hook does) stays here so both shapes share one.
         // `run` is captured deliberately: hooks that fire between turns route
@@ -635,6 +727,7 @@ export function createRunExec({
             brief: `${verb.clause}\n\n${run.task}`,
             utterances: recentUtterances(),
             focus: resolveFocusForPrompt(),
+            openNote: resolveOpenNoteForRun(),
           }),
           {
             onActivity: (line) => pushActivity(run, line),

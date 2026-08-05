@@ -223,6 +223,50 @@ export function createAnnouncements({
     notifyIris(eventText);
   }
 
+  // open-note-session design D3/5.1: work_on_note's own announcement path,
+  // spoken AS WRITTEN — never the 1-3 sentence summary announceClaudeCompletion
+  // asks for above. Scoped to this one verb rather than a general "don't
+  // summarize" switch (design.md Risks): every other verb keeps the summary
+  // instruction untouched.
+  /**
+   * @param {{ runId: string, task: string, status: string, output: string, usage?: { cost_usd: number|null, num_turns: number|null }|null }} params
+   */
+  function announceNoteWorkingResult({ runId, task, status, output, usage = null }) {
+    // Same UI card path as announceClaudeCompletion — the card is correct for
+    // any terminal status regardless of how the voice layer reads it.
+    emitEvent({
+      type: "claude_completion",
+      run_id: runId,
+      task,
+      status,
+      output,
+      usage: usage ?? null,
+      decisions: null,
+    });
+
+    // A run the user themselves stopped is not "here's your result" — same
+    // rule as announceClaudeCompletion.
+    if (status === runStatus.CANCELLED) return;
+
+    const eventText = [
+      "SYSTEM_EVENT_CLAUDE_COMPLETE",
+      `run_id: ${runId}`,
+      `status: ${status}`,
+      `original_task: ${task}`,
+      "instructions_to_iris:",
+      `- The note-working session has a result for ${userDisplayName()}. Speak the text below EXACTLY AS WRITTEN — do NOT summarize, condense, or re-render it. This is a note reading or a report of an edit, and shortening it defeats the point of asking for it.`,
+      "- If another conversation is in progress, pause it briefly first with something like: One moment, here's your note.",
+      ...(status === runStatus.LIMITED
+        ? [
+            "- This run did NOT fail: it reached the turn or spend ceiling Iris puts on every run. Say so plainly before reading what it produced, and that the work it did complete still stands.",
+          ]
+        : []),
+      fenceUntrustedText(output || "(The note-working session returned no text.)", "the note-working session's result, to be read aloud verbatim"),
+    ].join("\n");
+
+    notifyIris(eventText);
+  }
+
   return {
     notifyIris,
     fenceUntrustedText,
@@ -232,6 +276,7 @@ export function createAnnouncements({
     announceWorkspaceUpdate,
     userDisplayName,
     announceClaudeCompletion,
+    announceNoteWorkingResult,
     sendContextSupplement,
   };
 }

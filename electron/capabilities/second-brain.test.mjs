@@ -297,7 +297,7 @@ describe("second-brain capability: capture_note tool", () => {
 });
 
 describe("second-brain capability: ipcHandlers", () => {
-  it("registers exactly the 8 secondbrain:* channels plus the 2 ambient-capture:* channels, with the correct handle/on split", () => {
+  it("registers exactly the 10 secondbrain:* channels plus the 2 ambient-capture:* channels, with the correct handle/on split", () => {
     const cap = make();
     const byChannel = Object.fromEntries(cap.ipcHandlers.map((h) => [h.channel, h.kind]));
     expect(byChannel).toEqual({
@@ -309,6 +309,8 @@ describe("second-brain capability: ipcHandlers", () => {
       "secondbrain:set-focus": "handle",
       "secondbrain:get-focus": "handle",
       "secondbrain:clear-focus": "handle",
+      "secondbrain:note-opened": "on",
+      "secondbrain:note-closed": "on",
       "ambient-capture:set-enabled": "on",
       "ambient-capture:query": "handle",
     });
@@ -624,6 +626,121 @@ describe("second-brain capability: focus", () => {
   });
 });
 
+// open-note-session: main owns the open note on the same terms as the focus.
+describe("second-brain capability: open note", () => {
+  const NODES = [
+    { id: "a", title: "Alpha", tags: ["x"], ghost: false },
+    { id: "b", title: "Beta", tags: [], ghost: false },
+  ];
+
+  it("secondbrain:note-opened sets the open note; secondbrain:note-closed clears it", async () => {
+    const cap = make();
+    await seedGraph(cap, NODES);
+    handlerFor(cap, "secondbrain:note-opened")(null, "a");
+    expect(cap.resolveOpenNoteForRun()).toEqual({ id: "a", title: "Alpha", tags: ["x"], relativePath: "a.md" });
+    handlerFor(cap, "secondbrain:note-closed")(null);
+    expect(cap.resolveOpenNoteForRun()).toBeNull();
+  });
+
+  it("rejects a malformed id without opening anything", async () => {
+    const cap = make();
+    await seedGraph(cap, NODES);
+    handlerFor(cap, "secondbrain:note-opened")(null, "");
+    expect(cap.resolveOpenNoteForRun()).toBeNull();
+    handlerFor(cap, "secondbrain:note-opened")(null, 42);
+    expect(cap.resolveOpenNoteForRun()).toBeNull();
+  });
+
+  it("opening a different note (switching) replaces the open note", async () => {
+    const cap = make();
+    await seedGraph(cap, NODES);
+    handlerFor(cap, "secondbrain:note-opened")(null, "a");
+    handlerFor(cap, "secondbrain:note-opened")(null, "b");
+    expect(cap.resolveOpenNoteForRun()?.id).toBe("b");
+  });
+
+  it("secondbrain:deactivate clears the open note, on the same terms as the focus", async () => {
+    const cap = make();
+    await seedGraph(cap, NODES);
+    handlerFor(cap, "secondbrain:activate")();
+    handlerFor(cap, "secondbrain:note-opened")(null, "a");
+    handlerFor(cap, "secondbrain:deactivate")();
+    expect(cap.resolveOpenNoteForRun()).toBeNull();
+  });
+
+  it("a renamed open note resolves to its current title", async () => {
+    const cap = make();
+    await seedGraph(cap, NODES);
+    handlerFor(cap, "secondbrain:note-opened")(null, "a");
+    // Renamed on disk and in the graph — the identity ("a") is unchanged.
+    const renamed = [{ id: "a", title: "Alpha (renamed)", tags: ["x"], ghost: false }, NODES[1]];
+    await seedGraph(cap, renamed);
+    expect(cap.resolveOpenNoteForRun()?.title).toBe("Alpha (renamed)");
+  });
+
+  it("a deleted open note resolves to nothing rather than a phantom", async () => {
+    const cap = make();
+    await seedGraph(cap, NODES);
+    handlerFor(cap, "secondbrain:note-opened")(null, "a");
+    await seedGraph(cap, [NODES[1]]); // "a" is gone from the graph
+    expect(cap.resolveOpenNoteForRun()).toBeNull();
+    expect(cap.openNoteWritePath()).toBeNull();
+  });
+
+  it("openNoteWritePath resolves to the real, vault-checked absolute path — never sent to the model", async () => {
+    const cap = make();
+    await seedGraph(cap, NODES);
+    handlerFor(cap, "secondbrain:note-opened")(null, "a");
+    expect(cap.openNoteWritePath()).toBe(fs.realpathSync(path.join(NOTES_VAULT_DIR, "a.md")));
+    // The run-facing shape carries the relative path, never the absolute one.
+    expect(cap.resolveOpenNoteForRun()).not.toHaveProperty("absolutePath");
+    expect(cap.resolveOpenNoteForRun().relativePath).toBe("a.md");
+  });
+
+  it("announces SYSTEM_EVENT_NOTE_OPENED on open and SYSTEM_EVENT_NOTE_CLOSED on close", async () => {
+    const notifyIris = vi.fn();
+    const cap = make({ notifyIris });
+    await seedGraph(cap, NODES);
+
+    handlerFor(cap, "secondbrain:note-opened")(null, "a");
+    expect(notifyIris.mock.calls[0][0].join("\n")).toContain("SYSTEM_EVENT_NOTE_OPENED");
+    expect(notifyIris.mock.calls[0][0].join("\n")).toContain("Alpha");
+
+    handlerFor(cap, "secondbrain:note-closed")(null);
+    expect(notifyIris.mock.calls[1][0].join("\n")).toContain("SYSTEM_EVENT_NOTE_CLOSED");
+  });
+
+  it("closing when nothing is open announces nothing", async () => {
+    const notifyIris = vi.fn();
+    const cap = make({ notifyIris });
+    await seedGraph(cap, NODES);
+    handlerFor(cap, "secondbrain:note-closed")(null);
+    expect(notifyIris).not.toHaveBeenCalled();
+  });
+
+  it("switching notes announces the new one (a close-then-open would be wrong: it never closed)", async () => {
+    const notifyIris = vi.fn();
+    const cap = make({ notifyIris });
+    await seedGraph(cap, NODES);
+    handlerFor(cap, "secondbrain:note-opened")(null, "a");
+    notifyIris.mockClear();
+    handlerFor(cap, "secondbrain:note-opened")(null, "b");
+    expect(notifyIris).toHaveBeenCalledTimes(1);
+    expect(notifyIris.mock.calls[0][0].join("\n")).toContain("SYSTEM_EVENT_NOTE_OPENED");
+    expect(notifyIris.mock.calls[0][0].join("\n")).toContain("Beta");
+  });
+
+  it("carries no body in either the announcement or the run-facing shape", async () => {
+    const notifyIris = vi.fn();
+    const cap = make({ notifyIris });
+    const withBody = [{ id: "a", title: "Alpha", tags: [], ghost: false, body: "SECRET NOTE BODY" }];
+    await seedGraph(cap, withBody);
+    handlerFor(cap, "secondbrain:note-opened")(null, "a");
+    expect(notifyIris.mock.calls[0][0].join("\n")).not.toContain("SECRET NOTE BODY");
+    expect(JSON.stringify(cap.resolveOpenNoteForRun())).not.toContain("SECRET NOTE BODY");
+  });
+});
+
 describe("second-brain capability: promptFragment focus line", () => {
   const NODES = [{ id: "a", title: "Alpha", tags: [], ghost: false }];
 
@@ -651,6 +768,49 @@ describe("second-brain capability: promptFragment focus line", () => {
     const fragment = cap.promptFragment();
     expect(fragment).toContain("focused");
     expect(fragment).toContain("Alpha");
+  });
+
+  // open-note-session D1: exactly one referent is ever described.
+  describe("referent precedence against the open note", () => {
+    const TWO_NODES = [
+      { id: "a", title: "Alpha", tags: [], ghost: false },
+      { id: "b", title: "Beta", tags: [], ghost: false },
+    ];
+
+    it("describes the open note and says nothing about the focus while one is open", async () => {
+      const cap = make();
+      await seedGraph(cap, TWO_NODES);
+      handlerFor(cap, "secondbrain:activate")();
+      handlerFor(cap, "secondbrain:set-focus")(null, "a");
+      handlerFor(cap, "secondbrain:note-opened")(null, "b");
+      const fragment = cap.promptFragment();
+      expect(fragment).toContain("note open in the reader");
+      expect(fragment).toContain("Beta");
+      expect(fragment).not.toContain("focused");
+      expect(fragment).not.toContain("Alpha");
+    });
+
+    it("describes the focus again the moment the note closes — the focus was never cleared", async () => {
+      const cap = make();
+      await seedGraph(cap, TWO_NODES);
+      handlerFor(cap, "secondbrain:activate")();
+      handlerFor(cap, "secondbrain:set-focus")(null, "a");
+      handlerFor(cap, "secondbrain:note-opened")(null, "b");
+      handlerFor(cap, "secondbrain:note-closed")(null);
+      const fragment = cap.promptFragment();
+      expect(fragment).toContain("focused");
+      expect(fragment).toContain("Alpha");
+      expect(fragment).not.toContain("note open in the reader");
+    });
+
+    it("opening a note never clears the focus itself", async () => {
+      const cap = make();
+      await seedGraph(cap, TWO_NODES);
+      handlerFor(cap, "secondbrain:activate")();
+      handlerFor(cap, "secondbrain:set-focus")(null, "a");
+      handlerFor(cap, "secondbrain:note-opened")(null, "b");
+      expect(handlerFor(cap, "secondbrain:get-focus")().ids).toEqual(["a"]);
+    });
   });
 });
 
@@ -736,5 +896,45 @@ describe("second-brain capability: mutate_vault_notes tool", () => {
     await seedGraph(cap, NODES);
     const result = await cap.mutateVaultNotes({ operation: "delete", note_titles: "Alpha" });
     expect(result.status).toBe("error");
+  });
+
+  // open-note-session: "Structural edits target the open note when there is
+  // one" — explicit titles > open note > focus.
+  describe("target precedence: explicit titles > open note > focus", () => {
+    const THREE_NODES = [
+      { id: "a", title: "Alpha", tags: [], ghost: false, body: "# Alpha\n" },
+      { id: "b", title: "Beta", tags: [], ghost: false, body: "# Beta\n" },
+      { id: "c", title: "Gamma", tags: [], ghost: false, body: "# Gamma\n" },
+    ];
+
+    it("tags the open note when one is open, ignoring the focus", async () => {
+      const cap = make();
+      await seedGraph(cap, THREE_NODES);
+      handlerFor(cap, "secondbrain:set-focus")(null, "a");
+      handlerFor(cap, "secondbrain:note-opened")(null, "b");
+      const result = await cap.mutateVaultNotes({ operation: "set_tags", tags: "urgent" });
+      expect(result.status).toBe("ok");
+      expect(fs.readFileSync(path.join(NOTES_VAULT_DIR, "b.md"), "utf8")).toContain("urgent");
+      expect(fs.readFileSync(path.join(NOTES_VAULT_DIR, "a.md"), "utf8")).not.toContain("urgent");
+    });
+
+    it("named titles still win over an open note", async () => {
+      const cap = make();
+      await seedGraph(cap, THREE_NODES);
+      handlerFor(cap, "secondbrain:note-opened")(null, "a");
+      const result = await cap.mutateVaultNotes({ operation: "link", note_titles: "Beta, Gamma" });
+      expect(result.status).toBe("ok");
+      expect(fs.readFileSync(path.join(NOTES_VAULT_DIR, "b.md"), "utf8")).toContain("[[c]]");
+      expect(fs.readFileSync(path.join(NOTES_VAULT_DIR, "a.md"), "utf8")).not.toContain("[[");
+    });
+
+    it("falls back to the focus when no note is open", async () => {
+      const cap = make();
+      await seedGraph(cap, THREE_NODES);
+      handlerFor(cap, "secondbrain:set-focus")(null, "a");
+      const result = await cap.mutateVaultNotes({ operation: "set_tags", tags: "urgent" });
+      expect(result.status).toBe("ok");
+      expect(fs.readFileSync(path.join(NOTES_VAULT_DIR, "a.md"), "utf8")).toContain("urgent");
+    });
   });
 });

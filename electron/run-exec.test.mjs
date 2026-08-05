@@ -1,5 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
-import { createRunExec } from "./run-exec.mjs";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { createRunExec, buildNoteWriteGuard } from "./run-exec.mjs";
 import { buildRunInstructions } from "./role-prompt.mjs";
 import { resolveVerb } from "./verbs.mjs";
 import { runUsageFrom } from "./claude-stream.mjs";
@@ -593,5 +596,116 @@ describe("run-exec: the user's own words reach the run", () => {
     const queryImpl = fakeQuery([resultMessage()]);
     await make({ queryImpl, recentUtterances: () => many }).startStatelessRun(makeRun(), verbFor());
     expect(queryImpl.calls[0].prompt.length).toBeLessThan(6000);
+  });
+});
+
+// open-note-session design D6/8: the destructive-edit confirmation, wired only
+// for the verb that declares `guardOpenNoteWrites`. buildNoteWriteGuard is the
+// caller half of the seam po-session.mjs's buildCanUseTool exposes — this
+// exercises it directly against a real file, the same convention
+// vault-write.test.mjs uses.
+describe("run-exec: the note write guard", () => {
+  function withNote(content) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "iris-note-guard-"));
+    const notePath = path.join(dir, "note.md");
+    fs.writeFileSync(notePath, content);
+    return notePath;
+  }
+
+  it("returns undefined (no guard at all) when there is no open note", () => {
+    expect(buildNoteWriteGuard({ askUserQuestionViaVoice: vi.fn(), workstreamId: "ws1", notePath: null })).toBeUndefined();
+  });
+
+  it("allows a write aimed at a different file without asking anything", async () => {
+    const notePath = withNote("Paragraph one.\n\nParagraph two.");
+    const askUserQuestionViaVoice = vi.fn();
+    const confirmWrite = buildNoteWriteGuard({ askUserQuestionViaVoice, workstreamId: "ws1", notePath });
+
+    const result = await confirmWrite("Edit", { file_path: "/somewhere/else.md", old_string: "x", new_string: "" });
+    expect(result).toEqual({ behavior: "allow" });
+    expect(askUserQuestionViaVoice).not.toHaveBeenCalled();
+  });
+
+  it("allows a pure-insertion Edit to the open note without asking", async () => {
+    const notePath = withNote("Paragraph one.");
+    const askUserQuestionViaVoice = vi.fn();
+    const confirmWrite = buildNoteWriteGuard({ askUserQuestionViaVoice, workstreamId: "ws1", notePath });
+
+    const result = await confirmWrite("Edit", {
+      file_path: notePath,
+      old_string: "Paragraph one.",
+      new_string: "Paragraph one.\n\nParagraph two.",
+    });
+    expect(result).toEqual({ behavior: "allow" });
+    expect(askUserQuestionViaVoice).not.toHaveBeenCalled();
+  });
+
+  it("holds a destructive Edit until confirmed, and orders the first option as the no-op", async () => {
+    const notePath = withNote("Paragraph one.\n\nParagraph two.");
+    const askUserQuestionViaVoice = vi.fn(async (_workstreamId, questions) => {
+      expect(questions[0].options[0].label).toBe("Keep it, don't remove"); // task 8.5
+      return { behavior: "allow", answers: { [questions[0].question]: "Yes, remove it" } };
+    });
+    const confirmWrite = buildNoteWriteGuard({ askUserQuestionViaVoice, workstreamId: "ws1", notePath });
+
+    const result = await confirmWrite("Edit", {
+      file_path: notePath,
+      old_string: "Paragraph one.\n\nParagraph two.",
+      new_string: "Paragraph one.",
+    });
+    expect(askUserQuestionViaVoice).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ behavior: "allow" });
+  });
+
+  it("denies the write when the user declines", async () => {
+    const notePath = withNote("Paragraph one.\n\nParagraph two.");
+    const askUserQuestionViaVoice = vi.fn(async (_workstreamId, questions) => ({
+      behavior: "allow",
+      answers: { [questions[0].question]: "Keep it, don't remove" },
+    }));
+    const confirmWrite = buildNoteWriteGuard({ askUserQuestionViaVoice, workstreamId: "ws1", notePath });
+
+    const result = await confirmWrite("Edit", {
+      file_path: notePath,
+      old_string: "Paragraph one.\n\nParagraph two.",
+      new_string: "Paragraph one.",
+    });
+    expect(result.behavior).toBe("deny");
+    // Names which part it identified, so the next turn corrects (task 8.6).
+    expect(result.message).toContain("Paragraph one.\n\nParagraph two.");
+  });
+
+  it("writes nothing when the confirmation goes unanswered (the relay's own timeout default is options[0])", async () => {
+    const notePath = withNote("Paragraph one.\n\nParagraph two.");
+    // Mirrors defaultPoAnswers' behavior: an unanswered question resolves to
+    // options[0].label, which MUST be the no-op (task 8.5/9.9).
+    const askUserQuestionViaVoice = vi.fn(async (_workstreamId, questions) => ({
+      behavior: "allow",
+      answers: { [questions[0].question]: questions[0].options[0].label },
+    }));
+    const confirmWrite = buildNoteWriteGuard({ askUserQuestionViaVoice, workstreamId: "ws1", notePath });
+
+    const result = await confirmWrite("Write", { file_path: notePath, content: "Paragraph one." });
+    expect(result.behavior).toBe("deny");
+  });
+
+  it("denies when the question is abandoned (a session reset mid-confirmation)", async () => {
+    const notePath = withNote("Paragraph one.\n\nParagraph two.");
+    const askUserQuestionViaVoice = vi.fn(async () => ({ behavior: "deny", message: "Question abandoned." }));
+    const confirmWrite = buildNoteWriteGuard({ askUserQuestionViaVoice, workstreamId: "ws1", notePath });
+
+    const result = await confirmWrite("Write", { file_path: notePath, content: "Paragraph one." });
+    expect(result).toEqual({ behavior: "deny", message: "Question abandoned." });
+  });
+
+  it("allows a Write to a note that does not exist yet — nothing to remove from", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "iris-note-guard-"));
+    const notePath = path.join(dir, "brand-new.md");
+    const askUserQuestionViaVoice = vi.fn();
+    const confirmWrite = buildNoteWriteGuard({ askUserQuestionViaVoice, workstreamId: "ws1", notePath });
+
+    const result = await confirmWrite("Write", { file_path: notePath, content: "First thought." });
+    expect(result).toEqual({ behavior: "allow" });
+    expect(askUserQuestionViaVoice).not.toHaveBeenCalled();
   });
 });

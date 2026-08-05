@@ -86,6 +86,16 @@ const STATELESS = "stateless";
 // accumulated context matters most.
 export const STATEFUL_SESSION_KEY = "stateful";
 
+// open-note-session D2: `work_on_note`'s session key is derived PER NOTE, not
+// shared with STATEFUL_SESSION_KEY — editing a note is not the shaping
+// conversation, and sharing would bind both to one model and one context
+// window. Falls back to this bare key on the (should-not-happen) call with no
+// note open, since a session key must always resolve to something.
+const NOTE_SESSION_KEY_FALLBACK = "work_on_note";
+function noteSessionKey(state) {
+  return state.openNoteId ? `note:${state.openNoteId}` : NOTE_SESSION_KEY_FALLBACK;
+}
+
 // The thin schema both stateful verbs take (design.md D7). The model on the
 // other end is the strongest available, holds the session context, and can pause
 // to ask by voice — so a thin brief is a starting point it repairs, not a loss.
@@ -112,7 +122,11 @@ const THIN_PARAMS = Object.freeze({
  * One record per verb. Every field is either a value or a function of the
  * resolved project state — see `resolveVerb`.
  *
- * @typedef {{ hasOpenChange: boolean, changes: string[] }} ProjectState
+ * @typedef {{ hasOpenChange: boolean, changes: string[], openNoteId: string|null }} ProjectState
+ * @typedef {{ changes?: string[], openNoteId?: string|null } | string[] | null | undefined} ProjectStateInput
+ * A caller's raw shorthand for a project state — anything `projectState()` can
+ * normalize. `openNoteId` is optional here (unlike on the resolved
+ * `ProjectState`) because most callers have no note to report at all.
  */
 const VERBS = Object.freeze({
   // ---- stateful: a resident session that may pause and ask by voice --------
@@ -157,6 +171,50 @@ const VERBS = Object.freeze({
     basePersona: STATEFUL,
     clause:
       "Work on the drawing canvas with the user. Read the canvas before answering about it, and draw on it rather than describing what you would draw.",
+  },
+
+  work_on_note: {
+    label: "Note",
+    description:
+      "Work on the ONE note currently open on screen in the note reader — read it back aloud, then remove, add, or " +
+      "rewrite parts of it as the user asks, across turns of one continuing conversation about that note. Use when a " +
+      "note is open and the user asks to hear it, change it, fix it, or clean it up. Do NOT use this for weaving " +
+      "accumulated captures into pages, writing something up as a new page, or answering 'what do my notes say about " +
+      "X' — that is capture_learning's job, over everything that has accumulated, not this one open note.",
+    stateful: true,
+    park: PARK.ON_OPEN,
+    // NOT STATEFUL_SESSION_KEY: this is not the shaping conversation, and per
+    // note rather than per verb (design D2) — resolved per run against
+    // whichever note is open, so returning to a note resumes its own
+    // conversation instead of accumulating several notes in one window.
+    sessionKey: noteSessionKey,
+    model: STRONGEST,
+    budget: "stateful",
+    skills: NOTE_SKILLS,
+    mcpServers: [],
+    // The vault lives outside the project, so it has to be GRANTED as a
+    // working directory rather than described in prose (same as
+    // capture_learning).
+    vault: true,
+    // A spoken reading, not a build report — forcing it through the
+    // decisions schema's "keep it to a few sentences" summary would be
+    // exactly the condensing the verbatim read-back requirement forbids (see
+    // announcements.mjs's note-reading path).
+    structuredOutput: false,
+    // open-note-session D6: the main-process write guard (po-session.mjs's
+    // canUseTool seam, wired in run-exec.mjs) applies only to this verb.
+    guardOpenNoteWrites: true,
+    params: THIN_PARAMS,
+    basePersona: STATEFUL,
+    clause:
+      "Work on the ONE note currently open on screen (its identity, title, tags, and vault-relative path are in your " +
+      "context below). When asked to hear it, read it back AS WRITTEN — do not summarize or condense it — and identify " +
+      "its parts (e.g. by paragraph) so a follow-up can name one. An edit that only ADDS text: apply it, then report " +
+      "what you added in one line — do not ask first. An edit that REMOVES or REWRITES existing text: before writing " +
+      "anything, name the exact text about to go (the text itself, not just its position — 'the part about the " +
+      "project deadline', not 'the second paragraph') and wait for the user's answer via AskUserQuestion; only write " +
+      "once they agree. This confirmation discipline is required for every removal or rewrite, with no exception for " +
+      "review mode or any other setting.",
   },
 
   // ---- stateless: one-shot, autonomous, never asks -------------------------
@@ -340,6 +398,15 @@ export const VERB_NAMES = Object.freeze(Object.keys(VERBS));
 /** The verbs whose runs may pause and ask by voice. */
 export const STATEFUL_VERBS = Object.freeze(VERB_NAMES.filter((name) => VERBS[name].stateful));
 
+// The subset of STATEFUL_VERBS that share STATEFUL_SESSION_KEY — the same
+// conversation in two media (design.md D3). Distinct from STATEFUL_VERBS
+// itself since open-note-session D2: work_on_note is ALSO stateful but
+// deliberately keeps its own per-note session, so "may pause and ask" and
+// "shares this one conversation" are no longer the same set.
+export const SHARED_SESSION_VERBS = Object.freeze(
+  STATEFUL_VERBS.filter((name) => VERBS[name].sessionKey === STATEFUL_SESSION_KEY),
+);
+
 /**
  * True when `name` is a verb this build knows.
  * @param {unknown} name
@@ -349,18 +416,22 @@ export function isVerb(name) {
 }
 
 /** The empty project state, for a call site that has no project to read. */
-export const NO_PROJECT_STATE = Object.freeze({ hasOpenChange: false, changes: [] });
+export const NO_PROJECT_STATE = Object.freeze({ hasOpenChange: false, changes: [], openNoteId: null });
 
 /**
  * Normalizes whatever a caller knows about the project into the shape the
  * registry's functions read. Accepts the raw `openChangesWithTasks()` array so a
- * call site never has to build the object by hand.
- * @param {{ changes?: string[] } | string[] | null | undefined} input
+ * call site never has to build the object by hand. `openNoteId` (open-note-
+ * session design D2) is only ever read from the object form — a caller
+ * passing the bare changes array has no note to report, which is what every
+ * existing call site does.
+ * @param {{ changes?: string[], openNoteId?: string|null } | string[] | null | undefined} input
  * @returns {ProjectState}
  */
 export function projectState(input) {
   const changes = Array.isArray(input) ? input : Array.isArray(input?.changes) ? input.changes : [];
-  return { hasOpenChange: changes.length > 0, changes: [...changes] };
+  const openNoteId = Array.isArray(input) ? null : input?.openNoteId ?? null;
+  return { hasOpenChange: changes.length > 0, changes: [...changes], openNoteId };
 }
 
 // A field may be a function of the project state; everything else passes
@@ -377,13 +448,14 @@ function resolveField(value, state) {
  * directly.
  *
  * @param {string} name
- * @param {ProjectState | string[] | null} [state]
+ * @param {ProjectStateInput} [state]
  * @returns {{
  *   verb: string, label: string, description: string, stateful: boolean,
  *   park: string, sessionKey: string, model: string, budget: string,
  *   skills: string[], mcpServers: string[], vault: boolean,
  *   structuredOutput: boolean, disallowedTools: string[], params: object,
- *   basePersona: string, clause: string, projectState: ProjectState,
+ *   basePersona: string, clause: string, guardOpenNoteWrites: boolean,
+ *   projectState: ProjectState,
  * }}
  */
 export function resolveVerb(name, state = NO_PROJECT_STATE) {
@@ -398,13 +470,20 @@ export function resolveVerb(name, state = NO_PROJECT_STATE) {
     description: record.description,
     stateful: record.stateful,
     park: record.park,
-    sessionKey: record.sessionKey,
+    // A verb's own identity is dynamic for exactly one verb today (open-note-
+    // session D2: work_on_note derives it per note) — resolved through the
+    // same field-or-function policy as every other field, not read raw.
+    sessionKey: resolveField(record.sessionKey, resolvedState),
     model: resolveField(record.model, resolvedState),
     budget: record.budget,
     skills: resolveField(record.skills, resolvedState),
     mcpServers: resolveField(record.mcpServers, resolvedState),
     vault: record.vault,
     structuredOutput: resolveField(record.structuredOutput, resolvedState),
+    // open-note-session D6: declared per verb, read by run-exec.mjs to decide
+    // whether to wire the destructive-write confirmation seam — never a
+    // hardcoded verb-name check outside the registry.
+    guardOpenNoteWrites: Boolean(record.guardOpenNoteWrites),
     // A stateless verb's inability to ask is enforced by the run's
     // configuration, not by instruction — "DEV never asks" was a prompt promise
     // with nothing behind it. `investigate` additionally cannot modify: a verb
@@ -424,7 +503,7 @@ export function resolveVerb(name, state = NO_PROJECT_STATE) {
 /**
  * Every verb resolved against one project state, in declaration order — what
  * `gemini-tools.mjs` builds its declarations from.
- * @param {ProjectState | string[] | null} [state]
+ * @param {ProjectStateInput} [state]
  */
 export function resolveAllVerbs(state = NO_PROJECT_STATE) {
   return VERB_NAMES.map((name) => resolveVerb(name, state));

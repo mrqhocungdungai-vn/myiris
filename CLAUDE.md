@@ -14,7 +14,7 @@ A desktop voice companion (Electron + React + Vite + TypeScript), **macOS only**
 app, and chat needs only `GEMINI_API_KEY`. Iris **ships Claude Code inside the
 app** (the Agent SDK's native binary — nothing to install), so adding a Claude
 credential unlocks the build pipeline: Gemini delegates real work to Claude
-through **seven named verbs**, each with its own parameter schema, scoped skills,
+through **eight named verbs**, each with its own parameter schema, scoped skills,
 model, and ceilings — all declared in one registry, `electron/verbs.mjs`. **Iris
 picks the verb per request**; the user never names a role or operates a control.
 
@@ -89,7 +89,7 @@ tracks *that*, guarded by `scripts/check-types-node.mjs`.
 - **Configure a run only through options the Agent SDK declares.** An undeclared option is silently dropped — `appendSystemPrompt` was, for months, and the resident session ran with no base prompt while the tests claimed otherwise. `electron/sdk-options.test.mjs` asserts each run shape's complete options key set; add a field ⇒ add it there. Full audit in [docs/REFERENCE.md](docs/REFERENCE.md).
 - **Every run carries a turn and spend ceiling**, and a run that hits one finalizes as `limited` — its own terminal status, never `failed`. Cost is recorded from the runtime, never estimated.
 - **A verb is defined in exactly one place.** `gemini-tools.mjs` derives its declarations from the registry, `run-dispatch.mjs` derives the park label, `run-exec.mjs` derives the `query()` options. Adding a verb means adding a record — three hand-wired copies is the mechanism that produced the silently-dropped `appendSystemPrompt`.
-- **`skills` is scoped per verb, and that scoping is the substance.** Without it, seven verbs would be seven names for one agent.
+- **`skills` is scoped per verb, and that scoping is the substance.** Without it, eight verbs would be eight names for one agent.
 - **The review gate reads the verb's declared label, never the brief's text**, and it is enforced in the main process at dispatch — never by asking the voice layer to honour an instruction.
 - `bypassPermissions` is the intentional default for the headless worker. The `PreToolUse` denylist is a **guard against accidents, not a sandbox** — never describe it as containment.
 - Config is env-driven with `IRIS_*` / `GEMINI_*` prefixes; add new options the same way and **document them in `.env.example`**, which is the authoritative list.

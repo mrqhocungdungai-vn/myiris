@@ -23,7 +23,7 @@ import { activityEmitIntervalMs } from "./user-config.mjs";
  *   emitEvent: (event: any) => void,
  *   notifyIris: (lines: string | string[], opts?: { bufferIfOffline?: boolean }) => void,
  *   findWorkstream: (id: string | null) => any,
- *   sessionKeyFor: (verb: string) => string,
+ *   sessionKeyFor: (verb: string, state?: any) => string,
  *   persistSessionStore: () => void,
  *   emitSessions: () => void,
  * }} deps
@@ -107,7 +107,11 @@ export function createRunStream({
     run.claude_session_id = claudeSessionId;
     const workstream = findWorkstream(run.workstream_id);
     if (!workstream) return;
-    const key = sessionKeyFor(run.verb);
+    // open-note-session D2: work_on_note's key is per-note, resolved against
+    // whichever note was open when the RUN started (run.verbConfig.projectState,
+    // set once in run-exec.mjs's startClaudeRun) — not against whatever note
+    // happens to be open now, which could have changed mid-turn.
+    const key = sessionKeyFor(run.verb, run.verbConfig?.projectState);
     const changed =
       workstream.agent_sessions[key] !== claudeSessionId || workstream.last_verb_used !== run.verb;
     workstream.agent_sessions[key] = claudeSessionId;

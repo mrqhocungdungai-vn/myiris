@@ -127,6 +127,19 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
       // beyond the rejection, and the announcement gate above already filters
       // those out for exactly that reason.
       secondBrainCapability?.captureRunOutcome?.(run);
+      // open-note-session 5.1: work_on_note's result is read back AS WRITTEN,
+      // never through announceClaudeCompletion's 1-3 sentence summary
+      // instruction — scoped to this one verb, not a general switch.
+      if (run.verb === "work_on_note") {
+        announceNoteWorkingResult({
+          runId: run.run_id,
+          task: run.task,
+          status: run.status,
+          output: String(run.output || "").slice(0, 8000),
+          usage: run.usage ?? null,
+        });
+        return;
+      }
       announceClaudeCompletion({
         runId: run.run_id,
         task: run.task,
@@ -189,6 +202,7 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     announceWorkspaceUpdate,
     userDisplayName,
     announceClaudeCompletion,
+    announceNoteWorkingResult,
     sendContextSupplement,
   } = announcements;
 

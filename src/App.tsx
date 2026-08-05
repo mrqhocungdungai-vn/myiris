@@ -330,6 +330,7 @@ export default function App() {
 
   function closeNoteReader() {
     setOpenNote(null);
+    window.iris.reportNoteClosed();
   }
 
   async function openNoteFromGalaxy(id: string, title: string) {
@@ -339,6 +340,9 @@ export default function App() {
     const result = await window.iris.readSecondBrainNote(id);
     if (!result.ok) return;
     setOpenNote({ id, title, markdown: result.content });
+    // open-note-session: main is the single authority on which note is open —
+    // the renderer reports every step of this lifecycle to it.
+    window.iris.reportNoteOpened(id);
   }
 
   function exitHud() {
@@ -685,7 +689,10 @@ export default function App() {
   // galaxy back on would pop the stale reader open again over a freshly-
   // loading graph (second-brain-gesture-nav design.md D7 — ship both).
   useEffect(() => {
-    if (!secondBrainActive) setOpenNote(null);
+    if (!secondBrainActive) {
+      setOpenNote(null);
+      window.iris.reportNoteClosed();
+    }
   }, [secondBrainActive]);
 
   // First-run onboarding + settings affordance (design.md D3/D4): load the
@@ -1569,6 +1576,7 @@ export default function App() {
     setShowHistory(false);
     // Reader single-instance invariant, other direction (design.md D5).
     setOpenNote(null);
+    window.iris.reportNoteClosed();
   }
 
   function closeReader() {

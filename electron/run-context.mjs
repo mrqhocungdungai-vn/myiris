@@ -59,6 +59,18 @@ function renderFocusLines(focus) {
   return focus.map((note) => `- ${note.id}: ${note.title}${note.tags?.length ? ` (tags: ${note.tags.join(", ")})` : ""}`).join("\n");
 }
 
+// open-note-session design D4: the open note joins the focus and the
+// transcript at this single composition point, fenced on the same terms —
+// never as a per-verb schema parameter (task 6.3). Carries identity, title,
+// tags, and the vault-relative path (the path because the verb that receives
+// this has the vault granted and must open the file) — never the body.
+const OPEN_NOTE_LABEL = "identity/title/tags/vault-relative-path of the note currently open in the reader, as background context only";
+
+/** The open note's own line — identity, title, tags, vault-relative path. Never the body. */
+function renderOpenNoteLine(note) {
+  return `- ${note.id}: ${note.title}${note.tags?.length ? ` (tags: ${note.tags.join(", ")})` : ""} — ${note.relativePath}`;
+}
+
 /** Turns `expected_output` into `Expected output`. */
 function humanize(key) {
   const words = key.replace(/_/g, " ");
@@ -131,11 +143,27 @@ export function boundTranscript(utterances = []) {
  * user's own speech, and a note the user owns, are not exemptions.
  *
  * @param {{ stateful: boolean }} verb - a resolved verb
- * @param {{ brief: string, utterances?: Array<{ text: string, at: number }>, focus?: Array<{ id: string, title: string, tags: string[] }> | null }} input
+ * @param {{ brief: string, utterances?: Array<{ text: string, at: number }>, focus?: Array<{ id: string, title: string, tags: string[] }> | null, openNote?: { id: string, title: string, tags: string[], relativePath: string } | null }} input
  * @returns {string}
  */
-export function buildRunPrompt(verb, { brief, utterances = [], focus = null }) {
+export function buildRunPrompt(verb, { brief, utterances = [], focus = null, openNote = null }) {
   const parts = [brief];
+
+  // open-note-session design D4: composed here, at the single composition
+  // point, on the same terms as the focus below — never a per-verb schema
+  // parameter. Ahead of the focus block because it is the higher-precedence
+  // referent (open-note-session: "the open note outranks the focus"); both
+  // may in principle be non-null (a note can be open while notes are
+  // focused), so this does not suppress the focus block — that precedence is
+  // about the voice layer's single described referent, not about what a run
+  // receives.
+  if (openNote) {
+    parts.push(
+      "",
+      "The note currently open in the reader (identity/title/tags/vault-relative path only, not its body), for background only:",
+      fenceUntrustedText(renderOpenNoteLine(openNote), OPEN_NOTE_LABEL),
+    );
+  }
 
   // second-brain-focus D5: "It SHALL NOT be delivered as a new parameter
   // added to each verb's schema" — composed here, at the single composition

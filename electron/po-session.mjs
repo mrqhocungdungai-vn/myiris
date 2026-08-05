@@ -84,32 +84,47 @@ function createUserMessageChannel() {
 
 const sessions = new Map(); // workstreamId -> session state
 
-function buildCanUseTool(state, onAskUserQuestion) {
-  // Only AskUserQuestion is intercepted for the voice relay; every other tool
-  // resolves as an explicit allow — a no-op under bypassPermissions, and the
-  // fallback path (see design.md "Verified against the installed SDK") if a
-  // future permissionMode change makes canUseTool the sole gate for everything.
+function buildCanUseTool(state, onAskUserQuestion, confirmWrite) {
+  // Only AskUserQuestion (and, when the caller supplies one, Edit/Write) is
+  // intercepted; every other tool resolves as an explicit allow — a no-op
+  // under bypassPermissions, and the fallback path (see design.md "Verified
+  // against the installed SDK") if a future permissionMode change makes
+  // canUseTool the sole gate for everything.
   //
   // onAskUserQuestion resolves with a { behavior, answers?, message? }
   // descriptor, not a bare answers map — main.mjs's PendingQuestion decides
   // allow (voice/UI answer, or timeout default) vs deny (a deliberate session
   // reset abandoned the question) and this stays a thin translator, never
   // learning what "reset" vs "timeout" means.
+  //
+  // confirmWrite (open-note-session D6/D8.2) is the SAME kind of seam, for a
+  // different pair of tools: an injected `(toolName, input) => Promise<{
+  // behavior, message? }>` that decides whether an Edit/Write may proceed.
+  // This module stays completely ignorant of notes, vaults, and paths — it
+  // takes the predicate exactly as it takes onAskUserQuestion, and only calls
+  // it when the caller supplied one (every verb but the one that declares
+  // `guardOpenNoteWrites` passes nothing here, so this is a no-op for them).
   /**
    * @param {string} toolName
    * @param {any} input
    * @returns {Promise<import("@anthropic-ai/claude-agent-sdk").PermissionResult>}
    */
   return async function canUseTool(toolName, input) {
-    if (toolName !== "AskUserQuestion") {
-      return { behavior: "allow", updatedInput: input };
+    if (toolName === "AskUserQuestion") {
+      const questions = Array.isArray(input?.questions) ? input.questions : [];
+      const result = await onAskUserQuestion(state.workstreamId, questions);
+      if (result?.behavior === "deny") {
+        return { behavior: "deny", message: result.message ?? "Question abandoned." };
+      }
+      return { behavior: "allow", updatedInput: { ...input, answers: result.answers ?? {} } };
     }
-    const questions = Array.isArray(input?.questions) ? input.questions : [];
-    const result = await onAskUserQuestion(state.workstreamId, questions);
-    if (result?.behavior === "deny") {
-      return { behavior: "deny", message: result.message ?? "Question abandoned." };
+    if (confirmWrite && (toolName === "Edit" || toolName === "Write")) {
+      const result = await confirmWrite(toolName, input);
+      if (result?.behavior === "deny") {
+        return { behavior: "deny", message: result.message ?? "This write is held pending confirmation." };
+      }
     }
-    return { behavior: "allow", updatedInput: { ...input, answers: result.answers ?? {} } };
+    return { behavior: "allow", updatedInput: input };
   };
 }
 
@@ -195,12 +210,14 @@ async function pump(state) {
  *   sessionKey?: string,
  *   resumeSessionId?: string|null,
  *   onAskUserQuestion?: (workstreamId: string, questions: unknown[]) => Promise<{ behavior?: string, message?: string, answers?: Record<string, unknown> }>,
+ *   confirmWrite?: (toolName: string, input: any) => Promise<{ behavior?: string, message?: string }>,
  *   claudeExecutable?: string,
  *   model?: string,
  *   mcpServers?: Record<string, unknown>,
  *   budget?: { maxTurns: number, maxBudgetUsd: number },
  *   skills?: string[],
  *   systemPrompt?: import("@anthropic-ai/claude-agent-sdk").Options["systemPrompt"],
+ *   outputFormat?: import("@anthropic-ai/claude-agent-sdk").Options["outputFormat"] | false,
  *   title?: string,
  *   buildHooks?: (seams: { costUsd: () => Promise<number|null>, onToolEnd: (toolId: string, isError: boolean) => void, onActivity: (line: string) => void }) => any,
  *   stderr?: (data: string) => void,
@@ -217,6 +234,7 @@ export function getOrCreatePoSession(
     sessionKey,
     resumeSessionId,
     onAskUserQuestion,
+    confirmWrite,
     claudeExecutable,
     model,
     mcpServers,
@@ -224,22 +242,34 @@ export function getOrCreatePoSession(
     stderr,
     skills,
     systemPrompt,
+    outputFormat,
     buildHooks,
     title,
     query: queryFn = query,
   } = {},
 ) {
+  const requestedKey = sessionKey || "stateful";
   const existing = sessions.get(workstream.id);
-  if (existing && !existing.ended) return existing;
+  if (existing && !existing.ended) {
+    if (existing.sessionKey === requestedKey) return existing;
+    // A turn for a DIFFERENT conversation than the one resident — yield the
+    // slot rather than deliver it into the wrong context, model, and scoped
+    // skills (design.md D2a / stateful-verb-session: "never delivered a turn
+    // belonging to a different conversation"). closePoSession leaves
+    // `agent_sessions` untouched, so the outgoing conversation stays
+    // resumable — this is a handoff, not a reset.
+    closePoSession(workstream.id);
+  }
 
   const channel = createUserMessageChannel();
   const state = {
     workstreamId: workstream.id,
     // Which stored conversation this resident session writes back to. Both
-    // stateful verbs resolve to the same key, which is what makes moving from
+    // shaping verbs resolve to the same key, which is what makes moving from
     // voice to the canvas continue one conversation rather than opening a
-    // second (design.md D3).
-    sessionKey: sessionKey || "stateful",
+    // second (design.md D3); work_on_note resolves to its own per-note key
+    // instead (open-note-session D2).
+    sessionKey: requestedKey,
     sessionId: resumeSessionId || null,
     currentTurn: null,
     ended: false,
@@ -279,7 +309,7 @@ export function getOrCreatePoSession(
     // reach nothing, never one silently widened to every skill the bundle ships.
     skills: skills ?? [],
     env: computePoSessionEnv(process.env),
-    canUseTool: buildCanUseTool(state, onAskUserQuestion),
+    canUseTool: buildCanUseTool(state, onAskUserQuestion, confirmWrite),
     // Built by the caller through the one policy in role-prompt.mjs, on the one
     // field the SDK actually honours. It used to travel on a top-level
     // `appendSystemPrompt`, which the SDK destructures away and never reads — so
@@ -287,12 +317,16 @@ export function getOrCreatePoSession(
     // a full one. This module no longer knows what a persona is; it is handed
     // one. See the agent-sdk-conformance design.md D1b.
     systemPrompt,
-    // Decisions come back as validated data rather than a markdown heading the
-    // voice layer has to find. Applies to the whole resident session, so every
-    // turn reports in this shape — which is why the schema keeps `summary` as
-    // its only required field (design.md D6).
-    outputFormat: DECISION_OUTPUT_FORMAT,
   };
+  // Decisions come back as validated data rather than a markdown heading the
+  // voice layer has to find (design.md D6) — the default for every resident
+  // session. A caller may override it explicitly (`outputFormat: false`):
+  // open-note-session's work_on_note passes that, because the schema's own
+  // "keep it to a few sentences" summary instruction would condense exactly
+  // the verbatim reading its spec forbids condensing. `undefined` (the
+  // ordinary case — no override) still means "use the default".
+  const resolvedOutputFormat = outputFormat === undefined ? DECISION_OUTPUT_FORMAT : outputFormat;
+  if (resolvedOutputFormat) options.outputFormat = resolvedOutputFormat;
   if (model) options.model = model;
   // The ceilings come from the caller (run-exec.mjs → run-budget.mjs) rather
   // than being read here, so both run shapes resolve their budget through one
