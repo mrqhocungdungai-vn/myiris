@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { FilesetResolver, GestureRecognizer } from "@mediapipe/tasks-vision";
-import { semanticEquals } from "../lib/hand";
+import { semanticEquals, smoothPoint } from "../lib/hand";
 import { resolveVendoredAssetUrl } from "../lib/asset-url";
 
 export type HandPoint = { x: number; y: number };
@@ -91,6 +91,10 @@ const EMPTY_STATE: HandState = {
  */
 export const SYSTEM_DEFAULT_CAMERA = "default";
 
+// EMA smoothing factor (two-hand-gestures) — the value the primary hand's
+// point already used before every tracked hand was smoothed alike.
+const SMOOTHING_ALPHA = 0.5;
+
 function videoConstraintsFor(deviceId: string): MediaTrackConstraints {
   if (!deviceId || deviceId === SYSTEM_DEFAULT_CAMERA) {
     return { width: 640, height: 480, facingMode: "user" };
@@ -125,7 +129,11 @@ export function useHandControl(enabled: boolean, deviceId: string = SYSTEM_DEFAU
     video.playsInline = true;
     video.muted = true;
 
-    let smooth: HandPoint | null = null;
+    // Per-hand smoothing history, keyed by the same id stabilizeGesture uses
+    // (two-hand-gestures) — a relation between two hands (e.g. the galaxy's
+    // zoom distance) must not mix a filtered primary point with a raw
+    // secondary one, so every hand is smoothed independently.
+    const smoothById = new Map<string, HandPoint>();
     let primaryId = "";
     let primaryPoint: HandPoint | null = null;
     const stableGestureById = new Map<string, string>();
@@ -252,9 +260,11 @@ export function useHandControl(enabled: boolean, deviceId: string = SYSTEM_DEFAU
           const hands: TrackedHand[] = detected.map((hand) => {
             const id = detected.length === 1 ? "single" : hand === byX[0] ? "left" : "right";
             const gesture = stabilizeGesture(id, hand.rawGesture);
+            const smoothed = smoothPoint(smoothById.get(id) ?? null, hand.point, SMOOTHING_ALPHA);
+            smoothById.set(id, smoothed);
             return {
               id,
-              point: hand.point,
+              point: smoothed,
               landmarks: hand.landmarks,
               gesture,
               gestureScore: hand.score,
@@ -267,31 +277,25 @@ export function useHandControl(enabled: boolean, deviceId: string = SYSTEM_DEFAU
 
           const primary = choosePrimary(hands);
           primaryId = primary.id;
-          smooth = smooth
-            ? {
-                x: smooth.x + (primary.point.x - smooth.x) * 0.5,
-                y: smooth.y + (primary.point.y - smooth.y) * 0.5,
-              }
-            : primary.point;
-          primaryPoint = smooth;
+          primaryPoint = primary.point;
           hadHand = true;
 
           publish({
             active: true,
             present: true,
-            point: smooth,
+            point: primary.point,
             gesture: primary.gesture,
             gestureScore: primary.gestureScore,
             pointing: primary.pointing,
             openPalm: primary.openPalm,
             fist: primary.fist,
             pinchDistance: primary.pinchDistance,
-            hands: hands.map((item) => (item === primary ? { ...item, point: smooth! } : item)),
+            hands,
           });
         } else if (hadHand) {
           // Only re-publish the empty state on the transition into "no
           // hand" — an empty frame after another empty frame does zero work.
-          smooth = null;
+          smoothById.clear();
           primaryId = "";
           primaryPoint = null;
           stableGestureById.clear();

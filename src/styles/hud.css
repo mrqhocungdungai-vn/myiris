@@ -596,6 +596,28 @@ html:not(.hud-mode) .setup-backdrop {
   color: var(--muted);
 }
 
+/* two-palm-galaxy-zoom design.md D7: a tuning instrument gated behind a
+   localStorage flag, not a shipped surface — no pointer-events, so it never
+   steals the mouse drag/scroll the gesture drive must keep working. */
+.hud-galaxy-gesture-debug {
+  position: absolute;
+  z-index: 2;
+  bottom: 16px;
+  left: 16px;
+  margin: 0;
+  padding: 10px 14px;
+  max-width: 320px;
+  border-radius: 8px;
+  background: rgba(5, 6, 12, 0.72);
+  border: 1px solid rgba(159, 180, 255, 0.25);
+  color: #dbe6f5;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre;
+  pointer-events: none;
+}
+
 @keyframes hud-slide {
   from { opacity: 0; transform: translateX(30px); }
   to { opacity: 1; transform: none; }

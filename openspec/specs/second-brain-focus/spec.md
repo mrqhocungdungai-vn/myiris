@@ -8,7 +8,9 @@ The shared referent between the user's hands and their voice: which vault notes 
 
 ### Requirement: One authoritative focus is shared by the hand, the voice, and the runs
 
-Iris SHALL maintain a single authoritative **focus** — the set of vault notes the user currently has selected — owned by the main process. The renderer SHALL produce it (from hand gestures and from the mouse); the voice layer and Claude's runs SHALL consume it. There SHALL NOT be a second, separately-maintained notion of what is selected.
+Iris SHALL maintain a single authoritative **focus** — the set of vault notes the user currently has selected — owned by the main process. The renderer SHALL produce it; the voice layer and Claude's runs SHALL consume it. There SHALL NOT be a second, separately-maintained notion of what is selected.
+
+The renderer's means of producing it is currently the mouse alone. No gesture selects a note (see `second-brain-gesture-nav`, "Focus is reachable without hands", for why that is a decision rather than a gap). This is a statement about the producer, not about the focus: the ownership, the resolution rules, the bound and the lifecycle below are unchanged by how a selection is made, and a gesture producer added later SHALL feed this same focus rather than introduce a second one.
 
 The focus SHALL be stored as note **identities only**, and resolved to titles and tags at the moment of use against the live vault graph. It SHALL NOT store a snapshot of note metadata: a title captured at selection time goes stale the moment the note is renamed or deleted, and a selection that names a note which no longer exists SHALL resolve to nothing rather than to a phantom.
 
@@ -33,6 +35,11 @@ The focus SHALL survive the galaxy layer remounting, and SHALL be readable wheth
 
 - **WHEN** the galaxy layer remounts (for example after a re-render) while notes are selected
 - **THEN** the selection is still in effect and is not silently emptied
+
+#### Scenario: Selection is produced by the mouse
+
+- **WHEN** the user selects notes in the galaxy
+- **THEN** the selection is made with the mouse, and the resulting focus is the same single focus every consumer reads
 
 ### Requirement: The focus is bounded
 

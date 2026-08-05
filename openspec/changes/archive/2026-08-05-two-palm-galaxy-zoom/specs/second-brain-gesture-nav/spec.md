@@ -1,36 +1,4 @@
-# second-brain-gesture-nav Specification
-
-## Purpose
-Hands-free navigation of the second-brain galaxy: point-and-dwell opens a node, a closed fist orbits the camera, two open palms zoom it, and the gestures carry into the note reader once a node is open. One authoritative gesture context governs the galaxy and its reader together, so the two can never disagree about which layer owns the pointing hand. It follows the same hand-control opt-in as the rest of the gesture surface, and suspends while Iris is asleep.
-## Requirements
-### Requirement: A node is opened hands-free by point-and-dwell
-
-When hand control is enabled and the galaxy is active with no reader open, holding the pointing hand (`Pointing_Up`) over a note-node for the HUD's standard dwell duration (300 ms) SHALL open that note in the note reader — the same result as clicking the node. Because galaxy nodes are WebGL objects (not DOM elements), the target SHALL be resolved by projecting node positions to screen coordinates and selecting the node nearest the hand point within a pixel threshold, NOT by the DOM `elementFromPoint` dwell (which stays suppressed while the galaxy owns the surface). A node that is **behind the camera** SHALL NOT be targetable — projection alone yields in-viewport coordinates for nodes behind the viewer, so the hit-test SHALL exclude any node outside the camera's visible depth range, matching the mouse click's front-facing behavior. A **ghost node** (an unresolved `[[wikilink]]` target with no backing file) SHALL NOT be dwell-openable, exactly as it is not click-openable. After a dwell fires, the same target SHALL NOT fire again until the hand has left it (moved off the node or stopped pointing) and re-acquired it. The targeted node SHALL be given visible feedback (e.g. a highlight) while the dwell is charging.
-
-#### Scenario: Dwell over a node opens its note
-
-- **WHEN** hand control is on, the galaxy is active, no reader is open, and the user holds a pointing hand over a real note-node for 300 ms
-- **THEN** that note opens in the note reader — identical to clicking the node — and the target is highlighted while the dwell charges
-
-#### Scenario: Dwell over a ghost node does nothing
-
-- **WHEN** the pointing hand dwells over a faded ghost node (an unresolved `[[wikilink]]` target)
-- **THEN** no note reader opens and no file read is attempted
-
-#### Scenario: A node behind the camera is not targeted
-
-- **WHEN** the camera has orbited so that some nodes are behind the viewer, and the hand point happens to fall near where such a node projects into the viewport
-- **THEN** that behind-the-camera node is not dwell-targeted or opened — only nodes in front of the camera are eligible
-
-#### Scenario: A dwell must be released before re-firing
-
-- **WHEN** a node has just been opened by dwell and the hand is still over it
-- **THEN** it does not immediately open again — the hand must leave the node (or stop pointing) and re-acquire it before another dwell can fire
-
-#### Scenario: Mouse click still opens a node
-
-- **WHEN** hand control is off (or a mouse is used) and the user clicks a real note-node
-- **THEN** the note opens exactly as before — the gesture path is additive, not a replacement
+## ADDED Requirements
 
 ### Requirement: A closed fist orbits the galaxy camera
 
@@ -75,6 +43,8 @@ The camera SHALL always look at the graph's orbit center (an explicit center, no
 - **WHEN** a gesture camera drive ends by any route — the gesture is released, hand control is switched off mid-drive, a note opens mid-drive, Iris goes to sleep mid-drive, or the hand leaves the frame
 - **THEN** mouse drag/zoom still works for the rest of the galaxy session and the camera does not jump when mouse control resumes
 
+## MODIFIED Requirements
+
 ### Requirement: Focus is reachable without hands
 
 Selecting the focus SHALL be fully available by mouse, and clearing it SHALL be available by mouse and hands-free alike, independent of the hand-control preference. With hand control off, the galaxy and its focus SHALL be usable exactly as they are with it on, and no gesture machinery SHALL run — the existing rule that the gesture layer schedules no per-frame work while hand control is off SHALL continue to hold.
@@ -113,25 +83,6 @@ Clearing SHALL remain reachable without a mouse, because the clear-focus control
 - **WHEN** notes are focused, hand control is on, and the user dwells over the clear-focus control in the HUD control island
 - **THEN** the focus is emptied
 
-### Requirement: The note reader responds to hand gestures
-
-When hand control is enabled and a vault note is open in the note reader, the reader SHALL respond to the same gesture bindings as the task run-reader: a `Closed_Fist` SHALL close the reader, two open palms SHALL resize it, and a single open palm held above/below the reader body's center SHALL scroll it. The reader's footer hint SHALL communicate the gesture controls when hand control is active. With hand control off, the note reader SHALL behave exactly as change #1 shipped (mouse/keyboard: drag/scroll, X, Esc).
-
-#### Scenario: Fist closes the note reader
-
-- **WHEN** hand control is on, a vault note is open, and the primary hand shows `Closed_Fist`
-- **THEN** the note reader closes and the galaxy remains active
-
-#### Scenario: Palms scroll and resize the open note
-
-- **WHEN** hand control is on and a vault note is open
-- **THEN** one open palm held high/low scrolls the note body and two open palms resize the reader, exactly as in the task run-reader
-
-#### Scenario: Note reader without hand control is unchanged
-
-- **WHEN** hand control is off and a vault note is open
-- **THEN** the reader is controlled only by mouse/keyboard (drag/scroll, X, Esc), exactly as shipped in change #1
-
 ### Requirement: A single authoritative gesture context governs the galaxy and its reader
 
 Gesture bindings SHALL follow one authoritative context precedence so no two bindings act on the same gesture at once: (1) when a reader is open, only the reader's bindings run and the galaxy node-dwell and camera-nav bindings are suppressed; (2) when the galaxy is active with no reader open, the galaxy node-dwell and camera-nav bindings run and the deck's orb/universal-dwell/scroll bindings are suppressed; (3) otherwise the deck behaves as before. That precedence SHALL be derived from one shared, testable resolution of the current context rather than re-stated independently by each new consumer, so a future binding cannot disagree about which layer owns the hand. Two things SHALL survive the suppression in (2): the HUD control island stays dwell-activatable (so the galaxy can be closed hands-free — see `two-hand-gestures`), and the gesture action indicator SHALL report the binding that is actually live in the current context rather than a deck binding the galaxy has taken over. (The lifecycle rule that closing the galaxy dismisses an open note belongs to the galaxy layer itself and is specified in `second-brain-galaxy-view`.)
@@ -163,22 +114,12 @@ The indicator SHALL name the live binding from a signal that actually reaches it
 - **WHEN** the user changes pose over the galaxy and holds the new pose
 - **THEN** the indicator names the new binding, rather than continuing to show a binding derived from a measurement taken at some earlier moment
 
-### Requirement: Gesture navigation is gated on the hand-control opt-in and suspended while Iris is asleep
+## REMOVED Requirements
 
-The galaxy gesture bindings (node-dwell, camera nav, and the note reader's gesture response) SHALL be active only when the user's opt-in hand-control preference is enabled. When hand control is off, the galaxy and its note reader SHALL be fully usable by mouse and keyboard exactly as change #1 shipped, no camera is acquired for the galaxy on its own, and the gesture machinery SHALL consume no per-frame work at all (it SHALL NOT run a no-op loop). The gesture drive SHALL also be suspended whenever the galaxy's rendering is paused because Iris is asleep — the same signal that already pauses the force simulation and render loop — so the galaxy consumes no per-frame CPU while asleep and the camera cannot silently drift and snap on wake.
+### Requirement: A closed fist orbits the galaxy camera and a pinch zooms it
 
-#### Scenario: Gestures are suspended while Iris is asleep
+**Reason**: The pinch half of this requirement could not be made to work. Recognizing a pinch required an explicit predicate over the thumb-index distance, but that distance is an absolute image measurement never scaled by hand size, so its engage threshold was comparable to a whole hand length — a genuine fist satisfied it. The fist branch therefore had to be checked first and win, which meant a real pinch, once the recognizer read it as a fist, flipped the camera between orbiting and dollying. The tap-versus-hold discrimination window, its release-streak hysteresis and the resulting state machine all existed to service that pinch and go with it.
 
-- **WHEN** the galaxy is active with hand control on and Iris goes to sleep (the signal that pauses the galaxy's render loop)
-- **THEN** the gesture drive stops doing per-frame work and the camera does not move while asleep — waking Iris resumes gestures with the camera exactly where it was
+Zoom is replaced by the two-open-palms rule in `two-hand-gestures`, which uses poses that cannot be confused with a fist and measures the *relation* between two hands rather than an absolute distance. Orbit is carried forward unchanged by "A closed fist orbits the galaxy camera".
 
-#### Scenario: Gestures off means mouse-only galaxy
-
-- **WHEN** the hand-control preference is off and the galaxy is active
-- **THEN** no gesture bindings engage, no per-frame gesture loop is scheduled, and the galaxy plus its note reader are controlled entirely by mouse/keyboard, as shipped in change #1
-
-#### Scenario: Enabling hand control lights up galaxy gestures
-
-- **WHEN** the user enables hand control while the galaxy is active
-- **THEN** node-dwell and camera orbit/zoom become available without relaunching or re-toggling the galaxy
-
+**Migration**: Users zoom the galaxy by holding up two open palms and moving them apart (closer) or together (further away), the same motion that resizes an open note. Selecting a node by a quick pinch is removed with no gesture replacement — see "Focus is reachable without hands" for the recorded reasoning and the mouse and control-island paths that remain.

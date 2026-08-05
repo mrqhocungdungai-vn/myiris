@@ -1375,10 +1375,14 @@ export default function App() {
     if (gestureContext === "galaxy") {
       // Mirrors driveFor's pose partition (src/lib/galaxy-nav.ts) so the
       // indicator names the binding actually live, not "idle" or an orb/
-      // deck label the galaxy has taken over (design.md D10).
-      if (hand.fist) return { label: "Closed_Fist · orbit", tone: "fist" };
+      // deck label the galaxy has taken over (design.md D10/D6). Reads the
+      // open-palm count rather than pinchDistance: semanticEquals excludes
+      // pinchDistance from republishing, so that field never forced this
+      // memo to recompute — the label would show whatever it was when some
+      // OTHER field last changed. openPalm is compared per hand, so it does.
+      if (hand.hands.filter((item) => item.openPalm).length >= 2) return { label: "Two palms · zoom", tone: "open" };
       if (hand.pointing) return { label: "Pointing_Up · target a node", tone: "move" };
-      if (hand.pinchDistance < 0.08) return { label: "Pinch · zoom", tone: "open" };
+      if (hand.fist) return { label: "Closed_Fist · orbit", tone: "fist" };
       return { label: `${hand.gesture} · idle`, tone: "idle" };
     }
 
@@ -1400,7 +1404,6 @@ export default function App() {
     hand.openPalm,
     hand.pointing,
     hand.gesture,
-    hand.pinchDistance,
     dwellActive,
     drawingActive,
     gestureContext,

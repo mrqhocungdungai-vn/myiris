@@ -5,14 +5,14 @@ import {
   dwellStep,
   INITIAL_DWELL_STATE,
   driveFor,
-  INITIAL_POSE_DRIVE_STATE,
   orbitStep,
-  radiusStep,
+  handDistance,
+  zoomRadius,
   focusNeighborhood,
   type DwellState,
   type GalaxyNavNode,
 } from "./galaxy-nav";
-import type { HandState } from "../hooks/useHandControl";
+import type { HandState, TrackedHand } from "../hooks/useHandControl";
 
 // Real PerspectiveCamera + updateMatrixWorld — no WebGL context needed
 // (design.md D4b), looking from (0,0,10) toward the origin.
@@ -135,6 +135,21 @@ describe("dwellStep", () => {
 });
 
 describe("driveFor", () => {
+  function makeTrackedHand(overrides: Partial<TrackedHand> = {}): TrackedHand {
+    return {
+      id: "single",
+      point: { x: 0, y: 0 },
+      landmarks: [],
+      gesture: "None",
+      gestureScore: 1,
+      pointing: false,
+      openPalm: false,
+      fist: false,
+      pinchDistance: 0.2,
+      ...overrides,
+    };
+  }
+
   function makeHand(overrides: Partial<HandState> = {}): HandState {
     return {
       active: true,
@@ -146,170 +161,43 @@ describe("driveFor", () => {
       openPalm: false,
       fist: false,
       pinchDistance: 0.2,
-      hands: [
-        {
-          id: "single",
-          point: { x: 0, y: 0 },
-          landmarks: [],
-          gesture: "None",
-          gestureScore: 1,
-          pointing: false,
-          openPalm: false,
-          fist: false,
-          pinchDistance: 0.2,
-        },
-      ],
+      hands: [makeTrackedHand()],
       ...overrides,
     };
   }
 
+  it("returns zoom for two open palms", () => {
+    const hands = [makeTrackedHand({ id: "left", openPalm: true }), makeTrackedHand({ id: "right", openPalm: true })];
+    expect(driveFor(makeHand({ openPalm: true, hands }))).toBe("zoom");
+  });
+
   it("returns dwell for Pointing_Up", () => {
-    expect(driveFor(makeHand({ pointing: true })).drive).toBe("dwell");
+    expect(driveFor(makeHand({ pointing: true, hands: [makeTrackedHand({ pointing: true })] }))).toBe("dwell");
   });
 
   it("returns orbit for Closed_Fist", () => {
-    expect(driveFor(makeHand({ fist: true })).drive).toBe("orbit");
+    expect(driveFor(makeHand({ fist: true, hands: [makeTrackedHand({ fist: true })] }))).toBe("orbit");
   });
 
-  it("returns null for an open palm, two palms, and a resting/unrecognized hand", () => {
-    expect(driveFor(makeHand({ openPalm: true, pinchDistance: 0.02 })).drive).toBeNull();
-    expect(
-      driveFor(
-        makeHand({
-          openPalm: true,
-          hands: [makeHand().hands[0], makeHand().hands[0]],
-        }),
-      ).drive,
-    ).toBeNull();
-    expect(driveFor(makeHand({ pinchDistance: 0.5 })).drive).toBeNull();
+  it("returns null for a single open palm, an unrecognized gesture, and a resting hand", () => {
+    expect(driveFor(makeHand({ openPalm: true, hands: [makeTrackedHand({ openPalm: true })] }))).toBeNull();
+    expect(driveFor(makeHand())).toBeNull(); // "None" gesture, resting/unrecognized
   });
 
-  // Steps driveFor forward in 10ms increments, holding a pinch engaged, until
-  // it crosses into zoom — mirrors dwellStep's own chargeToFire helper above.
-  function holdPinchToZoom(pinchDistance = 0.05) {
-    let state = INITIAL_POSE_DRIVE_STATE;
-    for (let t = 0; t <= 2000; t += 10) {
-      const step = driveFor(makeHand({ pinchDistance }), state, t);
-      state = step.state;
-      if (step.drive === "zoom") return { drive: step.drive, state, t };
-    }
-    throw new Error("pinch never crossed into zoom");
-  }
+  // The pinch has no meaning in the galaxy at all (proposal.md "What
+  // Changes"): whatever canned class the recognizer assigns a pinched hand
+  // is what drives it — a tight pinch reads as Closed_Fist and orbits like
+  // any other fist; anything else it might read as drives nothing. Never a
+  // zoom, at any thumb-index distance.
+  it("a pinch drives whatever its canned class says, never a zoom", () => {
+    const pinchedFist = makeTrackedHand({ fist: true, pinchDistance: 0.02 });
+    expect(driveFor(makeHand({ fist: true, hands: [pinchedFist] }))).toBe("orbit");
 
-  // design.md D3 of shared-focus: "the camera SHALL NOT move" and "no zoom is
-  // emitted" while a pinch is still being discriminated as a possible tap.
-  it("drives nothing while a pinch is still being discriminated, and never newly engages from a mid-range distance", () => {
-    const engaging = driveFor(makeHand({ pinchDistance: 0.05 }), INITIAL_POSE_DRIVE_STATE, 0);
-    expect(engaging.drive).toBeNull();
-    const stillDiscriminating = driveFor(makeHand({ pinchDistance: 0.05 }), engaging.state, 50);
-    expect(stillDiscriminating.drive).toBeNull();
-    // A mid-range distance (between the engage and release thresholds) does
-    // not newly engage anything from rest.
-    expect(driveFor(makeHand({ pinchDistance: 0.13 }), INITIAL_POSE_DRIVE_STATE, 0).drive).toBeNull();
-  });
+    const pinchedRest = makeTrackedHand({ pinchDistance: 0.02 });
+    expect(driveFor(makeHand({ hands: [pinchedRest] }))).toBeNull();
 
-  it("no zoom is emitted during the whole discrimination window", () => {
-    let state = INITIAL_POSE_DRIVE_STATE;
-    for (let t = 0; t < 250; t += 10) {
-      const step = driveFor(makeHand({ pinchDistance: 0.05 }), state, t);
-      expect(step.drive).not.toBe("zoom");
-      state = step.state;
-    }
-  });
-
-  it("a pinch released quickly (inside the window) yields a tap for exactly one frame", () => {
-    let state = driveFor(makeHand({ pinchDistance: 0.05 }), INITIAL_POSE_DRIVE_STATE, 0).state;
-    state = driveFor(makeHand({ pinchDistance: 0.05 }), state, 50).state;
-    const released = driveFor(makeHand({ pinchDistance: 0.3 }), state, 80);
-    expect(released.drive).toBe("tap");
-    // Not sticky: the very next frame, even mid-release, is not a tap again.
-    const next = driveFor(makeHand({ pinchDistance: 0.3 }), released.state, 90);
-    expect(next.drive).not.toBe("tap");
-  });
-
-  it("a pinch held past the window yields zoom and never a tap", () => {
-    expect(holdPinchToZoom().drive).toBe("zoom");
-  });
-
-  it("releasing a zoom never fires a tap, however slowly the release happens", () => {
-    let { state } = holdPinchToZoom();
-    // Hold well past the window, so this pinch has unambiguously become a zoom.
-    for (let i = 0; i < 5; i++) state = driveFor(makeHand({ pinchDistance: 0.05 }), state, 1000 + i * 10).state;
-    let last: ReturnType<typeof driveFor> = { drive: "zoom", state };
-    for (let i = 0; i < 10; i++) {
-      last = driveFor(makeHand({ pinchDistance: 0.3 }), last.state, 2000 + i * 10);
-      expect(last.drive).not.toBe("tap");
-    }
-    expect(last.drive).toBeNull(); // the sustained release ended the zoom, not a tap
-  });
-
-  it("a pinch drifting while Pointing_Up yields neither a zoom nor a tap", () => {
-    let state = INITIAL_POSE_DRIVE_STATE;
-    for (let t = 0; t < 500; t += 10) {
-      const pinchDistance = t % 20 === 0 ? 0.05 : 0.3; // drifts across the engage threshold as a side effect of the pose
-      const step = driveFor(makeHand({ pointing: true, pinchDistance }), state, t);
-      expect(step.drive).toBe("dwell");
-      state = step.state;
-    }
-  });
-
-  it("survives a single noisy frame above the release threshold instead of dropping the drive", () => {
-    let step: ReturnType<typeof driveFor> = holdPinchToZoom();
-    expect(step.drive).toBe("zoom");
-
-    // Raw pinchDistance has no source-level debounce (unlike the canned
-    // fist/pointing gestures) — one tremor frame past PINCH_RELEASE must
-    // not wipe the seeded zoom reference.
-    step = driveFor(makeHand({ pinchDistance: 0.3 }), step.state, 3000);
-    expect(step.drive).toBe("zoom");
-
-    // Recovering below the release threshold clears the release streak.
-    step = driveFor(makeHand({ pinchDistance: 0.13 }), step.state, 3010);
-    expect(step.drive).toBe("zoom");
-  });
-
-  it("disengages zoom only after a sustained release, not a single frame", () => {
-    let step: ReturnType<typeof driveFor> = holdPinchToZoom();
-    expect(step.drive).toBe("zoom");
-
-    for (let i = 0; i < 10; i++) {
-      step = driveFor(makeHand({ pinchDistance: 0.3 }), step.state, 3000 + i * 10);
-    }
-    expect(step.drive).toBeNull();
-  });
-
-  // design.md D3 of shared-focus: "A zoom's reference SHALL be seeded when
-  // the hold window elapses, not when the pinch first engaged, so the
-  // discrimination window contributes no accumulated delta." A caller that
-  // seeded at engage time instead would carry forward however much the pinch
-  // distance drifted while merely being discriminated as a possible tap,
-  // producing a camera jump the instant zoom took over.
-  it("seeding the zoom reference on the elapse frame (not the engage frame) produces no radius jump, however much the pinch drifted while discriminating", () => {
-    let state = INITIAL_POSE_DRIVE_STATE;
-    const startRadius = 100;
-
-    // A real hand's pinch distance is not perfectly still while held during
-    // the discrimination window — it drifts a little, all comfortably inside
-    // TAP_MAX_MS (250ms in galaxy-nav.ts).
-    const drifting = [0.05, 0.04, 0.06, 0.05, 0.03];
-    for (let i = 0; i < drifting.length; i++) {
-      const step = driveFor(makeHand({ pinchDistance: drifting[i] }), state, i * 10);
-      state = step.state;
-      expect(step.drive).not.toBe("zoom"); // still discriminating
-    }
-
-    // The window elapses on this frame (t=250 >= TAP_MAX_MS since it engaged
-    // at t=0) — seeding happens HERE, using this frame's live pinch distance,
-    // never the one recorded back when the pinch first engaged.
-    const elapsePinchDistance = 0.05;
-    const elapseStep = driveFor(makeHand({ pinchDistance: elapsePinchDistance }), state, 250);
-    expect(elapseStep.drive).toBe("zoom");
-    const zoomReference = { pinch: elapsePinchDistance, radius: startRadius };
-
-    // The delta on this very frame is measured against the reference that
-    // was just seeded from it, so it is zero — the radius does not jump.
-    const radiusOnTakeover = radiusStep(zoomReference.radius, elapsePinchDistance - zoomReference.pinch, 600, 15, 2500);
-    expect(radiusOnTakeover).toBe(startRadius);
+    const looselyPinchedRest = makeTrackedHand({ pinchDistance: 0.15 });
+    expect(driveFor(makeHand({ hands: [looselyPinchedRest] }))).toBeNull();
   });
 });
 
@@ -325,11 +213,44 @@ describe("orbitStep", () => {
   });
 });
 
-describe("radiusStep", () => {
+describe("handDistance", () => {
+  it("measures the hypotenuse between two hand points", () => {
+    expect(handDistance({ x: 0, y: 0 }, { x: 3, y: 4 })).toBe(5);
+  });
+
+  it("is symmetric", () => {
+    const a = { x: 12, y: 40 };
+    const b = { x: 100, y: 5 };
+    expect(handDistance(a, b)).toBe(handDistance(b, a));
+  });
+});
+
+describe("zoomRadius", () => {
+  it("shrinks the radius when the hands spread apart (curDist > refDist)", () => {
+    const next = zoomRadius({ refRadius: 100, refDist: 200, curDist: 400, min: 10, max: 1000 });
+    expect(next).toBeLessThan(100);
+  });
+
+  it("grows the radius when the hands close together (curDist < refDist)", () => {
+    const next = zoomRadius({ refRadius: 100, refDist: 200, curDist: 100, min: 10, max: 1000 });
+    expect(next).toBeGreaterThan(100);
+  });
+
+  it("produces no change when curDist equals refDist", () => {
+    expect(zoomRadius({ refRadius: 250, refDist: 150, curDist: 150, min: 10, max: 1000 })).toBe(250);
+  });
+
   it("clamps at both the min and max bounds", () => {
-    expect(radiusStep(50, -1000, 1, 10, 500)).toBe(10);
-    expect(radiusStep(50, 1000, 1, 10, 500)).toBe(500);
-    expect(radiusStep(50, 5, 1, 10, 500)).toBe(55);
+    expect(zoomRadius({ refRadius: 100, refDist: 200, curDist: 100000, min: 10, max: 1000 })).toBe(10);
+    expect(zoomRadius({ refRadius: 100000, refDist: 200, curDist: 100, min: 10, max: 1000 })).toBe(1000);
+  });
+
+  it("floors refDist and curDist so hands nearly touching still produce a finite result", () => {
+    // Both well under the 80px floor, so both clamp to it — the ratio is 1
+    // and the radius is unchanged, rather than a division blowing it up.
+    const next = zoomRadius({ refRadius: 100, refDist: 1, curDist: 1, min: 10, max: 100000 });
+    expect(Number.isFinite(next)).toBe(true);
+    expect(next).toBe(100);
   });
 });
 

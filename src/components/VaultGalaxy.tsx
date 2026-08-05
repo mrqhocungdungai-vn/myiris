@@ -6,13 +6,13 @@ import {
   dwellStep,
   driveFor,
   orbitStep,
-  radiusStep,
+  zoomRadius,
+  handDistance,
   nearestNodeAt,
   focusNeighborhood,
   INITIAL_DWELL_STATE,
-  INITIAL_POSE_DRIVE_STATE,
   type DwellState,
-  type PoseDriveState,
+  type GalaxyDrive,
 } from "../lib/galaxy-nav";
 
 // second-brain-galaxy-view: 3d-force-graph is a vanilla (non-React) library
@@ -75,9 +75,22 @@ function colorForNode(node: GalaxyNode): string {
 const DWELL_THRESHOLD_PX = 48;
 const DWELL_HOLD_MS = 300;
 const ORBIT_SENSITIVITY = 0.006; // radians per pixel, matching the orb loop's feel
-const ZOOM_SENSITIVITY = 600;
 const ZOOM_MIN_RADIUS = 15;
 const ZOOM_MAX_RADIUS = 2500;
+
+// two-palm-galaxy-zoom design.md D7: a tuning instrument, not a shipped
+// surface — off by default, following the same localStorage preference
+// pattern App.tsx's own toggles use, but with no Settings UI of its own; a
+// developer flips it with `localStorage.setItem(...)` in devtools.
+const GESTURE_DEBUG_STORAGE_KEY = "iris.galaxyGestureDebug";
+
+function loadGestureDebugEnabled(): boolean {
+  try {
+    return window.localStorage.getItem(GESTURE_DEBUG_STORAGE_KEY) === "on";
+  } catch {
+    return false;
+  }
+}
 const DWELL_HIGHLIGHT_COLOR = "#fff2a8";
 // second-brain-focus 5.1: distinguishes a focused node from an ordinary one —
 // distinct from every TAG_COLORS entry, the ghost gray, and the dwell color,
@@ -303,11 +316,18 @@ function GalaxyCanvas({
   // thin driver below owns.
   const dwellStateRef = useRef<DwellState>(INITIAL_DWELL_STATE);
   const lastHighlightedRef = useRef<string | null>(null);
-  const poseStateRef = useRef<PoseDriveState>(INITIAL_POSE_DRIVE_STATE);
   const sphericalRef = useRef<THREE.Spherical | null>(null);
   const cameraEngagedRef = useRef<"orbit" | "zoom" | null>(null);
   const prevOrbitPointRef = useRef<{ x: number; y: number } | null>(null);
-  const zoomReferenceRef = useRef<{ pinch: number; radius: number } | null>(null);
+  const zoomReferenceRef = useRef<{ dist: number; radius: number } | null>(null);
+
+  // Gesture debug readout (design.md D7) — read once at mount, matching the
+  // renderer's other localStorage-backed preferences. Written by the
+  // gesture loop below via direct DOM text, never React state, so an
+  // enabled readout costs one `textContent` write per frame instead of a
+  // re-render.
+  const [debugEnabled] = useState(loadGestureDebugEnabled);
+  const debugRef = useRef<HTMLPreElement | null>(null);
 
   function applyGraph(nextGraph: VaultGraph) {
     const fg = fgRef.current;
@@ -457,6 +477,7 @@ function GalaxyCanvas({
   useEffect(() => {
     if (!handControl || !running) return;
     let raf = 0;
+    let lastFrameTime = performance.now();
 
     function restoreControlsIfNeeded(fg: ForceGraph3DInstance<GalaxyNode, GalaxyLink> | null) {
       if (!fg) return;
@@ -496,6 +517,43 @@ function GalaxyCanvas({
       fg.cameraPosition({ x: pos.x, y: pos.y, z: pos.z }, { x: center.x, y: center.y, z: center.z }, 0);
     }
 
+    // two-hand-gestures: the zoom reads the distance between the two open
+    // palms — null when fewer than two are present, which driveFor's own
+    // partition already guarantees never happens while "zoom" is live.
+    function twoPalmDistance(hand: HandState): number | null {
+      const palms = hand.hands.filter((item) => item.openPalm);
+      if (palms.length < 2) return null;
+      return handDistance(palms[0].point, palms[1].point);
+    }
+
+    // design.md D7: every defect this change fixed traced to a runtime
+    // number nobody could see — this makes them observable while tuning.
+    // Direct DOM write, not React state (design.md D7/M-A1): an enabled
+    // readout must not turn a 60fps loop into 60 re-renders.
+    function updateDebugReadout(hand: HandState, drive: GalaxyDrive, now: number) {
+      const el = debugRef.current;
+      if (!el) return;
+      const dt = now - lastFrameTime;
+      lastFrameTime = now;
+      const fps = dt > 0 ? 1000 / dt : 0;
+      const curDist = twoPalmDistance(hand);
+      const ref = zoomReferenceRef.current;
+      const refDist = ref?.dist ?? null;
+      const ratio = curDist !== null && refDist !== null ? curDist / Math.max(80, refDist) : null;
+      const radius = sphericalRef.current?.radius ?? null;
+      const lines = [
+        `hands: ${hand.hands.length}`,
+        ...hand.hands.map((item) => `  ${item.id}: ${item.gesture}`),
+        `curDist: ${curDist !== null ? curDist.toFixed(1) : "—"}`,
+        `refDist: ${refDist !== null ? refDist.toFixed(1) : "—"}`,
+        `ratio: ${ratio !== null ? ratio.toFixed(3) : "—"}`,
+        `radius: ${radius !== null ? radius.toFixed(1) : "—"}`,
+        `drive: ${drive ?? "none"}`,
+        `fps: ${fps.toFixed(0)}`,
+      ];
+      el.textContent = lines.join("\n");
+    }
+
     function loop() {
       try {
         const fg = fgRef.current;
@@ -507,8 +565,7 @@ function GalaxyCanvas({
         }
 
         const hand = handRef.current;
-        const { drive, state: poseState } = driveFor(hand, poseStateRef.current, performance.now());
-        poseStateRef.current = poseState;
+        const drive = driveFor(hand);
 
         // Node-dwell: dwellStep runs every frame (candidate null when the
         // pose isn't Pointing_Up) so leaving the pose immediately drops any
@@ -532,22 +589,6 @@ function GalaxyCanvas({
         }
         if (dwellResult.fire && candidate) onOpenNoteRef.current(candidate.id, candidate.title);
 
-        // second-brain-focus 4.1: a pinch tap resolves its target the same
-        // way the dwell does (same hit-testing, same depth filter) — a tap
-        // that resolves to no node, or (by construction of nearestNodeAt,
-        // which already skips ghosts) a ghost node, does nothing.
-        if (drive === "tap" && hand.point && containerRef.current) {
-          const tapped = nearestNodeAt(
-            positionsRef.current.values(),
-            fg.camera(),
-            containerRef.current.getBoundingClientRect(),
-            hand.point,
-            DWELL_THRESHOLD_PX,
-            null,
-          );
-          if (tapped) onToggleNodeRef.current(tapped.id);
-        }
-
         // Camera drive: orbit and zoom share one spherical — re-derived from
         // the LIVE camera on every engage (fist<->zoom switch or mouse-drag
         // handoff, design.md M13), never carried over stale.
@@ -558,8 +599,9 @@ function GalaxyCanvas({
             sphericalRef.current = new THREE.Spherical().setFromVector3(
               fg.camera().position.clone().sub(centerRef.current),
             );
+            const engageDist = activeCameraDrive === "zoom" ? twoPalmDistance(hand) : null;
             zoomReferenceRef.current =
-              activeCameraDrive === "zoom" ? { pinch: hand.pinchDistance, radius: sphericalRef.current.radius } : null;
+              engageDist !== null ? { dist: engageDist, radius: sphericalRef.current.radius } : null;
             prevOrbitPointRef.current = activeCameraDrive === "orbit" ? hand.point : null;
           } else {
             zoomReferenceRef.current = null;
@@ -576,14 +618,18 @@ function GalaxyCanvas({
           prevOrbitPointRef.current = hand.point;
           writeCameraFromSpherical(fg);
         } else if (activeCameraDrive === "zoom" && sphericalRef.current && zoomReferenceRef.current) {
-          const pinchDelta = hand.pinchDistance - zoomReferenceRef.current.pinch;
-          const next = radiusStep(
-            zoomReferenceRef.current.radius,
-            pinchDelta,
-            ZOOM_SENSITIVITY,
-            ZOOM_MIN_RADIUS,
-            ZOOM_MAX_RADIUS,
-          );
+          // A dropout (one palm briefly not open_palm) has already released
+          // the reference above on the frame `activeCameraDrive` goes null —
+          // here `zoomReferenceRef.current` staying set means both palms are
+          // still live, so `twoPalmDistance` cannot return null.
+          const curDist = twoPalmDistance(hand)!;
+          const next = zoomRadius({
+            refRadius: zoomReferenceRef.current.radius,
+            refDist: zoomReferenceRef.current.dist,
+            curDist,
+            min: ZOOM_MIN_RADIUS,
+            max: ZOOM_MAX_RADIUS,
+          });
           sphericalRef.current.set(next, sphericalRef.current.phi, sphericalRef.current.theta);
           writeCameraFromSpherical(fg);
         }
@@ -594,6 +640,8 @@ function GalaxyCanvas({
         } else {
           restoreControlsIfNeeded(fg);
         }
+
+        if (debugEnabled) updateDebugReadout(hand, drive, performance.now());
       } catch (err) {
         // The error boundary does NOT catch rAF throws (design.md R6) — a
         // per-frame throw must force-close instead of throwing into the void
@@ -612,7 +660,12 @@ function GalaxyCanvas({
     };
   }, [handControl, running]);
 
-  return <div ref={containerRef} className="hud-galaxy hud-hit" />;
+  return (
+    <>
+      <div ref={containerRef} className="hud-galaxy hud-hit" />
+      {debugEnabled && <pre ref={debugRef} className="hud-galaxy-gesture-debug" />}
+    </>
+  );
 }
 
 class GalaxyErrorBoundary extends Component<{ onCrash: () => void; children: ReactNode }, { crashed: boolean }> {

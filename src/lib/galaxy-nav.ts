@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import type { HandState } from "../hooks/useHandControl";
+import type { HandPoint, HandState } from "../hooks/useHandControl";
 
 // Pure policy for the second-brain galaxy's gesture layer (second-brain-
 // gesture-nav design.md D1-D4b): node hit-testing, the dwell state machine,
@@ -180,103 +180,28 @@ export function dwellStep(
   return { state: next, target: state.target, fire: false };
 }
 
-export type GalaxyDrive = "dwell" | "orbit" | "zoom" | "tap" | null;
+export type GalaxyDrive = "dwell" | "orbit" | "zoom" | null;
 
-export type PoseDriveState = {
-  zooming: boolean;
-  releaseStreak: number;
-  /** When the current pinch engaged, or null while no pinch is being discriminated/held (design.md D3 of shared-focus). */
-  pinchEngagedAt: number | null;
-  /** Whether THIS pinch already crossed into zoom — so a slow release at the end of a zoom is never mistaken for a tap. */
-  becameZoom: boolean;
-};
-
-export const INITIAL_POSE_DRIVE_STATE: PoseDriveState = {
-  zooming: false,
-  releaseStreak: 0,
-  pinchEngagedAt: null,
-  becameZoom: false,
-};
-
-// Explicit pinch predicate with hysteresis (design.md D4/H3): MediaPipe
-// publishes no pinch class, only a continuous pinchDistance, so treating
-// zoom as the leftover `else` branch would let an open palm, an unrecognized
-// pose, or a hand merely resting in frame dolly the camera. Engage below the
-// tighter threshold, release only above the looser one, so a hand hovering
-// at the boundary doesn't chatter between zoom and no-drive.
-const PINCH_ENGAGE = 0.1;
-const PINCH_RELEASE = 0.16;
-
-// `Pointing_Up`/`Closed_Fist` are already debounced at the source
-// (useHandControl's stabilizeGesture requires 3 consecutive matching frames
-// before a canned gesture takes effect) — but pinchDistance is a raw
-// continuous signal with no such debounce, so a single noisy frame above
-// PINCH_RELEASE (hand tremor mid-pinch) must not immediately drop the
-// drive; it would wipe the seeded reference (radius/spherical) and make any
-// real pinch motion look like it does nothing, since every reset re-seeds
-// at whatever position the hand happens to be at. Require several
-// consecutive above-release frames before actually disengaging.
-const RELEASE_STREAK_TO_DISENGAGE = 5;
-
-// Tap-vs-hold discrimination window (design.md D3 of shared-focus): a pinch
-// that engages and releases before this elapses is a tap (toggles a node's
-// focus); one still engaged past it becomes a zoom. A guess, tunable here
-// alone — beside the pinch's other tuning constants.
-const TAP_MAX_MS = 250;
-
-type DriveHand = Pick<HandState, "pointing" | "fist" | "openPalm" | "pinchDistance" | "hands">;
+type DriveHand = Pick<HandState, "pointing" | "fist" | "hands">;
 
 /**
  * Partitions the frame's hand pose into exactly one galaxy drive, with no
- * overlap (design.md D4, extended by shared-focus design.md D3): `Pointing_Up`
- * -> dwell targeting only, `Closed_Fist` -> orbit only, an explicitly-detected
- * pinch -> a tap (released inside `TAP_MAX_MS`) or a zoom (held past it), and
- * anything else (open palm, two open palms, an unrecognized pose, a resting
- * hand) -> null.
+ * overlap (design.md D5): two open palms (the general two-hand-gestures
+ * rule, "scale the layer that owns the gesture surface") -> zoom,
+ * `Pointing_Up` -> dwell targeting only, `Closed_Fist` -> orbit, and
+ * anything else — a single open palm, an unrecognized pose, or a hand
+ * merely resting in frame — -> null. A pinch has no meaning here: a tight
+ * pinch reads as `Closed_Fist` and orbits like any other fist.
  *
- * `now` must be a monotonically increasing clock reading (e.g.
- * `performance.now()`) — it is what times the tap/hold discrimination window
- * and is otherwise unused, so a caller with no meaningful clock (existing
- * tests for the other poses) can pass a constant.
+ * Stateless (design.md D5): with pinch gone, no drive needs to remember
+ * anything across frames — a hand cannot be both `Open_Palm` and
+ * `Closed_Fist` at once, so each frame's pose alone decides the drive.
  */
-export function driveFor(
-  hand: DriveHand,
-  state: PoseDriveState = INITIAL_POSE_DRIVE_STATE,
-  now: number = 0,
-): { drive: GalaxyDrive; state: PoseDriveState } {
-  if (hand.pointing) return { drive: "dwell", state: INITIAL_POSE_DRIVE_STATE };
-  if (hand.fist) return { drive: "orbit", state: INITIAL_POSE_DRIVE_STATE };
-
-  const pinchEligible = hand.hands.length === 1 && !hand.openPalm;
-  if (!pinchEligible) return { drive: null, state: INITIAL_POSE_DRIVE_STATE };
-
-  if (state.zooming) {
-    if (hand.pinchDistance < PINCH_RELEASE) return { drive: "zoom", state: { ...state, releaseStreak: 0 } };
-    const releaseStreak = state.releaseStreak + 1;
-    if (releaseStreak < RELEASE_STREAK_TO_DISENGAGE) return { drive: "zoom", state: { ...state, releaseStreak } };
-    // A sustained release ends the zoom. `becameZoom` was true, so this is
-    // never mistaken for a tap however slowly the release happened.
-    return { drive: null, state: INITIAL_POSE_DRIVE_STATE };
-  }
-
-  if (hand.pinchDistance < PINCH_ENGAGE) {
-    const engagedAt = state.pinchEngagedAt ?? now;
-    if (now - engagedAt >= TAP_MAX_MS) {
-      return { drive: "zoom", state: { zooming: true, releaseStreak: 0, pinchEngagedAt: engagedAt, becameZoom: true } };
-    }
-    // Still discriminating: no camera motion this frame, but remember when
-    // this pinch engaged so a later frame can tell how long it has been held.
-    return { drive: null, state: { zooming: false, releaseStreak: 0, pinchEngagedAt: engagedAt, becameZoom: false } };
-  }
-
-  // Pinch distance is above the engage threshold. If a pinch was mid-
-  // discrimination (engaged, never became a zoom), this is its release
-  // inside the window — a tap. Otherwise (no pinch was engaged) there is
-  // nothing to release.
-  if (state.pinchEngagedAt !== null && !state.becameZoom) {
-    return { drive: "tap", state: INITIAL_POSE_DRIVE_STATE };
-  }
-  return { drive: null, state: INITIAL_POSE_DRIVE_STATE };
+export function driveFor(hand: DriveHand): GalaxyDrive {
+  if (hand.hands.filter((h) => h.openPalm).length >= 2) return "zoom";
+  if (hand.pointing) return "dwell";
+  if (hand.fist) return "orbit";
+  return null;
 }
 
 export type Spherical = { radius: number; phi: number; theta: number };
@@ -297,11 +222,46 @@ export function orbitStep(spherical: Spherical, delta: { x: number; y: number },
 }
 
 /**
- * Relative zoom step (design.md D4): `pinchDelta` is the change in pinch
- * distance since the reference seeded on engage (positive = fingers
- * spreading = zoom out), clamped so the camera can neither pass through the
- * orbit center nor fly away.
+ * The distance between two tracked hands' points, in the same window-pixel
+ * space `HandPoint` already uses — the one measurement the zoom drive and
+ * its tests both read, so they can never disagree about what "distance"
+ * means (design.md D3/D4).
  */
-export function radiusStep(radius: number, pinchDelta: number, sensitivity: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, radius + pinchDelta * sensitivity));
+export function handDistance(a: HandPoint, b: HandPoint): number {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+// ReaderCore's own 80px floor (design.md D3) — engaging with the hands
+// nearly touching cannot produce a runaway ratio.
+const MIN_HAND_DISTANCE_PX = 80;
+
+/**
+ * Multiplicative zoom law (design.md D3), replacing the additive
+ * `radiusStep`: `radius = clamp(min, max, refRadius * refDist / curDist)`.
+ * Spreading the hands (`curDist` grows past `refDist`) shrinks the radius —
+ * the camera gets closer, the same direction spreading enlarges a reader.
+ * Closing them grows it. `k = 1.0`, so this is a single multiply-divide
+ * with no exponent and no extra tuning constant.
+ *
+ * Both `refDist` and `curDist` are floored at `MIN_HAND_DISTANCE_PX` before
+ * dividing — the output clamp would eventually catch a division by ~0
+ * regardless, but flooring the input keeps the function total rather than
+ * relying on that clamp to absorb it.
+ */
+export function zoomRadius({
+  refRadius,
+  refDist,
+  curDist,
+  min,
+  max,
+}: {
+  refRadius: number;
+  refDist: number;
+  curDist: number;
+  min: number;
+  max: number;
+}): number {
+  const flooredRef = Math.max(MIN_HAND_DISTANCE_PX, refDist);
+  const flooredCur = Math.max(MIN_HAND_DISTANCE_PX, curDist);
+  return Math.max(min, Math.min(max, (refRadius * flooredRef) / flooredCur));
 }

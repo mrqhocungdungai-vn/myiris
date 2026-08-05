@@ -1,4 +1,17 @@
-import type { HandState, TrackedHand } from "../hooks/useHandControl";
+import type { HandPoint, HandState, TrackedHand } from "../hooks/useHandControl";
+
+// Per-hand EMA smoothing (two-hand-gestures: "Every tracked hand's point
+// SHALL be smoothed"), extracted so it can be unit-tested without a camera.
+// `previous` is null exactly on a hand's first frame (freshly seeded, or
+// just cleared on the no-hand transition) — that frame passes `target`
+// through untouched rather than easing in from a stale/absent position.
+export function smoothPoint(previous: HandPoint | null, target: HandPoint, alpha: number): HandPoint {
+  if (!previous) return target;
+  return {
+    x: previous.x + (target.x - previous.x) * alpha,
+    y: previous.y + (target.y - previous.y) * alpha,
+  };
+}
 
 function sameHand(a: TrackedHand, b: TrackedHand): boolean {
   return (
