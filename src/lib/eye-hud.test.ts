@@ -8,20 +8,16 @@ import {
   VIEW_W,
   acquireScale,
   arcPath,
-  chooseReadoutSide,
   createReadoutLayout,
   dashPattern,
   panelReveal,
   polarPoint,
-  readoutSlack,
   resolveReadoutLayout,
   segmentRing,
   tetherPath,
   tetherReveal,
   tickLine,
   wingPath,
-  type ReadoutGeometry,
-  type ReadoutSide,
 } from "./eye-hud";
 
 function sumDashArray(pattern: string): number {
@@ -172,85 +168,64 @@ describe("the acquisition stagger", () => {
   });
 });
 
-// Spec: "An eye near the frame edge puts the panel on its other side" and
-// "Dwelling at the switch point does not strobe".
-describe("chooseReadoutSide", () => {
-  const geom: ReadoutGeometry = { offset: 0.075, width: 0.3, height: 0.5, rise: -0.08, hysteresis: 0.04 };
-
-  it("keeps the panel on its current side while that side still fits", () => {
-    expect(chooseReadoutSide(0.4, "right", geom)).toBe("right");
-  });
-
-  it("moves the panel to the other side once its own side would clip the frame", () => {
-    expect(readoutSlack(0.7, "right", geom)).toBeLessThan(0);
-    expect(chooseReadoutSide(0.7, "right", geom)).toBe("left");
-  });
-
-  it("mirrors that for an eye near the left edge", () => {
-    expect(chooseReadoutSide(0.2, "left", geom)).toBe("right");
-  });
-
-  it("stays put when neither side has room, rather than picking the lesser clipping", () => {
-    const wide: ReadoutGeometry = { ...geom, width: 0.9 };
-    expect(chooseReadoutSide(0.5, "right", wide)).toBe("right");
-    expect(chooseReadoutSide(0.5, "left", wide)).toBe("left");
-  });
-
-  it("does not strobe while the eye dwells exactly at the switch point", () => {
-    // The eye x at which the right side stops fitting.
-    const threshold = 1 - geom.offset - geom.width;
-    let side: ReadoutSide = "right";
-    const visited: ReadoutSide[] = [];
-    // Jitter across the threshold the way a head at rest actually does.
-    for (let i = 0; i < 200; i++) {
-      const jitter = Math.sin(i * 1.9) * 0.004;
-      side = chooseReadoutSide(threshold + jitter, side, geom);
-      visited.push(side);
-    }
-    const flips = visited.filter((value, index) => index > 0 && value !== visited[index - 1]).length;
-    expect(flips).toBeLessThanOrEqual(1);
-  });
-
-  it("settles on one side across a slow sweep out and back, without oscillating at the boundary", () => {
-    let side: ReadoutSide = "right";
-    let flips = 0;
-    let previous = side;
-    for (let step = 0; step <= 400; step++) {
-      // Sweep 0.30 → 0.95 → 0.30, one small increment at a time.
-      const phase = step <= 200 ? step / 200 : (400 - step) / 200;
-      side = chooseReadoutSide(0.3 + phase * 0.65, side, geom);
-      if (side !== previous) flips += 1;
-      previous = side;
-    }
-    // Exactly one flip out and one back — never a burst at either crossing.
-    expect(flips).toBe(2);
-  });
-});
-
 describe("resolveReadoutLayout", () => {
-  it("anchors the panel's near edge at the offset, on its current side", () => {
-    const layout = resolveReadoutLayout({ x: 0.5, y: 0.5 }, 10_000, createReadoutLayout());
-    expect(layout.side).toBe("right");
-    expect(layout.anchorX).toBeCloseTo(0.5 + READOUT_GEOMETRY.offset, 6);
+  // Spec: "the panel appears on the LEFT of the displayed frame". The readout
+  // eye is the one on that side, and the panel hangs outward from it — so it
+  // is anchored left of its eye, by exactly the offset.
+  it("anchors the panel's right edge at the offset, left of its eye", () => {
+    const layout = resolveReadoutLayout({ x: 0.42, y: 0.5 }, 10_000, createReadoutLayout());
+    expect(layout.anchorX).toBeCloseTo(0.42 - READOUT_GEOMETRY.offset, 6);
   });
 
-  it("clamps the panel vertically instead of flipping it, so it cannot oscillate", () => {
+  // Spec: "The panel stays on its eye's outward side, even when that clips it".
+  // This is the requirement the earlier flip-at-the-edge behavior broke: the
+  // flipped panel landed on the other eye, where the ring is, and its position
+  // depended on head pose — so it collided AND jumped. Sweeping the eye all
+  // the way to the frame's left edge must move the panel with it and nothing
+  // else, even where that puts the panel's far edge off-frame.
+  it("keeps the panel left of its eye at every position, clipping rather than crossing it", () => {
+    const layout = createReadoutLayout();
+    for (let x = 0.02; x <= 0.98; x += 0.01) {
+      resolveReadoutLayout({ x, y: 0.5 }, 10_000, layout);
+      expect(layout.anchorX).toBeCloseTo(x - READOUT_GEOMETRY.offset, 6);
+      // The panel's whole extent stays left of the eye — never over it, and
+      // never out on the ring eye's side of the frame.
+      expect(layout.anchorX).toBeLessThan(x);
+    }
+  });
+
+  // Every position is a pure function of the eye's, so there is no state that
+  // could make the panel move while the head does not — the failure the flip
+  // produced, which no deadband would have fixed.
+  it("does not move while the eye is still, however near an edge it sits", () => {
+    const layout = createReadoutLayout();
+    const at = (x: number) => {
+      resolveReadoutLayout({ x, y: 0.5 }, 10_000, layout);
+      return layout.anchorX;
+    };
+    for (const x of [0.05, 0.3, 0.5, 0.9]) {
+      expect(at(x)).toBeCloseTo(at(x), 12);
+      // …and returning to it from anywhere else gives the same answer.
+      at(0.5);
+      expect(at(x)).toBeCloseTo(x - READOUT_GEOMETRY.offset, 12);
+    }
+  });
+
+  it("clamps the panel vertically, so it cannot oscillate", () => {
     const high = resolveReadoutLayout({ x: 0.5, y: 0.02 }, 10_000, createReadoutLayout());
     expect(high.anchorY).toBeCloseTo(READOUT_GEOMETRY.height / 2, 6);
     const low = resolveReadoutLayout({ x: 0.5, y: 0.98 }, 10_000, createReadoutLayout());
     expect(low.anchorY).toBeCloseTo(1 - READOUT_GEOMETRY.height / 2, 6);
   });
 
-  it("keeps the panel fully inside the frame on whichever side it lands", () => {
+  // The panel may run off the frame's left edge, but never off its right —
+  // that direction is the ring eye's, and reaching it would mean the panel had
+  // crossed its own eye.
+  it("never extends past its eye toward the frame's right", () => {
     const layout = createReadoutLayout();
-    for (let x = 0.05; x <= 0.95; x += 0.01) {
+    for (let x = 0.02; x <= 0.98; x += 0.01) {
       resolveReadoutLayout({ x, y: 0.5 }, 10_000, layout);
-      const near = layout.anchorX;
-      const far = layout.side === "right" ? near + READOUT_GEOMETRY.width : near - READOUT_GEOMETRY.width;
-      // The only escape is an eye so close to an edge that neither side fits,
-      // which the geometry above never produces.
-      expect(Math.min(near, far)).toBeGreaterThanOrEqual(-1e-9);
-      expect(Math.max(near, far)).toBeLessThanOrEqual(1 + 1e-9);
+      expect(layout.anchorX).toBeLessThanOrEqual(x - READOUT_GEOMETRY.offset + 1e-9);
     }
   });
 
@@ -272,16 +247,13 @@ describe("tetherPath", () => {
     expect(numbers[numbers.length - 1]).toBeCloseTo(layout.anchorY * VIEW_H, 2);
   });
 
-  it("bends its elbow toward the panel, whichever side that is", () => {
-    const center = { x: 0.4, y: 0.45 };
-    const right = createReadoutLayout();
-    resolveReadoutLayout(center, 10_000, right);
-    const rightKnee = Number(tetherPath(center, right).match(/-?\d+(\.\d+)?/g)![2]);
-    expect(rightKnee).toBeLessThan(right.anchorX * VIEW_W);
-
-    const left = { ...createReadoutLayout(), side: "left" as ReadoutSide };
-    resolveReadoutLayout({ x: 0.9, y: 0.45 }, 10_000, left);
-    const leftKnee = Number(tetherPath({ x: 0.9, y: 0.45 }, left).match(/-?\d+(\.\d+)?/g)![2]);
-    expect(leftKnee).toBeGreaterThan(left.anchorX * VIEW_W);
+  it("bends its elbow inboard of the anchor, toward the eye it came from", () => {
+    for (const x of [0.15, 0.4, 0.75]) {
+      const center = { x, y: 0.45 };
+      const layout = resolveReadoutLayout(center, 10_000, createReadoutLayout());
+      const knee = Number(tetherPath(center, layout).match(/-?\d+(\.\d+)?/g)![2]);
+      expect(knee).toBeGreaterThan(layout.anchorX * VIEW_W);
+      expect(knee).toBeLessThanOrEqual(center.x * VIEW_W);
+    }
   });
 });

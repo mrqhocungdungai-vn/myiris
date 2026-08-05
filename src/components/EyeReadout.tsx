@@ -85,11 +85,11 @@ export default function EyeReadout({
       if (readoutEye && panel) {
         const layout = layoutRef.current;
         const { width, height } = frameSizeRef.current;
-        // The anchor is the panel's NEAR edge, vertically centered — so the
-        // side flip is a change of which edge is pinned, not a re-measurement.
+        // The anchor is the panel's RIGHT edge, vertically centered: the panel
+        // hangs leftward from its eye and never crosses it, so the pinned edge
+        // is fixed and the frame's left edge clips it rather than moving it.
         panel.style.transform =
-          `translate(${layout.anchorX * width}px, ${layout.anchorY * height}px)` +
-          ` translate(${layout.side === "right" ? "0" : "-100%"}, -50%)`;
+          `translate(${layout.anchorX * width}px, ${layout.anchorY * height}px) translate(-100%, -50%)`;
         panel.style.opacity = String(layout.panel);
 
         const now = performance.now();

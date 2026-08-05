@@ -164,8 +164,6 @@ export function panelReveal(elapsedMs: number): number {
 // other (design D10).
 // ---------------------------------------------------------------------------
 
-export type ReadoutSide = "left" | "right";
-
 export type ReadoutGeometry = {
   /** Gap between the eye and the panel's near edge, in frame widths. */
   offset: number;
@@ -175,8 +173,6 @@ export type ReadoutGeometry = {
   height: number;
   /** How far the panel's center sits above its eye, in frame heights. */
   rise: number;
-  /** Clear room the far side must have before the panel will move there. */
-  hysteresis: number;
 };
 
 export const READOUT_GEOMETRY: ReadoutGeometry = {
@@ -184,33 +180,10 @@ export const READOUT_GEOMETRY: ReadoutGeometry = {
   width: 0.3,
   height: 0.52,
   rise: -0.08,
-  hysteresis: 0.04,
 };
 
-/** Room left over when the panel sits on `side` — negative means it is clipped. */
-export function readoutSlack(eyeX: number, side: ReadoutSide, geom: ReadoutGeometry): number {
-  return side === "right" ? 1 - (eyeX + geom.offset + geom.width) : eyeX - geom.offset - geom.width;
-}
-
-/**
- * Which side of its eye the panel goes on, given where it currently is
- * (spec: "The panel stays wholly inside the camera frame").
- *
- * The hysteresis is the substance, not a refinement: the panel leaves a side
- * only once that side actually clips, and moves only if the other side is
- * clear by a whole deadband. A single `fits ? right : left` comparison strobes
- * the panel between sides whenever the eye is held at the threshold, which is
- * exactly where a head at rest tends to sit.
- */
-export function chooseReadoutSide(eyeX: number, current: ReadoutSide, geom: ReadoutGeometry): ReadoutSide {
-  if (readoutSlack(eyeX, current, geom) >= 0) return current;
-  const other: ReadoutSide = current === "right" ? "left" : "right";
-  return readoutSlack(eyeX, other, geom) >= geom.hysteresis ? other : current;
-}
-
 export type ReadoutLayout = {
-  side: ReadoutSide;
-  /** Frame-normalized anchor: the panel's near edge, vertically centered. Both the tether's far end and the panel's own transform derive from exactly this. */
+  /** Frame-normalized anchor: the panel's right edge, vertically centered. Both the tether's far end and the panel's own transform derive from exactly this. */
   anchorX: number;
   anchorY: number;
   /** 0..1 stagger, so the tether extends before the panel unfolds at its end. */
@@ -218,20 +191,26 @@ export type ReadoutLayout = {
   panel: number;
 };
 
-/**
- * The panel starts on the outward side of its eye — which, since the readout
- * eye is the one appearing on the frame's right, is the frame's right.
- */
 export function createReadoutLayout(): ReadoutLayout {
-  return { side: "right", anchorX: 0, anchorY: 0, tether: 0, panel: 0 };
+  return { anchorX: 0, anchorY: 0, tether: 0, panel: 0 };
 }
 
 /**
- * Resolves the layout for one frame, in place — `layout` carries the side
- * across frames, which is what makes the hysteresis above possible at all.
+ * Resolves the layout for one frame, in place.
  *
- * Vertical placement clamps rather than flips: there is no second vertical
- * position to flip to, and clamping cannot oscillate.
+ * The panel hangs LEFT of its eye and never anywhere else (spec: "The panel
+ * stays on its eye's outward side, even when that clips it"). An earlier
+ * version flipped it across its eye when the frame's left edge would clip it,
+ * with hysteresis; both halves of that were wrong here. The near half is that
+ * the flipped position is where the OTHER eye's ring is, so the two
+ * instruments collided — the whole point of the asymmetric assignment is that
+ * each eye owns its own half of the frame. The far half is that no deadband
+ * makes a position that depends on head pose read as stable: the panel jumped
+ * around. Clipping at the frame edge is the accepted cost, chosen deliberately
+ * over both.
+ *
+ * Vertical placement still clamps — there is no second vertical position to
+ * move to, so a clamp cannot oscillate and costs no legibility.
  */
 export function resolveReadoutLayout(
   center: EyePoint,
@@ -239,8 +218,7 @@ export function resolveReadoutLayout(
   layout: ReadoutLayout,
   geom: ReadoutGeometry = READOUT_GEOMETRY,
 ): ReadoutLayout {
-  layout.side = chooseReadoutSide(center.x, layout.side, geom);
-  layout.anchorX = layout.side === "right" ? center.x + geom.offset : center.x - geom.offset;
+  layout.anchorX = center.x - geom.offset;
   layout.anchorY = Math.max(geom.height / 2, Math.min(1 - geom.height / 2, center.y + geom.rise));
   layout.tether = tetherReveal(elapsedMs);
   layout.panel = panelReveal(elapsedMs);
@@ -249,16 +227,18 @@ export function resolveReadoutLayout(
 
 /**
  * The tether: an origin dot at the eye, a diagonal run outward, a horizontal
- * run across, and a terminating tick at the panel's near edge — in viewBox
- * units. `pathLength="1"` on the rendered path lets the draw-on be a plain
- * `stroke-dashoffset = 1 - tether`, with no length measurement anywhere.
+ * run across, and a terminating tick at the panel's near (right) edge — in
+ * viewBox units. `pathLength="1"` on the rendered path lets the draw-on be a
+ * plain `stroke-dashoffset = 1 - tether`, with no length measurement anywhere.
+ *
+ * The knee sits inboard of the anchor — i.e. to its right, since the panel is
+ * always left of the eye — so the run bends toward the panel rather than away.
  */
 export function tetherPath(center: EyePoint, layout: ReadoutLayout, elbow = 0.045): string {
   const ex = center.x * VIEW_W;
   const ey = center.y * VIEW_H;
   const ax = layout.anchorX * VIEW_W;
   const ay = layout.anchorY * VIEW_H;
-  const direction = layout.side === "right" ? 1 : -1;
-  const kneeX = ax - direction * elbow * VIEW_W;
+  const kneeX = ax + elbow * VIEW_W;
   return `M ${fmt(ex)} ${fmt(ey)} L ${fmt(kneeX)} ${fmt(ay)} L ${fmt(ax)} ${fmt(ay)}`;
 }

@@ -2,7 +2,7 @@
 
 Decorative, on-device iris tracking layered into the Camera/Gesture dock — a visual-only "lock-on" HUD that tracks both eyes' live position, purely for atmosphere, with no interaction or app behavior derived from it.
 
-## ADDED Requirements
+## Requirements
 
 ### Requirement: Iris tracking is decorative and shares the existing camera session
 
@@ -57,9 +57,9 @@ The overlays SHALL NOT be specialized per surface: the same elements, behavior, 
 
 The two eyes SHALL NOT receive the same visual treatment. Rendering the same small ring-style element on both real eyes reads as redundant and does not read clearly at typical webcam scale — so one eye SHALL drive a ring-style "lock-on" HUD element, and the other eye SHALL position a distinct panel-style element beside itself, never overlapping that eye.
 
-Which eye drives which element SHALL be fixed and consistent — the assignment SHALL NOT switch between the two eyes frame-to-frame or between sessions, since an inconsistent assignment would read as flickering/broken rather than as two deliberately different instruments.
+The assignment SHALL be: **the ring-style element on the eye appearing on the RIGHT of the displayed frame, and the panel-style element on the eye appearing on its LEFT.** It SHALL be fixed and consistent — it SHALL NOT switch between the two eyes frame-to-frame or between sessions, since an inconsistent assignment would read as flickering/broken rather than as two deliberately different instruments.
 
-The assignment SHALL be recorded in terms of which side of the **displayed frame** each element appears on, as well as in whatever internal terms the implementation uses. The camera preview is mirrored, so an anatomical eye label and an on-screen side name opposite things; recording only one guarantees the two are eventually confused.
+That on-screen side is the binding statement of the assignment. Whatever internal identifier the implementation uses for an eye — an anatomical label, a landmark index — SHALL be derived from it and recorded alongside it, never the reverse: the preview is mirrored, so any reasoning that goes from a landmark label to an on-screen side is exactly the step that has already been gotten backwards once.
 
 Both elements SHALL update their position every frame to track their eye's live position as the face moves, with no more than a couple of frames of lag — this remains eye tracking; only the rendering is asymmetric.
 
@@ -67,6 +67,11 @@ Both elements SHALL update their position every frame to track their eye's live 
 
 - **WHEN** a face is detected
 - **THEN** one eye shows the ring-style HUD centered on it, and the other eye shows the panel-style element positioned beside it (not overlapping it), and no eye shows both or neither
+
+#### Scenario: The ring is on the frame's right and the panel on its left
+
+- **WHEN** a face is detected and the overlays render
+- **THEN** the ring-style element is over the eye appearing on the right of the displayed frame, and the panel-style element belongs to the eye appearing on its left
 
 #### Scenario: The eye-to-element assignment stays fixed
 
@@ -232,21 +237,28 @@ Value updates SHALL NOT change the panel's layout: rows SHALL NOT reflow, shift,
 - **WHEN** the panel's values update, including between values of differing digit counts
 - **THEN** no row changes position or width, and no text shifts horizontally
 
-### Requirement: The panel stays wholly inside the camera frame
+### Requirement: The panel stays on its eye's outward side, even when that clips it
 
-The panel SHALL remain fully within the camera frame's bounds. When the fixed offset from its eye would place it partly outside the frame, it SHALL be placed on the opposite side of that eye instead, and its connector SHALL follow.
+Each element SHALL stay within its own eye's half of the frame: the panel SHALL hang **left** of its eye — the outward direction, since its eye is the one appearing on the frame's left — and SHALL NOT be placed on that eye's other side under any condition. The two elements SHALL NOT overlap each other at any head position.
 
-The side-switch SHALL be stable: it SHALL NOT alternate rapidly while the tracked eye dwells near the switching threshold. A single unhysteretic comparison SHALL NOT be used, since an eye held at the threshold would strobe the panel between sides.
+The panel's placement SHALL be a function of its eye's position alone, with no dependence on frame bounds, on its own previous placement, or on any threshold. Placement that changes discontinuously with head pose SHALL NOT be used, whatever it is protecting against: a panel that relocates while the user merely turns their head reads as malfunctioning, and no deadband around such a relocation removes that — it only decides when it happens.
 
-#### Scenario: An eye near the frame edge puts the panel on its other side
+Where this places part of the panel outside the frame, the panel SHALL simply be clipped by the frame's edge. **Losing part of the readout is the accepted cost**, deliberately chosen over both alternatives: moving the panel across its eye puts it where the other eye's ring is, and moving it along with the frame edge detaches it from the eye it is reporting on. Its content is placeholder data, so nothing is actually lost by clipping it.
 
-- **WHEN** the tracked eye approaches the frame edge that its panel is offset toward
-- **THEN** the panel appears on the eye's opposite side instead, still fully within the frame and still connected by its tether, and never clipped by the frame edge
+#### Scenario: The panel never crosses to its eye's other side
 
-#### Scenario: Dwelling at the switch point does not strobe
+- **WHEN** the tracked face moves anywhere within the frame, including hard against either edge
+- **THEN** the panel remains on the left of its eye throughout, and never overlaps the ring on the other eye
 
-- **WHEN** the tracked eye is held near the position at which the panel switches sides
-- **THEN** the panel settles on one side and stays there, rather than alternating repeatedly between sides
+#### Scenario: An eye near the left edge clips the panel rather than moving it
+
+- **WHEN** the tracked eye approaches the frame's left edge
+- **THEN** the panel keeps its fixed offset from that eye and is progressively clipped by the frame edge, still connected by its tether
+
+#### Scenario: A head turn never relocates the panel
+
+- **WHEN** the user turns or moves their head, at any position in the frame, including dwelling near an edge
+- **THEN** the panel tracks its eye continuously and is never seen jumping to a different position relative to it
 
 ### Requirement: Overlay geometry and text are not distorted by the frame's aspect ratio
 

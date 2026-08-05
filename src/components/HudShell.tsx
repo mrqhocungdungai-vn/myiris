@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties, type RefObject } from "react";
 import {
   ChevronDown,
+  Clock,
   Hand,
   Headphones,
   HeadphoneOff,
@@ -30,6 +31,7 @@ import type { HandoffTone, ReactorState, TaskCard, TranscriptLine } from "../typ
 import type { HandState } from "../hooks/useHandControl";
 import type { EyeState } from "../hooks/useEyeTracking";
 import { createReadoutLayout } from "../lib/eye-hud";
+import { formatRecStamp } from "../lib/rec-clock";
 import { acceptedKey } from "../lib/tasks";
 
 function HudCamera({
@@ -41,6 +43,7 @@ function HudCamera({
   actionLabel,
   actionTone,
   enlarged,
+  stampOn,
 }: {
   stream: MediaStream | null;
   hand: HandState;
@@ -51,15 +54,31 @@ function HudCamera({
   actionTone: string;
   /** glass-hud-mode: the camera-size control's state. Standard size is the default. */
   enlarged: boolean;
+  /** hud-rec-timestamp: its control sits beside the size control, outside this frame, so the state arrives as a prop. */
+  stampOn: boolean;
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  // Per-surface, for the same reason as CameraDock's: it carries the readout
-  // panel's side across frames so its edge-flip can be hysteretic.
+  // Per-surface, for the same reason as CameraDock's: the eye readout's layout
+  // is resolved by the reticle and read by the panel within the same frame.
   const readoutLayoutRef = useRef(createReadoutLayout());
+
+  const [stamp, setStamp] = useState("");
 
   useEffect(() => {
     if (videoRef.current) videoRef.current.srcObject = stream;
   }, [stream]);
+
+  useEffect(() => {
+    if (!stampOn) return;
+    // 1 Hz via setInterval, not rAF: nothing here changes per frame, and this
+    // thread already carries the WebGL orb and two MediaPipe loops
+    // (main-thread-budget, design D4). The tick exists only while the overlay
+    // does — the cleanup is the point of the decision, not the frequency.
+    const tick = () => setStamp(formatRecStamp(new Date()));
+    tick();
+    const timer = window.setInterval(tick, 1000);
+    return () => window.clearInterval(timer);
+  }, [stampOn]);
 
   return (
     <div className={`hud-camera hud-hit ${enlarged ? "enlarged" : ""}`}>
@@ -69,6 +88,19 @@ function HudCamera({
         <HandSkeleton hands={hand.hands} handsRef={handRef} />
         <EyeReticle eye={eye} eyeRef={eyeRef} layoutRef={readoutLayoutRef} />
         <EyeReadout eye={eye} eyeRef={eyeRef} layoutRef={readoutLayoutRef} />
+        {/* Top-left, the one corner not already taken: `.cam-status` is
+            top-right and `.gesture-chip` bottom-left (design D2). The
+            RECORDING line and the clock are one block, so an audience reads
+            them together as the stamp on the footage. */}
+        {stampOn ? (
+          <span className="cam-stamp">
+            <span className="rec">
+              <i />
+              RECORDING
+            </span>
+            <span className="clock">{stamp}</span>
+          </span>
+        ) : null}
         <span className="cam-status">
           <i />
           {hand.present ? "tracking" : "no hand"}
@@ -264,6 +296,13 @@ export default function HudShell({
   // core of the HUD, so they start open but can be tucked away the same way.
   const [workOpen, setWorkOpen] = useState(true);
 
+  // hud-rec-timestamp: owned here because the control sits in this column
+  // beside the camera-size button while the stamp it drives renders inside the
+  // frame. Deliberately NOT lifted to App.tsx and NOT persisted (design D3) —
+  // a REC indicator restored from disk would claim a recording that is not
+  // happening. Off on every launch.
+  const [stampOn, setStampOn] = useState(false);
+
   // second-brain-focus: owned here (not lifted to App.tsx) — the chip and the
   // clear control both live in this component's own tree, alongside the
   // galaxy that produces the selection. Mirrors the note-reader-clearing
@@ -374,20 +413,45 @@ export default function HudShell({
         ) : null}
         {handControl ? (
           <>
-            {/* A sibling ABOVE the camera, so it keeps `.hud-left`'s 300px
-                width and does not move when the frame resizes. `.hud-hit` is
-                not optional: HUD mode is click-through by default, so a
-                control without it cannot be clicked at all. */}
-            <button
-              type="button"
-              className={`hud-comms-toggle hud-camera-size hud-hit ${cameraEnlarged ? "open" : ""}`}
-              onClick={onToggleCameraSize}
-              title={cameraEnlarged ? "Return the camera to its standard size" : "Enlarge the camera for streaming"}
-            >
-              {cameraEnlarged ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
-              Cam
-              <span className="count">{cameraEnlarged ? "+30%" : "1×"}</span>
-            </button>
+            {/* A row of camera controls ABOVE the frame, so they keep
+                `.hud-left`'s 300px width and do not move when the frame
+                resizes. `.hud-hit` is not optional on either: HUD mode is
+                click-through by default, so a control without it cannot be
+                clicked at all. */}
+            <div className="hud-camera-controls">
+              <button
+                type="button"
+                className={`hud-comms-toggle hud-camera-size hud-hit ${cameraEnlarged ? "open" : ""}`}
+                onClick={onToggleCameraSize}
+                title={cameraEnlarged ? "Return the camera to its standard size" : "Enlarge the camera for streaming"}
+              >
+                {cameraEnlarged ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
+                Cam
+                <span className="count">{cameraEnlarged ? "+35%" : "1×"}</span>
+              </button>
+              {/* hud-rec-timestamp. It wears REC vocabulary because that is
+                  what reads as "this footage is timestamped" to an audience —
+                  but the app records nothing, and the title says what it
+                  actually does. Never label this start/stop recording, and
+                  never give it an elapsed timer or a file readout: those are
+                  the affordances only a real recorder has (spec: "The
+                  recording indicator SHALL NOT imply the app is capturing
+                  video"). */}
+              <button
+                type="button"
+                className={`hud-comms-toggle hud-camera-rec hud-hit ${stampOn ? "open" : ""}`}
+                onClick={() => setStampOn((current) => !current)}
+                title={
+                  stampOn
+                    ? "Hide the date and time on the camera"
+                    : "Show the date and time on the camera (Iris records nothing — this only stamps the picture)"
+                }
+              >
+                <Clock size={12} />
+                Rec
+                <span className="count">{stampOn ? "on" : "off"}</span>
+              </button>
+            </div>
             <HudCamera
               stream={handStream}
               hand={hand}
@@ -397,6 +461,7 @@ export default function HudShell({
               actionLabel={handActionLabel}
               actionTone={handActionTone}
               enlarged={cameraEnlarged}
+              stampOn={stampOn}
             />
           </>
         ) : null}

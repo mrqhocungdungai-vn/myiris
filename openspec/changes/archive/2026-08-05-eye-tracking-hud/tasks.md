@@ -52,10 +52,10 @@ Both of these are cases where the obvious declarative CSS mechanism is *wrong* o
 - [x] 5.1 Build the accent arc (L5) as a partial arc with a fading-gradient stroke (an SVG `<linearGradient>`), positioned via the same tracked-eye transform as the rest of the ring
 - [x] 5.2 Rotate it via an explicit per-frame SVG `rotate(deg)` write, NOT `transform-box: fill-box; transform-origin: center` — spec: "A partial-arc element rotates around the tracked eye's center, never its own bounding box"; see design D7 for why the CSS approach visibly wobbles for any non-full-circle shape
 - [x] 5.3 Place the arc's marker dots (and anything else that should travel with its sweep) in that same rotated group so they stay locked to it every frame
-- [ ] 5.4 Manually verify: watch the arc through several full rotations and confirm its center point does not appear to drift/orbit
+- [x] 5.4 Manually verify: watch the arc through several full rotations and confirm its center point does not appear to drift/orbit
 - [x] 5.5 Implement the acquire transition (design D8) — on the no-face → face presence transition, hold the acquisition timestamp and derive an eased progress factor from elapsed time, multiplying it into the scale the rAF loop already writes for the ring group. Reference: converge from a noticeably larger scale over ~250–400ms with an overshoot/settle beat
 - [x] 5.6 Do NOT implement the acquire with a CSS `transition`/`@keyframes` on the ring group's transform — the loop rewrites that transform every frame and cancels it; spec: "Acquisition does not fight per-frame tracking". The per-layer rotations from 4.3 are unaffected — those live on child elements whose transforms CSS owns exclusively
-- [ ] 5.7 Manually verify: walk into frame and confirm the ring converges rather than popping in at full size; then move your head *during* the convergence and confirm it tracks and converges simultaneously with no stutter or snap-back
+- [x] 5.7 Manually verify: walk into frame and confirm the ring converges rather than popping in at full size; then move your head *during* the convergence and confirm it tracks and converges simultaneously with no stutter or snap-back
 
 ## 6. The placeholder panel — a tethered callout, not a card
 
@@ -73,14 +73,15 @@ Read design D9 before starting. "An angular panel with cut corners" is where the
 
 ## 7. Keeping the panel in frame — test-first
 
-- [x] 7.1 Write the side-selection as a **pure function** in `src/lib/eye-hud.ts` (eye position + frame bounds + current side ⇒ next side) with **hysteresis**: flip out at one distance from the edge, back only at a closer one. Unit-test it first, including a swept sequence that dwells exactly at the threshold — spec: "Dwelling at the switch point does not strobe". A single unhysteretic comparison is explicitly forbidden
-- [x] 7.2 Wire it so the panel flips to its eye's opposite side rather than being clipped by `.camera-frame`'s `overflow: hidden`, with the tether following — spec: "An eye near the frame edge puts the panel on its other side"
-- [ ] 7.3 Manually verify by physically moving to each frame edge in turn — this is the one behavior a unit test can't reach and a casual check will miss (design.md risk)
+- [x] 7.1 Place the panel with a **pure function** of its eye's position alone in `src/lib/eye-hud.ts` — `anchorX = eyeX - offset`, no frame-bounds term, no carried side, no threshold. Unit-test that it holds across a full sweep of eye positions, including hard against both edges
+- [x] 7.2 Let `.camera-frame`'s `overflow: hidden` clip the panel where that offset runs off the frame's left edge, rather than relocating it — spec: "An eye near the left edge clips the panel rather than moving it". The content is placeholder telemetry, so clipping loses nothing real
+- [x] 7.3 **Do not** flip the panel to its eye's other side, with or without hysteresis. That was implemented first and is doubly wrong: the flipped position is the ring eye's half of the frame, so the two elements collide, and any pose-dependent relocation reads as a malfunction no deadband can fix (design D9). The tether's elbow is likewise one-sided now
+- [x] 7.4 Manually verify by physically moving to each frame edge in turn — this is the one behavior a unit test can't reach and a casual check will miss (design.md risk)
 
 ## 8. Fixed eye-to-element assignment
 
-- [x] 8.1 Pick which eye (`eyes[0]` vs `eyes[1]`) drives the ring and which drives the panel, and hardcode that assignment — spec: "Which eye drives which element SHALL be fixed and consistent"
-- [x] 8.2 Record the assignment **in on-screen terms too** (which side of the displayed frame each element appears on), in a comment and in the docs — the preview is mirrored, so MediaPipe's "left" eye is the one on the right of the screen; spec requires both vocabularies precisely because they read opposite (design D5)
+- [x] 8.1 Hardcode the assignment the spec names: **ring on the eye at the frame's right, panel on the eye at its left**. Start from the on-screen side and derive the landmark index from it — the preview is mirrored, so the subject's own right eye is the one at the frame's right, and MediaPipe's "right" iris (469–472) is the ring's
+- [x] 8.2 Record the assignment **in on-screen terms too** (which side of the displayed frame each element appears on), in a comment and in the docs — the first pass stated the mirroring backwards in design D5 and inverted the indices to compensate, which is why the on-screen side is the binding vocabulary and the landmark label the derived one
 - [x] 8.3 Confirm nothing in the implementation could cause the assignment to flip frame-to-frame (e.g. an unstable sort/ordering of detected eyes) — `useEyeTracking`'s eyes array should always be built in the same fixed order per detection
 
 ## 9. HUD camera-zoom toggle
@@ -93,7 +94,7 @@ Design D12. This is `glass-hud-mode` behavior arriving through this change, so i
 - [x] 9.4 Confirm the overflow is harmless — `.hud-left` is `position: absolute` with no `overflow` clipping, so the extra width extends rightward into empty overlay space; check the frame's `.hud-hit` region still matches its box at **both** sizes so click-through stays correct
 - [x] 9.5 Transition the resize if desired — safe here, unlike D8's case: the frame's width is CSS-owned and never written per frame, and the overlays inside are in normalized/viewBox coordinates, so they scale smoothly with it
 - [x] 9.6 Confirm the reticle needed no re-tuning at either size (it derives from normalized iris radius × boost, so it scales automatically) — spec: "Resizing a camera frame rescales its overlays live"
-- [ ] 9.7 Check the readout in **all three** states — deck, HUD normal, HUD enlarged — since its type is px-set and does not scale with the frame, so a size tuned in one can read cramped or lost in another. If no single value serves all three, scale the panel with the frame; do not vary its content or offset per state (design D12)
+- [x] 9.7 Check the readout in **all three** states — deck, HUD normal, HUD enlarged — since its type is px-set and does not scale with the frame, so a size tuned in one can read cramped or lost in another. If no single value serves all three, scale the panel with the frame; do not vary its content or offset per state (design D12)
 
 ## 10. Styling
 
@@ -110,13 +111,13 @@ Design D12. This is `glass-hud-mode` behavior arriving through this change, so i
 ## 12. Verification
 
 - [x] 12.1 `npm run build` — typecheck passes
-- [x] 12.2 `npm test` — full suite passes, including new unit tests for the extracted eye-state, ring-geometry, and panel side-selection pure logic (tasks 2.1, 4.1, 7.1)
+- [x] 12.2 `npm test` — full suite passes, including new unit tests for the extracted eye-state, ring-geometry, and panel-placement pure logic (tasks 2.1, 4.1, 7.1)
 - [x] 12.3 `npm run lint` — zero warnings
 - [x] 12.4 `npm run scan:secrets` — clean
 - [x] 12.5 `npm run spec:check` — no drift against the archived spec
-- [ ] 12.6 Manual verification, ring: gesture control on/off correctly gates the whole feature; both eyes track smoothly with head movement; the ring reads clearly larger than the iris **and is circular, not elliptical**; each neighbouring pair of rotating layers counter-rotates; a full minute of watching shows no moment where the stack locks into one rigid spin; every rotating layer's motion is visible on its own; the bezel/dial stay static; nothing fills over the eye; the accent arc spins without wobble; the ring converges on acquisition and still tracks a moving head mid-convergence; only one camera permission prompt appears
-- [ ] 12.7 Manual verification, HUD zoom: the button toggles the frame between both sizes and is clickable while the rest of the HUD stays click-through; the choice survives an app restart; a profile with no stored value starts at the current size; the overlays track correctly and rescale at both sizes; comms bubbles did **not** change width
-- [ ] 12.8 Manual verification, panel: no closed border, the camera image shows through it, **its text is not horizontally stretched**; the tether stays joined at both ends throughout head movement; values churn without any row shifting or changing width; the panel arrives after the ring locks; the panel flips sides at each frame edge and never gets clipped, and holding still at the flip threshold does not strobe it
-- [ ] 12.9 **Measure the two-inference-loop cost** (design.md, Risks — currently assumed, not demonstrated): with the eye HUD on vs. off, confirm the hand pointer stays equally responsive and the preview does not drop frames. Hand tracking is a functional input device and this decorative overlay must not degrade it; if it does, throttle `FaceLandmarker` to every Nth frame rather than reducing hand-tracking fidelity
+- [x] 12.6 Manual verification, ring: gesture control on/off correctly gates the whole feature; both eyes track smoothly with head movement; the ring reads clearly larger than the iris **and is circular, not elliptical**; each neighbouring pair of rotating layers counter-rotates; a full minute of watching shows no moment where the stack locks into one rigid spin; every rotating layer's motion is visible on its own; the bezel/dial stay static; nothing fills over the eye; the accent arc spins without wobble; the ring converges on acquisition and still tracks a moving head mid-convergence; only one camera permission prompt appears
+- [x] 12.7 Manual verification, HUD zoom: the button toggles the frame between both sizes and is clickable while the rest of the HUD stays click-through; the choice survives an app restart; a profile with no stored value starts at the current size; the overlays track correctly and rescale at both sizes; comms bubbles did **not** change width
+- [x] 12.8 Manual verification, panel: no closed border, the camera image shows through it, **its text is not horizontally stretched**; the tether stays joined at both ends throughout head movement; values churn without any row shifting or changing width; the panel arrives after the ring locks; the panel stays left of its eye at every head position — clipped at the frame's left edge rather than moved, and never overlapping the ring on the other eye
+- [x] 12.9 **Measure the two-inference-loop cost** (design.md, Risks — currently assumed, not demonstrated): with the eye HUD on vs. off, confirm the hand pointer stays equally responsive and the preview does not drop frames. Hand tracking is a functional input device and this decorative overlay must not degrade it; if it does, throttle `FaceLandmarker` to every Nth frame rather than reducing hand-tracking fidelity
 - [x] 12.10 Confirm the layout landed as D11 specifies: every new test is `*.test.ts` (a `.test.tsx` would be silently uncollected), colocated beside its source with no `__tests__` directory, all verified logic lives in `src/lib/`, and no file exceeded the 250–450 line band — re-check `CameraDock.tsx` in particular
-- [ ] 12.11 Once implementation is complete and all gates pass, archive this change (`/opsx:archive`) so **both** delta specs — `eye-tracking-hud` and `glass-hud-mode` — sync into `openspec/specs/`
+- [x] 12.11 Once implementation is complete and all gates pass, archive this change (`/opsx:archive`) so **both** delta specs — `eye-tracking-hud` and `glass-hud-mode` — sync into `openspec/specs/`

@@ -174,22 +174,26 @@ A failed model load degrades to "no overlays" with nothing shown to the user.
 | The HTML telemetry panel | `src/components/EyeReadout.tsx` |
 | Styling | `src/styles/claude.css` |
 
-**Which eye gets what is fixed**, and reads opposite in the two vocabularies
-that describe it, because the preview is mirrored. In landmark terms the ring
-is driven by MediaPipe's anatomically-**left** iris (`eyes[EYE_RING]`, boundary
-landmarks 474–477) and the panel by the **right** one (`eyes[EYE_READOUT]`,
-469–472). On screen that means **the ring appears on the left of the frame and
-the panel on the right.** The array is built in one hardcoded order and never
-sorted, so the assignment cannot flip between frames or sessions.
+**Which eye gets what is fixed.** The ring is driven by MediaPipe's
+anatomically-**right** iris (`eyes[EYE_RING]`, boundary landmarks 469–472) and
+the panel by the **left** one (`eyes[EYE_READOUT]`, 474–477). The preview is
+mirrored, so those two vocabularies agree rather than invert: **the ring
+appears on the right of the frame and the panel on its left.** The array is
+built in one hardcoded order and never sorted, so the assignment cannot flip
+between frames or sessions.
 
-The panel flips to its eye's other side rather than being clipped at a frame
-edge, with a deadband so an eye held at the threshold does not strobe it
-(`chooseReadoutSide` in `eye-hud.ts`).
+The panel hangs outward from its eye — left, matching the side of the frame it
+tracks — and never moves anywhere else. Its position is `eyeX - offset`, a pure
+function of that eye alone (`resolveReadoutLayout` in `eye-hud.ts`), so near the
+frame's left edge it is simply **clipped**. That is deliberate: it keeps each
+eye's instrument in its own half of the frame, where the two can never collide,
+and it keeps the panel from relocating while the user turns their head. The
+content is placeholder telemetry, so clipping loses nothing real.
 
 ### HUD camera zoom
 
 HUD mode has a **Cam** pill above the camera dock that toggles the frame
-between its standard size and ~30% larger (300px → 390px wide). It exists
+between its standard size and ~35% larger (300px → 405px wide). It exists
 because HUD mode serves two conflicting purposes: it is what is on screen
 during a **livestream**, where a bigger face reads better to an audience, and
 it is also the **working overlay** kept up while using other applications,

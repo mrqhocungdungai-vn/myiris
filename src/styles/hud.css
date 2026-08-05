@@ -253,7 +253,11 @@ html:not(.hud-mode) .setup-backdrop {
    so re-tuning the enlarged factor against a real stream layout is one edit. */
 .hud-camera {
   --hud-camera-width: 300px;
-  --hud-camera-width-lg: 390px;
+  /* +35% of the standard width. Re-tuned from +30% (390px) against a real
+     stream layout — the enlarged frame read too small to an audience. The
+     `glass-hud-mode` spec asks for "roughly a third larger", which this is,
+     so re-tuning it is a constant change and not a behavior change. */
+  --hud-camera-width-lg: 405px;
   width: var(--hud-camera-width);
   /* Safe to transition, unlike the reticle's transform (design D8/D12): this
      width is CSS-owned and never written per frame, and the overlays inside
@@ -268,10 +272,91 @@ html:not(.hud-mode) .setup-backdrop {
 .hud-camera .camera-frame {
   margin: 0;
   aspect-ratio: 4 / 3;
+  /* So the REC stamp below can size itself in `cqw` and scale with the frame
+     at both camera sizes, instead of being px-tuned for one and wrong at the
+     other. `.camera-frame` is already `position: relative`, so the containment
+     this introduces changes nothing about how the overlays are positioned. */
+  container-type: inline-size;
   border-radius: var(--r-card);
   box-shadow:
     inset 0 0 0 1px var(--hairline-strong),
     0 1px 8px rgba(0, 0, 0, 0.2);
+}
+
+/* The camera's controls sit in a row above the frame, so they keep
+   `.hud-left`'s 300px width and do not move when the frame resizes. */
+.hud-camera-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* hud-rec-timestamp. Follows `.cam-status`'s treatment (mono, small,
+   letter-spaced) rather than the control pills' — this lives inside the frame,
+   on the instrument layer, not in the column outside it. */
+.hud-camera .cam-stamp {
+  position: absolute;
+  left: 10px;
+  top: 10px;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-family: var(--font-mono);
+  /* Two shadows, not one: the tight one gives the glyph edges against a bright
+     face, the wide one keeps it readable over a blown-out background. A stamp
+     that is only legible against dark video is not legible. */
+  text-shadow:
+    0 1px 3px rgba(3, 10, 18, 0.95),
+    0 0 14px rgba(3, 10, 18, 0.8);
+  pointer-events: none;
+}
+
+/* Sized in `cqw` against `.camera-frame`, so one setting is right at both
+   camera sizes: 3.6cqw is ~10.8px at 300px wide and ~14.6px at 405px, and
+   4.6cqw is ~13.8px / ~18.6px. This is a stamp meant to be read back off a
+   recording, so it is deliberately larger and heavier than `.cam-status` —
+   that one is a glanceable status for the operator, this one has to survive
+   video compression and a viewer sitting further from the screen. */
+.hud-camera .cam-stamp .rec {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 3.6cqw;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  color: #ffe2e2;
+}
+
+.hud-camera .cam-stamp .rec i {
+  width: 2.4cqw;
+  height: 2.4cqw;
+  border-radius: 50%;
+  background: var(--coral);
+  box-shadow: 0 0 8px var(--coral);
+  animation: pulse-dot 1.6s ease-in-out infinite;
+}
+
+.hud-camera .cam-stamp .clock {
+  font-size: 4.6cqw;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: #ffffff;
+  /* Not cosmetic: with the formatter's zero-padding this is what fixes the
+     stamp's width, so it cannot shift as the seconds tick (spec: "The stamp
+     does not jitter as it ticks"). */
+  font-variant-numeric: tabular-nums;
+}
+
+/* The REC pill reuses `.hud-comms-toggle`'s shape; only its lit state differs,
+   coral rather than cyan, so "on" reads as a recording light. */
+.hud-camera-rec.open {
+  color: #ffd9d9;
+}
+
+.hud-camera-rec.open .count {
+  color: #ffe4e4;
+  background: rgba(var(--coral-rgb), 0.22);
 }
 
 .hud-comms-toggle {

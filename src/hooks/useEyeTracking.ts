@@ -63,10 +63,11 @@ const RIGHT_IRIS_RING = [469, 470, 471, 472];
  *
  * In on-screen terms — which is how anyone verifying this reads it, and the
  * vocabulary the spec requires alongside the landmark one: **the ring sits on
- * the LEFT of the displayed frame and the readout panel on its RIGHT.**
+ * the RIGHT of the displayed frame and the readout panel on its LEFT.** The
+ * preview is mirrored, so the frame's right is the subject's own right eye.
  */
-export const EYE_RING = 0;
-export const EYE_READOUT = 1;
+export const EYE_READOUT = 0;
+export const EYE_RING = 1;
 
 // Matches useHandControl's own smoothing — the same EMA, reusing lib/hand.ts's
 // smoothPoint rather than a second copy of it. Iris centers are noisier than a
@@ -171,9 +172,9 @@ export function useEyeTracking(stream: MediaStream | null, enabled: boolean) {
         const result = landmarker.detectForVideo(video, now);
         const landmarks = result.faceLandmarks?.[0];
 
-        // Fixed order, never sorted (task 8.3): index EYE_RING is always the
-        // anatomically-left iris and index EYE_READOUT always the right one,
-        // so the assignment cannot flip between frames or sessions.
+        // Fixed order, never sorted (task 8.3): index EYE_READOUT is always the
+        // anatomically-left iris and index EYE_RING always the right one, so
+        // the assignment cannot flip between frames or sessions.
         const eyes = landmarks
           ? [trackEye("left", landmarks, LEFT_IRIS_RING), trackEye("right", landmarks, RIGHT_IRIS_RING)].filter(
               (eye): eye is TrackedEye => eye !== null,
