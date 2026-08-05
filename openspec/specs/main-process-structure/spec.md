@@ -59,10 +59,10 @@ This exists so that adding a capability means adding one module and one registra
 
 State owned by one module SHALL NOT be mutated directly by another. Where a module currently drives another module's state by direct field assignment, the split SHALL convert those assignments into named transition operations exposed by the owning module.
 
-#### Scenario: The Live session does not write listening-mode state
+#### Scenario: The listen-only flag has exactly one writer
 
-- **WHEN** the Live session's connect or message-handling path needs to affect listening-mode state
-- **THEN** it calls a named transition on the listening-mode module rather than assigning to its fields, and the listening-mode module remains the only writer of its own state
+- **WHEN** the IPC layer, the tray item, the global hotkey, or the message-handling path needs to read or change listen-only mode state
+- **THEN** it calls a named transition or an injected accessor exposed by the module that owns the flag rather than assigning to its fields, and that module remains the only writer of its own state
 
 #### Scenario: Each transition is covered
 
@@ -168,7 +168,7 @@ There SHALL NOT be a shared mutable application-state module that other modules 
 
 #### Scenario: A module owns its own state
 
-- **WHEN** the session store, the Live session handle, or the listening-mode engagement flag is located
+- **WHEN** the session store, the Live session handle, or the listen-only engagement flag is located
 - **THEN** each is owned by exactly one module, and no other module reads or writes it except through that module's interface
 
 #### Scenario: No global state module exists
