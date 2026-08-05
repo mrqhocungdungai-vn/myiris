@@ -245,6 +245,26 @@ html:not(.hud-mode) .setup-backdrop {
   animation: hud-rise 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) 0.16s backwards;
 }
 
+/* glass-hud-mode: the camera carries its OWN width rather than widening
+   `.hud-left`, whose 300px is shared with the comms toggle and bubbles —
+   bumping the column would widen comms by 30% too. `.hud-left` is
+   `position: absolute` with no overflow clipping, so the enlarged frame simply
+   extends rightward into empty overlay space. Both sizes are custom properties
+   so re-tuning the enlarged factor against a real stream layout is one edit. */
+.hud-camera {
+  --hud-camera-width: 300px;
+  --hud-camera-width-lg: 390px;
+  width: var(--hud-camera-width);
+  /* Safe to transition, unlike the reticle's transform (design D8/D12): this
+     width is CSS-owned and never written per frame, and the overlays inside
+     are in normalized/viewBox coordinates, so they rescale with it smoothly. */
+  transition: width 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.hud-camera.enlarged {
+  width: var(--hud-camera-width-lg);
+}
+
 .hud-camera .camera-frame {
   margin: 0;
   aspect-ratio: 4 / 3;

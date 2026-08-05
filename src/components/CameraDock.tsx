@@ -1,6 +1,10 @@
 import { useEffect, useRef } from "react";
 import { Camera } from "lucide-react";
 import type { HandState } from "../hooks/useHandControl";
+import type { EyeState } from "../hooks/useEyeTracking";
+import EyeReticle from "./EyeReticle";
+import EyeReadout from "./EyeReadout";
+import { createReadoutLayout } from "../lib/eye-hud";
 
 const HAND_CONNECTIONS = [
   [0, 1], [1, 2], [2, 3], [3, 4],
@@ -100,6 +104,8 @@ export default function CameraDock({
   handControl,
   hand,
   handRef,
+  eye,
+  eyeRef,
   stream,
   actionLabel,
   actionTone,
@@ -108,6 +114,9 @@ export default function CameraDock({
   hand: HandState;
   /** Per-frame hand data (useHandControl's stateRef) — feeds the skeleton overlay. */
   handRef: { current: HandState };
+  eye: EyeState;
+  /** Per-frame eye data (useEyeTracking's stateRef) — feeds the eye overlays. */
+  eyeRef: { current: EyeState };
   stream: MediaStream | null;
   actionLabel: string;
   actionTone: string;
@@ -115,6 +124,10 @@ export default function CameraDock({
   // Owns its own srcObject assignment so the feed survives remounts (e.g.
   // returning from HUD mode re-creates this video element).
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  // Shared between the two eye overlays: the reticle resolves it, the readout
+  // reads it. Held per surface because it carries the panel's side across
+  // frames, which is what makes its flip hysteretic (design D10).
+  const readoutLayoutRef = useRef(createReadoutLayout());
   useEffect(() => {
     if (videoRef.current) videoRef.current.srcObject = stream;
   }, [stream, handControl]);
@@ -130,6 +143,8 @@ export default function CameraDock({
           <video ref={videoRef} autoPlay playsInline muted />
           <div className="cam-scan" />
           <HandSkeleton hands={hand.hands} handsRef={handRef} />
+          <EyeReticle eye={eye} eyeRef={eyeRef} layoutRef={readoutLayoutRef} />
+          <EyeReadout eye={eye} eyeRef={eyeRef} layoutRef={readoutLayoutRef} />
           <span className="cam-status">
             <i />
             {hand.present ? "tracking" : "no hand"}

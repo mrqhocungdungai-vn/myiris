@@ -1,7 +1,10 @@
 #!/usr/bin/env node
-// Vendors the WASM/JS runtime glue that src/hooks/useWakeWord.ts and
-// src/hooks/useHandControl.ts load, so the renderer never fetches executable
-// code from a third-party origin at runtime (renderer-content-security).
+// Vendors the WASM/JS runtime glue that src/hooks/useWakeWord.ts,
+// src/hooks/useHandControl.ts and src/hooks/useEyeTracking.ts load, so the
+// renderer never fetches executable code from a third-party origin at runtime
+// (renderer-content-security). The two MediaPipe hooks share one fileset —
+// GestureRecognizer and FaceLandmarker are sibling tasks in the same package,
+// so only the .task model assets differ.
 // Copies straight from node_modules (already on disk, already pinned by
 // package.json) rather than committing ~25MB of binaries to git, so the
 // shipped runtime can't drift from the installed package version. Run before
@@ -65,10 +68,15 @@ function vendorMediaPipe() {
   ];
 }
 
-// Not shipped in node_modules — a data asset (not code), fetched once and
+// Not shipped in node_modules — data assets (not code), fetched once and
 // cached on disk so subsequent builds don't need the network. Kept in sync
-// with the MODEL_URL this replaces in src/hooks/useHandControl.ts.
+// with the MODEL_URLs these replace in src/hooks/useHandControl.ts and
+// src/hooks/useEyeTracking.ts.
 const GESTURE_MODEL_URL = "https://storage.googleapis.com/mediapipe-tasks/gesture_recognizer/gesture_recognizer.task";
+// The plain face_landmarker variant, deliberately not the _with_blendshapes
+// one: the eye HUD needs iris position/size only (eye-tracking-hud design D1).
+const FACE_MODEL_URL =
+  "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
 
 function downloadFile(url, destPath) {
   return new Promise((resolve, reject) => {
@@ -92,26 +100,41 @@ function downloadFile(url, destPath) {
   });
 }
 
-async function vendorGestureModel() {
-  const destPath = path.join(publicDir, "mediapipe", "gesture_recognizer.task");
+// Download-once, skip-if-present. Shared by every vendored model so a second
+// model can't quietly acquire different caching behaviour from the first.
+async function vendorModel(label, url, fileName) {
+  const destPath = path.join(publicDir, "mediapipe", fileName);
   if (existsSync(destPath)) {
     return { file: path.relative(repoRoot, destPath), bytes: statSync(destPath).size, skipped: true };
   }
   mkdirSync(path.dirname(destPath), { recursive: true });
   const tmpPath = `${destPath}.download`;
   try {
-    await downloadFile(GESTURE_MODEL_URL, tmpPath);
+    await downloadFile(url, tmpPath);
     copyFileSync(tmpPath, destPath);
     return { file: path.relative(repoRoot, destPath), bytes: statSync(destPath).size };
   } catch (error) {
-    throw new Error(`Could not vendor the gesture recognizer model from ${GESTURE_MODEL_URL}: ${error.message}`);
+    throw new Error(`Could not vendor the ${label} model from ${url}: ${error.message}`);
   } finally {
     try { unlinkSync(tmpPath); } catch { /* best-effort cleanup */ }
   }
 }
 
+function vendorGestureModel() {
+  return vendorModel("gesture recognizer", GESTURE_MODEL_URL, "gesture_recognizer.task");
+}
+
+function vendorFaceModel() {
+  return vendorModel("face landmarker", FACE_MODEL_URL, "face_landmarker.task");
+}
+
 async function main() {
-  const results = [...vendorOnnxRuntime(), ...vendorMediaPipe(), await vendorGestureModel()];
+  const results = [
+    ...vendorOnnxRuntime(),
+    ...vendorMediaPipe(),
+    await vendorGestureModel(),
+    await vendorFaceModel(),
+  ];
   const totalBytes = results.reduce((sum, r) => sum + r.bytes, 0);
   for (const r of results) {
     const mb = (r.bytes / (1024 * 1024)).toFixed(1);

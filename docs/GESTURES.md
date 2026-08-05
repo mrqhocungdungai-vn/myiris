@@ -144,6 +144,64 @@ in `galaxy-nav.ts`) is dimmed near-invisible — nodes and edges alike — so th
 selection and its immediate neighbors stand out without anything moving or
 disappearing. Clearing the focus restores the full graph.
 
+### Eye HUD (decorative)
+
+The same camera session also drives a **purely decorative** iris HUD over the
+camera preview — a J.A.R.V.I.S.-style lock-on reticle on one eye and a
+telemetry callout beside the other. It drives **no** gesture, pointer, or app
+behavior; eye position decides only where those two elements are drawn. It has
+no switch of its own: it lives and dies with the hand-gesture toggle above.
+
+It uses `FaceLandmarker`, a **sibling task to `GestureRecognizer` in the same
+`@mediapipe/tasks-vision` package** — same `FilesetResolver`, same vendored WASM
+fileset, one extra model asset (`face_landmarker.task`, vendored by
+`scripts/vendor-runtime-assets.mjs` exactly like the gesture model). There is
+**no second `getUserMedia`**: `useEyeTracking(stream, enabled)`
+(`src/hooks/useEyeTracking.ts`) takes the `MediaStream` `useHandControl` already
+opened and runs against its own detached `<video>`, so there is one camera
+session and one permission prompt. It is called once in `App.tsx`, not inside
+either camera component — the deck and the HUD are mutually exclusive, so a
+component-level hook would re-initialize the model on every mode switch.
+
+A failed model load degrades to "no overlays" with nothing shown to the user.
+
+| Piece | Where |
+| --- | --- |
+| Tracking hook, `EyeState`/`TrackedEye` types | `src/hooks/useEyeTracking.ts` |
+| Iris center/radius, the presence gate | `src/lib/eye.ts` |
+| Ring geometry, acquire easing, panel side-selection | `src/lib/eye-hud.ts` |
+| The SVG ring stack and the tether | `src/components/EyeReticle.tsx` |
+| The HTML telemetry panel | `src/components/EyeReadout.tsx` |
+| Styling | `src/styles/claude.css` |
+
+**Which eye gets what is fixed**, and reads opposite in the two vocabularies
+that describe it, because the preview is mirrored. In landmark terms the ring
+is driven by MediaPipe's anatomically-**left** iris (`eyes[EYE_RING]`, boundary
+landmarks 474–477) and the panel by the **right** one (`eyes[EYE_READOUT]`,
+469–472). On screen that means **the ring appears on the left of the frame and
+the panel on the right.** The array is built in one hardcoded order and never
+sorted, so the assignment cannot flip between frames or sessions.
+
+The panel flips to its eye's other side rather than being clipped at a frame
+edge, with a deadband so an eye held at the threshold does not strobe it
+(`chooseReadoutSide` in `eye-hud.ts`).
+
+### HUD camera zoom
+
+HUD mode has a **Cam** pill above the camera dock that toggles the frame
+between its standard size and ~30% larger (300px → 390px wide). It exists
+because HUD mode serves two conflicting purposes: it is what is on screen
+during a **livestream**, where a bigger face reads better to an audience, and
+it is also the **working overlay** kept up while using other applications,
+where a large camera eats room other content needs.
+
+The standard size is the default, and the choice is remembered across restarts
+(`iris.hudCameraEnlarged` in `localStorage`); an absent or unreadable value
+resolves to the standard size, so the failure mode is "reverts to normal",
+never "stuck enlarged". Only the camera resizes — the comms panel beside it
+keeps its width, and the deck's camera dock has no such control. The eye
+overlays rescale with the frame automatically.
+
 ### Reader animation
 
 Expanded Claude task results open with a simple scale/fade pop and close with a

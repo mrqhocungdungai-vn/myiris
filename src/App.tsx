@@ -17,6 +17,7 @@ import { uiSounds } from "./lib/sounds";
 import { useAudioPipeline } from "./hooks/useAudioPipeline";
 import { useHandoffFx } from "./hooks/useHandoffFx";
 import { useHandControl, SYSTEM_DEFAULT_CAMERA, type HandPoint } from "./hooks/useHandControl";
+import { useEyeTracking } from "./hooks/useEyeTracking";
 import { useWakeWord } from "./hooks/useWakeWord";
 import { SYSTEM_DEFAULT_MIC } from "./lib/mic-device";
 import { wakeCaption } from "./lib/wake-caption";
@@ -49,6 +50,11 @@ const HAND_STORAGE_KEY = "iris.handControlEnabled";
 // ambient-memory: default OFF, unlike sounds above — this is the one
 // preference whose safer default is off, not on (design D1).
 const AMBIENT_CAPTURE_STORAGE_KEY = "iris.ambientCaptureEnabled";
+// glass-hud-mode: the HUD camera's size. Enlarging is the deliberate act, so
+// the standard size is the default and anything absent or unreadable resolves
+// to it — the failure mode is "reverts to standard", never "stuck enlarged
+// with no way back".
+const HUD_CAMERA_SIZE_STORAGE_KEY = "iris.hudCameraEnlarged";
 
 function loadSoundsEnabled(): boolean {
   try {
@@ -98,6 +104,14 @@ function loadAmbientCaptureEnabled(): boolean {
   }
 }
 
+function loadHudCameraEnlarged(): boolean {
+  try {
+    return window.localStorage.getItem(HUD_CAMERA_SIZE_STORAGE_KEY) === "on";
+  } catch {
+    return false;
+  }
+}
+
 export default function App() {
   const [sidecarRunning, setSidecarRunning] = useState(false);
   // Drives the WebGL backdrop/orb render loops: paused (0 GPU) whenever the
@@ -116,6 +130,7 @@ export default function App() {
   const [taskChooser, setTaskChooser] = useState<{ query: string; matches: TaskCard[] } | null>(null);
   const [showHistory, setShowHistory] = useState(false);
   const [handControl, setHandControl] = useState(loadHandEnabled);
+  const [hudCameraEnlarged, setHudCameraEnlarged] = useState(loadHudCameraEnlarged);
   // The non-blocking confirm dialog is gone with its only caller: the soft gate
   // that warned before switching pipeline roles. Nothing asks the user to
   // confirm anything now — Iris picks the verb, and the review gate is where a
@@ -266,6 +281,18 @@ export default function App() {
       const next = !current;
       try {
         window.localStorage.setItem(HAND_STORAGE_KEY, next ? "on" : "off");
+      } catch {
+        // Best-effort persistence; the toggle still works for this session.
+      }
+      return next;
+    });
+  }
+
+  function toggleHudCameraSize() {
+    setHudCameraEnlarged((current) => {
+      const next = !current;
+      try {
+        window.localStorage.setItem(HUD_CAMERA_SIZE_STORAGE_KEY, next ? "on" : "off");
       } catch {
         // Best-effort persistence; the toggle still works for this session.
       }
@@ -1196,6 +1223,15 @@ export default function App() {
     cameraDeviceId,
   );
 
+  // eye-tracking-hud: decorative only, and deliberately called HERE rather
+  // than inside either camera component. The deck and the HUD are mutually
+  // exclusive, so a component-level hook would tear down and re-create
+  // FaceLandmarker on every mode switch; at App level it takes the stream
+  // useHandControl already opened (no second getUserMedia, no second
+  // permission prompt) and survives the switch untouched. Gated by the same
+  // handControl boolean as everything else — no new toggle, no new preference.
+  const { state: eye, stateRef: liveEyeRef } = useEyeTracking(handStream, handControl);
+
   useEffect(() => {
     if (handError) pushLog("error", `Hand control: ${handError}`);
   }, [handError]);
@@ -1637,9 +1673,13 @@ export default function App() {
           onToggleHand={toggleHand}
           hand={hand}
           handRef={liveHandRef}
+          eye={eye}
+          eyeRef={liveEyeRef}
           handStream={handStream}
           handActionLabel={handAction.label}
           handActionTone={handAction.tone}
+          cameraEnlarged={hudCameraEnlarged}
+          onToggleCameraSize={toggleHudCameraSize}
           pipelineAvailable={pipelineAvailable}
           poQuestion={
             pendingPoQuestion
@@ -1700,6 +1740,8 @@ export default function App() {
               handControl={handControl}
               hand={hand}
               handRef={liveHandRef}
+              eye={eye}
+              eyeRef={liveEyeRef}
               stream={handStream}
               actionLabel={handAction.label}
               actionTone={handAction.tone}

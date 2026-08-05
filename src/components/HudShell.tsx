@@ -6,6 +6,7 @@ import {
   HeadphoneOff,
   Maximize2,
   MessageSquare,
+  Minimize2,
   Mic,
   MicOff,
   Network,
@@ -21,37 +22,53 @@ import PoQuestionBanner from "./PoQuestionBanner";
 import ReviewBanner from "./ReviewBanner";
 import ContextSupplementInput from "./ContextSupplementInput";
 import { HandSkeleton } from "./CameraDock";
+import EyeReticle from "./EyeReticle";
+import EyeReadout from "./EyeReadout";
 import DrawingCanvas from "./DrawingCanvas";
 import VaultGalaxy, { type GalaxyNode } from "./VaultGalaxy";
 import type { HandoffTone, ReactorState, TaskCard, TranscriptLine } from "../types";
 import type { HandState } from "../hooks/useHandControl";
+import type { EyeState } from "../hooks/useEyeTracking";
+import { createReadoutLayout } from "../lib/eye-hud";
 import { acceptedKey } from "../lib/tasks";
 
 function HudCamera({
   stream,
   hand,
   handRef,
+  eye,
+  eyeRef,
   actionLabel,
   actionTone,
+  enlarged,
 }: {
   stream: MediaStream | null;
   hand: HandState;
   handRef: { current: HandState };
+  eye: EyeState;
+  eyeRef: { current: EyeState };
   actionLabel: string;
   actionTone: string;
+  /** glass-hud-mode: the camera-size control's state. Standard size is the default. */
+  enlarged: boolean;
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  // Per-surface, for the same reason as CameraDock's: it carries the readout
+  // panel's side across frames so its edge-flip can be hysteretic.
+  const readoutLayoutRef = useRef(createReadoutLayout());
 
   useEffect(() => {
     if (videoRef.current) videoRef.current.srcObject = stream;
   }, [stream]);
 
   return (
-    <div className="hud-camera hud-hit">
+    <div className={`hud-camera hud-hit ${enlarged ? "enlarged" : ""}`}>
       <div className="camera-frame">
         <video ref={videoRef} autoPlay playsInline muted />
         <div className="cam-scan" />
         <HandSkeleton hands={hand.hands} handsRef={handRef} />
+        <EyeReticle eye={eye} eyeRef={eyeRef} layoutRef={readoutLayoutRef} />
+        <EyeReadout eye={eye} eyeRef={eyeRef} layoutRef={readoutLayoutRef} />
         <span className="cam-status">
           <i />
           {hand.present ? "tracking" : "no hand"}
@@ -112,9 +129,13 @@ export default function HudShell({
   onToggleHand,
   hand,
   handRef,
+  eye,
+  eyeRef,
   handStream,
   handActionLabel,
   handActionTone,
+  cameraEnlarged,
+  onToggleCameraSize,
   pipelineAvailable,
   poQuestion,
   taskReview,
@@ -178,9 +199,20 @@ export default function HudShell({
   hand: HandState;
   /** Per-frame hand data (useHandControl's stateRef) — feeds the HUD camera skeleton. */
   handRef: { current: HandState };
+  // eye-tracking-hud: the same pair the deck's camera dock receives — the
+  // overlays are not specialized per surface, so both get identical props.
+  eye: EyeState;
+  eyeRef: { current: EyeState };
   handStream: MediaStream | null;
   handActionLabel: string;
   handActionTone: string;
+  // glass-hud-mode: the camera-size control. HUD mode is both the livestream
+  // surface (a bigger face reads better to an audience) and the working
+  // overlay (where a big camera costs room), so the size is a control rather
+  // than a constant. Owned and persisted in App.tsx; the deck has no such
+  // control and is unaffected.
+  cameraEnlarged: boolean;
+  onToggleCameraSize: () => void;
   // Pipeline master switch (pipeline-availability spec) — hides the tasks
   // column and PO question banner in chat-only mode.
   pipelineAvailable: boolean;
@@ -341,13 +373,32 @@ export default function HudShell({
           </>
         ) : null}
         {handControl ? (
-          <HudCamera
-            stream={handStream}
-            hand={hand}
-            handRef={handRef}
-            actionLabel={handActionLabel}
-            actionTone={handActionTone}
-          />
+          <>
+            {/* A sibling ABOVE the camera, so it keeps `.hud-left`'s 300px
+                width and does not move when the frame resizes. `.hud-hit` is
+                not optional: HUD mode is click-through by default, so a
+                control without it cannot be clicked at all. */}
+            <button
+              type="button"
+              className={`hud-comms-toggle hud-camera-size hud-hit ${cameraEnlarged ? "open" : ""}`}
+              onClick={onToggleCameraSize}
+              title={cameraEnlarged ? "Return the camera to its standard size" : "Enlarge the camera for streaming"}
+            >
+              {cameraEnlarged ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
+              Cam
+              <span className="count">{cameraEnlarged ? "+30%" : "1×"}</span>
+            </button>
+            <HudCamera
+              stream={handStream}
+              hand={hand}
+              handRef={handRef}
+              eye={eye}
+              eyeRef={eyeRef}
+              actionLabel={handActionLabel}
+              actionTone={handActionTone}
+              enlarged={cameraEnlarged}
+            />
+          </>
         ) : null}
       </div>
 

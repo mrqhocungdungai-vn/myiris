@@ -564,3 +564,305 @@
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+
+/* =====================================================================
+   eye-tracking-hud — the decorative iris HUD over both camera previews.
+   Rotation reuses deck.css's existing `orb-spin`/`orb-spin-rev` keyframes
+   (neither bakes in a duration), and every colour is an existing token.
+   ===================================================================== */
+
+/* Its own overlay, NOT `.hand-skeleton`'s: that one is `0 0 100 100` with
+   `preserveAspectRatio="none"` inside a 4/3 frame, so one x-unit is 4/3 the
+   pixels of one y-unit. Fine for a skeleton of lines and dots, fatal here —
+   every ring would be an ellipse stretched 33% wide. */
+.eye-reticle {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* Stroke-only with additive glow, no fills anywhere (spec: "The eye stays
+   visible through the ring") — a filled ring reads as a disc over the eye. */
+.eye-reticle g,
+.eye-reticle circle,
+.eye-reticle line,
+.eye-reticle path {
+  fill: none;
+  vector-effect: non-scaling-stroke;
+}
+
+.eye-ring {
+  filter: drop-shadow(0 0 4px rgba(var(--coral-rgb), 0.55));
+}
+
+.eye-wing {
+  stroke: rgba(var(--coral-rgb), 0.85);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.eye-tick {
+  stroke: rgba(var(--amber-rgb), 0.75);
+  stroke-width: 1;
+}
+
+/* The long/short alternation doubles as the coral/amber hazard stripe — one
+   treatment, no separate colour logic. */
+.eye-tick.long {
+  stroke: rgba(var(--coral-rgb), 0.95);
+  stroke-width: 1.4;
+}
+
+.eye-bezel {
+  stroke: rgba(var(--coral-rgb), 0.9);
+  stroke-width: 2.5;
+}
+
+.eye-rim {
+  stroke: rgba(240, 252, 255, 0.28);
+  stroke-width: 0.7;
+}
+
+.eye-layer {
+  stroke-width: 1;
+  stroke-linecap: butt;
+}
+
+.eye-layer.cyan { stroke: rgba(var(--cyan-rgb), 0.9); }
+.eye-layer.coral { stroke: rgba(var(--coral-rgb), 0.8); }
+.eye-layer.amber { stroke: rgba(var(--amber-rgb), 0.85); }
+
+/* Correct ONLY because each of these is a FULL circle centred on the group's
+   local origin, so its fill box is centred on the pivot we want. The accent
+   arc is a partial sweep and must not use this — see EyeReticle.tsx. */
+.eye-layer.spin-cw,
+.eye-layer.spin-ccw {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.eye-layer.spin-cw {
+  animation: orb-spin linear infinite;
+}
+
+.eye-layer.spin-ccw {
+  animation: orb-spin-rev linear infinite;
+}
+
+.eye-accent {
+  stroke: url(#eye-accent-sweep);
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+
+.eye-accent-fade { stop-color: rgba(var(--amber-rgb), 0); }
+.eye-accent-mid { stop-color: rgba(var(--amber-rgb), 0.8); }
+.eye-accent-full { stop-color: rgb(var(--amber-rgb)); }
+
+/* Scoped under .eye-reticle so it out-specifies the blanket `fill: none`
+   above — the few solid dots in this HUD are the exception to it. */
+.eye-reticle .eye-accent-dot {
+  fill: rgba(var(--amber-rgb), 0.95);
+  stroke: none;
+}
+
+.eye-cross {
+  stroke: rgba(var(--cyan-rgb), 0.9);
+  stroke-width: 1;
+}
+
+.eye-reticle .eye-core {
+  fill: rgba(var(--cyan-rgb), 0.95);
+  stroke: none;
+  animation: pulse-dot 1.4s ease-in-out infinite;
+}
+
+/* ----- The tether: the panel's only claim to being attached to an eye ----- */
+.eye-tether path {
+  stroke: rgba(var(--cyan-rgb), 0.85);
+  stroke-width: 1.2;
+  stroke-linejoin: round;
+}
+
+.eye-reticle .eye-tether-origin,
+.eye-reticle .eye-tether-tick {
+  fill: rgba(var(--cyan-rgb), 0.95);
+  stroke: rgba(var(--cyan-rgb), 0.95);
+  stroke-width: 1.2;
+}
+
+.eye-reticle .eye-tether-origin {
+  stroke: none;
+}
+
+/* ----- The readout panel ----- */
+
+/* `container-type: inline-size` makes the panel's type scale with whatever
+   frame it is drawn in — deck, HUD standard, HUD enlarged — instead of being
+   a px value tuned for one of the three and cramped or lost in the others
+   (design D12). Clamped at both ends so it never leaves the legible band. */
+.eye-readout-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+  container-type: inline-size;
+}
+
+.eye-readout {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35em;
+  padding: 0.7em 0.75em;
+  font-family: var(--font-mono);
+  font-size: clamp(6.5px, 3.1cqw, 10px);
+  line-height: 1.25;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: rgba(207, 238, 255, 0.92);
+  /* Translucent, never opaque — the camera image stays visible through it,
+     which is what keeps it reading as a projection over the scene rather than
+     a panel occluding it (spec: "The scene shows through the panel"). */
+  background: linear-gradient(160deg, rgba(6, 16, 26, 0.52), rgba(6, 16, 26, 0.32));
+  /* One chamfered corner, not four — the asymmetry gives the shape an
+     orientation. Note there is no `border` anywhere in this rule: the frame is
+     implied by the brackets below (spec: "The panel has no closed border"). */
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 0.9em), calc(100% - 0.9em) 100%, 0 100%);
+  overflow: hidden;
+}
+
+.eye-readout .bracket {
+  position: absolute;
+  width: 0.9em;
+  height: 0.9em;
+  border: 0 solid rgba(var(--cyan-rgb), 0.8);
+}
+
+.eye-readout .bracket.tl { top: 2px; left: 2px; border-top-width: 1px; border-left-width: 1px; }
+.eye-readout .bracket.tr { top: 2px; right: 2px; border-top-width: 1px; border-right-width: 1px; }
+.eye-readout .bracket.bl { bottom: 2px; left: 2px; border-bottom-width: 1px; border-left-width: 1px; }
+/* No L here — the clip-path has cut this corner away. A single amber edge tick
+   marks the chamfer instead, so the asymmetry is stated twice rather than
+   fought with. */
+.eye-readout .bracket.br {
+  bottom: calc(0.9em + 1px);
+  right: 2px;
+  border-right-width: 1px;
+  border-color: rgba(var(--amber-rgb), 0.85);
+}
+
+/* Full-height so the band can be a fraction of the PANEL and travel exactly
+   its height on a self-relative translate — no container-height unit needed,
+   which keeps the layer on the cheaper `inline-size` containment above. */
+.eye-readout .scan {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 100%;
+  pointer-events: none;
+  background: linear-gradient(
+    rgba(var(--cyan-rgb), 0) 42%,
+    rgba(var(--cyan-rgb), 0.14) 50%,
+    rgba(var(--cyan-rgb), 0) 58%
+  );
+  animation: eye-readout-scan 3.7s linear infinite;
+}
+
+@keyframes eye-readout-scan {
+  from { transform: translateY(-100%); }
+  to { transform: translateY(100%); }
+}
+
+.eye-readout .head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5em;
+}
+
+/* Inverted, so the header reads as a strip rather than as another row. */
+.eye-readout .tag {
+  padding: 0.1em 0.4em;
+  color: #04121c;
+  background: rgba(var(--cyan-rgb), 0.85);
+  letter-spacing: 0.14em;
+}
+
+.eye-readout .token {
+  color: rgba(var(--amber-rgb), 0.95);
+  letter-spacing: 0.2em;
+}
+
+.eye-readout .row,
+.eye-readout .meter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5em;
+}
+
+.eye-readout .label {
+  flex: 0 0 auto;
+  color: rgba(207, 238, 255, 0.55);
+  letter-spacing: 0.14em;
+}
+
+/* Right-aligned tabular figures in a column that owns the leftover width, so
+   a value going from two digits to three cannot reflow or resize the row
+   (spec: "Changing values do not move anything"). */
+.eye-readout .value {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  white-space: nowrap;
+  overflow: hidden;
+  color: rgba(223, 246, 255, 0.95);
+}
+
+/* The one warning tone in an otherwise informational panel — the palette says
+   the ring alerts and the panel reports. */
+.eye-readout .row.accent .value {
+  color: rgba(var(--amber-rgb), 0.95);
+}
+
+.eye-readout .cells {
+  display: flex;
+  flex: 1 1 auto;
+  gap: 0.12em;
+  justify-content: flex-end;
+}
+
+/* Discrete cells, never a smooth fill. */
+.eye-readout .cell {
+  width: 0.28em;
+  height: 0.75em;
+  background: rgba(var(--cyan-rgb), 0.16);
+}
+
+.eye-readout .cell.lit {
+  background: rgba(var(--cyan-rgb), 0.85);
+  box-shadow: 0 0 4px rgba(var(--cyan-rgb), 0.55);
+}
+
+.eye-readout .foot {
+  margin-top: auto;
+  font-size: 0.85em;
+  letter-spacing: 0.05em;
+  color: rgba(var(--cyan-rgb), 0.4);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+/* ----- glass-hud-mode: the camera-size pill, following .hud-comms-toggle ----- */
+.hud-camera-size .count {
+  font-variant-numeric: tabular-nums;
+}
