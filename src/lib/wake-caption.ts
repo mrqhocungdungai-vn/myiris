@@ -4,6 +4,13 @@ export type WakeCaptionInput = {
   sidecarRunning: boolean;
   wakeWordEnabled: boolean;
   wakeFailed: boolean;
+  /**
+   * The listener is running and hearing the phrase, but speech confirmation
+   * has withheld every wake (speech-confirmed-wake-word). Not a failure to
+   * start — a second way to be silent, which needs its own caption for the
+   * same reason wakeFailed does.
+   */
+  speechBlocked: boolean;
   /** The wake accelerator actually registered, e.g. "Alt+Shift+W". */
   wakeHotkey: string;
 };
@@ -22,12 +29,28 @@ export type Caption = { text: string; dim: boolean };
 // shortcut the user can rebind, and naming a key that does not wake Iris is
 // the defect wake-sleep-voice's displayed-keys scenario is about. With no
 // usable value the caption drops the keyboard clause instead of inventing one.
-export function wakeCaption({ sidecarRunning, wakeWordEnabled, wakeFailed, wakeHotkey }: WakeCaptionInput): Caption | null {
+export function wakeCaption({
+  sidecarRunning,
+  wakeWordEnabled,
+  wakeFailed,
+  speechBlocked,
+  wakeHotkey,
+}: WakeCaptionInput): Caption | null {
   if (sidecarRunning) return null;
   const chord = acceleratorLabel(wakeHotkey);
   if (wakeWordEnabled && wakeFailed) {
     return {
       text: chord ? `Wake word failed to start — press ${chord} to wake Iris` : "Wake word failed to start",
+      dim: true,
+    };
+  }
+  // Ranked below wakeFailed: a listener that never started cannot also be
+  // hearing the phrase. Like that branch, this one drops the invitation to
+  // speak rather than repeating an instruction that is demonstrably not
+  // working for this user, and names the key that is.
+  if (wakeWordEnabled && speechBlocked) {
+    return {
+      text: chord ? `Heard “Hey Iris” but no voice — press ${chord} to wake` : "Heard “Hey Iris” but no voice",
       dim: true,
     };
   }

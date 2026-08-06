@@ -151,6 +151,11 @@ export default function App() {
   // here rather than routed to pushLog, whose state is discarded at
   // declaration and rendered by no component (design D3, wake-sleep-voice).
   const [wakeFailed, setWakeFailed] = useState(false);
+  // The listener is running and hearing "Hey Iris", but speech confirmation has
+  // withheld every wake (speech-confirmed-wake-word). Held separately from
+  // wakeFailed because it is not a failure to start, and the two produce
+  // different captions.
+  const [wakeSpeechBlocked, setWakeSpeechBlocked] = useState(false);
   const [sessions, setSessions] = useState<ClaudeSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [verbs, setVerbs] = useState<VerbsSnapshot | null>(null);
@@ -788,16 +793,26 @@ export default function App() {
     },
     () => {
       if (!sidecarRunning) start();
+      // A wake proves the two signals are pairing, so the blocked notice is
+      // stale the moment one lands.
+      setWakeSpeechBlocked(false);
     },
     (message, fallbackDeviceId) => {
       pushLog("error", `Wake word: ${message}`);
       if (fallbackDeviceId) applyMicDeviceId(fallbackDeviceId);
     },
     micDeviceId,
-    () => setWakeFailed(false),
+    () => {
+      setWakeFailed(false);
+      setWakeSpeechBlocked(false); // a fresh arm has withheld nothing yet
+    },
     (message) => {
       pushLog("error", `Wake word: ${message}`);
       setWakeFailed(true);
+    },
+    () => {
+      pushLog("error", "Wake word: heard “Hey Iris” but no voice was confirmed — not waking");
+      setWakeSpeechBlocked(true);
     },
   );
 
@@ -806,7 +821,10 @@ export default function App() {
   // cleared here rather than left next to a caption reading "press ⌥⇧W to wake
   // Iris" (design D3, wake-sleep-voice).
   useEffect(() => {
-    if (!wakeWordEnabled) setWakeFailed(false);
+    if (!wakeWordEnabled) {
+      setWakeFailed(false);
+      setWakeSpeechBlocked(false);
+    }
   }, [wakeWordEnabled]);
 
   // Keyboard wake/sleep used to live here as a bare w/s keydown handler, which
@@ -1638,6 +1656,7 @@ export default function App() {
       sidecarRunning,
       wakeWordEnabled,
       wakeFailed,
+      speechBlocked: wakeSpeechBlocked,
       wakeHotkey: fullConfig?.wakeHotkey ?? "",
     });
     if (wake) return wake;
@@ -1656,6 +1675,7 @@ export default function App() {
     geminiStatus,
     wakeWordEnabled,
     wakeFailed,
+    wakeSpeechBlocked,
     fullConfig?.wakeHotkey,
   ]);
 

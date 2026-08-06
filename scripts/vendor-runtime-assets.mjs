@@ -77,6 +77,16 @@ const GESTURE_MODEL_URL = "https://storage.googleapis.com/mediapipe-tasks/gestur
 // one: the eye HUD needs iris position/size only (eye-tracking-hud design D1).
 const FACE_MODEL_URL =
   "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
+// Silero VAD **v5**, the speech-confirmation half of the wake decision
+// (speech-confirmed-wake-word). Pinned to the v5.1.2 tag, never `master`:
+// v4 and v5 differ in input signature (v5: input[1,512] + state[2,1,128] + sr;
+// v4: separate h/c [2,1,64]), so an unpinned URL could swap the signature out
+// from under src/lib/silero-vad.ts on a rebuild. Downloaded rather than
+// committed because it has a stable upstream URL — the phrase models under
+// public/wakeword/ are committed only because they come from a private
+// "Hey Iris" training run with no URL to fetch them from.
+const SILERO_VAD_MODEL_URL =
+  "https://raw.githubusercontent.com/snakers4/silero-vad/v5.1.2/src/silero_vad/data/silero_vad.onnx";
 
 function downloadFile(url, destPath) {
   return new Promise((resolve, reject) => {
@@ -102,8 +112,11 @@ function downloadFile(url, destPath) {
 
 // Download-once, skip-if-present. Shared by every vendored model so a second
 // model can't quietly acquire different caching behaviour from the first.
-async function vendorModel(label, url, fileName) {
-  const destPath = path.join(publicDir, "mediapipe", fileName);
+// `destDir` is a parameter rather than a hardcoded "mediapipe" because the
+// Silero VAD model is not a MediaPipe asset and belongs beside the wake-word
+// runtime, not inside another runtime's fileset.
+async function vendorModel(label, url, destDir, fileName) {
+  const destPath = path.join(publicDir, destDir, fileName);
   if (existsSync(destPath)) {
     return { file: path.relative(repoRoot, destPath), bytes: statSync(destPath).size, skipped: true };
   }
@@ -121,11 +134,15 @@ async function vendorModel(label, url, fileName) {
 }
 
 function vendorGestureModel() {
-  return vendorModel("gesture recognizer", GESTURE_MODEL_URL, "gesture_recognizer.task");
+  return vendorModel("gesture recognizer", GESTURE_MODEL_URL, "mediapipe", "gesture_recognizer.task");
 }
 
 function vendorFaceModel() {
-  return vendorModel("face landmarker", FACE_MODEL_URL, "face_landmarker.task");
+  return vendorModel("face landmarker", FACE_MODEL_URL, "mediapipe", "face_landmarker.task");
+}
+
+function vendorSileroVadModel() {
+  return vendorModel("Silero VAD", SILERO_VAD_MODEL_URL, "wakeword", "silero_vad.onnx");
 }
 
 async function main() {
@@ -134,6 +151,7 @@ async function main() {
     ...vendorMediaPipe(),
     await vendorGestureModel(),
     await vendorFaceModel(),
+    await vendorSileroVadModel(),
   ];
   const totalBytes = results.reduce((sum, r) => sum + r.bytes, 0);
   for (const r of results) {
