@@ -79,16 +79,16 @@
 
 - [x] 6.1 Run the five gates: `npm run build`, `npm test`, `npm run lint`,
       `npm run scan:secrets`, `npm run spec:check`
-- [ ] 6.2 Manual: focus another application, press wake — Iris wakes
-- [ ] 6.3 Manual: focus another application while awake, press sleep — Iris sleeps
-- [ ] 6.4 Manual: in HUD mode with another app focused, both work — the motivating case
-- [ ] 6.5 Manual: **close the deck window**, then press wake — Iris wakes and a window
+- [x] 6.2 Manual: focus another application, press wake — Iris wakes
+- [x] 6.3 Manual: focus another application while awake, press sleep — Iris sleeps
+- [x] 6.4 Manual: in HUD mode with another app focused, both work — the motivating case
+- [x] 6.5 Manual: **close the deck window**, then press wake — Iris wakes and a window
       appears. This is the new failure mode a window-level handler could not have
-- [ ] 6.6 Manual: type text containing the shortcut letters without the modifier, in Iris
+- [x] 6.6 Manual: type text containing the shortcut letters without the modifier, in Iris
       and in another app, and confirm nothing happens
-- [ ] 6.7 Manual: set a conflicting value in `.env`, restart, confirm the app runs and
+- [x] 6.7 Manual: set a conflicting value in `.env`, restart, confirm the app runs and
       Iris is still wakeable by tray and wake word
-- [ ] 6.8 Manual: set a **malformed** value (e.g. `Altt+W`), restart, and confirm startup
+- [x] 6.8 Manual: set a **malformed** value (e.g. `Altt+W`), restart, and confirm startup
       completes and Iris is still wakeable
-- [ ] 6.9 Manual: override a hotkey in `.env` and confirm the UI displays the overridden
+- [x] 6.9 Manual: override a hotkey in `.env` and confirm the UI displays the overridden
       chord, not the default
