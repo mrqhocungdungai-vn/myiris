@@ -6,9 +6,15 @@ The galaxy SHALL render a **pointed-at** node distinctly and SHALL light up the 
 
 **The lit links SHALL be unmistakably prominent** — the point of the requirement is that a cluster reads at a glance, so the difference between a lit link and a resting one SHALL NOT be a subtle shift in an already-faint line. Any graph-wide opacity or intensity ceiling the renderer applies SHALL be accounted for, so that raising a link's own intensity actually reaches the view rather than being scaled back down by a global factor. Making lit links prominent SHALL NOT brighten the resting links: at rest the graph SHALL look exactly as it did before this requirement existed.
 
+**Everything outside the pointed-at cluster SHALL be dimmed for as long as it is pointed at.** Brightening the cluster is not enough on its own: in a dense galaxy a brighter cluster still sits inside a mesh of other links, so the answer to "what is this note connected to" has to be the only thing lit. The reveal is a spotlight, not an accent.
+
+The dimming SHALL use the same treatment the focus declutter uses, so the galaxy has one visual language for "this is what matters right now" rather than two that have to be told apart.
+
 The one-hop neighbourhood used here SHALL be the same one the focus declutter uses, so the highlight and the dimming can never disagree about what one hop means.
 
-Full strength SHALL apply **even while the focus declutter has dimmed those nodes**: pointing at a dimmed node SHALL reveal what it connects to without the user having to change the focus first. The dimming itself SHALL NOT be lifted from the rest of the graph — only the pointed-at node and its immediate neighbours are exempted while they are pointed at.
+**Pointing SHALL take precedence over the focus's own dimming** rather than adding to it: while something is pointed at, what stays bright is that node's cluster, and when nothing is pointed at it is the focus's. One question is answered at a time, and a second bright island beside the first would answer neither clearly. It follows that pointing at a node the focus has dimmed reveals what that node connects to without the user having to change the focus first, and that releasing restores the focus's dimming exactly as it was.
+
+A **focused** node SHALL remain visibly focused even while the spotlight is elsewhere: losing sight of a selection because the user pointed at something else is a worse loss than the spotlight is worth.
 
 **The highlight SHALL be transient and SHALL change no state.** It SHALL NOT select anything, SHALL NOT alter the focus, SHALL NOT move the camera, and SHALL NOT open a note. Ceasing to point SHALL restore exactly the previous rendering, including whatever dimming a live focus was applying. Nothing SHALL accumulate: at most one node is pointed at at any moment, and moving on leaves nothing behind.
 
@@ -54,10 +60,25 @@ Repainting for a highlight change SHALL be coalesced so that sweeping a pointer 
 - **WHEN** the user points at one node after another
 - **THEN** exactly one cluster is lit at a time and each previous one returns to normal — no growing set of lit nodes builds up
 
+#### Scenario: The rest of the galaxy dims around the pointed-at cluster
+
+- **WHEN** the user points at a node while nothing is focused
+- **THEN** everything outside that node's one-hop cluster is dimmed for as long as it is pointed at, so the cluster is the only lit thing in the view
+
 #### Scenario: Pointing at a dimmed node reveals its cluster
 
 - **WHEN** a focus is active, everything outside its one-hop neighbourhood is dimmed, and the user points at one of those dimmed nodes
-- **THEN** that node and its own one-hop neighbours are drawn at full strength while it is pointed at, the rest of the graph stays dimmed, and the focus is not changed
+- **THEN** that node and its own one-hop neighbours are drawn at full strength while it is pointed at, everything else — including what the focus was keeping bright — is dimmed, and the focus itself is not changed
+
+#### Scenario: Releasing restores the focus's dimming
+
+- **WHEN** the user stops pointing while a focus is still active
+- **THEN** the dimming returns to exactly what the focus was applying before
+
+#### Scenario: A selection stays visible under a spotlight elsewhere
+
+- **WHEN** notes are focused and the user points at an unrelated node
+- **THEN** the focused notes are still visibly focused, even though they are outside the lit cluster
 
 #### Scenario: Every producer draws the same thing
 

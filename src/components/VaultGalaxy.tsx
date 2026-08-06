@@ -158,28 +158,25 @@ function withAlpha(color: string, alpha: number): string {
 // nearestNodeAt's own dead-band (M14) and, for the mouse, coalesced to one
 // repaint per frame. The pointed-at highlight wins over the focus highlight
 // when both apply to the same node — being pointed at is a momentary
-// indicator, not a second selection state. `relevantIds` is null (never dims
-// anything) while nothing is focused, and the focus/neighborhood set while
-// something is — a focused or directly-linked node is never dimmed, only
-// nodes outside that one-hop neighborhood are.
+// indicator, not a second selection state.
 //
-// `pointedIds` is the pointed-at node plus ITS one hop, and it exempts those
-// nodes from the dimming: pointing at a dimmed node reveals what it connects
-// to without the user having to change the focus first
-// (second-brain-galaxy-view, "Pointing at a dimmed node reveals its
-// cluster"). It never lifts the dimming from anything else.
-function makeNodeColor(
-  pointedAtId: string | null,
-  focusIds: Set<string>,
-  relevantIds: Set<string> | null,
-  pointedIds: Set<string> | null,
-) {
+// `litIds` is the ONE set of nodes exempt from dimming, and the caller decides
+// what it is: the pointed-at node's one-hop cluster while something is pointed
+// at, otherwise the focus's, otherwise null (dim nothing). Collapsing "what the
+// focus keeps bright" and "what the pointer keeps bright" into a single set is
+// what makes a spotlight and the focus declutter the same mechanism instead of
+// two that have to be reconciled at every call site (design.md D7).
+//
+// A FOCUSED node is returned before the dimming is considered at all, so a
+// selection stays visible even while the spotlight is somewhere else — losing
+// sight of what you have selected because you pointed elsewhere would be a
+// worse trade than the spotlight is worth.
+function makeNodeColor(pointedAtId: string | null, focusIds: Set<string>, litIds: Set<string> | null) {
   return (node: GalaxyNode) => {
     if (node.id === pointedAtId) return DWELL_HIGHLIGHT_COLOR;
     if (focusIds.has(node.id)) return FOCUS_HIGHLIGHT_COLOR;
     const base = colorForNode(node);
-    if (pointedIds?.has(node.id)) return base;
-    if (relevantIds && !relevantIds.has(node.id)) return withAlpha(base, DIM_NODE_ALPHA);
+    if (litIds && !litIds.has(node.id)) return withAlpha(base, DIM_NODE_ALPHA);
     return base;
   };
 }
@@ -194,23 +191,25 @@ function linkEndpointId(endpoint: string | GalaxyNode): string {
 
 // Mirrors makeNodeColor's dimming for the edges themselves — otherwise a
 // dense mesh of undimmed link lines would still read as clutter even with
-// the nodes they connect dimmed.
+// the nodes they connect dimmed. `litIds` is the same single set makeNodeColor
+// takes, so the nodes that stay bright and the links that stay bright can never
+// be computed from different sets.
 //
 // A link INCIDENT to the pointed-at node is drawn bright and outranks both the
 // base colour and the dimming — that brightening is the substance of "what is
 // this note connected to". Only incident links, not links among the
 // neighborhood: lighting the neighbors' own edges too would draw a blob rather
 // than a star, and the question being answered is what THIS node touches.
-function makeLinkColor(relevantIds: Set<string> | null, pointedAtId: string | null) {
+function makeLinkColor(litIds: Set<string> | null, pointedAtId: string | null) {
   return (link: GalaxyLink) => {
     if (pointedAtId !== null) {
       const source = linkEndpointId(link.source);
       const target = linkEndpointId(link.target);
       if (source === pointedAtId || target === pointedAtId) return LINK_HIGHLIGHT_COLOR;
     }
-    if (!relevantIds) return LINK_BASE_COLOR;
-    const touchesRelevant = relevantIds.has(linkEndpointId(link.source)) || relevantIds.has(linkEndpointId(link.target));
-    return touchesRelevant ? LINK_BASE_COLOR : withAlpha(LINK_BASE_COLOR, DIM_LINK_ALPHA);
+    if (!litIds) return LINK_BASE_COLOR;
+    const touchesLit = litIds.has(linkEndpointId(link.source)) || litIds.has(linkEndpointId(link.target));
+    return touchesLit ? LINK_BASE_COLOR : withAlpha(LINK_BASE_COLOR, DIM_LINK_ALPHA);
   };
 }
 
@@ -350,12 +349,6 @@ function GalaxyCanvas({
   // captured at that time.
   const focusIdsRef = useRef(new Set(focusIds));
   focusIdsRef.current = new Set(focusIds);
-  // The one-hop declutter set (focusNeighborhood) — null while nothing is
-  // focused (no dimming). Recomputed by repaintHighlight() below, whenever the
-  // focus OR the graph's own links change, from whichever is current at that
-  // moment (never stale — see repaintHighlight's own callers).
-  const relevantIdsRef = useRef<Set<string> | null>(null);
-
   // Orbit center (design.md D3/6.1): recomputed from positionsRef at most
   // once per dirty flag, never inside applyGraph's own position-free moment.
   const centerRef = useRef(new THREE.Vector3());
@@ -447,11 +440,23 @@ function GalaxyCanvas({
     if (!fg) return;
     const links = pendingGraphRef.current.links;
     const focus = focusIdsRef.current;
-    relevantIdsRef.current = focus.size ? focusNeighborhood(focus, links) : null;
+    // Both sets are derived here and nowhere else, and neither is cached across
+    // calls: every producer funnels through this function, so recomputing from
+    // whatever is current is what makes a stale set impossible rather than
+    // something to keep in sync.
+    const focusLitIds = focus.size ? focusNeighborhood(focus, links) : null;
     const pointedAt = handTargetRef.current ?? mouseHoverRef.current;
-    const pointedIds = pointedAt ? focusNeighborhood([pointedAt], links) : null;
-    fg.nodeColor(makeNodeColor(pointedAt, focus, relevantIdsRef.current, pointedIds));
-    fg.linkColor(makeLinkColor(relevantIdsRef.current, pointedAt));
+    // Precedence, and the whole of the spotlight (design.md D7): whatever is
+    // POINTED AT decides what stays bright while it is pointed at; the focus
+    // decides when nothing is; nothing dims when neither applies. Pointing
+    // therefore darkens the rest of the galaxy around the cluster rather than
+    // merely brightening its links, and it temporarily overrides the focus's own
+    // dimming instead of adding a second bright island beside it — one question
+    // is being answered at a time. Releasing restores the focus's dimming
+    // because this recomputes from whatever is current, never from a saved copy.
+    const litIds = pointedAt ? focusNeighborhood([pointedAt], links) : focusLitIds;
+    fg.nodeColor(makeNodeColor(pointedAt, focus, litIds));
+    fg.linkColor(makeLinkColor(litIds, pointedAt));
   }
 
   // The mouse's producer never repaints inline — it records the id and lets at

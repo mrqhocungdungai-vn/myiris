@@ -19,12 +19,16 @@ it".
 
 ## What Changes
 
-- **A pointed-at node lights up its links.** The links incident to the node
-  being pointed at are drawn prominently instead of the faint base blue, and the
-  node's one-hop neighbours are drawn at full strength — even when the focus
-  declutter has dimmed them, so pointing at a dimmed node reveals what it
-  connects to. Transient, and it changes nothing: no selection is made, no
-  camera moves, no note opens, and nothing accumulates.
+- **A pointed-at node lights up its links, and the rest of the galaxy dims
+  around it.** The links incident to the node are drawn prominently, its one-hop
+  neighbours at full strength, and **everything else is dimmed** for as long as
+  it is pointed at — a spotlight, not an accent, because in a dense galaxy a
+  merely-brighter cluster still sits inside a mesh of everything else. Pointing
+  takes precedence over the focus's own dimming rather than adding a second
+  bright island beside it, so pointing at a node the focus had dimmed still
+  reveals what it connects to, and releasing restores the focus's dimming
+  exactly. Transient throughout: no selection is made, no camera moves, no note
+  opens, and nothing accumulates.
 - **The lit links have to actually read as lit.** `linkOpacity` is a graph-wide
   constant that three-forcegraph *multiplies* into each link's own colour alpha
   (`three-forcegraph.mjs:1278`), and the galaxy sets it to `0.5` — so a link

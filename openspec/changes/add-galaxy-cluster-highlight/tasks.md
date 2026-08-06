@@ -12,9 +12,12 @@
 - [x] 2.2 Lift the graph-wide opacity ceiling (design.md D1b): set `linkOpacity(1)`, and rebalance `LINK_BASE_COLOR` to `0.175` alpha and `DIM_LINK_ALPHA` to `0.025` so every resting and dimmed link renders at exactly the opacity it does today, while a lit link can reach `0.98`
 - [x] 2.3 Keep the lit alpha a hair under 1.0 — `three-forcegraph` flips a link's material to `transparent: false` / `depthWrite: true` at `opacity >= 1`, and a lit link must not change rendering mode mid-hover
 - [x] 2.4 Extend `makeLinkColor` to take the pointed-at id: a link incident to it gets the lit colour, everything else keeps the existing base/dimmed logic
-- [x] 2.5 Extend `makeNodeColor` to take the pointed-at hop set: a node in it is never dimmed, and the pointed-at node itself keeps the existing dwell highlight colour (design.md D5)
-- [x] 2.6 Rename `repaintFocus()` → `repaintHighlight()` and derive both hop sets in it via the same `focusNeighborhood`, so one function remains the only place either is computed (design.md D6)
-- [x] 2.7 Verify every existing caller still funnels through it: `applyGraph`, the focus-change effect, and the mount effect's first paint
+- [x] 2.5 Collapse `makeNodeColor`/`makeLinkColor`'s two sets (`relevantIds` + `pointedIds`) into one `litIds` — "the nodes exempt from dimming" — with the caller deciding what it is (design.md D7)
+- [x] 2.6 Make the reveal a spotlight: `litIds` is the pointed-at node's one-hop cluster while something is pointed at, the focus's when nothing is, and null when neither — so everything outside the lit cluster dims, pointing takes precedence over the focus's dimming, and releasing restores it by recomputation rather than from a saved copy (design.md D7)
+- [x] 2.7 Keep a focused node returned before the dimming is considered, so a selection stays visible while the spotlight is elsewhere
+- [x] 2.8 Delete `relevantIdsRef` — with every producer funnelling through `repaintHighlight`, the focus set is a local and there is nothing to keep in sync
+- [x] 2.9 Rename `repaintFocus()` → `repaintHighlight()` and derive both hop sets in it via the same `focusNeighborhood`, so one function remains the only place either is computed (design.md D6)
+- [x] 2.10 Verify every existing caller still funnels through it: `applyGraph`, the focus-change effect, and the mount effect's first paint
 
 ## 3. Mouse producer
 
@@ -42,9 +45,11 @@
 
 ## 6. Manual verification
 
-- [ ] 6.1 Mouse: hover a node → its links are **obviously** lit, not subtly brighter; move off → everything returns exactly as before
+- [ ] 6.1 Mouse: hover a node → its links are **obviously** lit AND the rest of the galaxy dims around it; move off → everything returns exactly as before
+- [ ] 6.1b Judge the spotlight's magnitude on a hover *sweep* — the whole graph dims and undims as the pointer moves between nodes. If it reads as flashing rather than as a spotlight, soften `DIM_NODE_ALPHA`/`DIM_LINK_ALPHA` for the transient case (design.md D7 records this as the one judgement call to confirm in use)
 - [ ] 6.2 Compare the graph at rest against the previous build → resting and focus-dimmed links look identical (this is what the alpha rebalance has to preserve)
-- [ ] 6.3 Mouse: hover a node while a focus is active and the rest of the graph is dimmed → the hovered node and its neighbours come up to full strength, the rest stays dimmed, and the focus chip does not change
+- [ ] 6.3 Mouse: hover a node while a focus is active → the hovered cluster becomes the only lit thing (including over what the focus was keeping bright), the focused nodes are still visibly focused, the focus chip does not change, and releasing restores the focus's dimming exactly
+- [ ] 6.3b Hand: hold `Victory` near a node → the rest of the galaxy dims around its cluster, and releasing restores everything
 - [ ] 6.4 Mouse: sweep quickly across a dense cluster → no stutter, and the highlight keeps up
 - [ ] 6.5 Mouse: hover a ghost node → no cluster highlight
 - [ ] 6.6 Hand: hold `Victory` near a node → its links blaze; **release → the view returns to normal with nothing left lit and nothing selected**

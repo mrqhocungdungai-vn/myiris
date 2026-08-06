@@ -125,12 +125,28 @@ a leave-and-re-acquire rule (all in `dwellStep`). The inspect pose commits to
 nothing, so it has no hold at all: the cluster lights the moment the pose is
 near a node, and nothing fires on release.
 
-**Pointing at a node lights up its links.** The links incident to whatever
-node is pointed at are drawn bright, and that node plus its one-hop
-neighbours are drawn at full strength — including when the focus declutter
-below has dimmed them, so pointing at a dimmed node reveals what it connects
-to without changing the focus. It changes nothing and accumulates nothing:
-exactly one node is lit at a time, and ceasing to point restores the view.
+**Pointing at a node lights up its links — and dims everything else.** The
+links incident to whatever node is pointed at are drawn bright, that node plus
+its one-hop neighbours at full strength, and the rest of the galaxy is dimmed
+around them. A spotlight, not an accent: in a dense galaxy a merely-brighter
+cluster still sits inside a mesh of everything else, so the thing being asked
+about has to be the only thing lit.
+
+**Pointing takes precedence over the focus's own dimming**, rather than adding a
+second bright island beside it — one question is answered at a time. So pointing
+at a node the focus had dimmed still reveals what that node connects to without
+changing the focus, and releasing restores the focus's dimming exactly (it is
+recomputed from whatever is current, never restored from a saved copy). A
+**focused** node stays visibly focused even while the spotlight is elsewhere:
+losing sight of a selection because you pointed at something else is a worse
+trade than the spotlight is worth.
+
+There is exactly ONE set of "nodes exempt from dimming" in the code — `litIds` —
+and the caller decides what it is (the pointed-at cluster, else the focus's, else
+nothing). The spotlight and the focus declutter are therefore the same mechanism
+rather than two that have to be reconciled at each call site. It changes nothing
+and accumulates nothing: one node is lit at a time, and ceasing to point restores
+the view.
 
 Three producers, one rendering — the mouse hovering a node, the `Victory`
 inspect pose, and the node a `Pointing_Up` dwell is charging against. The

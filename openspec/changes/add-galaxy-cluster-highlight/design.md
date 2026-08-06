@@ -48,10 +48,9 @@ The constraints that actually shape the approach:
 - **No highlight from a hand that drives nothing.** Also withdrawn after testing.
 - No highlight on link hover, no multi-hop highlight, no highlight in the reader.
 - No change to dwell duration, the zoom/orbit drives, or the pinch rule.
-- No dimming of the rest of the graph while a cluster is lit. The requirement is
-  that other clusters do not light up, which they already do not; dimming
-  everything else would be a second, competing declutter mechanism next to the
-  focus's.
+- No *second* declutter mechanism. The spotlight dims the rest of the graph
+  (D7), but through the same treatment and the same one-hop set the focus
+  declutter already uses — not a parallel one with its own look.
 
 ## Decisions
 
@@ -162,6 +161,45 @@ already scheduled, schedules one on `requestAnimationFrame`. One repaint per fra
 maximum instead of one per node crossed. The hand path needs no coalescing — it
 already repaints at most once per frame, and only on an actual target change.
 
+### D7 — The reveal is a spotlight: one lit set, pointing takes precedence
+
+Brightening the cluster's links turned out not to be enough — in a dense galaxy
+a brighter cluster still sits inside a mesh of everything else, so the thing
+being asked about is not the only thing visible. Everything outside the
+pointed-at cluster is therefore dimmed while it is pointed at, using the same
+`DIM_NODE_ALPHA`/`DIM_LINK_ALPHA` the focus declutter uses.
+
+This **simplifies** the colour accessors rather than complicating them. The
+previous shape passed two sets — `relevantIds` (what the focus keeps bright) and
+`pointedIds` (what pointing additionally exempts from dimming) — and each accessor
+had to reconcile them. They collapse into one `litIds`, "the nodes exempt from
+dimming", with the caller deciding what it is:
+
+    litIds = pointedAt ? oneHop(pointedAt) : (focus.size ? oneHop(focus) : null)
+
+Precedence rather than union, deliberately. A union would leave two bright
+islands — the focus's and the pointer's — which answers neither question
+clearly; the view should answer one at a time. And because `repaintHighlight`
+recomputes this from whatever is current on every call, releasing the pointer
+restores the focus's dimming by construction rather than by restoring a saved
+copy.
+
+Two consequences worth stating:
+
+- `relevantIdsRef` is gone. It existed so the gesture loop could pass the focus
+  set into a direct `makeNodeColor` call; with every producer funnelling through
+  `repaintHighlight`, the set is a local and there is nothing to keep in sync.
+- A **focused** node is still returned before the dimming is considered, so a
+  selection stays visible while the spotlight is elsewhere. Losing sight of a
+  selection because the user pointed at something else is a worse trade than the
+  spotlight is worth.
+
+Reusing the focus's dim constants rather than a gentler transient pair is a
+judgement call: one visual language beats two, and the contrast is the point.
+The hover case is the one to watch — a pointer sweep re-dims the whole graph on
+each new node — so the manual pass checks it, and softening means changing one
+constant.
+
 ## Risks / Trade-offs
 
 - **`Victory` recognition quality is unmeasured on this model.** MediaPipe's canned
@@ -174,6 +212,11 @@ already repaints at most once per frame, and only on an actual target change.
 - **Rebalancing the link alphas touches the galaxy's resting look if the
   arithmetic is wrong** → the table in D1b states every before/after product, and
   the manual pass compares the graph at rest against the previous build.
+- **The spotlight fires on every hover, and it is a large visual change** — the
+  whole graph dims and undims as the pointer moves between nodes. Bounded to one
+  repaint per frame by the rAF coalescing, but the *magnitude* is what to judge
+  in the manual pass; if a sweep reads as flashing, a gentler transient dim is one
+  constant away.
 - **Repaint cost on a large vault**: a hover repaint is O(n) material work. At one
   per frame worst case this is the same order as the existing dwell repaint, but
   on a very large vault a fast sweep will be felt → if the manual pass shows it,
