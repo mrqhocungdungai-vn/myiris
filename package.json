@@ -15,7 +15,7 @@
     "url": "git+https://github.com/mrqhocungdungai-vn/myiris.git"
   },
   "bugs": {
-    "url": "https://github.com/mrqhocungdungai-vn/myiris/issues"
+    "url": "https://github.com/mrqhocungdungai-vn/myiris/blob/main/SECURITY.md"
   },
   "type": "module",
   "main": "electron/main.mjs",
