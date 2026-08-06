@@ -41,6 +41,7 @@
 - [ ] 5.8 Verify on the high-fidelity quality path specifically that bloom does not smear the text illegibly, and adjust the label colour if it does
 - [ ] 5.9 Confirm the tuning constants feel right on a real vault at both ends — titles are not permanently on, and not unreachably far — and adjust `LABEL_MAX_DISTANCE`/`LABEL_BUDGET` if not (design.md D9 records them as starting points)
 - [ ] 5.10 Create a note whose filename contains `<img src=x onerror=alert(1)>`, get close enough to name it, and confirm the characters render literally with no script execution (spec: "A crafted note title is inert as an in-scene title")
+- [x] 5.11 (found during manual pass) With mouse-only navigation (scroll-wheel zoom, no pan), a note off the camera's exact line of sight never revealed its title no matter how far zoomed in, while one on that line did — traced to selecting by the camera's eye position, which `TrackballControls`' zoom dollies toward a fixed orbit target rather than toward whatever's on screen. Fixed: measure from `controls.target` instead (design.md D10); spec.md and this file updated to record the requirement change.
 
 ## 6. Gates
 

@@ -2,9 +2,9 @@
 
 ### Requirement: Note titles are revealed in the galaxy by camera proximity
 
-The galaxy SHALL render each note's title as text in the scene beside its node, revealed by the camera's distance to that node: a title SHALL be shown while the camera is within a proximity threshold of its node and SHALL NOT be shown beyond it. Viewed from far out — including the whole-vault framing a fresh galaxy opens with — the galaxy SHALL therefore carry no titles at all and read as the unlabelled deep-space cloud it does today; moving the camera in toward a region SHALL name the notes in that region.
+The galaxy SHALL render each note's title as text in the scene beside its node, revealed by proximity to the point the camera is currently oriented around (its orbit target) rather than its exact eye position: a title SHALL be shown while that point is within a proximity threshold of its node and SHALL NOT be shown beyond it. Viewed from far out — including the whole-vault framing a fresh galaxy opens with — the galaxy SHALL therefore carry no titles at all and read as the unlabelled deep-space cloud it does today; moving the camera in toward a region SHALL name the notes in that region.
 
-The reveal SHALL depend on the distance to each node individually, and SHALL NOT be a single global zoom step that names the far side of the graph at the same moment as the cluster in front of the camera — in a 3D view that would put unreadably small overlapping titles across the whole graph, worst exactly where the vault is largest.
+The reveal SHALL depend on the distance to each node individually, and SHALL NOT be a single global zoom step that names the far side of the graph at the same moment as the cluster in front of the camera — in a 3D view that would put unreadably small overlapping titles across the whole graph, worst exactly where the vault is largest. It also SHALL NOT depend on which angle the camera happens to be viewing from: two notes equally near the region the camera is oriented toward SHALL reveal together, regardless of which one the camera's line of sight passes directly through — a note "beside" another must not stay unlabelled purely because it sits off that line.
 
 Titles SHALL be readable from navigation alone — no pointer, hover, click, or gesture. This is the point of the requirement: the hover tooltip names one node and only while a pointer rests on it, and under hand control there is no pointer at all, so without in-scene titles a node can be identified only by opening it. The hover tooltip SHALL remain unchanged; this adds an affordance and removes none.
 
@@ -37,6 +37,11 @@ Titles SHALL stop being drawn and updated whenever the galaxy's rendering is pau
 
 - **WHEN** the camera is close to one cluster while other clusters remain far away
 - **THEN** only the nodes near the camera are named — distance is evaluated per node, so the far clusters stay unlabelled
+
+#### Scenario: A note beside another is not excluded just for being off-axis
+
+- **WHEN** the camera has zoomed toward a region using only scroll-wheel zoom and mouse rotation (no panning), and two notes sit at roughly the same structural distance from that region, one of them along the camera's exact line of sight and one beside it
+- **THEN** both reveal their titles together — the one directly ahead does not light up while the one beside it stays dark, and rotating the camera further does not change which of the two is named
 
 #### Scenario: A large vault does not draw more titles than the budget
 

@@ -206,6 +206,44 @@ is where the galaxy's other tuning lives:
 These are starting points to be confirmed in the manual pass, not derived
 constants; tasks.md carries the check.
 
+### D10 — Distance is measured from the orbit target, not the camera's eye position
+
+The manual pass surfaced a real defect in the first cut: `selectLabels` was
+called with `fg.camera().position` (the literal eye position). With
+mouse-only navigation, `TrackballControls`' scroll-wheel zoom does not move
+the camera toward whatever is on screen — it dollies the eye toward
+`controls.target` (the fixed orbit center, set by `zoomToFit` to the vault's
+centroid and otherwise unchanged by rotate/zoom). For a node **directly along
+the eye→target axis**, distance to the eye shrinks to nearly zero as the user
+zooms in; for a node at the **same structural distance from the target but
+off that axis** ("beside" the one that lit up), eye-to-node distance is
+`sqrt(radius² + d²)` — larger by construction, and it does not shrink to `d`
+until `radius` is nearly zero. The visible symptom was exactly this: only
+whatever sat on the camera's exact line of sight (reading as "the center of
+the screen") ever crossed the threshold, and rotating or zooming further
+never brought an off-axis neighbor into range, because the eye position's
+distance to it has a floor of roughly `d` regardless of how much closer the
+eye gets to the target.
+
+Fix: `selectLabels`'s distance origin is `controls.target` (the point the
+camera orbits around — read via the same `TrackballControlsLike` shape the
+gesture loop already uses to restore `.enabled`/`.target`), not
+`camera.position`. This is rotation-invariant: a node's distance from the
+*target* does not depend on which angle the camera happens to be viewing it
+from, so nodes structurally equidistant from wherever the user has
+zoomed/oriented reveal together, matching what "zoomed in on a region" means
+to the person driving the camera rather than to the raw eye coordinate. The
+existing requirements this must keep true: viewed from far out (`target` far
+from every node) nothing is revealed, and a vault's far side (never panned
+toward) stays unlabeled — both still hold, because they only depend on
+`target`'s distance to a node, never on the camera's orbit angle around it.
+
+`selectLabels` itself needed no change — it already took a plain `{x,y,z}`
+point with no assumption about what produced it. Only the call site in
+`VaultGalaxy.tsx`'s label loop changed, and the parameter name in
+`galaxy-labels.ts` was widened from `cameraPos` to `originPos` so the module
+does not silently imply "camera eye" to the next reader.
+
 ## Risks / Trade-offs
 
 - **Titles overlap in a dense cluster.** No de-overlap pass — the budget and the

@@ -83,11 +83,13 @@ const ZOOM_MIN_RADIUS = 15;
 const ZOOM_MAX_RADIUS = 2500;
 
 // add-galaxy-node-labels tuning constants (design.md D9).
-// The force layout's default link distance is ~30 units, so ~180 is a few
-// link-hops: the neighbourhood you are flying through, not the whole graph.
-// This composes with zoomToFit-on-first-settle for free: a small vault
-// frames close enough that its titles are visible immediately, while a large
-// vault frames far out and opens clean, with no vault-size branch in the code.
+// Measured from the camera's orbit TARGET, not its eye position (design.md
+// D10). The force layout's default link distance is ~30 units, so ~180 is a
+// few link-hops: the neighbourhood you are flying through, not the whole
+// graph. This composes with zoomToFit-on-first-settle for free: a small
+// vault frames close enough that its titles are visible immediately, while a
+// large vault frames far out and opens clean, with no vault-size branch in
+// the code.
 const LABEL_MAX_DISTANCE = 180;
 // Readable at a glance; also the texture count ceiling (design.md D2).
 const LABEL_BUDGET = 24;
@@ -628,7 +630,16 @@ function GalaxyCanvas({
           const now = performance.now();
           if (now - lastSelect >= SELECT_INTERVAL_MS) {
             lastSelect = now;
-            selection = selectLabels(positionsRef.current.values(), fg.camera().position, {
+            // The orbit TARGET, not the eye position (design.md D10): mouse
+            // scroll-wheel zoom dollies the eye toward this fixed point
+            // rather than toward whatever's on screen, so measuring from the
+            // eye made reveal depend on which node happened to sit on the
+            // camera's exact line of sight. Falls back to the eye position
+            // only if `target` is ever absent (`TrackballControls` always
+            // sets one in practice).
+            const controls = fg.controls() as unknown as TrackballControlsLike;
+            const origin = controls.target ?? fg.camera().position;
+            selection = selectLabels(positionsRef.current.values(), origin, {
               maxDistance: LABEL_MAX_DISTANCE,
               budget: LABEL_BUDGET,
               eligible: relevantIdsRef.current,
