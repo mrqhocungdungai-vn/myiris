@@ -230,17 +230,49 @@ npm run start:prod
 npm run build
 ```
 
+## Install into /Applications
+
+```bash
+npm run install:mac
+```
+
+One command: builds, packages for **this machine's** architecture, installs to
+`/Applications/Iris.app`, and launches it. If Iris is already installed and
+running it is asked to quit first (a real quit, so background Claude work tears
+down cleanly); if it will not quit, the install aborts rather than copying over
+a live app. A `npm run dev` session is left alone.
+
+**The installed app reads `~/.iris/.env`, not this repository's `.env`.** A
+working `.env` here does not carry over — the first launch will report a missing
+`GEMINI_API_KEY` until you create `~/.iris/.env` with at least:
+
+```bash
+mkdir -p ~/.iris && cp .env.example ~/.iris/.env
+# then edit ~/.iris/.env and set GEMINI_API_KEY
+```
+
+The app is **unsigned** — there is no signing identity, hardened runtime, or
+notarization in the build config. A bundle you build locally still launches,
+because Gatekeeper's assessment is triggered by the `com.apple.quarantine`
+attribute, which is written by whatever *downloads* a file and is therefore
+absent on a local build. (The installer clears it anyway, defensively.) None of
+this makes the app distributable to anyone else — a copy someone downloads will
+be quarantined and blocked. On macOS Sequoia and later, the old "right-click and
+choose Open" workaround no longer exists; the path is **System Settings →
+Privacy & Security → Open Anyway**.
+
 ## Packaging
 
 ### macOS
 
 ```bash
-npm run package:mac
-open release/mac-arm64/Iris.app
+npm run package:mac        # both arches (x64 + arm64), unpacked .app under release/
+npm run package:mac:host   # host arch only — no ~250 MB foreign-binary fetch
+open release/mac/Iris.app  # or release/mac-arm64/Iris.app
 ```
 
-The app is unsigned by default. If macOS blocks it, right-click the app and choose
-**Open** once.
+`mac.target` is `dir`, so these produce an unpacked `.app`, not a dmg or zip.
+`npm run dist:mac` is identical to `package:mac` today.
 
 ## Controls
 

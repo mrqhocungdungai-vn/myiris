@@ -37,6 +37,7 @@
     "package:mac": "npm run build && npm run prepare:mac-binaries && electron-builder --mac --x64 --arm64",
     "package:mac:host": "npm run build && electron-builder --mac",
     "dist:mac": "npm run build && npm run prepare:mac-binaries && electron-builder --mac --x64 --arm64",
+    "install:mac": "node scripts/install-mac.mjs",
     "electron": "node scripts/run-electron.mjs"
   },
   "dependencies": {
@@ -115,11 +116,7 @@
       "icon": "build/icon.png",
       "target": [
         {
-          "target": "dir",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
+          "target": "dir"
         }
       ]
     }

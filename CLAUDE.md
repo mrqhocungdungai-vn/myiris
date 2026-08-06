@@ -54,10 +54,20 @@ npm run scan:secrets   # gitleaks over the staged changes
 npm run spec:check     # drift check over openspec/specs/ (the living spec)
 npm start              # build then launch Electron from dist/ (production-like)
 npm run start:prod     # launch prod build without rebuilding
-npm run package:mac    # build + both mac arches (x64 + arm64) as unpacked .app
-npm run package:mac:host # build + host arch only (skips the ~250 MB arm64 fetch)
-npm run dist:mac       # build + full macOS distributable
+npm run install:mac    # build + package (host arch) + install into /Applications + launch
+npm run package:mac    # build + both mac arches (x64 + arm64) as unpacked .app under release/
+npm run package:mac:host # build + host arch only (skips the ~250 MB foreign-arch fetch)
+npm run dist:mac       # identical to package:mac today — see below
 ```
+
+`mac.target` is `dir`, so **none** of the packaging scripts produce a dmg or a
+zip — they emit an unpacked `.app` under `release/`. `dist:mac` is currently
+character-for-character identical to `package:mac`; it is kept as the name a
+real distributable target would take if signing and notarization are ever added,
+and until then it is a duplicate, deliberately. `package:mac:host` builds the
+host arch only because `mac.target` declares no `arch` array — when it did, the
+config won over the silent CLI and `:host` built both, then failed on the
+foreign-arch Claude binary `npm ci` never installed.
 
 `build`, `test`, `lint`, `scan:secrets`, and `spec:check` are **five independent
 gates** — run all of them to verify a change; the last three are deliberately kept
