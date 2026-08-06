@@ -21,6 +21,7 @@ import { useEyeTracking } from "./hooks/useEyeTracking";
 import { useWakeWord } from "./hooks/useWakeWord";
 import { SYSTEM_DEFAULT_MIC } from "./lib/mic-device";
 import { wakeCaption } from "./lib/wake-caption";
+import { stepBootGate, type BootGateState } from "./lib/boot-gate";
 import TopBar from "./components/TopBar";
 import HudShell from "./components/HudShell";
 import CommsPanel from "./components/CommsPanel";
@@ -825,14 +826,23 @@ export default function App() {
     [tasks],
   );
 
-  const booting = sidecarRunning && geminiStatus !== "connected";
-  const prevBootingRef = useRef(false);
+  // The intro is edge-triggered off the session starting, not derived from
+  // (running, connected) — see src/lib/boot-gate.ts. A reconnect and a shutdown
+  // both look like a start to any predicate over those two.
+  const [booting, setBooting] = useState(false);
+  const bootGateRef = useRef<BootGateState>({ running: false, introVisible: false });
   useEffect(() => {
+    const previous = bootGateRef.current;
+    const { introVisible, reportBootDone } = stepBootGate(previous, {
+      running: sidecarRunning,
+      connected: geminiStatus === "connected",
+    });
+    bootGateRef.current = { running: sidecarRunning, introVisible };
+    setBooting(introVisible);
     // Tell main the boot screen is gone so Iris can speak its welcome now
-    // (design.md D6) — only on the falling edge, once per wake.
-    if (prevBootingRef.current && !booting && hasBridge) window.iris.notifyBootDone();
-    prevBootingRef.current = booting;
-  }, [booting, hasBridge]);
+    // (design.md D6) — only for an intro that actually played.
+    if (reportBootDone && hasBridge) window.iris.notifyBootDone();
+  }, [sidecarRunning, geminiStatus, hasBridge]);
 
   const reactorState = useMemo(() => {
     if (!sidecarRunning) return "idle" as const;
