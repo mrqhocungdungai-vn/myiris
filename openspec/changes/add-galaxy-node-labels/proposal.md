@@ -25,20 +25,22 @@ galaxy, adapted to a 3D camera.
 
 ## What Changes
 
-- **Note titles render in the scene, revealed by proximity.** A node's title
-  appears as text beside it only while the camera is within a distance threshold
-  of that node, and disappears beyond it. Pulled back, the galaxy stays the
-  unlabelled deep-space cloud it is today; fly into a region and the notes in
-  that region name themselves.
-- **Proximity, not a global zoom step.** In 3D a single "past this zoom, show
-  everything" threshold would reveal the far side of the graph at the same
-  moment as the cluster in front of the camera — hundreds of tiny overlapping
-  strings, worst exactly where the vault is largest. Distance-per-node gives the
-  same "zoom out → clean, zoom in → readable" feel while only ever naming what
-  the user is actually near.
-- **The number of titles on screen at once is bounded** by a fixed budget filled
-  nearest-camera-first, so labelling costs the same in a 50-note vault and a
-  5000-note one — the view does not get slower the more the app is used.
+- **Note titles render in the scene, always.** A node's title is text drawn
+  beside it, always present rather than toggled on or off by distance — the
+  manual pass reversed the original distance-cutoff design (see design.md
+  D11) after finding that a mouse-only camera can only ever get close to ONE
+  region without panning, which left every other cluster permanently
+  unlabelled rather than merely decluttered. Legibility across zoom now comes
+  entirely from perspective (`sizeAttenuation`): pulled back, titles shrink
+  toward the same visual insignificance as their nodes' dots, so the galaxy
+  still *reads* as the unlabelled deep-space cloud it is today; fly into a
+  region and its titles grow into legibility.
+- **The number of title sprites is bounded** by a pool sized to the vault's own
+  note count (every note gets one) capped at a defensive ceiling, so a normal
+  vault labels everything while a pathologically large one still can't
+  allocate an unbounded number of textures — labelling cost now scales with
+  the vault up to that ceiling rather than staying flat regardless of size
+  (design.md D11 records the tradeoff).
 - **Titles obey the existing focus declutter.** While a focus is active, only
   nodes inside its one-hop neighbourhood (the ones not dimmed to near-invisible)
   are eligible for a title, so the two decluttering mechanisms agree instead of

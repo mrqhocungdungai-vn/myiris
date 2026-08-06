@@ -82,17 +82,23 @@ const ORBIT_SENSITIVITY = 0.006; // radians per pixel, matching the orb loop's f
 const ZOOM_MIN_RADIUS = 15;
 const ZOOM_MAX_RADIUS = 2500;
 
-// add-galaxy-node-labels tuning constants (design.md D9).
-// Measured from the camera's orbit TARGET, not its eye position (design.md
-// D10). The force layout's default link distance is ~30 units, so ~180 is a
-// few link-hops: the neighbourhood you are flying through, not the whole
-// graph. This composes with zoomToFit-on-first-settle for free: a small
-// vault frames close enough that its titles are visible immediately, while a
-// large vault frames far out and opens clean, with no vault-size branch in
-// the code.
-const LABEL_MAX_DISTANCE = 180;
-// Readable at a glance; also the texture count ceiling (design.md D2).
-const LABEL_BUDGET = 24;
+// add-galaxy-node-labels tuning constants (design.md D9, revised D11).
+// No distance cutoff: every eligible note's title is always a selection
+// candidate (design.md D11) — `sizeAttenuation` on the sprite material
+// already shrinks a distant title toward illegible-and-ignorable on its own,
+// the same way a distant node's dot is already small, so a second, hard
+// on/off gate on top of that added a failure mode (a note that never gets
+// close enough to the camera's orbit target never got named at all) without
+// actually improving readability. `Infinity` here reads as "no cutoff" at
+// every call site that squares or compares it, with no special-casing needed.
+const LABEL_MAX_DISTANCE = Infinity;
+// The number of label sprites is still a fixed pool sized once at mount
+// (design.md D2's cost argument stands — this is a ceiling, not a target).
+// Sized to the vault's own note count so a normal personal vault gets every
+// note titled with room to spare; capped so a pathologically large vault
+// (thousands of notes) can't allocate thousands of canvases up front. Raise
+// this if a real vault's note count exceeds it (design.md D11).
+const LABEL_BUDGET_CEILING = 500;
 // Text a bit above a default-sized node (radius ~4).
 const LABEL_WORLD_HEIGHT = 5;
 const LABEL_Y_OFFSET = 6;
@@ -378,6 +384,10 @@ function GalaxyCanvas({
   // The proximity-title sprite pool (design.md D2) — created once per mount
   // alongside the graph instance, disposed in the same effect's cleanup.
   const labelPoolRef = useRef<LabelPool | null>(null);
+  // The pool's actual slot count (design.md D11) — sized to this mount's node
+  // count (capped at LABEL_BUDGET_CEILING), so `selectLabels`'s `budget`
+  // option can match whatever the pool was actually built with.
+  const labelBudgetRef = useRef(0);
   // Orbit center (design.md D3/6.1): recomputed from positionsRef at most
   // once per dirty flag, never inside applyGraph's own position-free moment.
   const centerRef = useRef(new THREE.Vector3());
@@ -561,7 +571,12 @@ function GalaxyCanvas({
       if (highFidelity) await addBloom(fg);
       if (disposed) return;
       fgRef.current = fg;
-      const labelPool = createLabelPool(LABEL_BUDGET, LABEL_Y_OFFSET, LABEL_WORLD_HEIGHT);
+      // Sized to this mount's actual node count (design.md D11), not a small
+      // fixed constant — every note is meant to get a title, with the
+      // ceiling only a defensive cap against a pathologically large vault.
+      const labelBudget = Math.min(pendingGraphRef.current.nodes.length, LABEL_BUDGET_CEILING);
+      labelBudgetRef.current = labelBudget;
+      const labelPool = createLabelPool(labelBudget, LABEL_Y_OFFSET, LABEL_WORLD_HEIGHT);
       fg.scene().add(labelPool.group);
       labelPoolRef.current = labelPool;
       // applyGraph's own repaintHighlight() call paints the ring/dimming on
@@ -641,7 +656,7 @@ function GalaxyCanvas({
             const origin = controls.target ?? fg.camera().position;
             selection = selectLabels(positionsRef.current.values(), origin, {
               maxDistance: LABEL_MAX_DISTANCE,
-              budget: LABEL_BUDGET,
+              budget: labelBudgetRef.current,
               eligible: relevantIdsRef.current,
             });
           }

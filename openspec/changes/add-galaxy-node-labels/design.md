@@ -29,8 +29,12 @@ See proposal.md — Why. What matters for the approach:
 
 **Goals:**
 
-- Titles legible from navigation alone, with cost bounded independently of vault
-  size.
+- Titles legible from navigation alone. Cost was originally meant to be
+  bounded independently of vault size (a small fixed budget, revealed only
+  near the camera); the manual pass reversed that specific goal (design.md
+  D11) in favour of every note always carrying a title — cost now scales with
+  the vault's own note count, capped at a defensive ceiling rather than a
+  vault-size-independent constant.
 - The label mechanism testable where it can be: the *selection policy* is pure
   and unit-tested; only the WebGL/canvas mechanics are untested.
 - Zero new dependencies, one `three` copy, no IPC or main-process surface.
@@ -193,18 +197,17 @@ diagnosable.
 All in `VaultGalaxy.tsx` beside `ZOOM_MIN_RADIUS`/`ZOOM_MAX_RADIUS`, since that
 is where the galaxy's other tuning lives:
 
-- `LABEL_MAX_DISTANCE = 180` — the force layout's default link distance is ~30
-  units, so ~180 is a few link-hops: the neighbourhood you are flying through,
-  not the whole graph. Note this composes with `zoomToFit`-on-first-settle to
-  give a useful property for free: a small vault frames close enough that its
-  titles are visible immediately, while a large vault frames far out and opens
-  clean, with no vault-size branch in the code.
-- `LABEL_BUDGET = 24` — readable at a glance; also the texture count ceiling.
+- `LABEL_MAX_DISTANCE = 180` (superseded — see D11: now `Infinity`, no
+  distance cutoff at all).
+- `LABEL_BUDGET = 24` (superseded — see D11: replaced by
+  `LABEL_BUDGET_CEILING = 500`, a defensive ceiling on a pool now sized to the
+  vault's own note count, not a small fixed target).
 - `LABEL_WORLD_HEIGHT = 5`, `LABEL_Y_OFFSET = 6` — text a bit above a
-  default-sized node (radius ~4).
+  default-sized node (radius ~4). Unchanged by D11.
 
 These are starting points to be confirmed in the manual pass, not derived
-constants; tasks.md carries the check.
+constants; tasks.md carries the check. D10 and D11 record what the manual
+pass actually changed.
 
 ### D10 — Distance is measured from the orbit target, not the camera's eye position
 
@@ -244,13 +247,58 @@ point with no assumption about what produced it. Only the call site in
 `galaxy-labels.ts` was widened from `cameraPos` to `originPos` so the module
 does not silently imply "camera eye" to the next reader.
 
+### D11 — Reversed: every note always carries a title; no distance cutoff
+
+The manual pass raised a second, more fundamental objection than D10's bug:
+even with distance measured correctly (from the orbit target), only ONE
+cluster — whichever the initial `zoomToFit` happened to frame, or wherever
+the user has since panned — could ever be close enough to reveal titles.
+Every other cluster stayed permanently dark regardless of how the camera was
+rotated or zoomed, because reaching a different cluster requires panning the
+orbit target itself, which plain rotate-and-zoom navigation never does. The
+proximity gate's original goal — "a map you fly into gets readable, pulled
+back it doesn't" — technically held per-node, but the practical experience
+was "one arbitrary cluster is always named, the rest of the vault never is,"
+which reads as broken rather than as the intended declutter.
+
+The requested, and now shipped, behaviour: **every eligible note always
+carries a title.** `LABEL_MAX_DISTANCE` is `Infinity` — the distance compare
+in `selectLabels` still runs (no special-casing needed: squaring and
+comparing against `Infinity` behaves correctly on its own), it simply never
+excludes anything. Legibility across zoom levels is left entirely to
+`sizeAttenuation` (D6, already true): a title's SCREEN size shrinks with
+distance exactly as a node's dot already does, so a title far from the
+camera reads as visual noise near a dot rather than as competing legible
+text, without a second, independent mechanism turning it off. This directly
+reverses the proposal's original "Proximity, not a global zoom step" framing
+and the spec scenario "A galaxy viewed from far out carries no titles" (now
+replaced — see spec.md); the closest surviving guarantee is that titles
+shrink to visual insignificance at distance, not that they stop rendering.
+
+Consequence for the pool (D2): a **fixed-size-at-mount** pool is still the
+mechanism (one canvas/texture per slot, no per-node allocation growing with
+graph digests), but its size is no longer a small, vault-size-independent
+constant — it is `min(vault's note count, LABEL_BUDGET_CEILING)`, read once
+from `pendingGraphRef.current.nodes.length` at the same point the pool is
+created. A normal personal vault (tens to low hundreds of notes) gets one
+slot per note, so nothing is ever budget-truncated; `LABEL_BUDGET_CEILING`
+(500) exists purely as a backstop against a vault large enough that
+allocating one canvas per note would be a real cost, and is expected to be
+raised rather than treated as a design target if a real vault exceeds it.
+Notes added after mount (the live file watcher) beyond the pool's fixed size
+are silently budget-truncated by `selectLabels`'s existing nearest-first
+ordering until the galaxy is reopened — an accepted, pre-existing property of
+"the pool is sized once at mount," not a new gap this change introduces.
+
 ## Risks / Trade-offs
 
-- **Titles overlap in a dense cluster.** No de-overlap pass — the budget and the
-  distance cull are the only mitigations, and nearest-first at least means the
-  ones that survive are the ones nearest the camera. Obsidian's graph has the
-  same behaviour. Deferred rather than hidden: a de-overlap or fade-by-density
-  pass is a follow-on if the manual pass shows it is intolerable.
+- **Titles overlap in a dense cluster.** No de-overlap pass — since D11
+  removed the distance cull, `sizeAttenuation` shrinking distant titles is now
+  the ONLY mitigation (nearest-first ordering still applies once the vault
+  exceeds `LABEL_BUDGET_CEILING`, but a normal vault never reaches that
+  truncation at all). Obsidian's graph has the same overlap behaviour.
+  Deferred rather than hidden: a de-overlap or fade-by-density pass is a
+  follow-on if the manual pass shows it is intolerable.
 - **Bloom bleeds on bright text** (high-fidelity path only; `UnrealBloomPass`
   threshold is 0.15) → keep the label colour a soft blue-white rather than pure
   white, and verify on the high-fidelity path specifically, not just the default
@@ -258,10 +306,12 @@ does not silently imply "camera eye" to the next reader.
 - **A second rAF loop is a second thing that can spin.** → Gated on `running`
   exactly like the render it serves, and it does strictly less work than the
   gesture loop it sits beside (no projection, no hit-testing, no repaint).
-- **Wrong constants read as a broken feature** (titles always on, or never
-  visible) → they are named constants in one place, with the reasoning above
-  recorded, and the manual pass explicitly checks both ends of the range on a
-  real vault.
+- **A vault larger than `LABEL_BUDGET_CEILING` silently truncates** (D11) —
+  no user-visible signal distinguishes "every note has a title" from "the
+  vault outgrew the ceiling and the farthest notes lost theirs." Accepted for
+  now since a personal second-brain vault is expected to stay well under 500
+  notes; raise the ceiling (or add a truncation indicator) if that stops
+  being true.
 - **A crash in the label loop.** The gesture loop wraps its body in try/catch
   because a rAF throw escapes React's error boundary and would otherwise repeat
   every frame → the label loop follows the same shape, but it hides its own
