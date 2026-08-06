@@ -5,7 +5,7 @@ import type { HandState } from "../hooks/useHandControl";
 import {
   dwellStep,
   driveFor,
-  selectingHand,
+  inspectingHand,
   orbitStep,
   zoomRadius,
   handDistance,
@@ -105,8 +105,18 @@ const FOCUS_HIGHLIGHT_COLOR = "#39ff88";
 // decluttering the view around a selection without moving or hiding a
 // single node.
 const DIM_NODE_ALPHA = 0.08;
-const DIM_LINK_ALPHA = 0.05;
-const LINK_BASE_COLOR = "rgba(140, 170, 255, 0.35)";
+// Every link alpha below is the FINAL rendered opacity, because `linkOpacity` is
+// set to 1 (design.md D1b). three-forcegraph computes
+// `opacity = state.linkOpacity * colorAlpha(color)`, so a graph-wide
+// `linkOpacity` below 1 is a *ceiling* on every link, not just a default: with
+// the previous `linkOpacity(0.5)`, a highlight colour at 0.95 alpha rendered at
+// 0.475 and no link could ever exceed half opacity however bright its colour —
+// which is why the lit cluster did not read as lit. Moving that factor out of the
+// global and into these alphas leaves the resting graph pixel-identical
+// (0.5 x 0.35 = 0.175, 0.5 x 0.05 = 0.025) while freeing the lit colour to reach
+// near-full intensity.
+const DIM_LINK_ALPHA = 0.025;
+const LINK_BASE_COLOR = "rgba(140, 170, 255, 0.175)";
 // The links incident to whatever node is being pointed at, lifted from the
 // faint base colour to near-opaque so the cluster reads at a glance
 // (second-brain-galaxy-view: "The node being pointed at reveals its link
@@ -116,7 +126,12 @@ const LINK_BASE_COLOR = "rgba(140, 170, 255, 0.35)";
 // `linkWidth` accessor clears `linkDataMapper` outright and rebuilds every
 // link object in the graph. Per hover. `linkColor` changes only update
 // materials — the same path the focus dimming below already takes.
-const LINK_HIGHLIGHT_COLOR = "rgba(255, 242, 168, 0.95)";
+//
+// 0.98 rather than 1: three-forcegraph switches a link's material to
+// `transparent: false` / `depthWrite: true` at exactly `opacity >= 1`, so a lit
+// link at full alpha would flip rendering mode mid-hover. A hair under keeps
+// every link on the same transparent path.
+const LINK_HIGHLIGHT_COLOR = "rgba(255, 245, 190, 0.98)";
 
 // Both node and link colors above are CSS color strings, some already
 // carrying their own alpha (colorForNode's ghost gray, LINK_BASE_COLOR) —
@@ -350,16 +365,10 @@ function GalaxyCanvas({
   // src/lib/galaxy-nav.ts, plus the imperative camera-drive bookkeeping the
   // thin driver below owns.
   const dwellStateRef = useRef<DwellState>(INITIAL_DWELL_STATE);
-  // The select drive's own dwell, entirely independent of the opening one
-  // above (second-brain-gesture-nav: "The two dwells do not interfere").
-  // Nothing has to enforce that: dwellStep resets to INITIAL_DWELL_STATE
-  // whenever its candidate is null, and each machine is fed a candidate only
-  // while its own drive is live — so changing pose abandons the other's charge
-  // by construction rather than by extra bookkeeping.
-  const selectDwellStateRef = useRef<DwellState>(INITIAL_DWELL_STATE);
-  // The node the HAND is pointing at. Written by the gesture loop under any
-  // pose that is not a camera drive — not only while a dwell charges — so a
-  // hand that drives nothing can still show what it is over.
+  // The node the HAND is pointing at — written by the gesture loop while the
+  // pose is `dwell` or `inspect`, and null otherwise. The inspect pose needs no
+  // dwell machine of its own: a reveal commits to nothing, so there is nothing
+  // to debounce into a decision and nothing to fire.
   const handTargetRef = useRef<string | null>(null);
   // The node the MOUSE is hovering, from `onNodeHover`. The effective
   // pointed-at node is `handTargetRef ?? mouseHoverRef` (design.md D2): two
@@ -465,8 +474,11 @@ function GalaxyCanvas({
         .nodeLabel((node) => escapeHtml(node.title))
         .nodeColor(colorForNode)
         .nodeOpacity(0.95)
-        .linkColor(() => "rgba(140, 170, 255, 0.35)")
-        .linkOpacity(0.5)
+        .linkColor(() => LINK_BASE_COLOR)
+        // 1, not a fraction: this is a ceiling multiplied into every link's own
+        // colour alpha, and those alphas above already carry the resting dimness
+        // (design.md D1b).
+        .linkOpacity(1)
         .onNodeClick((node, event) => {
           if (node.ghost) return; // unresolved wikilink target — no backing file to open (D8)
           // second-brain-gesture-nav "Focus is reachable without hands": a
@@ -671,26 +683,27 @@ function GalaxyCanvas({
         const drive = driveFor(hand);
         const activeCameraDrive = drive === "orbit" || drive === "zoom" ? drive : null;
 
-        // Which hand's point targets a node. The select drive uses the point of
+        // Which hand's point targets a node. The inspect drive uses the point of
         // the hand actually making the pose, not the primary hand's: the
         // primary is chosen with a preference for POINTING hands, so a Victory
         // hand can lose primacy while still being the hand the user is
-        // selecting with (design.md D4).
-        const selectHand = drive === "select" ? selectingHand(hand) : null;
-        const targetPoint = drive === "select" ? selectHand?.point ?? null : hand.point;
+        // inspecting with (design.md D4).
+        const targetPoint =
+          drive === "inspect" ? inspectingHand(hand)?.point ?? null : drive === "dwell" ? hand.point : null;
 
-        // The pointed-at node is resolved under ANY pose that is not a camera
-        // drive — not only while a dwell charges — because highlighting is
-        // feedback rather than a drive (second-brain-gesture-nav: "A resting
-        // hand still shows what it points at"). During an orbit or a zoom the
-        // hand's position means "camera", not "target", so nothing is resolved.
+        // Only a pose that MEANS to point at something resolves a target
+        // (design.md D3): the charging dwell, or the inspect pose. An earlier
+        // pass resolved one under any non-camera pose, on the grounds that a
+        // highlight is feedback rather than an action — in use that lit one
+        // cluster after another as a hand drifted, which reads as the view
+        // twitching at the hand rather than answering a question.
         //
-        // The incumbent handed to nearestNodeAt is the currently-PAINTED target
-        // rather than a dwell's committed one: the dead-band exists to stop the
-        // highlight flickering between neighbours in a dense cluster, so the
-        // thing it protects should be the thing on screen.
+        // The incumbent handed to nearestNodeAt is the currently-PAINTED target:
+        // the dead-band exists to stop the highlight flickering between
+        // neighbours in a dense cluster, so the thing it protects should be the
+        // thing on screen.
         const candidate =
-          !activeCameraDrive && targetPoint && containerRef.current
+          targetPoint && containerRef.current
             ? nearestNodeAt(
                 positionsRef.current.values(),
                 fg.camera(),
@@ -701,17 +714,13 @@ function GalaxyCanvas({
               )
             : null;
 
-        // Each dwell sees a candidate only while its own drive is live, so
-        // leaving the pose immediately drops that machine's charge —
-        // dwellStep resets on a null candidate — and switching between the two
-        // poses abandons rather than transfers a charge.
-        const now = performance.now();
+        // Only the opening dwell has a machine: it is the one pose that commits
+        // to something. Leaving the pose feeds it a null candidate, which
+        // dwellStep resets on, so a charge is abandoned rather than carried into
+        // a different pose.
         const openCandidate = drive === "dwell" ? candidate : null;
-        const selectCandidate = drive === "select" ? candidate : null;
-        const openResult = dwellStep(dwellStateRef.current, openCandidate, now, DWELL_HOLD_MS);
+        const openResult = dwellStep(dwellStateRef.current, openCandidate, performance.now(), DWELL_HOLD_MS);
         dwellStateRef.current = openResult.state;
-        const selectResult = dwellStep(selectDwellStateRef.current, selectCandidate, now, DWELL_HOLD_MS);
-        selectDwellStateRef.current = selectResult.state;
 
         const pointedAt = candidate?.id ?? null;
         if (pointedAt !== handTargetRef.current) {
@@ -719,12 +728,6 @@ function GalaxyCanvas({
           repaintHighlight();
         }
         if (openResult.fire && openCandidate) onOpenNoteRef.current(openCandidate.id, openCandidate.title);
-        // Feeds the ONE authoritative focus through the same call the mouse's
-        // Cmd/Ctrl-click makes (second-brain-focus: "a gesture producer added
-        // later SHALL feed this same focus rather than introduce a second
-        // one"). dwellStep's leave-and-re-acquire rule is what stops a held
-        // pose from toggling the same node on and off every 300ms.
-        if (selectResult.fire && selectCandidate) onToggleNodeRef.current(selectCandidate.id);
 
         // Camera drive: orbit and zoom share one spherical — re-derived from
         // the LIVE camera on every engage (fist<->zoom switch or mouse-drag

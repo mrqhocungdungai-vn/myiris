@@ -106,7 +106,7 @@ is open and no reader is open over it:
 | Pose | Action |
 | --- | --- |
 | `Pointing_Up` | Node dwell — hold over a node 300 ms to **open** it (same dwell mechanic as the deck) |
-| `Victory` (two fingers) | Node dwell — hold over a node 300 ms to **toggle its focus**, without opening it |
+| `Victory` (two fingers) | **Inspect** — hold near a node to light up its link cluster while held. Selects nothing, opens nothing, leaves nothing behind |
 | `Closed_Fist` | Orbit the camera around the graph |
 | Two open palms | Zoom the camera — not a galaxy binding but the general two-hand rule applied to whichever layer owns the surface |
 | Anything else (a single open palm, unrecognized, resting) | Drives nothing |
@@ -119,25 +119,35 @@ and a held pinch that zoomed; `two-palm-galaxy-zoom` replaced both with the
 two-open-palms rule above and removed the pinch entirely, which also removed
 the need for a tap/hold discrimination window.
 
-**The two dwells are independent.** Each is fed a target only while its own
-pose is live, and `dwellStep` resets whenever its candidate is null, so
-changing pose abandons a charge rather than transferring it. Both carry the
-same leave-and-re-acquire rule — for the selection dwell that matters more
-than for the opening one: without it, a held `Victory` would toggle the same
-node on and off every 300 ms and the user could not tell from the pose which
-state they had ended in.
+**Only the opening dwell has a state machine.** `Pointing_Up` is the one pose
+that commits to something, so it is the one that needs a hold, a dead-band and
+a leave-and-re-acquire rule (all in `dwellStep`). The inspect pose commits to
+nothing, so it has no hold at all: the cluster lights the moment the pose is
+near a node, and nothing fires on release.
 
 **Pointing at a node lights up its links.** The links incident to whatever
 node is pointed at are drawn bright, and that node plus its one-hop
 neighbours are drawn at full strength — including when the focus declutter
 below has dimmed them, so pointing at a dimmed node reveals what it connects
-to without changing the focus. Two producers, one rendering: the mouse
-hovering a node, and the hand targeting one. The hand's target wins when both
-apply. It is deliberately **feedback, not a drive** — it selects nothing,
-opens nothing and moves nothing, which is why it follows a hand in *any* pose
-(including one that drives nothing) as long as no camera drive is engaged.
-During an orbit or a zoom the hand's position means "camera", not "target", so
-no highlight follows it.
+to without changing the focus. It changes nothing and accumulates nothing:
+exactly one node is lit at a time, and ceasing to point restores the view.
+
+Three producers, one rendering — the mouse hovering a node, the `Victory`
+inspect pose, and the node a `Pointing_Up` dwell is charging against. The
+hand wins when both a hand and the mouse could apply. A hand that **drives
+nothing also shows nothing**: an earlier pass let the highlight follow a hand
+in any pose, reasoning that a highlight is feedback rather than a drive, and in
+use that lit one cluster after another as a hand drifted — the view twitching at
+the hand instead of answering a question. A camera drive suppresses it too,
+since while orbiting or zooming the hand's position means "camera", not
+"target".
+
+**Why the lit links are bright enough to see:** `linkOpacity` is a graph-wide
+constant that three-forcegraph *multiplies* into each link's own colour alpha,
+so a value below 1 is a **ceiling on every link**. It is therefore set to `1`,
+with the resting dimness folded into `LINK_BASE_COLOR`'s own alpha — resting
+links render at exactly the opacity they always did, while a lit one can reach
+near-full intensity instead of being capped at half.
 
 **Clearing the focus is a control, not a gesture** — a button in the HUD's
 control island, reachable by dwell like every other control there. An
@@ -145,12 +155,15 @@ accidental pinch over empty space does nothing (it neither selects nor
 clears), so a deliberately-built selection can't be discarded by a stray
 gesture with no undo.
 
-Selection is also reachable with hand control off, by mouse: a plain click
-still opens a note, and a Cmd/Ctrl-click toggles its focus instead. Both
-producers — the `Victory` dwell and the modifier-click — feed the same single
-main-process focus through the same call; neither keeps a selection of its own.
-No route to the focus requires hands, so the feature is never gated on having
-a camera on.
+**Selection is the mouse's job, deliberately.** A plain click opens a note and a
+Cmd/Ctrl-click toggles its focus; **no gesture selects a node.** That is a
+recorded decision in `second-brain-gesture-nav`, and it has now been tested
+twice over: a first pass at a `Victory`-to-select gesture produced exactly the
+failure the decision predicted — sweeping the pose across the graph toggled node
+after node into the focus, the bound pushed older ones out so nodes appeared to
+light up in sequence, and releasing the pose left a selection behind that the
+user never asked for. `Victory` reveals instead, and the focus keeps a single
+producer.
 
 **The galaxy frames its whole graph in view once, the first time a fresh open
 settles** (`zoomToFit`, on the first `onEngineStop`) — otherwise the default

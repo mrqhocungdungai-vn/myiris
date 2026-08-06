@@ -4,9 +4,9 @@
 
 When hand control is enabled and the galaxy is active with no reader open, a primary hand showing `Closed_Fist` SHALL orbit the galaxy camera around the graph by the hand's movement delta. Zooming the camera is not a galaxy-specific binding: it is the two-open-palms rule that scales whatever layer owns the gesture surface (see `two-hand-gestures`), and it applies here because the galaxy is such a layer.
 
-The galaxy drives SHALL be partitioned by hand pose so they never act at once on the same hand: `Pointing_Up` targets a node dwell (no camera motion), `Victory` targets a node **selection** dwell (no camera motion — see "A held two-finger pose selects a node"), `Closed_Fist` orbits, two open palms zoom, and **any other pose — a single open palm, an unrecognized gesture, or a hand merely resting in frame — SHALL drive nothing**. In particular a pinch SHALL have no meaning in the galaxy: the thumb-index distance SHALL NOT move the camera, select anything, or disturb a charging dwell, however tightly the fingers are closed.
+The galaxy drives SHALL be partitioned by hand pose so they never act at once on the same hand: `Pointing_Up` targets a node dwell (no camera motion), `Victory` **inspects** a node (no camera motion, and nothing selected or opened — see "A held two-finger pose reveals a node's link cluster"), `Closed_Fist` orbits, two open palms zoom, and **any other pose — a single open palm, an unrecognized gesture, or a hand merely resting in frame — SHALL drive nothing**. In particular a pinch SHALL have no meaning in the galaxy: the thumb-index distance SHALL NOT move the camera, select anything, or disturb a charging dwell, however tightly the fingers are closed.
 
-**Highlighting is feedback, not a drive, and is therefore outside this partition.** The node the hand is nearest SHALL be given the pointed-at highlight (see `second-brain-galaxy-view`, "The node being pointed at reveals its link cluster") whatever pose the hand is in, provided no camera drive is engaged — a hand that drives nothing may still show the user what it is pointing at. This does not weaken the partition: a resting hand still *acts* on nothing, since a highlight selects nothing, opens nothing, and moves nothing. Suppressing it during an orbit or a zoom is deliberate: while a camera drive is engaged the hand's position means "camera", not "target".
+**A hand that drives nothing SHALL also show nothing.** The pointed-at highlight (see `second-brain-galaxy-view`, "The node being pointed at reveals its link cluster") SHALL be produced only by a pose that means to point at something — the inspect pose, or a charging `Pointing_Up` dwell — and SHALL NOT follow a hand that is merely present in frame. A highlight that tracks any hand in any pose lights a cluster the user did not ask about, then another as the hand drifts, which is noise rather than feedback: it reads as the view reacting to the user's hand rather than answering their question. A camera drive SHALL suppress it too, because while an orbit or a zoom is engaged the hand's position means "camera", not "target".
 
 The camera SHALL always look at the graph's orbit center (an explicit center, not assumed to be the world origin). The orbit drive SHALL be **relative**: the first frame after it (re)engages SHALL seed its reference from the hand point and apply no motion, with subsequent frames applying only the delta from that reference, so engaging a fist never snaps the camera. Seeding SHALL re-derive from the **live** camera, so a gesture drive that begins after the user moved the camera with the mouse continues from where the mouse left it rather than jumping back to where gesture control last was. The camera drive SHALL be smooth and stable (built on the smoothed hand point, with small per-frame deltas). These bindings SHALL engage only while the galaxy is active and no reader is open, so they never collide with the reader's `Closed_Fist`-closes-reader binding or with the deck's fist-rotates-the-orb binding. **Mouse drag/scroll camera control SHALL remain working after every exit from a gesture drive** — not only when a gesture is released, but also when hand control is switched off mid-drive, a reader opens mid-drive, Iris goes to sleep mid-drive, or the hand simply leaves the frame; the gesture drive SHALL NOT be able to leave the built-in camera controls permanently disabled for the rest of the galaxy session.
 
@@ -30,10 +30,10 @@ The camera SHALL always look at the graph's orbit center (an explicit center, no
 - **WHEN** the galaxy is active with hand control on and the user's hand is simply present in frame in some other pose (a single open palm, or an unrecognized gesture)
 - **THEN** the camera does not orbit or dolly
 
-#### Scenario: A resting hand still shows what it points at
+#### Scenario: A resting hand highlights nothing
 
-- **WHEN** the galaxy is active with hand control on, no camera drive is engaged, and the user's hand is near a node in a pose that drives nothing
-- **THEN** that node's cluster is highlighted, and nothing is selected, opened, or moved
+- **WHEN** the galaxy is active with hand control on and the user's hand moves across the graph in a pose that drives nothing
+- **THEN** no node's cluster is highlighted as it passes — the view is unchanged by a hand that is not pointing at anything
 
 #### Scenario: A camera drive suppresses the highlight
 
@@ -55,98 +55,51 @@ The camera SHALL always look at the graph's orbit center (an explicit center, no
 - **WHEN** a gesture camera drive ends by any route — the gesture is released, hand control is switched off mid-drive, a note opens mid-drive, Iris goes to sleep mid-drive, or the hand leaves the frame
 - **THEN** mouse drag/zoom still works for the rest of the galaxy session and the camera does not jump when mouse control resumes
 
-### Requirement: Focus is reachable without hands
-
-Selecting the focus SHALL be fully available by mouse, and clearing it SHALL be available by mouse and hands-free alike, independent of the hand-control preference. With hand control off, the galaxy and its focus SHALL be usable exactly as they are with it on, and no gesture machinery SHALL run — the existing rule that the gesture layer schedules no per-frame work while hand control is off SHALL continue to hold.
-
-Selection is now **also** reachable by gesture (see "A held two-finger pose selects a node"), but SHALL NEVER be reachable *only* by gesture: every route to a focus SHALL remain available to a user who has hand control off, so the feature is never gated on a camera.
-
-This reverses, on its own stated terms, the earlier recorded decision that there was deliberately no gesture that selected a node. That decision was conditional: the focus existed to give a deictic voice request something to resolve against, the second brain's voice surface was then capture and curation with no tool that opened or pointed at a note, and the decision said adding a selection gesture was worth doing once that consumer was in play. It now is — a resident note-working session opens a note, reads it back verbatim, edits it by conversation, and targets structural edits at the open note (see `open-note-session`). The decision's other half — that a gesture must not quietly toggle a selection the user cannot easily see — SHALL continue to hold, and is what makes the selection gesture a **held** dwell with visible feedback rather than a tap.
-
-Clearing SHALL remain reachable without a mouse, because the clear-focus control lives in the HUD control island, which stays dwell-activatable even while a fullscreen layer is active. A user who selected notes by mouse and then put the mouse down SHALL still be able to release that selection.
-
-#### Scenario: Mouse selection works with hand control off
-
-- **WHEN** hand control is off and the user selects nodes with the mouse
-- **THEN** those nodes are focused, the focus indicator names them, and a deictic voice request resolves against them
-
-#### Scenario: Mouse selection works with hand control on
-
-- **WHEN** hand control is on and the user selects nodes with the mouse
-- **THEN** those nodes are focused exactly as they are with hand control off — enabling the camera neither adds nor removes a way to select
-
-#### Scenario: No route to the focus requires hands
-
-- **WHEN** hand control is off
-- **THEN** selecting and clearing the focus are both still fully available by mouse — the gesture route is additive
-
-#### Scenario: No per-frame work when hand control is off
-
-- **WHEN** hand control is off and the galaxy is active with notes focused
-- **THEN** no gesture loop is scheduled
-
-#### Scenario: Clearing works by mouse
-
-- **WHEN** notes are focused and the user activates the clear-focus control with the mouse
-- **THEN** the focus is emptied
-
-#### Scenario: Clearing works hands-free
-
-- **WHEN** notes are focused, hand control is on, and the user dwells over the clear-focus control in the HUD control island
-- **THEN** the focus is emptied
-
 ## ADDED Requirements
 
-### Requirement: A held two-finger pose selects a node
+### Requirement: A held two-finger pose reveals a node's link cluster
 
-When hand control is enabled and the galaxy is active with no reader open, holding a hand showing `Victory` over a note-node for the HUD's standard dwell duration (300 ms) SHALL toggle that node's membership in the focus — the same result as a Cmd/Ctrl-click on it. The pose SHALL be **held**, not tapped: a selection the user did not intend is worse than one that took a moment, and the focus is read by the voice layer and by Claude's runs.
+When hand control is enabled and the galaxy is active with no reader open, holding a hand showing `Victory` near a note-node SHALL reveal that node's link cluster (see `second-brain-galaxy-view`, "The node being pointed at reveals its link cluster") for as long as the pose is held over it. This is the hands-free equivalent of hovering with a mouse: it is how the user asks "what is this note connected to" without a pointer.
 
-The gesture SHALL feed **the one authoritative focus** (see `second-brain-focus`), through the same call the mouse's modifier-click makes. It SHALL NOT maintain any second notion of what is selected.
+**The reveal SHALL be momentary and SHALL change nothing.** Releasing the pose, or moving off the node, SHALL restore the view exactly as it was. It SHALL NOT select the node, SHALL NOT alter the focus, SHALL NOT move the camera, and SHALL NOT open a note — so nothing the voice layer or a run reads is different afterwards, and there is nothing for the user to undo.
 
-The target SHALL be resolved exactly as the opening dwell resolves it — nearest node to the hand point within the pixel threshold, excluding nodes behind the camera and ghost nodes — so the node that gets selected is the node that was highlighted.
+There SHALL be no accumulation: sweeping the pose across several nodes SHALL show one node's cluster at a time and leave nothing behind. Exactly one node SHALL be revealed at any moment — the one the hand is nearest.
 
-After a selection fires, the same target SHALL NOT fire again until the hand has left it (moved off the node or stopped showing the pose) and re-acquired it. Without this a held pose over one node would toggle it on and off repeatedly, which for a *toggle* is worse than for an open: the user cannot tell from a held pose what state they have ended in.
+The target SHALL be resolved exactly as the opening dwell resolves it — the nearest node to the hand point within the pixel threshold, excluding nodes behind the camera and ghost nodes — and from the point of **the hand actually making the pose**, not from whichever hand is currently primary, so the pose works while another hand is present in frame in some other pose.
 
-The selection dwell and the opening dwell SHALL be independent: charging one SHALL NOT charge or cancel-and-restart the other's progress against a different node, and changing pose from one to the other SHALL abandon the abandoned pose's charge rather than transferring it. A selection SHALL NOT move the camera, and SHALL NOT open a note.
+There SHALL be **no** hold delay before the reveal: unlike the opening dwell, nothing is being committed to, so making the user wait would only make the view feel slow. Conversely nothing SHALL fire on release — the pose has no outcome beyond the reveal itself.
 
-Because the pose is resolved per hand rather than from whichever hand is currently primary, a `Victory` hand SHALL be able to select while another hand is present in frame in some other pose.
+#### Scenario: Holding two fingers over a node reveals its cluster
 
-#### Scenario: Holding two fingers over a node selects it
+- **WHEN** hand control is on, the galaxy is active, no reader is open, and the user holds a `Victory` hand near a real note-node
+- **THEN** that node's links are drawn prominently and its one-hop neighbours at full strength, for as long as the pose stays on it
 
-- **WHEN** hand control is on, the galaxy is active, no reader is open, and the user holds a `Victory` hand over an unselected real note-node for 300 ms
-- **THEN** that node becomes focused — identical to Cmd/Ctrl-clicking it — the focus indicator names it, and no note opens
+#### Scenario: Releasing the pose restores the view
 
-#### Scenario: Holding two fingers over a selected node deselects it
+- **WHEN** the user stops making the pose, or moves it off the node
+- **THEN** the view returns exactly to how it was drawn before — nothing stays lit
 
-- **WHEN** the user holds a `Victory` hand for 300 ms over a node that is already focused
-- **THEN** that node is released from the focus
+#### Scenario: The reveal selects nothing
 
-#### Scenario: A selection does not repeat while the pose is held
+- **WHEN** the pose has revealed a node's cluster
+- **THEN** the focus is unchanged, no note opens, the camera has not moved, and what the voice layer and a run's prompt describe is unchanged
 
-- **WHEN** a node has just been selected by the pose and the hand keeps showing it over the same node
-- **THEN** the node does not toggle again — the hand must leave the node (or stop showing the pose) and re-acquire it
+#### Scenario: Sweeping the pose accumulates nothing
 
-#### Scenario: Selecting does not open
+- **WHEN** the user moves the pose across several nodes in turn
+- **THEN** one cluster is shown at a time, each previous one returns to normal as it is left, and no set of lit or selected nodes builds up
 
-- **WHEN** the selection pose fires over a node
-- **THEN** no note reader opens and the camera does not move
+#### Scenario: A ghost node is not revealed
 
-#### Scenario: A ghost node cannot be selected by gesture
+- **WHEN** the user holds the pose over a faded ghost node
+- **THEN** no cluster is revealed for it, matching the opening dwell's exclusion of ghosts
 
-- **WHEN** the user holds the selection pose over a faded ghost node
-- **THEN** nothing is selected, exactly as a ghost cannot be opened
+#### Scenario: The revealing hand need not be the primary hand
 
-#### Scenario: The two dwells do not interfere
+- **WHEN** two hands are in frame, one showing `Victory` near a node and the other in some other pose
+- **THEN** the `Victory` hand's nearest node is the one revealed
 
-- **WHEN** the user charges a selection over one node, then changes to the pointing pose over a different node
-- **THEN** the selection does not fire, and the opening dwell charges from scratch against the node it is actually over
+#### Scenario: The reveal does not disturb a dwell
 
-#### Scenario: The gesture and the mouse produce one focus
-
-- **WHEN** the user selects one note by gesture and another by Cmd/Ctrl-click
-- **THEN** both are in the same single focus, and the voice layer and a run's prompt describe both
-
-#### Scenario: The selecting hand need not be the primary hand
-
-- **WHEN** two hands are in frame, one showing `Victory` over a node and the other in some other pose
-- **THEN** the `Victory` hand's target is the one that gets selected
+- **WHEN** the user changes from the pointing pose to the inspect pose, or back
+- **THEN** no note opens from the abandoned dwell, and the newly-live pose acts on the node it is actually over

@@ -5,7 +5,7 @@ import {
   dwellStep,
   INITIAL_DWELL_STATE,
   driveFor,
-  selectingHand,
+  inspectingHand,
   orbitStep,
   handDistance,
   zoomRadius,
@@ -201,9 +201,9 @@ describe("driveFor", () => {
     expect(driveFor(makeHand({ hands: [looselyPinchedRest] }))).toBeNull();
   });
 
-  it("returns select for Victory", () => {
+  it("returns inspect for Victory", () => {
     const victory = makeTrackedHand({ gesture: "Victory" });
-    expect(driveFor(makeHand({ gesture: "Victory", hands: [victory] }))).toBe("select");
+    expect(driveFor(makeHand({ gesture: "Victory", hands: [victory] }))).toBe("inspect");
   });
 
   // Zoom is the two-hand rule and must outrank whatever either hand looks
@@ -217,25 +217,25 @@ describe("driveFor", () => {
       makeTrackedHand({ id: "left", openPalm: true }),
       makeTrackedHand({ id: "right", gesture: "Victory" }),
     ];
-    expect(driveFor(makeHand({ openPalm: true, hands: palmAndVictory }))).toBe("select");
+    expect(driveFor(makeHand({ openPalm: true, hands: palmAndVictory }))).toBe("inspect");
   });
 
   // The pose is resolved per hand, not from the primary-hand fields:
   // choosePrimary prefers pointing hands, so the Victory hand can lose
-  // primacy while still being the hand the user is selecting with.
-  it("selects from a non-primary Victory hand while the primary hand points", () => {
+  // primacy while still being the hand the user is inspecting with.
+  it("inspects from a non-primary Victory hand while the primary hand points", () => {
     const hands = [
       makeTrackedHand({ id: "left", pointing: true }),
       makeTrackedHand({ id: "right", gesture: "Victory" }),
     ];
-    expect(driveFor(makeHand({ pointing: true, hands }))).toBe("select");
+    expect(driveFor(makeHand({ pointing: true, hands }))).toBe("inspect");
   });
 
-  it("exposes the selecting hand itself, so the caller hit-tests with that hand's point", () => {
+  it("exposes the inspecting hand itself, so the caller hit-tests with that hand's point", () => {
     const victory = makeTrackedHand({ id: "right", gesture: "Victory", point: { x: 42, y: 7 } });
     const hands = [makeTrackedHand({ id: "left", pointing: true, point: { x: 0, y: 0 } }), victory];
-    expect(selectingHand(makeHand({ pointing: true, hands }))?.point).toEqual({ x: 42, y: 7 });
-    expect(selectingHand(makeHand())).toBeNull();
+    expect(inspectingHand(makeHand({ pointing: true, hands }))?.point).toEqual({ x: 42, y: 7 });
+    expect(inspectingHand(makeHand())).toBeNull();
   });
 });
 
