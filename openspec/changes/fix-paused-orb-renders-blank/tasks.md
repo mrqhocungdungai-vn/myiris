@@ -1,9 +1,9 @@
 ## 1. A paused surface still draws
 
-- [ ] 1.1 Change `src/components/ReactorCore.tsx:343` from
+- [x] 1.1 Change `src/components/ReactorCore.tsx:343` from
       `frameloop={running ? "always" : "never"}` to `"always" : "demand"`
-- [ ] 1.2 Same change in `src/components/HoloBackdrop.tsx:83`
-- [ ] 1.3 Handle the settle-vs-freeze problem named in design.md: `useFrame` lerps
+- [x] 1.2 Same change in `src/components/HoloBackdrop.tsx:83`
+- [x] 1.3 Handle the settle-vs-freeze problem named in design.md: `useFrame` lerps
       `energyRef` toward `targetEnergy(state)` at 0.06/frame, so under `"demand"` a
       state change that triggers one redraw would leave the orb part-way to the new
       colour. Make a paused orb settle at its target state rather than freeze
@@ -14,15 +14,15 @@
 
 ## 2. The pause decision as pure logic
 
-- [ ] 2.1 Add `src/lib/orb-frameloop.ts` exporting a resolver over
+- [x] 2.1 Add `src/lib/orb-frameloop.ts` exporting a resolver over
       (surface: `deck-orb` | `hud-orb` | `backdrop`, awake, windowFocused) →
       whether that surface advances frames
-- [ ] 2.2 Encode the asymmetry `orb-expressions` specifies: deck orb and backdrop
+- [x] 2.2 Encode the asymmetry `orb-expressions` specifies: deck orb and backdrop
       take the focus term, HUD orb does not; all three stop advancing when asleep
-- [ ] 2.3 Add `src/lib/orb-frameloop.test.ts` covering the full truth table, with the
+- [x] 2.3 Add `src/lib/orb-frameloop.test.ts` covering the full truth table, with the
       HUD-awake-unfocused row asserted explicitly — that is the row the spec argues
       for at length and the one a future refactor is most likely to "simplify" away
-- [ ] 2.4 Replace the three inline expressions with calls to it: `src/App.tsx:1733`
+- [x] 2.4 Replace the three inline expressions with calls to it: `src/App.tsx:1733`
       (backdrop), `1775` (deck orb), `1658` (HUD orb)
 
 ## 3. Confirm the GPU saving survived
@@ -36,12 +36,12 @@
 
 ## 4. Make the focus signal reliable
 
-- [ ] 4.1 Resynchronise `windowFocused` from `document.hasFocus()` at the moment the
+- [x] 4.1 Resynchronise `windowFocused` from `document.hasFocus()` at the moment the
       listeners attach (`src/App.tsx:455-468`), closing the startup race where the
       window is shown on `ready-to-show` after the first render
-- [ ] 4.2 Emit window focus/blur from the main process over the existing
+- [x] 4.2 Emit window focus/blur from the main process over the existing
       `emitToRenderer` channel in `electron/window.mjs`, alongside `hud:mode`
-- [ ] 4.3 Subscribe in `electron/preload.cjs` following the `onHudMode` pattern, and
+- [x] 4.3 Subscribe in `electron/preload.cjs` following the `onHudMode` pattern, and
       consume it in `App.tsx` as the authoritative source, keeping the DOM listeners
       as the same-process fast path
 - [ ] 4.4 Confirm the main-process events fire on the HUD↔deck transition path, where
@@ -50,7 +50,7 @@
 
 ## 5. Verify
 
-- [ ] 5.1 Run the five gates: `npm run build`, `npm test`, `npm run lint`,
+- [x] 5.1 Run the five gates: `npm run build`, `npm test`, `npm run lint`,
       `npm run scan:secrets`, `npm run spec:check`
 - [ ] 5.2 Manual — the originally reported path: start Iris fresh and confirm the
       deck orb is drawn, not just its CSS ring and radar

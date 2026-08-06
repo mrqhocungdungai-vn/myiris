@@ -118,6 +118,13 @@ export function createWindowModule({
     mainWindow.webContents.on("did-start-navigation", (_event, _url, _isInPlace, isMainFrame) => {
       if (isMainFrame) stopVaultGraphWatch();
     });
+    // Main owns the window, so it is the authority on whether the window holds
+    // OS focus — the deck's WebGL surfaces pause on that signal
+    // (orb-expressions). The renderer's own focus/blur events are a derived
+    // view that can miss a transition: the window is created hidden and shown
+    // on "ready-to-show", commonly after the renderer's first render.
+    mainWindow.on("focus", () => emitToRenderer("win:focus", { focused: true }));
+    mainWindow.on("blur", () => emitToRenderer("win:focus", { focused: false }));
     // Avoid a translucent first-paint flash on the transparent window.
     mainWindow.once("ready-to-show", () => mainWindow?.show());
     mainWindow.on("closed", () => {

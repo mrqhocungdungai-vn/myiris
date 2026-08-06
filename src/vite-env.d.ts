@@ -345,6 +345,7 @@ type IrisApi = {
   replyCanvasImage: (id: string, image: CanvasImagePayload) => void;
   windowControl: (action: "close" | "minimize") => void;
   onHudMode: (callback: (payload: { mode: UiMode }) => void) => () => void;
+  onWindowFocus: (callback: (payload: { focused: boolean }) => void) => () => void;
   onWakeRequest: (callback: () => void) => () => void;
   requestListenOnlyToggle: () => void;
   getListenOnlyState: () => Promise<{ engaged: boolean }>;

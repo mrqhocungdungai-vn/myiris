@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef } from "react";
-import { Canvas, useFrame } from "@react-three/fiber";
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { EffectComposer, Bloom } from "@react-three/postprocessing";
 import * as THREE from "three";
 import type { Group, Mesh } from "three";
@@ -71,6 +71,15 @@ function targetEnergy(s: ReactorState) {
   return ORB_ENERGY[s];
 }
 
+// Steps a value toward its target — or lands on it outright while the loop is
+// paused. Paused draws one frame per change, so a per-frame step would strand
+// the orb part-way to the state it is meant to depict: a still orb showing a
+// colour between two states is as wrong as a blank one (design.md — settle vs
+// freeze).
+function approach(current: number, target: number, factor: number, paused: boolean) {
+  return paused ? target : current + (target - current) * factor;
+}
+
 type Ripple = { start: number; kind: "wake" | "heard" };
 const MAX_RIPPLES = 4;
 
@@ -130,6 +139,7 @@ function ArcReactorScene({
   rotationRef,
   scaleRef,
   unlit,
+  running,
 }: {
   state: ReactorState;
   inputLevelRef?: { current: number };
@@ -140,6 +150,8 @@ function ArcReactorScene({
   scaleRef?: { current: number };
   /** Light path (design.md D1/D4): rings use materials that need no scene lighting. */
   unlit: boolean;
+  /** False while the loop is paused — the scene then draws on change, not per frame. */
+  running: boolean;
 }) {
   const groupRef = useRef<Group>(null);
   const coreRef = useRef<Mesh>(null);
@@ -153,24 +165,37 @@ function ArcReactorScene({
   const outRef = useRef(0);
   const thinkingAlphaRef = useRef(0);
 
+  // Nothing in this scene's JSX changes with `state` — every colour and scale
+  // is written from inside useFrame — so r3f has no prop change to invalidate
+  // on. A paused orb must therefore ask for the one frame that repaints it into
+  // the state it now depicts.
+  const invalidate = useThree((three) => three.invalidate);
+  useEffect(() => {
+    if (!running) invalidate();
+  }, [running, state, thinking, unlit, invalidate]);
+
   useFrame((threeState, delta) => {
+    const paused = !running;
     const pc = PALETTE_COLORS[state];
-    energyRef.current += (targetEnergy(state) - energyRef.current) * 0.06;
+    energyRef.current = approach(energyRef.current, targetEnergy(state), 0.06, paused);
     const inTarget = inputLevelRef ? Math.max(0, Math.min(1, inputLevelRef.current)) : 0;
     const outTarget = outputLevelRef ? Math.max(0, Math.min(1, outputLevelRef.current)) : 0;
-    inRef.current += (inTarget - inRef.current) * 0.35;
-    outRef.current += (outTarget - outRef.current) * 0.35;
+    inRef.current = approach(inRef.current, inTarget, 0.35, paused);
+    outRef.current = approach(outRef.current, outTarget, 0.35, paused);
     const energy = energyRef.current;
     const t = threeState.clock.elapsedTime;
 
     if (groupRef.current) {
       const targetX = rotationRef?.current.x ?? 0;
       const targetY = rotationRef?.current.y ?? 0;
-      groupRef.current.rotation.x += (targetX - groupRef.current.rotation.x) * 0.1;
-      groupRef.current.rotation.y += (targetY - groupRef.current.rotation.y) * 0.1 + delta * 0.02;
+      groupRef.current.rotation.x = approach(groupRef.current.rotation.x, targetX, 0.1, paused);
+      // The delta term is idle drift, an animation — a paused frame lands on
+      // the gesture target without advancing it.
+      groupRef.current.rotation.y =
+        approach(groupRef.current.rotation.y, targetY, 0.1, paused) + (paused ? 0 : delta * 0.02);
       const targetScale = scaleRef?.current ?? 1;
       _scaleVec.set(targetScale, targetScale, targetScale);
-      groupRef.current.scale.lerp(_scaleVec, 0.12);
+      groupRef.current.scale.lerp(_scaleVec, paused ? 1 : 0.12);
     }
 
     if (ring1Ref.current) {
@@ -219,7 +244,7 @@ function ArcReactorScene({
     }
 
     // Thinking swirl: two orbiting sparks, eased in/out so it never pops.
-    thinkingAlphaRef.current += ((thinking ? 1 : 0) - thinkingAlphaRef.current) * 0.07;
+    thinkingAlphaRef.current = approach(thinkingAlphaRef.current, thinking ? 1 : 0, 0.07, paused);
     const alpha = thinkingAlphaRef.current;
     for (let k = 0; k < 2; k++) {
       const spark = sparkRefs.current[k];
@@ -301,7 +326,11 @@ export default function ReactorCore({
   wakeKey?: number;
   /** Increment to fire a single "understood you" ripple. */
   rippleKey?: number;
-  /** Render loop stays paused (0 GPU) while false; resumes without state loss. */
+  /**
+   * Render loop stays paused while false — no continuous frame advancement, so
+   * no steady GPU cost — and resumes without state loss. A paused orb still
+   * draws: it redraws on change and settles at the state it depicts.
+   */
   running?: boolean;
   /** Gesture-driven rotation (radians), read every frame and lerped in smoothly. */
   rotationRef?: { current: { x: number; y: number } };
@@ -340,7 +369,13 @@ export default function ReactorCore({
       // The refs above this Canvas (ripple queue, rotation/scale) are untouched.
       key={highFidelity ? "high-fidelity" : "light"}
       className="reactor-canvas"
-      frameloop={running ? "always" : "never"}
+      // "demand", not "never": r3f's "never" renders nothing at all until
+      // advance() is called by hand, so an orb that reaches its paused
+      // condition before it ever drew stays an empty canvas — the deck's CSS
+      // ring and radar spinning over nothing. "demand" stops continuous
+      // advancement while still drawing on mount and on change, which is what
+      // orb-expressions means by paused.
+      frameloop={running ? "always" : "demand"}
       camera={{ position: [0, 0, 3.2], fov: 42 }}
       gl={{ ...settings.orb.gl, alpha: true }}
       dpr={settings.orb.dpr}
@@ -360,6 +395,7 @@ export default function ReactorCore({
         rotationRef={rotationRef}
         scaleRef={scaleRef}
         unlit={settings.orb.unlitMaterials}
+        running={running}
       />
       {settings.orb.bloom ? (
         <EffectComposer>

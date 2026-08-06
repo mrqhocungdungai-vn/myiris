@@ -80,7 +80,12 @@ export default function HoloBackdrop({ running = true }: { running?: boolean }) 
   return (
     <div className="holo-backdrop" aria-hidden="true">
       <Canvas
-        frameloop={running ? "always" : "never"}
+        // "demand", not "never": r3f's "never" renders nothing at all until
+        // advance() is called by hand, so a backdrop that reaches its paused
+        // condition before it ever drew stays an empty canvas. "demand" stops
+        // continuous advancement — which is what pausing means here — while
+        // still drawing on mount and on change (holo-deck-backdrop spec).
+        frameloop={running ? "always" : "demand"}
         camera={{ position: [0, 0, 7], fov: 42 }}
         gl={{ antialias: false, alpha: true, powerPreference: "high-performance" }}
       >

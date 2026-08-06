@@ -22,6 +22,7 @@ import { useWakeWord } from "./hooks/useWakeWord";
 import { SYSTEM_DEFAULT_MIC } from "./lib/mic-device";
 import { wakeCaption } from "./lib/wake-caption";
 import { stepBootGate, type BootGateState } from "./lib/boot-gate";
+import { surfaceAdvancesFrames } from "./lib/orb-frameloop";
 import TopBar from "./components/TopBar";
 import HudShell from "./components/HudShell";
 import CommsPanel from "./components/CommsPanel";
@@ -453,6 +454,14 @@ export default function App() {
 
   // Deck WebGL backdrop/orb: pause their render loops when the window loses
   // OS focus, independent of the awake/asleep gate above.
+  //
+  // The seed above is read during the first render, which commonly runs while
+  // the window is still hidden (it is shown on "ready-to-show"), so the focus
+  // event that follows can land before these listeners exist. Nothing else
+  // writes the flag and a window that never loses focus never fires another
+  // event, so a missed transition would latch `false` for the whole session and
+  // leave the deck's surfaces paused. Resynchronise on attach, and take main's
+  // report — it owns the window — as authoritative over these DOM events.
   useEffect(() => {
     function onFocus() {
       setWindowFocused(true);
@@ -462,11 +471,16 @@ export default function App() {
     }
     window.addEventListener("focus", onFocus);
     window.addEventListener("blur", onBlur);
+    setWindowFocused(document.hasFocus());
+    const offWindowFocus = hasBridge
+      ? window.iris.onWindowFocus(({ focused }) => setWindowFocused(Boolean(focused)))
+      : null;
     return () => {
       window.removeEventListener("focus", onFocus);
       window.removeEventListener("blur", onBlur);
+      offWindowFocus?.();
     };
-  }, []);
+  }, [hasBridge]);
 
   // renderer-content-security (harden-security-boundaries D9): Chromium's
   // default for an unhandled drop is to navigate the window to the dropped
@@ -843,6 +857,13 @@ export default function App() {
     // (design.md D6) — only for an intro that actually played.
     if (reportBootDone && hasBridge) window.iris.notifyBootDone();
   }, [sidecarRunning, geminiStatus, hasBridge]);
+
+  // The two facts every WebGL surface's pause decision is made from; which of
+  // them a given surface honours lives in src/lib/orb-frameloop.ts.
+  const surfaceActivity = useMemo(
+    () => ({ awake: sidecarRunning, windowFocused }),
+    [sidecarRunning, windowFocused],
+  );
 
   const reactorState = useMemo(() => {
     if (!sidecarRunning) return "idle" as const;
@@ -1665,7 +1686,7 @@ export default function App() {
           thinking={orbThinking}
           wakeKey={wakeKey}
           rippleKey={rippleKey}
-          running={sidecarRunning}
+          running={surfaceAdvancesFrames("hud-orb", surfaceActivity)}
           orbRotationRef={orbRotationRef}
           orbScaleRef={orbScaleRef}
           orbStageRef={orbStageRef}
@@ -1740,7 +1761,9 @@ export default function App() {
         <div className="hud-nebula" />
         <div className="hud-glow" />
         <div className="hud-vignette" />
-        {webglSettings.backdrop.mount ? <HoloBackdrop running={sidecarRunning && windowFocused} /> : null}
+        {webglSettings.backdrop.mount ? (
+          <HoloBackdrop running={surfaceAdvancesFrames("backdrop", surfaceActivity)} />
+        ) : null}
 
         <TopBar
           geminiDot={dotState(geminiStatus, ["connected"])}
@@ -1782,7 +1805,7 @@ export default function App() {
             thinking={orbThinking}
             wakeKey={wakeKey}
             rippleKey={rippleKey}
-            orbRunning={sidecarRunning && windowFocused}
+            orbRunning={surfaceAdvancesFrames("deck-orb", surfaceActivity)}
             orbRotationRef={orbRotationRef}
             orbScaleRef={orbScaleRef}
             orbStageRef={orbStageRef}

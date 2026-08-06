@@ -51,6 +51,14 @@ contextBridge.exposeInMainWorld("iris", {
     ipcRenderer.on("hud:mode", handler);
     return () => ipcRenderer.removeListener("hud:mode", handler);
   },
+  // Window focus as main reports it — authoritative over the renderer's own
+  // focus/blur events, which can miss the transition that happens while the
+  // window is still hidden (fix-paused-orb-renders-blank design).
+  onWindowFocus: (callback) => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on("win:focus", handler);
+    return () => ipcRenderer.removeListener("win:focus", handler);
+  },
   onWakeRequest: (callback) => {
     const handler = () => callback();
     ipcRenderer.on("iris:wake", handler);
