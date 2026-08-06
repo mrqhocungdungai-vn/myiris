@@ -71,7 +71,7 @@ export function createLiveSession({
   // Gemini Live closes each WebSocket connection after ~10 minutes. With
   // sessionResumption enabled the server hands us refresh handles; on close we
   // reconnect with the latest handle so the conversation continues seamlessly
-  // instead of dropping Iris back to the "Press W to wake" sleep screen.
+  // instead of dropping Iris back to the "press the wake shortcut" sleep screen.
   let resumptionHandle = null;
   let userStopped = false;
   let reconnectAttempts = 0;

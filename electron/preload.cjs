@@ -62,6 +62,11 @@ contextBridge.exposeInMainWorld("iris", {
   onWakeRequest: (callback) => {
     const handler = () => callback();
     ipcRenderer.on("iris:wake", handler);
+    // Tells main the renderer is listening. The global wake hotkey can be
+    // pressed with no window open, in which case main creates one and holds
+    // the wake until this announcement — without it the request would land
+    // before the renderer subscribed and be dropped (wake-sleep-voice).
+    ipcRenderer.send("iris:wake-ready");
     return () => ipcRenderer.removeListener("iris:wake", handler);
   },
   // Listen-only mode (replace-listening-mode-with-listen-only design.md D3):

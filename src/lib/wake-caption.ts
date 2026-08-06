@@ -1,7 +1,11 @@
+import { acceleratorLabel } from "./accelerator-label";
+
 export type WakeCaptionInput = {
   sidecarRunning: boolean;
   wakeWordEnabled: boolean;
   wakeFailed: boolean;
+  /** The wake accelerator actually registered, e.g. "Alt+Shift+W". */
+  wakeHotkey: string;
 };
 
 export type Caption = { text: string; dim: boolean };
@@ -13,13 +17,25 @@ export type Caption = { text: string; dim: boolean };
 // inside App.tsx's useMemo (design D3). Returns null while awake, since the
 // asleep-only wake instruction has nothing to say then; the caller falls
 // through to its own awake-state captions.
-export function wakeCaption({ sidecarRunning, wakeWordEnabled, wakeFailed }: WakeCaptionInput): Caption | null {
+//
+// The chord comes from configuration rather than a literal: it is a global
+// shortcut the user can rebind, and naming a key that does not wake Iris is
+// the defect wake-sleep-voice's displayed-keys scenario is about. With no
+// usable value the caption drops the keyboard clause instead of inventing one.
+export function wakeCaption({ sidecarRunning, wakeWordEnabled, wakeFailed, wakeHotkey }: WakeCaptionInput): Caption | null {
   if (sidecarRunning) return null;
+  const chord = acceleratorLabel(wakeHotkey);
   if (wakeWordEnabled && wakeFailed) {
-    return { text: "Wake word failed to start — press W to wake Iris", dim: true };
+    return {
+      text: chord ? `Wake word failed to start — press ${chord} to wake Iris` : "Wake word failed to start",
+      dim: true,
+    };
+  }
+  if (!chord) {
+    return { text: wakeWordEnabled ? "Say “Hey Iris” to wake" : "Iris is asleep", dim: true };
   }
   return {
-    text: wakeWordEnabled ? "Say “Hey Iris” or press W to wake" : "Press W to wake Iris",
+    text: wakeWordEnabled ? `Say “Hey Iris” or press ${chord} to wake` : `Press ${chord} to wake Iris`,
     dim: true,
   };
 }

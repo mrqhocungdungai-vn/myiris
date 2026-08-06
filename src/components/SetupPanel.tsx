@@ -12,6 +12,8 @@ import {
   X,
 } from "lucide-react";
 import { SYSTEM_DEFAULT_MIC } from "../lib/mic-device";
+import { acceleratorParts } from "../lib/accelerator-label";
+import Keycaps from "./Keycaps";
 
 type Mode = "onboarding" | "settings";
 type TestState = { status: "idle" | "testing" | "ok" | "error"; message?: string };
@@ -886,7 +888,16 @@ export default function SetupPanel({
     body = (
       <div className="setup-welcome">
         <h2>You're all set</h2>
-        <p>Iris will save your settings and wake up. Press W any time to wake, S to sleep.</p>
+        {acceleratorParts(config.wakeHotkey).length > 0 && acceleratorParts(config.sleepHotkey).length > 0 ? (
+          <p>
+            Iris will save your settings and wake up. Press <Keycaps accelerator={config.wakeHotkey} /> any time to
+            wake, <Keycaps accelerator={config.sleepHotkey} /> to sleep — from any app, even when Iris isn't in front.
+          </p>
+        ) : (
+          // A chord that can't be rendered is one we can't promise fires, so
+          // the guidance names no key rather than a wrong one.
+          <p>Iris will save your settings and wake up.</p>
+        )}
         <ul className="setup-summary">
           <li>
             Gemini key {gemini.status === "ok" ? <Check size={13} className="ok" /> : keyReady ? "added" : "missing"}

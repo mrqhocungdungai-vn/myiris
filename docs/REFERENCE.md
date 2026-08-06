@@ -74,6 +74,20 @@ entry and walking up.
   hits the package's default bundle, which hardcodes that filename; MediaPipe
   resolves to the `vision_wasm_internal` pair (SIMD, non-module) since
   Electron's bundled Chromium always supports WASM SIMD.
+- **A renderer key handler must match `event.code`, not `event.key`, for any
+  chord holding Option.** macOS rewrites `event.key` while Option is down —
+  `⌥W` arrives as `"∑"` — so an Option chord matched on `event.key` silently
+  never fires. Every current renderer handler matches `Escape`, `Enter`, or a
+  digit, so none is affected today; the rule is for the next one. Iris's own
+  Option chords are `globalShortcut` registrations in the main process, where
+  this does not apply — see the `wake-sleep-voice` spec.
+- **A malformed global accelerator does not reliably fail loudly.** Electron 42
+  returns `true` for `globalShortcut.register("Altt+W", …)` — the registration
+  reports success and the key simply never fires. Other spellings throw instead,
+  which is why `main.mjs`'s `registerHotkey()` wraps the call: an unhandled
+  throw inside the `whenReady()` callback would skip every registration after
+  it. Treat "the hotkey I set in `.env` does nothing" as a likely typo, not a
+  conflict.
 - **Gemini Live audio formats are fixed:** send **16 kHz** PCM, receive **24 kHz**
   PCM. Don't assume a single sample rate for both directions.
 - **Gemini 3.1 Live function calls are synchronous** — never block a tool call on

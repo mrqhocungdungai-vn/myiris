@@ -420,6 +420,11 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     createTray: live.createTray,
     hudHotkey: live.hudHotkey,
     listenHotkey: live.listenHotkey,
+    wakeHotkey: live.wakeHotkey,
+    sleepHotkey: live.sleepHotkey,
+    requestWake: live.requestWake,
+    requestSleep: live.requestSleep,
+    notifyWakeReady: live.notifyWakeReady,
     installAppMenu: live.installAppMenu,
     setRendererSecurity: live.setRendererSecurity,
     // Live session / listen-only mode

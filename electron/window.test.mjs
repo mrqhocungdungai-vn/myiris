@@ -161,10 +161,32 @@ describe("window: hotkey readers", () => {
     const originalEnv = { ...process.env };
     delete process.env.IRIS_HUD_HOTKEY;
     delete process.env.IRIS_LISTEN_HOTKEY;
+    delete process.env.IRIS_WAKE_HOTKEY;
+    delete process.env.IRIS_SLEEP_HOTKEY;
     try {
       const win = make();
       expect(win.hudHotkey()).toBe("Alt+Space");
       expect(win.listenHotkey()).toBe("Alt+L");
+      expect(win.wakeHotkey()).toBe("Alt+Shift+W");
+      expect(win.sleepHotkey()).toBe("Alt+Shift+S");
+    } finally {
+      process.env = originalEnv;
+    }
+  });
+
+  it("every default is modifier-qualified and no two collide", () => {
+    const originalEnv = { ...process.env };
+    for (const key of ["IRIS_HUD_HOTKEY", "IRIS_LISTEN_HOTKEY", "IRIS_WAKE_HOTKEY", "IRIS_SLEEP_HOTKEY"]) {
+      delete process.env[key];
+    }
+    try {
+      const win = make();
+      const defaults = [win.hudHotkey(), win.listenHotkey(), win.wakeHotkey(), win.sleepHotkey()];
+      // A bare key would be swallowed system-wide by a global registration
+      // (wake-sleep-voice), and two Iris hotkeys on one chord means one of them
+      // never registers.
+      for (const accelerator of defaults) expect(accelerator).toMatch(/^(Alt|Control|Cmd|Command|Shift)\+/);
+      expect(new Set(defaults).size).toBe(defaults.length);
     } finally {
       process.env = originalEnv;
     }
@@ -173,11 +195,73 @@ describe("window: hotkey readers", () => {
   it("respect an env override", () => {
     const originalEnv = { ...process.env };
     process.env.IRIS_HUD_HOTKEY = "Cmd+Shift+H";
+    process.env.IRIS_WAKE_HOTKEY = "Cmd+Shift+K";
+    process.env.IRIS_SLEEP_HOTKEY = "Cmd+Shift+J";
     try {
       const win = make();
       expect(win.hudHotkey()).toBe("Cmd+Shift+H");
+      expect(win.wakeHotkey()).toBe("Cmd+Shift+K");
+      expect(win.sleepHotkey()).toBe("Cmd+Shift+J");
     } finally {
       process.env = originalEnv;
     }
+  });
+});
+
+describe("window: wake and sleep requests", () => {
+  it("emits the wake straight through when a window already exists", () => {
+    const emitToRenderer = vi.fn();
+    const win = make({ emitToRenderer });
+    win.createWindow();
+    win.requestWake();
+    expect(emitToRenderer).toHaveBeenCalledWith("iris:wake", {});
+  });
+
+  it("creates a window and holds the wake until the renderer subscribes", () => {
+    const emitToRenderer = vi.fn();
+    const win = make({ emitToRenderer });
+    expect(win.getMainWindow()).toBeNull();
+    win.requestWake();
+    expect(win.getMainWindow()).not.toBeNull();
+    // Nothing is listening yet — emitting now would be the silent no-op the
+    // spec forbids, so the request waits.
+    expect(emitToRenderer).not.toHaveBeenCalledWith("iris:wake", {});
+    win.notifyWakeReady();
+    expect(emitToRenderer).toHaveBeenCalledWith("iris:wake", {});
+  });
+
+  it("does not wake on a renderer announcement when no wake is pending", () => {
+    const emitToRenderer = vi.fn();
+    const win = make({ emitToRenderer });
+    win.createWindow();
+    win.notifyWakeReady();
+    win.notifyWakeReady();
+    expect(emitToRenderer).not.toHaveBeenCalledWith("iris:wake", {});
+  });
+
+  it("flushes a held wake only once, so a later resubscribe does not re-wake", () => {
+    const emitToRenderer = vi.fn();
+    const win = make({ emitToRenderer });
+    win.requestWake();
+    win.notifyWakeReady();
+    win.notifyWakeReady();
+    expect(emitToRenderer.mock.calls.filter(([channel]) => channel === "iris:wake")).toHaveLength(1);
+  });
+
+  it("drops a held wake when the window it was waiting on closes", () => {
+    const emitToRenderer = vi.fn();
+    const win = make({ emitToRenderer });
+    win.requestWake();
+    lastFakeWindow.__listeners.closed();
+    win.notifyWakeReady();
+    expect(emitToRenderer).not.toHaveBeenCalledWith("iris:wake", {});
+  });
+
+  it("requestSleep emits the same channel the voice sleep path uses", () => {
+    const emitToRenderer = vi.fn();
+    const win = make({ emitToRenderer });
+    win.createWindow();
+    win.requestSleep();
+    expect(emitToRenderer).toHaveBeenCalledWith("iris:sleep", {});
   });
 });

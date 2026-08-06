@@ -1,6 +1,8 @@
 import { useEffect, useState, type CSSProperties, type RefObject } from "react";
 import { Headphones, HeadphoneOff, Mic, MicOff, Power, Radio } from "lucide-react";
 import ReactorCore, { ORB_ACCENT, ORB_ENERGY } from "./ReactorCore";
+import Keycaps from "./Keycaps";
+import { acceleratorLabel } from "../lib/accelerator-label";
 import type { HandoffTone, ReactorState } from "../types";
 
 function Telemetry({
@@ -78,6 +80,8 @@ export default function CenterStage({
   ambientCaptureLive,
   onStopAmbientCapture,
   onSleep,
+  wakeHotkey,
+  sleepHotkey,
   webglHighFidelity,
 }: {
   reactorState: ReactorState;
@@ -114,9 +118,14 @@ export default function CenterStage({
   ambientCaptureLive: boolean;
   onStopAmbientCapture: () => void;
   onSleep: () => void;
+  /** The global wake accelerator main registered, e.g. "Alt+Shift+W"; "" until known. */
+  wakeHotkey: string;
+  /** The global sleep accelerator main registered, e.g. "Alt+Shift+S"; "" until known. */
+  sleepHotkey: string;
   /** webgl-quality-mode: high-fidelity path (bloom) vs the light-path default. */
   webglHighFidelity: boolean;
 }) {
+  const sleepChord = acceleratorLabel(sleepHotkey);
   return (
     <div className="deck-center">
       <div
@@ -178,13 +187,30 @@ export default function CenterStage({
               <Radio size={18} />
             </button>
           ) : null}
-          <button className="t-btn small danger" onClick={onSleep} title="Sleep (S)">
+          <button
+            className="t-btn small danger"
+            onClick={onSleep}
+            title={sleepChord ? `Sleep (${sleepChord})` : "Sleep"}
+          >
             <Power size={18} />
           </button>
         </div>
       ) : (
+        // Both chords are global shortcuts registered by main and rebindable,
+        // so the hint names whatever is registered — and names nothing when
+        // there is nothing to name (wake-sleep-voice).
         <div className="transport-hint">
-          <span className="key">W</span> wake · <span className="key">S</span> sleep
+          {wakeHotkey ? (
+            <>
+              <Keycaps accelerator={wakeHotkey} /> wake
+            </>
+          ) : null}
+          {wakeHotkey && sleepHotkey ? " · " : null}
+          {sleepHotkey ? (
+            <>
+              <Keycaps accelerator={sleepHotkey} /> sleep
+            </>
+          ) : null}
         </div>
       )}
     </div>

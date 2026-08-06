@@ -161,7 +161,11 @@ diffed against `electron/ipc.mjs`.
 Beyond the files above, the renderer captures the microphone with WebRTC audio
 cleanup, downsamples to 16 kHz PCM, plays Gemini audio through an `AudioContext`,
 renders the Comms and Claude Tasks panes and the dark-only Orbital Deck layout,
-provides the keyboard shortcuts, and runs camera hand-gesture control after wake.
+provides the in-window keyboard shortcuts, and runs camera hand-gesture control
+after wake. The shortcuts that must work while another app has focus — the HUD
+toggle, listen-only, and wake/sleep — are `globalShortcut` registrations in the
+main process instead, and reach the renderer over the same channels the tray
+uses (see the `wake-sleep-voice` and `hud-activation` specs).
 
 ## Gemini Tools
 

@@ -60,6 +60,11 @@ const {
   createTray,
   hudHotkey,
   listenHotkey,
+  wakeHotkey,
+  sleepHotkey,
+  requestWake,
+  requestSleep,
+  notifyWakeReady,
   installAppMenu,
   setRendererSecurity,
   startLive,
@@ -154,6 +159,7 @@ app.whenReady().then(() => {
     stopLive,
     getLiveStatus,
     greetGateFire: () => GreetGate.fire(),
+    notifyWakeReady,
     toggleListenOnly,
     isListenOnlyEngaged,
     sendCommand,
@@ -184,23 +190,52 @@ app.whenReady().then(() => {
 
   createWindow();
   createTray();
-  const registered = globalShortcut.register(hudHotkey(), () => {
+  // These accelerators are hand-edited by users in .env, so a value can be not
+  // just taken (register returns false) but unparseable — which *throws*. An
+  // unhandled throw here would skip every registration that follows it and
+  // whatever else the whenReady() callback still had to do, so one typo could
+  // cost an unrelated feature. Both failure shapes land in the same place:
+  // logged, and the app carries on with the hotkey missing (wake-sleep-voice,
+  // hud-activation).
+  function registerHotkey(label, accelerator, handler) {
+    let ok = false;
+    try {
+      ok = globalShortcut.register(accelerator, handler);
+    } catch (error) {
+      ok = false;
+      emitEvent({
+        type: "log",
+        level: "error",
+        message: `Could not register ${label} hotkey ${accelerator}: ${error?.message || error}`,
+      });
+      return;
+    }
+    if (!ok) {
+      emitEvent({ type: "log", level: "error", message: `Could not register ${label} hotkey ${accelerator}.` });
+    }
+  }
+
+  registerHotkey("HUD", hudHotkey(), () => {
     toggleHud();
     updateTrayMenu();
   });
-  if (!registered) {
-    emitEvent({ type: "log", level: "error", message: `Could not register HUD hotkey ${hudHotkey()}.` });
-  }
   // Calls main's toggle directly, not emitToRenderer (design.md D3) — a
   // modifier+key accelerator, not a media key, so no Accessibility or Input
   // Monitoring grant is involved. No unregistration code needed: will-quit
   // already calls globalShortcut.unregisterAll().
-  const listenRegistered = globalShortcut.register(listenHotkey(), () => {
+  registerHotkey("listen-only", listenHotkey(), () => {
     toggleListenOnly();
   });
-  if (!listenRegistered) {
-    emitEvent({ type: "log", level: "error", message: `Could not register listen-only hotkey ${listenHotkey()}.` });
-  }
+  // Wake and sleep are global for the same reason the HUD toggle is: the user
+  // reaches for them from whatever application they are working in. Both route
+  // through the window module's request helpers, which are the same paths the
+  // tray uses — and requestWake additionally creates a window when the deck has
+  // been closed, since on macOS that does not quit Iris.
+  // No updateTrayMenu() here, unlike the HUD toggle: the wake/sleep tray label
+  // follows the live session, which flips asynchronously in the renderer, and
+  // live-session.mjs already refreshes the tray on both transitions.
+  registerHotkey("wake", wakeHotkey(), () => requestWake());
+  registerHotkey("sleep", sleepHotkey(), () => requestSleep());
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

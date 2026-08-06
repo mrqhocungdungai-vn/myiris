@@ -148,6 +148,11 @@ export function createLiveWiring({
     createTray,
     hudHotkey,
     listenHotkey,
+    wakeHotkey,
+    sleepHotkey,
+    requestWake,
+    requestSleep,
+    notifyWakeReady,
     installAppMenu,
   } = windowModule;
   setWindowModule(windowModule);
@@ -159,6 +164,11 @@ export function createLiveWiring({
     createTray,
     hudHotkey,
     listenHotkey,
+    wakeHotkey,
+    sleepHotkey,
+    requestWake,
+    requestSleep,
+    notifyWakeReady,
     installAppMenu,
     setRendererSecurity,
     startLive,

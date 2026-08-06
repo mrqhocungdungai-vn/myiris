@@ -25,13 +25,46 @@
   color: var(--muted);
 }
 
+/* One cap per key of a chord (components/Keycaps.tsx), so a rebound ⌥⇧W shows
+   as three caps rather than one wide one. Shared by every surface that names a
+   shortcut — the deck's asleep hint and the setup wizard's closing guidance.
+   Lives here, not in overlays.css, which stays upstream-verbatim
+   (deepspace-skin). */
+.keycaps {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  vertical-align: baseline;
+}
+
+.keycaps .key {
+  min-width: 18px;
+  padding: 1px 5px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: 5px;
+  background: var(--edge-light);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  text-align: center;
+  color: var(--text);
+}
+
+/* The asleep hint retints the caps to the deck's cyan and separates the whole
+   chord from the word after it. */
+.transport-hint .keycaps {
+  margin-right: 6px;
+}
+
 .transport-hint .key {
   display: inline-grid;
   place-items: center;
   min-width: 18px;
   height: 18px;
-  margin-right: 6px;
+  padding: 0 4px;
+  border: 0;
   border-radius: 5px;
+  font-family: inherit;
   font-size: 10px;
   color: var(--cyan-bright);
   background: rgba(var(--cyan-rgb), 0.16);

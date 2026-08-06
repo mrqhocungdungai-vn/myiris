@@ -286,11 +286,23 @@ reply arrives as text on screen instead of as sound, with no reconnect on
 either transition — has the same three-surface pattern: a headphone button
 beside the mic-mute control (deck and HUD), a tray item, and a global hotkey,
 `⌥L` by default (`IRIS_LISTEN_HOTKEY` to change it). It's independent of the
-mic and resets to audible on every wake. If you've changed `IRIS_HUD_HOTKEY`
-to something that collides with `⌥L` (or vice versa), pick different combos
-for each — a conflicting `globalShortcut` registration fails silently in the
-OS and Iris just logs it and keeps going, so the control remains reachable
-via the UI/tray even if the hotkey itself doesn't fire.
+mic and resets to audible on every wake.
+
+**Wake and sleep by keyboard** are global too: `⌥⇧W` wakes Iris and `⌥⇧S`
+puts her back to sleep (`IRIS_WAKE_HOTKEY` / `IRIS_SLEEP_HOTKEY` to change
+them), from whatever application you're working in — that's the point, since
+the moment you want Iris is usually the moment her window isn't in front.
+`⌥⇧W` works even with the deck closed: on macOS closing the window doesn't
+quit Iris, so the shortcut opens one and wakes her in it. They're
+modifier-qualified on purpose — a bare letter registered globally would be
+swallowed everywhere you type.
+
+All four hotkeys are Electron accelerator strings. If two of them collide, or
+another app already holds one, pick different combos: a failed
+`globalShortcut` registration is logged and otherwise ignored, so Iris keeps
+running and every control stays reachable by the UI, the tray, and the wake
+word — a bad hotkey can't make Iris unwakeable. A malformed value (`Altt+W`)
+is handled the same way and won't disturb the rest of startup.
 
 The app always boots into deck mode (booting straight into a click-through
 overlay with no visible affordance would be a lockout risk). Management

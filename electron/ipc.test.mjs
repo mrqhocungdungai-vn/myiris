@@ -60,6 +60,7 @@ const EXPECTED_ON = [
   "hud:interactive",
   "win:control",
   "iris:boot-done",
+  "iris:wake-ready",
   "iris:ui-context",
   "live:audio",
 ].sort();
@@ -74,6 +75,7 @@ function makeDeps(overrides = {}) {
     stopLive: vi.fn(),
     getLiveStatus: vi.fn(() => ({ running: false })),
     greetGateFire: vi.fn(),
+    notifyWakeReady: vi.fn(),
     toggleListenOnly: vi.fn(),
     isListenOnlyEngaged: vi.fn(() => false),
     sendCommand: vi.fn(),

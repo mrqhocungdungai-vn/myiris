@@ -593,8 +593,9 @@ export default function App() {
   }, [hasBridge, sidecarRunning]);
 
   // Main process owns the current window shape; mirror its `hud:mode`
-  // broadcasts here. Tray/hotkey wake requests run the same renderer flow as
-  // the W key so mic capture stays renderer-owned.
+  // broadcasts here. Tray and global-hotkey wake requests both arrive as
+  // iris:wake and run this same renderer flow, so mic capture stays
+  // renderer-owned wherever the wake came from.
   useEffect(() => {
     if (!hasBridge) return;
     const offMode = window.iris.onHudMode(({ mode }) => {
@@ -802,30 +803,19 @@ export default function App() {
 
   // Toggling wake word off tears down the listener with no callback (it
   // returns early on `enabled: false`), so a stale failure banner must be
-  // cleared here rather than left next to a caption reading "Press W to wake
+  // cleared here rather than left next to a caption reading "press ⌥⇧W to wake
   // Iris" (design D3, wake-sleep-voice).
   useEffect(() => {
     if (!wakeWordEnabled) setWakeFailed(false);
   }, [wakeWordEnabled]);
 
-  useEffect(() => {
-    function onKey(event: KeyboardEvent) {
-      if (event.metaKey || event.ctrlKey || event.altKey || event.repeat) return;
-      const target = event.target as HTMLElement | null;
-      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
-
-      const key = event.key.toLowerCase();
-      if (key === "w" && !sidecarRunning) {
-        event.preventDefault();
-        start();
-      } else if (key === "s" && sidecarRunning) {
-        event.preventDefault();
-        stop();
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [sidecarRunning, hasBridge]);
+  // Keyboard wake/sleep used to live here as a bare w/s keydown handler, which
+  // only worked while this window had focus — useless in the case Iris is for,
+  // HUD mode over another application. They are `globalShortcut` registrations
+  // in the main process now (wake-sleep-voice), arriving over iris:wake and
+  // iris:sleep like the tray's, so nothing renderer-side is needed. The
+  // INPUT/TEXTAREA guard went with them: it existed only to keep a bare letter
+  // from firing while the user typed.
 
   // Scoped autoscroll: scrollIntoView would also scroll every scrollable
   // ancestor (the rounded deck clips with overflow:hidden), shifting the whole
@@ -1641,7 +1631,15 @@ export default function App() {
   }, [hasBridge, tasks, sortedTasks, expandedTaskId, focusedTaskId, latestResultTask, pendingPoQuestion, pendingReview]);
 
   const caption = useMemo(() => {
-    const wake = wakeCaption({ sidecarRunning, wakeWordEnabled, wakeFailed });
+    // No local default for the chord: main owns what is registered, and until
+    // that snapshot arrives the caption says nothing about the keyboard rather
+    // than naming a key it hasn't confirmed (wake-sleep-voice).
+    const wake = wakeCaption({
+      sidecarRunning,
+      wakeWordEnabled,
+      wakeFailed,
+      wakeHotkey: fullConfig?.wakeHotkey ?? "",
+    });
     if (wake) return wake;
     if (audioState === "speaking") return { text: "Speaking…", dim: false };
     if (audioState === "listening") return { text: "Listening…", dim: false };
@@ -1650,7 +1648,16 @@ export default function App() {
     if (last) return { text: last.text, dim: false };
     if (geminiStatus === "connected") return { text: "How can I help?", dim: true };
     return { text: "Connecting…", dim: true };
-  }, [sidecarRunning, audioState, working, transcript, geminiStatus, wakeWordEnabled, wakeFailed]);
+  }, [
+    sidecarRunning,
+    audioState,
+    working,
+    transcript,
+    geminiStatus,
+    wakeWordEnabled,
+    wakeFailed,
+    fullConfig?.wakeHotkey,
+  ]);
 
   function openTask(task: TaskCard) {
     if (!(task.output || task.error)) return;
@@ -1824,6 +1831,8 @@ export default function App() {
             ambientCaptureLive={ambientCaptureLive}
             onStopAmbientCapture={stopAmbientCapture}
             onSleep={stop}
+            wakeHotkey={fullConfig?.wakeHotkey ?? ""}
+            sleepHotkey={fullConfig?.sleepHotkey ?? ""}
             webglHighFidelity={webglHighFidelity}
           />
 

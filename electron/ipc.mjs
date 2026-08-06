@@ -28,6 +28,7 @@ const { ipcMain } = electron;
  *   stopLive: () => any,
  *   getLiveStatus: () => any,
  *   greetGateFire: () => void,
+ *   notifyWakeReady: () => void,
  *   toggleListenOnly: () => void,
  *   isListenOnlyEngaged: () => boolean,
  *   sendCommand: (command: any) => any,
@@ -66,6 +67,7 @@ export function registerIpc(deps) {
     stopLive,
     getLiveStatus,
     greetGateFire,
+    notifyWakeReady,
     toggleListenOnly,
     isListenOnlyEngaged,
     sendCommand,
@@ -172,6 +174,10 @@ export function registerIpc(deps) {
   ipcMain.handle("pipeline:status", () => ({ available: getPipelineAvailable() }));
   ipcMain.handle("config:preview-voice", (_event, payload) => previewVoice(payload || {}));
   ipcMain.on("iris:boot-done", () => greetGateFire());
+  // The renderer announcing that it has subscribed to iris:wake. Main holds a
+  // wake requested while no window existed and flushes it here, so the global
+  // wake hotkey works with the deck closed (wake-sleep-voice).
+  ipcMain.on("iris:wake-ready", () => notifyWakeReady());
   ipcMain.on("iris:ui-context", (_event, context) => {
     if (context && typeof context === "object") {
       setUiContextSnapshot(context);

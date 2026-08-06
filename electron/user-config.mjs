@@ -10,6 +10,7 @@ import { GoogleGenAI } from "@google/genai";
 import { closeAllPoSessions } from "./po-session.mjs";
 import { RUN_STATUS } from "./run-queue.mjs";
 import { writeFileAtomicSync } from "./atomic-file.mjs";
+import { wakeHotkey, sleepHotkey } from "./hotkeys.mjs";
 
 // Look for .env in several places so both the dev repo run and a packaged
 // Iris.app can find credentials. First match for a given key wins.
@@ -201,6 +202,12 @@ export function createUserConfig({
       wakeConsecutive: envNumber("IRIS_WAKE_CONSECUTIVE", 2, { min: 1, max: 10, integer: true }),
       wakeDebug: envFlag("IRIS_WAKE_DEBUG", false),
       googleSearch: envFlag("IRIS_ENABLE_GOOGLE_SEARCH", false),
+      // The registered chords, read from the same accessors main.mjs registers
+      // through, so any text naming a key names the one that actually fires
+      // (wake-sleep-voice). Display values, not credentials — returned as-is,
+      // unlike the keys above.
+      wakeHotkey: wakeHotkey(),
+      sleepHotkey: sleepHotkey(),
       // Presence only — the credential itself never crosses the IPC boundary
       // (design D2). Reported per-key rather than through poBillingStatus(),
       // which is now true for EITHER credential: the panel has a separate field

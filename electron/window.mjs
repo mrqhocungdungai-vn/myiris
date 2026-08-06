@@ -6,6 +6,10 @@
 import electron from "electron";
 import fs from "node:fs";
 import path from "node:path";
+// Re-exported below rather than redefined here: getFullConfig() reports the
+// same accelerators to the renderer, and one definition is what keeps the
+// displayed key and the registered key the same key.
+import { hudHotkey, listenHotkey, wakeHotkey, sleepHotkey } from "./hotkeys.mjs";
 
 const { app, BrowserWindow, Menu, Tray, screen } = electron;
 
@@ -130,6 +134,9 @@ export function createWindowModule({
     mainWindow.on("closed", () => {
       mainWindow = null;
       uiMode = "deck";
+      // A wake held for a renderer that never subscribed dies with the window
+      // it was waiting on, rather than firing at whatever opens the next one.
+      pendingWake = false;
     });
   }
 
@@ -192,7 +199,7 @@ export function createWindowModule({
       Menu.buildFromTemplate([
         {
           label: liveStatus.running ? "Sleep Iris" : "Wake Iris",
-          click: () => emitToRenderer(liveStatus.running ? "iris:sleep" : "iris:wake", {}),
+          click: () => (liveStatus.running ? requestSleep() : requestWake()),
         },
         {
           // Main owns this state directly (design.md D3) — calls
@@ -229,12 +236,35 @@ export function createWindowModule({
     updateTrayMenu();
   }
 
-  function hudHotkey() {
-    return process.env.IRIS_HUD_HOTKEY || "Alt+Space";
+  // Wake has to survive the one state no window-level handler could ever reach:
+  // the deck closed while Iris keeps running in the tray (wake-sleep-voice).
+  // emitToRenderer drops the message when there is no window, and a window
+  // created on the spot is not listening yet either — the renderer subscribes to
+  // iris:wake from a mount effect, which can run after the page's load event. So
+  // the request is *held* and flushed when the renderer says it has subscribed
+  // (notifyWakeReady, over iris:wake-ready). Emitting on window creation and
+  // hoping the listener is up would be the silent no-op the spec forbids.
+  let pendingWake = false;
+
+  function requestWake() {
+    if (mainWindow) {
+      emitToRenderer("iris:wake", {});
+      return;
+    }
+    pendingWake = true;
+    createWindow();
   }
 
-  function listenHotkey() {
-    return process.env.IRIS_LISTEN_HOTKEY || "Alt+L";
+  function notifyWakeReady() {
+    if (!pendingWake) return;
+    pendingWake = false;
+    emitToRenderer("iris:wake", {});
+  }
+
+  // No window means no live session — mic capture is renderer-owned — so this
+  // needs no window handling of its own; emitToRenderer already no-ops.
+  function requestSleep() {
+    emitToRenderer("iris:sleep", {});
   }
 
   function installAppMenu() {
@@ -274,6 +304,11 @@ export function createWindowModule({
     createTray,
     hudHotkey,
     listenHotkey,
+    wakeHotkey,
+    sleepHotkey,
+    requestWake,
+    requestSleep,
+    notifyWakeReady,
     installAppMenu,
   };
 }

@@ -132,6 +132,10 @@ type IrisConfig = {
   wakeConsecutive: number;
   wakeDebug: boolean;
   googleSearch: boolean;
+  /** The global wake accelerator actually registered, e.g. "Alt+Shift+W". */
+  wakeHotkey: string;
+  /** The global sleep accelerator actually registered, e.g. "Alt+Shift+S". */
+  sleepHotkey: string;
   /** Presence only — the PO subscription token itself never reaches the renderer. */
   poTokenSet: boolean;
   /** Presence only — the metered API key itself never reaches the renderer. */
