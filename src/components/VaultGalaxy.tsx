@@ -880,20 +880,30 @@ function GalaxyCanvas({
             const engageDist = activeCameraDrive === "zoom" ? twoPalmDistance(hand) : null;
             zoomReferenceRef.current =
               engageDist !== null ? { dist: engageDist, radius: sphericalRef.current.radius } : null;
-            prevOrbitPointRef.current = activeCameraDrive === "orbit" ? hand.point : null;
+            // The wrist, not the fingertip (design note on
+            // TrackedHand.wristPoint): the fingertip moves a long way purely
+            // from curling/uncurling into a fist, which orbit's delta would
+            // otherwise read as hand movement — exactly at the Closed_Fist
+            // engage/release boundary, where that curl is happening.
+            prevOrbitPointRef.current = activeCameraDrive === "orbit" ? hand.wristPoint : null;
           } else {
             zoomReferenceRef.current = null;
             prevOrbitPointRef.current = null;
           }
           cameraEngagedRef.current = activeCameraDrive;
-        } else if (activeCameraDrive === "orbit" && sphericalRef.current && prevOrbitPointRef.current && hand.point) {
+        } else if (
+          activeCameraDrive === "orbit" &&
+          sphericalRef.current &&
+          prevOrbitPointRef.current &&
+          hand.wristPoint
+        ) {
           const delta = {
-            x: hand.point.x - prevOrbitPointRef.current.x,
-            y: hand.point.y - prevOrbitPointRef.current.y,
+            x: hand.wristPoint.x - prevOrbitPointRef.current.x,
+            y: hand.wristPoint.y - prevOrbitPointRef.current.y,
           };
           const next = orbitStep(sphericalRef.current, delta, ORBIT_SENSITIVITY);
           sphericalRef.current.set(next.radius, next.phi, next.theta);
-          prevOrbitPointRef.current = hand.point;
+          prevOrbitPointRef.current = hand.wristPoint;
           writeCameraFromSpherical(fg);
         } else if (activeCameraDrive === "zoom" && sphericalRef.current && zoomReferenceRef.current) {
           // A dropout (one palm briefly not open_palm) has already released

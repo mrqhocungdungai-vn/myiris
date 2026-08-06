@@ -9,6 +9,18 @@ export type HandLandmark = { x: number; y: number };
 export type TrackedHand = {
   id: string;
   point: HandPoint;
+  /**
+   * The wrist landmark (0), screen-remapped and smoothed the same way as
+   * `point` (the index fingertip, landmark 8) but tracked separately
+   * (add-galaxy-node-labels manual pass / gesture-nav follow-up): the
+   * fingertip moves a large distance purely from curling/uncurling a finger
+   * — exactly what happens crossing the Closed_Fist <-> Open_Palm boundary —
+   * even when the hand hasn't translated at all. A drive that measures
+   * frame-to-frame MOVEMENT (the galaxy's fist-orbit) needs a landmark whose
+   * position doesn't depend on which pose the hand is making; the wrist is
+   * that landmark, `point` is not.
+   */
+  wristPoint: HandPoint;
   landmarks: HandLandmark[];
   gesture: string;
   gestureScore: number;
@@ -23,6 +35,8 @@ export type HandState = {
   active: boolean;
   present: boolean;
   point: HandPoint | null;
+  /** The primary hand's `wristPoint` — see `TrackedHand.wristPoint`. */
+  wristPoint: HandPoint | null;
   gesture: string;
   gestureScore: number;
   pointing: boolean;
@@ -73,6 +87,7 @@ const EMPTY_STATE: HandState = {
   active: false,
   present: false,
   point: null,
+  wristPoint: null,
   gesture: "None",
   gestureScore: 0,
   pointing: false,
@@ -134,6 +149,9 @@ export function useHandControl(enabled: boolean, deviceId: string = SYSTEM_DEFAU
     // zoom distance) must not mix a filtered primary point with a raw
     // secondary one, so every hand is smoothed independently.
     const smoothById = new Map<string, HandPoint>();
+    // Separate smoothing history for `wristPoint` — mixing it with `point`'s
+    // would smooth two landmarks moving at different rates through one EMA.
+    const smoothWristById = new Map<string, HandPoint>();
     let primaryId = "";
     let primaryPoint: HandPoint | null = null;
     const stableGestureById = new Map<string, string>();
@@ -241,16 +259,25 @@ export function useHandControl(enabled: boolean, deviceId: string = SYSTEM_DEFAU
             const rawGesture = score >= 0.55 ? topGesture?.categoryName ?? "None" : "None";
             const indexTip = hand[8];
             const thumbTip = hand[4];
+            const wrist = hand[0];
             const mirroredX = 1 - indexTip.x;
             const point = {
               x: remapToScreen(mirroredX, INPUT_RANGE.xMin, INPUT_RANGE.xMax, window.innerWidth),
               y: remapToScreen(indexTip.y, INPUT_RANGE.yMin, INPUT_RANGE.yMax, window.innerHeight),
+            };
+            // Same remap as `point`, but from the wrist (landmark 0) instead
+            // of the index fingertip — see TrackedHand.wristPoint.
+            const wristMirroredX = 1 - wrist.x;
+            const wristPoint = {
+              x: remapToScreen(wristMirroredX, INPUT_RANGE.xMin, INPUT_RANGE.xMax, window.innerWidth),
+              y: remapToScreen(wrist.y, INPUT_RANGE.yMin, INPUT_RANGE.yMax, window.innerHeight),
             };
             const pinchDistance = Math.hypot(indexTip.x - thumbTip.x, indexTip.y - thumbTip.y);
             return {
               rawGesture,
               score,
               point,
+              wristPoint,
               landmarks: hand.map((landmark) => ({ x: 1 - landmark.x, y: landmark.y })),
               pinchDistance,
             };
@@ -262,9 +289,12 @@ export function useHandControl(enabled: boolean, deviceId: string = SYSTEM_DEFAU
             const gesture = stabilizeGesture(id, hand.rawGesture);
             const smoothed = smoothPoint(smoothById.get(id) ?? null, hand.point, SMOOTHING_ALPHA);
             smoothById.set(id, smoothed);
+            const smoothedWrist = smoothPoint(smoothWristById.get(id) ?? null, hand.wristPoint, SMOOTHING_ALPHA);
+            smoothWristById.set(id, smoothedWrist);
             return {
               id,
               point: smoothed,
+              wristPoint: smoothedWrist,
               landmarks: hand.landmarks,
               gesture,
               gestureScore: hand.score,
@@ -284,6 +314,7 @@ export function useHandControl(enabled: boolean, deviceId: string = SYSTEM_DEFAU
             active: true,
             present: true,
             point: primary.point,
+            wristPoint: primary.wristPoint,
             gesture: primary.gesture,
             gestureScore: primary.gestureScore,
             pointing: primary.pointing,
@@ -296,6 +327,7 @@ export function useHandControl(enabled: boolean, deviceId: string = SYSTEM_DEFAU
           // Only re-publish the empty state on the transition into "no
           // hand" — an empty frame after another empty frame does zero work.
           smoothById.clear();
+          smoothWristById.clear();
           primaryId = "";
           primaryPoint = null;
           stableGestureById.clear();
