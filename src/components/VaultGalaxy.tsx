@@ -14,7 +14,10 @@ import {
   INITIAL_DWELL_STATE,
   type DwellState,
   type GalaxyDrive,
+  type GalaxyNavNode,
 } from "../lib/galaxy-nav";
+import { selectLabels } from "../lib/galaxy-labels";
+import { createLabelPool, type LabelPool } from "../lib/galaxy-label-sprites";
 
 // second-brain-galaxy-view: 3d-force-graph is a vanilla (non-React) library
 // that attaches imperatively to a container element — it has no React
@@ -78,6 +81,22 @@ const DWELL_HOLD_MS = 300;
 const ORBIT_SENSITIVITY = 0.006; // radians per pixel, matching the orb loop's feel
 const ZOOM_MIN_RADIUS = 15;
 const ZOOM_MAX_RADIUS = 2500;
+
+// add-galaxy-node-labels tuning constants (design.md D9).
+// The force layout's default link distance is ~30 units, so ~180 is a few
+// link-hops: the neighbourhood you are flying through, not the whole graph.
+// This composes with zoomToFit-on-first-settle for free: a small vault
+// frames close enough that its titles are visible immediately, while a large
+// vault frames far out and opens clean, with no vault-size branch in the code.
+const LABEL_MAX_DISTANCE = 180;
+// Readable at a glance; also the texture count ceiling (design.md D2).
+const LABEL_BUDGET = 24;
+// Text a bit above a default-sized node (radius ~4).
+const LABEL_WORLD_HEIGHT = 5;
+const LABEL_Y_OFFSET = 6;
+// A reveal is a threshold crossing during navigation, and 10Hz is
+// imperceptible for that — positions still update every frame (design.md D5).
+const SELECT_INTERVAL_MS = 100;
 
 // two-palm-galaxy-zoom design.md D7: a tuning instrument, not a shipped
 // surface — off by default, following the same localStorage preference
@@ -349,6 +368,14 @@ function GalaxyCanvas({
   // captured at that time.
   const focusIdsRef = useRef(new Set(focusIds));
   focusIdsRef.current = new Set(focusIds);
+  // The focus declutter's one-hop neighbourhood, written by repaintHighlight
+  // — the single place that set is derived — and read by the label loop
+  // below as its `eligible` set (design.md D7), so titles never disagree with
+  // the dimming about which nodes are relevant. Null means "no filtering".
+  const relevantIdsRef = useRef<Set<string> | null>(null);
+  // The proximity-title sprite pool (design.md D2) — created once per mount
+  // alongside the graph instance, disposed in the same effect's cleanup.
+  const labelPoolRef = useRef<LabelPool | null>(null);
   // Orbit center (design.md D3/6.1): recomputed from positionsRef at most
   // once per dirty flag, never inside applyGraph's own position-free moment.
   const centerRef = useRef(new THREE.Vector3());
@@ -445,6 +472,11 @@ function GalaxyCanvas({
     // whatever is current is what makes a stale set impossible rather than
     // something to keep in sync.
     const focusLitIds = focus.size ? focusNeighborhood(focus, links) : null;
+    // The label loop's `eligible` set is the focus declutter's neighbourhood
+    // specifically — NOT the pointed-at spotlight below, which is momentary
+    // and would otherwise make titles flicker with whatever the pointer
+    // happens to be over (design.md D7).
+    relevantIdsRef.current = focusLitIds;
     const pointedAt = handTargetRef.current ?? mouseHoverRef.current;
     // Precedence, and the whole of the spotlight (design.md D7): whatever is
     // POINTED AT decides what stays bright while it is pointed at; the focus
@@ -527,6 +559,9 @@ function GalaxyCanvas({
       if (highFidelity) await addBloom(fg);
       if (disposed) return;
       fgRef.current = fg;
+      const labelPool = createLabelPool(LABEL_BUDGET, LABEL_Y_OFFSET, LABEL_WORLD_HEIGHT);
+      fg.scene().add(labelPool.group);
+      labelPoolRef.current = labelPool;
       // applyGraph's own repaintHighlight() call paints the ring/dimming on
       // whatever is already focused (second-brain-focus "survives a
       // remount") — the focus-change effect below only fires on a LATER
@@ -544,6 +579,9 @@ function GalaxyCanvas({
       }
       const fg = fgRef.current;
       fgRef.current = null;
+      const labelPool = labelPoolRef.current;
+      labelPoolRef.current = null;
+      if (labelPool) labelPool.dispose();
       if (fg) {
         fg.pauseAnimation();
         fg._destructor();
@@ -563,6 +601,60 @@ function GalaxyCanvas({
     if (!fg) return;
     if (running) fg.resumeAnimation();
     else fg.pauseAnimation();
+  }, [running]);
+
+  // Proximity-title drive (design.md D4/D5): a second rAF loop, gated on
+  // `running` ONLY — unlike the gesture loop it is not additionally gated on
+  // `handControl` (mouse-only navigation must still reveal titles) and is
+  // deliberately NOT suspended while the reader is open: it only writes
+  // sprite transforms rather than driving the camera, and staying live means
+  // no stale-position pop when the reader closes.
+  //
+  // Two rates in one loop: re-selecting is O(nodes) with an ordering step, so
+  // it runs at most every SELECT_INTERVAL_MS; positions must be exact every
+  // frame or a title visibly lags its node while the layout is still
+  // settling, so `apply()` runs on every tick regardless.
+  useEffect(() => {
+    if (!running) return;
+    let raf = 0;
+    let lastSelect = 0;
+    let selection: GalaxyNavNode[] = [];
+
+    function loop() {
+      try {
+        const fg = fgRef.current;
+        const pool = labelPoolRef.current;
+        if (fg && pool) {
+          const now = performance.now();
+          if (now - lastSelect >= SELECT_INTERVAL_MS) {
+            lastSelect = now;
+            selection = selectLabels(positionsRef.current.values(), fg.camera().position, {
+              maxDistance: LABEL_MAX_DISTANCE,
+              budget: LABEL_BUDGET,
+              eligible: relevantIdsRef.current,
+            });
+          }
+          pool.apply(selection);
+        }
+      } catch (err) {
+        // Mirrors the gesture loop's try/catch (a rAF throw escapes React's
+        // error boundary and would otherwise repeat every frame), but a label
+        // crash hides the labels and stops this loop rather than force-
+        // closing the galaxy: labels failing is not a reason to tear down the
+        // view they annotate (design.md Risks).
+        console.error("[add-galaxy-node-labels] label loop crashed, hiding labels:", err);
+        labelPoolRef.current?.apply([]);
+        return;
+      }
+      raf = requestAnimationFrame(loop);
+    }
+
+    raf = requestAnimationFrame(loop);
+    return () => {
+      cancelAnimationFrame(raf);
+      labelPoolRef.current?.apply([]);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [running]);
 
   // second-brain-focus 4.2/4.4: repaints the focus ring and the declutter

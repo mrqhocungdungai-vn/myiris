@@ -197,6 +197,17 @@ in `galaxy-nav.ts`) is dimmed near-invisible — nodes and edges alike — so th
 selection and its immediate neighbors stand out without anything moving or
 disappearing. Clearing the focus restores the full graph.
 
+**Note titles are revealed by proximity, not a pointer.** Flying the camera
+close enough to a node (`LABEL_MAX_DISTANCE`, `VaultGalaxy.tsx`) draws its
+title as text beside it; pulling back past that distance hides it again. It
+needs no hover, click, or gesture — the point of the feature is that the
+galaxy is otherwise unreadable while flying through it under hand control,
+where there is no pointer at all. The count on screen at once is bounded by a
+fixed budget (`LABEL_BUDGET`), filled nearest-camera-first, so the cost is the
+same in a small vault and a large one. Titles respect the same one-hop
+declutter as the dimming above — a node the focus has dimmed carries no title
+either, so the two mechanisms never disagree about what is relevant.
+
 ### Eye HUD (decorative)
 
 The same camera session also drives a **purely decorative** iris HUD over the

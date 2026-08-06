@@ -1,33 +1,33 @@
 ## 1. Pure selection policy
 
-- [ ] 1.1 Create `src/lib/galaxy-labels.ts` with `selectLabels(nodes, cameraPos, { maxDistance, budget, eligible })` returning the ≤budget nearest eligible nodes within `maxDistance`, nearest first — squared distances only, no `sqrt` (design.md D3)
-- [ ] 1.2 Write `src/lib/galaxy-labels.test.ts` covering: nodes outside `maxDistance` excluded and inside included (boundary at exactly `maxDistance`), ordering is nearest-camera-first, a selection longer than `budget` truncated to the nearest `budget`, `eligible = null` filters nothing while a non-empty `eligible` excludes non-members, ghost nodes included, and nodes with no position yet skipped
-- [ ] 1.3 `npm test` green, `npm run lint` clean
+- [x] 1.1 Create `src/lib/galaxy-labels.ts` with `selectLabels(nodes, cameraPos, { maxDistance, budget, eligible })` returning the ≤budget nearest eligible nodes within `maxDistance`, nearest first — squared distances only, no `sqrt` (design.md D3)
+- [x] 1.2 Write `src/lib/galaxy-labels.test.ts` covering: nodes outside `maxDistance` excluded and inside included (boundary at exactly `maxDistance`), ordering is nearest-camera-first, a selection longer than `budget` truncated to the nearest `budget`, `eligible = null` filters nothing while a non-empty `eligible` excludes non-members, ghost nodes included, and nodes with no position yet skipped
+- [x] 1.3 `npm test` green, `npm run lint` clean
 
 ## 2. Label sprite pool
 
-- [ ] 2.1 Create `src/lib/galaxy-label-sprites.ts` exporting `createLabelPool(budget)` → `{ group, apply(selection), dispose() }`, with a header comment stating why it carries no unit test (needs a 2D canvas context; `src/**/*.test.ts` runs in vitest's `node` environment — design.md D3)
-- [ ] 2.2 Build the pool: `budget` sprites in one `THREE.Group`, each with its own fixed 512×96 canvas + `CanvasTexture` (`minFilter = LinearFilter`, `generateMipmaps = false`), material `transparent: true`, `depthWrite: false`, `depthTest: true` (design.md D1)
-- [ ] 2.3 Implement `apply(selection)`: repaint a slot's canvas only when the id assigned to it changed, crop the texture to the measured text via `repeat`/`offset` and set the sprite scale to the measured aspect so short and long titles draw at the same text height, position each sprite at its node's live `x/y/z` plus `LABEL_Y_OFFSET` on Y, and hide the tail slots when the selection is shorter than the pool (design.md D2)
-- [ ] 2.4 Implement measured elision: draw shrinking prefixes + `…` until `measureText` fits the canvas width (spec: "A very long note title is elided")
-- [ ] 2.5 Paint a ghost node's title in the same faded grey the ghost node uses, and a real note's in a soft blue-white chosen not to bleed under bloom (design.md D6/D8)
-- [ ] 2.6 Implement `dispose()`: dispose every texture and material, remove the group from its parent — verify no leak across galaxy open/close cycles in task 5.6
+- [x] 2.1 Create `src/lib/galaxy-label-sprites.ts` exporting `createLabelPool(budget)` → `{ group, apply(selection), dispose() }`, with a header comment stating why it carries no unit test (needs a 2D canvas context; `src/**/*.test.ts` runs in vitest's `node` environment — design.md D3)
+- [x] 2.2 Build the pool: `budget` sprites in one `THREE.Group`, each with its own fixed 512×96 canvas + `CanvasTexture` (`minFilter = LinearFilter`, `generateMipmaps = false`), material `transparent: true`, `depthWrite: false`, `depthTest: true` (design.md D1)
+- [x] 2.3 Implement `apply(selection)`: repaint a slot's canvas only when the id assigned to it changed, crop the texture to the measured text via `repeat`/`offset` and set the sprite scale to the measured aspect so short and long titles draw at the same text height, position each sprite at its node's live `x/y/z` plus `LABEL_Y_OFFSET` on Y, and hide the tail slots when the selection is shorter than the pool (design.md D2)
+- [x] 2.4 Implement measured elision: draw shrinking prefixes + `…` until `measureText` fits the canvas width (spec: "A very long note title is elided")
+- [x] 2.5 Paint a ghost node's title in the same faded grey the ghost node uses, and a real note's in a soft blue-white chosen not to bleed under bloom (design.md D6/D8)
+- [x] 2.6 Implement `dispose()`: dispose every texture and material, remove the group from its parent — verify no leak across galaxy open/close cycles in task 5.6
 
 ## 3. Wire into the galaxy
 
-- [ ] 3.1 Add the tuning constants to `VaultGalaxy.tsx` beside `ZOOM_MIN_RADIUS`/`ZOOM_MAX_RADIUS`: `LABEL_MAX_DISTANCE = 180`, `LABEL_BUDGET = 24`, `LABEL_WORLD_HEIGHT = 5`, `LABEL_Y_OFFSET = 6`, `SELECT_INTERVAL_MS = 100`, each with the reasoning from design.md D9
-- [ ] 3.2 Create the pool in the mount effect (after the graph instance exists) and add its group to `fg.scene()`; dispose it in that effect's cleanup, alongside `fg._destructor()`
-- [ ] 3.3 Add a `useEffect` on `[running]` owning its own rAF loop: re-select every `SELECT_INTERVAL_MS` from `positionsRef` + `fg.camera().position` + `relevantIdsRef.current` as `eligible`, and `apply()` the current assignment every frame (design.md D5/D7)
-- [ ] 3.4 Wrap the loop body in try/catch like the gesture loop, but on error hide the labels and stop the loop rather than force-closing the galaxy (design.md Risks)
-- [ ] 3.5 Confirm the loop schedules nothing while `running` is false, and that its cleanup cancels the rAF and hides all labels
-- [ ] 3.6 Keep `VaultGalaxy.tsx`'s addition to wiring only — no canvas or selection logic in the component (design.md Context: the file is already 799 lines)
-- [ ] 3.7 `npm run build` (typecheck) and `npm run lint` clean
+- [x] 3.1 Add the tuning constants to `VaultGalaxy.tsx` beside `ZOOM_MIN_RADIUS`/`ZOOM_MAX_RADIUS`: `LABEL_MAX_DISTANCE = 180`, `LABEL_BUDGET = 24`, `LABEL_WORLD_HEIGHT = 5`, `LABEL_Y_OFFSET = 6`, `SELECT_INTERVAL_MS = 100`, each with the reasoning from design.md D9
+- [x] 3.2 Create the pool in the mount effect (after the graph instance exists) and add its group to `fg.scene()`; dispose it in that effect's cleanup, alongside `fg._destructor()`
+- [x] 3.3 Add a `useEffect` on `[running]` owning its own rAF loop: re-select every `SELECT_INTERVAL_MS` from `positionsRef` + `fg.camera().position` + `relevantIdsRef.current` as `eligible`, and `apply()` the current assignment every frame (design.md D5/D7)
+- [x] 3.4 Wrap the loop body in try/catch like the gesture loop, but on error hide the labels and stop the loop rather than force-closing the galaxy (design.md Risks)
+- [x] 3.5 Confirm the loop schedules nothing while `running` is false, and that its cleanup cancels the rAF and hides all labels
+- [x] 3.6 Keep `VaultGalaxy.tsx`'s addition to wiring only — no canvas or selection logic in the component (design.md Context: the file is already 799 lines)
+- [x] 3.7 `npm run build` (typecheck) and `npm run lint` clean
 
 ## 4. Documentation
 
-- [ ] 4.1 Add proximity titles to the galaxy section of `docs/GESTURES.md`, beside the `zoomToFit`-on-first-settle and focus-declutter notes — what reveals a title, that the count is budgeted, and that it needs no pointer
-- [ ] 4.2 Correct the stale over-convention line count for `src/components/VaultGalaxy.tsx` in `docs/TESTING.md` (recorded as 561, actually 799 before this change) to the post-change figure
-- [ ] 4.3 Check whether `docs/ARCHITECTURE.md`'s component/module map needs the two new `src/lib/` modules listed, and add them if it lists peers like `galaxy-nav.ts`
+- [x] 4.1 Add proximity titles to the galaxy section of `docs/GESTURES.md`, beside the `zoomToFit`-on-first-settle and focus-declutter notes — what reveals a title, that the count is budgeted, and that it needs no pointer
+- [x] 4.2 Correct the stale over-convention line count for `src/components/VaultGalaxy.tsx` in `docs/TESTING.md` (recorded as 561, actually 799 before this change) to the post-change figure
+- [x] 4.3 Check whether `docs/ARCHITECTURE.md`'s component/module map needs the two new `src/lib/` modules listed, and add them if it lists peers like `galaxy-nav.ts` — checked: ARCHITECTURE.md's Main Components list doesn't enumerate `src/lib/` files at all (no `galaxy-nav.ts` entry either), so no addition needed
 
 ## 5. Manual verification on a real vault
 

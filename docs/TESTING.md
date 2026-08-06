@@ -288,7 +288,7 @@ re-measured post-split-main-process-modules):
 - **Files over the 250–450 line convention** (see Conventions in
   [CLAUDE.md](../CLAUDE.md)): `src/App.tsx` (1738 lines),
   `src/components/SetupPanel.tsx` (1023), `src/components/VaultGalaxy.tsx`
-  (561), `electron/canvas-mcp.mjs` (557, a recorded pre-existing exception —
+  (1035), `electron/canvas-mcp.mjs` (557, a recorded pre-existing exception —
   its split is an explicit non-goal of split-main-process-modules, tracked as
   a follow-up). Enforcement is convention-only by deliberate decision, so
   these are flagged here rather than silently accepted.
