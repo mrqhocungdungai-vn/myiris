@@ -32,9 +32,9 @@
 
 - [x] 3.1 Run the five gates: `npm run build`, `npm test`, `npm run lint`,
       `npm run scan:secrets`, `npm run spec:check`
-- [ ] 3.2 Manual: cold start plays the intro once, and it clears on connect
-- [ ] 3.3 Manual: force a reconnect (drop Wi-Fi mid-session, or kill the connection)
+- [x] 3.2 Manual: cold start plays the intro once, and it clears on connect
+- [x] 3.3 Manual: force a reconnect (drop Wi-Fi mid-session, or kill the connection)
       and confirm the intro does not appear while it re-dials
-- [ ] 3.4 Manual: stop Iris and confirm no intro flash during teardown
-- [ ] 3.5 Manual: stop Iris *while the intro is still playing*, and confirm no
+- [x] 3.4 Manual: stop Iris and confirm no intro flash during teardown
+- [x] 3.5 Manual: stop Iris *while the intro is still playing*, and confirm no
       greeting is spoken on the way down (the armed-`GreetGate` case)
