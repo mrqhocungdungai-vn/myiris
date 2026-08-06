@@ -62,6 +62,23 @@ export function envNumber(name, fallback, { min = -Infinity, max = Infinity, int
   return parsed;
 }
 
+// The system-audio half of listen-only mode (listen-mode-hears-system-audio
+// D8). Default ON: engaging the mode captures what the machine is playing and
+// mixes it into the stream. `IRIS_SYSTEM_AUDIO=0` restores the pre-change
+// behaviour entirely — no capture, no in-band request, no meeting retention,
+// no system recording indicator — which is the whole point of it existing.
+export function systemAudioEnabled() {
+  return envFlag("IRIS_SYSTEM_AUDIO", true);
+}
+
+// How loudly captured system audio sits against the microphone in the mix.
+// Below unity by default so loud playback does not bury the user's own voice;
+// the microphone's own gain is derived from this (see resolveInputMix in
+// src/hooks/useAudioPipeline.ts) so the nominal sum keeps headroom.
+export function systemAudioGain() {
+  return envNumber("IRIS_SYSTEM_AUDIO_GAIN", 0.7, { min: 0, max: 1 });
+}
+
 export function sleepDelayMs() {
   const parsed = Number(process.env.IRIS_SLEEP_DELAY_MS);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 3000;

@@ -189,7 +189,11 @@ describe("live-session: listen-only mode ownership (design.md D3)", () => {
     expect(live.getListenOnlyEngaged()).toBe(false);
     live.toggleListenOnly();
     expect(live.getListenOnlyEngaged()).toBe(true);
-    expect(emitToRenderer).toHaveBeenCalledWith("listen-only:state", { engaged: true });
+    expect(emitToRenderer).toHaveBeenCalledWith("listen-only:state", {
+      engaged: true,
+      systemAudio: false,
+      systemAudioGain: 0.7,
+    });
     expect(updateTrayMenu).toHaveBeenCalled();
 
     live.toggleListenOnly();
@@ -240,7 +244,7 @@ describe("live-session: listen-only mode ownership (design.md D3)", () => {
     expect(live.getListenOnlyEngaged()).toBe(false);
   });
 
-  it("resets to disengaged once reconnect attempts are exhausted (server-initiated teardown)", async () => {
+  it("stays ENGAGED once reconnect attempts are exhausted — a network blip must not restore the voice", async () => {
     vi.useFakeTimers();
     try {
       /** @type {any} */
@@ -275,10 +279,155 @@ describe("live-session: listen-only mode ownership (design.md D3)", () => {
         }
       }
 
-      expect(live.getListenOnlyEngaged()).toBe(false);
+      // The behaviour change (listen-mode-hears-system-audio D4): this used to
+      // disengage, which un-suppresses audio — Iris would start speaking aloud
+      // into a meeting after a network drop, at the moment the user is least
+      // likely to be looking at the screen.
+      expect(live.getListenOnlyEngaged()).toBe(true);
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// listen-mode-hears-system-audio §2/§3. The mode is now a meeting mode, and
+// three things have to hold at once: the transport is never touched, the model
+// is ASKED to stay quiet without being asked to speak, and none of it happens
+// under the escape hatch.
+describe("live-session: the in-band silence request (listen-mode-hears-system-audio D3)", () => {
+  async function engagedSession(overrides = {}) {
+    const session = {
+      sendRealtimeInput: vi.fn(),
+      sendClientContent: vi.fn(),
+      close: vi.fn(),
+    };
+    const live = make({ systemAudioEnabled: () => true, systemAudioGain: () => 0.5, ...overrides });
+    const GoogleGenAI = await getMockedGoogleGenAI();
+    GoogleGenAI.mockImplementationOnce(
+      fakeGoogleGenAIImpl(async (args) => {
+        args.callbacks.onopen();
+        return session;
+      }),
+    );
+    await live.startLive();
+    return { live, session, GoogleGenAI };
+  }
+
+  it("sends the request with sendClientContent and turnComplete false — never sendRealtimeInput", async () => {
+    const { live, session } = await engagedSession();
+    session.sendRealtimeInput.mockClear();
+
+    live.toggleListenOnly();
+
+    expect(session.sendClientContent).toHaveBeenCalledTimes(1);
+    const sent = session.sendClientContent.mock.calls[0][0];
+    // turnComplete:false ADDS conversation content without closing a turn, so
+    // the model is never asked to generate. sendRealtimeInput expects a reply
+    // and would provoke exactly the turn this is trying to prevent.
+    expect(sent.turnComplete).toBe(false);
+    expect(sent.turns[0].parts[0].text).toContain("SYSTEM_EVENT_LISTEN_ONLY_ENGAGED");
+    expect(session.sendRealtimeInput).not.toHaveBeenCalled();
+  });
+
+  it("sends the disengage request on the way back out", async () => {
+    const { live, session } = await engagedSession();
+    live.toggleListenOnly();
+    session.sendClientContent.mockClear();
+
+    live.toggleListenOnly();
+
+    expect(session.sendClientContent.mock.calls[0][0].turns[0].parts[0].text).toContain(
+      "SYSTEM_EVENT_LISTEN_ONLY_DISENGAGED",
+    );
+  });
+
+  it("neither transition reconnects or rebuilds the session config", async () => {
+    const { live, session, GoogleGenAI } = await engagedSession();
+    const connectsBefore = GoogleGenAI.mock.calls.length;
+
+    live.toggleListenOnly();
+    live.toggleListenOnly();
+
+    expect(GoogleGenAI.mock.calls.length).toBe(connectsBefore);
+    expect(session.close).not.toHaveBeenCalled();
+  });
+
+  it("sends nothing at all under the IRIS_SYSTEM_AUDIO escape hatch", async () => {
+    const { live, session } = await engagedSession({ systemAudioEnabled: () => false });
+
+    live.toggleListenOnly();
+    live.toggleListenOnly();
+
+    expect(session.sendClientContent).not.toHaveBeenCalled();
+  });
+
+  it("does not let a failed send stop the mode from engaging", async () => {
+    const { live, session } = await engagedSession();
+    session.sendClientContent.mockImplementation(() => {
+      throw new Error("socket closed");
+    });
+
+    live.toggleListenOnly();
+
+    // Discarding at the client is the guarantee; the request is only a cost
+    // reduction, so its failure must never be the mode's failure.
+    expect(live.getListenOnlyEngaged()).toBe(true);
+  });
+
+  it("re-states the request on a reconnect, since the conversation may not have survived", async () => {
+    const { live, session } = await engagedSession();
+    live.toggleListenOnly();
+    session.sendClientContent.mockClear();
+
+    const GoogleGenAI = await getMockedGoogleGenAI();
+    GoogleGenAI.mockImplementationOnce(
+      fakeGoogleGenAIImpl(async (args) => {
+        args.callbacks.onopen();
+        return session;
+      }),
+    );
+    await live.connectLive({ isReconnect: true });
+
+    expect(session.sendClientContent.mock.calls[0][0].turns[0].parts[0].text).toContain(
+      "SYSTEM_EVENT_LISTEN_ONLY_ENGAGED",
+    );
+  });
+
+  it("speaks no welcome greeting while the mode is engaged", async () => {
+    const { live, session } = await engagedSession();
+    live.toggleListenOnly();
+    session.sendRealtimeInput.mockClear();
+
+    live.GreetGate.arm();
+    live.GreetGate.fire();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(session.sendRealtimeInput).not.toHaveBeenCalled();
+  });
+
+  it("drives meeting retention from the mode, and releases it when the renderer goes away", async () => {
+    const onListenOnlyChange = vi.fn();
+    const { live } = await engagedSession({ onListenOnlyChange });
+
+    live.toggleListenOnly();
+    expect(onListenOnlyChange).toHaveBeenLastCalledWith(true);
+
+    live.handleRendererGone();
+    expect(live.getListenOnlyEngaged()).toBe(false);
+    expect(onListenOnlyChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it("disengages when the capture could not be acquired at all, and only then", async () => {
+    const { live } = await engagedSession();
+
+    // Not engaged: nothing to undo, and nothing to report.
+    live.handleSystemAudioUnavailable("NotAllowedError");
+    expect(live.getListenOnlyEngaged()).toBe(false);
+
+    live.toggleListenOnly();
+    live.handleSystemAudioUnavailable("NotAllowedError");
+    expect(live.getListenOnlyEngaged()).toBe(false);
   });
 });
 

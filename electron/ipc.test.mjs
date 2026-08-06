@@ -56,6 +56,7 @@ const EXPECTED_HANDLE = [
 ].sort();
 
 const EXPECTED_ON = [
+  "listen-only:system-audio-unavailable",
   "listen-only:toggle-request",
   "hud:interactive",
   "win:control",

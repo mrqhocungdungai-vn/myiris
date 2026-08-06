@@ -11,6 +11,7 @@
 import { createWindowModule } from "./window.mjs";
 import { createLiveSession } from "./live-session.mjs";
 import { createLiveMessages } from "./live-messages.mjs";
+import { systemAudioEnabled, systemAudioGain } from "./user-config.mjs";
 
 /**
  * @param {{
@@ -35,6 +36,9 @@ import { createLiveMessages } from "./live-messages.mjs";
  *     stopVaultGraphWatch: () => void,
  *     probeSecondBrainAvailability: () => boolean,
  *     setAmbientCaptureAwake: (awake: boolean) => Promise<void>,
+ *     setMeetingCaptureEngaged: (engaged: boolean) => Promise<void>,
+ *     appendMeetingFragment: (text: string) => void,
+ *     closeMeetingUtterance: () => void,
  *   },
  *   setWindowModule: (mod: any) => void,
  *   setLiveSessionModule: (mod: any) => void,
@@ -83,6 +87,12 @@ export function createLiveWiring({
     executeClaudeTool,
     submitClaudeTask,
     isListenOnlyEngaged: () => liveSessionModule.getListenOnlyEngaged(),
+    // Meeting retention's feed (listen-mode-hears-system-audio D7) — the raw
+    // transcription fragments, deliberately not the bounded utterance ring.
+    // Both are no-ops unless the mode is engaged, which the capture itself
+    // decides; nothing here needs to know the mode.
+    onInputTranscription: (text) => secondBrainCapability.appendMeetingFragment(text),
+    onUtteranceBoundary: () => secondBrainCapability.closeMeetingUtterance(),
   });
   const { handleLiveMessage, sendAudioChunk, sendCommand } = liveMessages;
 
@@ -106,10 +116,26 @@ export function createLiveWiring({
     // renderer — that decide whether it is live.
     onAwake: () => secondBrainCapability.setAmbientCaptureAwake(true),
     onAsleep: () => secondBrainCapability.setAmbientCaptureAwake(false),
+    // The system-audio half of the mode (listen-mode-hears-system-audio D8):
+    // main resolves both values and pushes them with the mode state, so the
+    // renderer's capture graph never reads the environment a second time.
+    systemAudioEnabled,
+    systemAudioGain,
+    // Meeting retention is driven by the MODE, so its lifecycle hangs off the
+    // one place every control surface already funnels through — not off the
+    // ambient-capture preference, which governs a different area under a
+    // different consent.
+    onListenOnlyChange: (engaged) => {
+      if (!systemAudioEnabled()) return;
+      secondBrainCapability.setMeetingCaptureEngaged(engaged);
+    },
   });
   const {
     GreetGate,
     getListenOnlyEngaged,
+    listenOnlyStatePayload,
+    handleRendererGone,
+    handleSystemAudioUnavailable,
     toggleListenOnly,
     logPoBillingPathOnce,
     startLive,
@@ -140,6 +166,11 @@ export function createLiveWiring({
     getLiveStatus: () => liveSessionModule.getLiveStatus(),
     isListenOnlyEngaged: () => getListenOnlyEngaged(),
     toggleListenOnly: () => toggleListenOnly(),
+    // Everything listen-only mode owns lives behind the renderer — the capture
+    // graph and the mixed stream both die with the window, so a mode left
+    // "engaged" behind a closed window would claim a meeting is being recorded
+    // while nothing reaches Iris at all (listen-mode-hears-system-audio 4.7).
+    onRendererGone: () => handleRendererGone(),
   });
   const {
     createWindow,
@@ -176,6 +207,8 @@ export function createLiveWiring({
     GreetGate,
     toggleListenOnly,
     isListenOnlyEngaged: () => getListenOnlyEngaged(),
+    listenOnlyStatePayload,
+    handleSystemAudioUnavailable,
     sendCommand,
     sendAudioChunk,
   };

@@ -6,6 +6,38 @@
 // Electron-free — the live session is reached through an injected accessor,
 // never imported directly.
 
+// How an utterance boundary is decided while listen-only mode is engaged
+// (listen-mode-hears-system-audio). NOT the model's turn: measured on a real
+// engagement, a continuously-narrated video produced only one or two turn
+// boundaries in several minutes, because Gemini's automatic activity detection
+// commits end-of-speech on a PAUSE and continuous narration never pauses.
+//
+// design.md D6 assumed the opposite — "when speakers pause, which they do
+// constantly in a meeting, VAD commits end-of-speech… the mechanism that
+// looked like the risk is the one carrying the payload". That holds for people
+// talking to each other and fails for continuous audio, which is half of what
+// this mode exists to hear.
+//
+// Two bounds, whichever comes first, so a boundary is guaranteed either way:
+export const UTTERANCE_IDLE_MS = 1500;
+export const UTTERANCE_MAX_SPAN_MS = 15000;
+
+/**
+ * How long to wait before closing the open utterance, given how long it has
+ * already been accumulating. Idle-based normally — a gap in transcription is a
+ * natural sentence break — but capped so a stream that never goes idle still
+ * closes on a bounded cadence rather than growing until the mode ends.
+ *
+ * Pure, so the bound is provable without a live session.
+ */
+export function utteranceBoundaryDelayMs({
+  elapsedMs,
+  idleMs = UTTERANCE_IDLE_MS,
+  maxSpanMs = UTTERANCE_MAX_SPAN_MS,
+}) {
+  return Math.max(0, Math.min(idleMs, maxSpanMs - elapsedMs));
+}
+
 /**
  * @param {{
  *   getLiveSession: () => any,
@@ -18,6 +50,8 @@
  *   executeClaudeTool: (name: string, args: any) => Promise<any>,
  *   submitClaudeTask: (params: any) => any,
  *   isListenOnlyEngaged: () => boolean,
+ *   onInputTranscription?: (text: string) => void,
+ *   onUtteranceBoundary?: () => void,
  * }} deps
  */
 export function createLiveMessages({
@@ -31,7 +65,51 @@ export function createLiveMessages({
   executeClaudeTool,
   submitClaudeTask,
   isListenOnlyEngaged,
+  // Meeting retention's feed (listen-mode-hears-system-audio D7). Deliberately
+  // the RAW transcription fragments, not the bounded recent-utterance ring the
+  // ambient capture reads: that ring is capped at 40 entries / 10 minutes and
+  // flushed on a 30-second timer, so a busy meeting loses whatever is pruned
+  // between two flushes. Those bounds are a stated privacy property and are not
+  // raisable, so meeting retention gets its own source instead.
+  onInputTranscription = () => {},
+  onUtteranceBoundary = () => {},
 }) {
+  // The open utterance's own clock, used ONLY while the mode is engaged (see
+  // UTTERANCE_IDLE_MS above). Outside the mode nothing here arms, so ordinary
+  // conversation keeps closing utterances exactly where it always did — on the
+  // model's turn — and this change cannot alter it.
+  let utteranceOpenedAt = null;
+  let utteranceTimer = null;
+
+  function cancelUtteranceTimer() {
+    if (!utteranceTimer) return;
+    clearTimeout(utteranceTimer);
+    utteranceTimer = null;
+  }
+
+  /** Closes the open utterance: the display transcript flushes and retention takes the boundary. */
+  function closeUtterance() {
+    cancelUtteranceTimer();
+    utteranceOpenedAt = null;
+    flushTranscripts();
+    onUtteranceBoundary();
+  }
+
+  /**
+   * A transcription fragment just arrived. Re-arms the boundary timer, capped
+   * so an utterance cannot outrun UTTERANCE_MAX_SPAN_MS however continuous the
+   * audio is — which is what makes the record fill, and the transcript appear,
+   * while a video is playing with no pauses in it at all.
+   */
+  function noteTranscriptionFragment() {
+    if (!isListenOnlyEngaged()) return;
+    const now = Date.now();
+    if (utteranceOpenedAt === null) utteranceOpenedAt = now;
+    cancelUtteranceTimer();
+    utteranceTimer = setTimeout(closeUtterance, utteranceBoundaryDelayMs({ elapsedMs: now - utteranceOpenedAt }));
+    utteranceTimer.unref?.();
+  }
+
   async function handleToolCall(toolCall) {
     const functionResponses = [];
     for (const call of toolCall.functionCalls || []) {
@@ -80,7 +158,9 @@ export function createLiveMessages({
     if (!content) return;
 
     if (content.interrupted) {
-      flushTranscripts();
+      // A real turn boundary still wins: it flushes, and it cancels whatever
+      // the idle timer had pending so the same utterance is not closed twice.
+      closeUtterance();
       emitToRenderer("live:interrupt", {});
       emitEvent({ type: "audio_state", state: "listening" });
       return;
@@ -88,26 +168,45 @@ export function createLiveMessages({
 
     if (content.inputTranscription?.text) {
       appendUserTranscript(content.inputTranscription.text);
+      onInputTranscription(content.inputTranscription.text);
+      noteTranscriptionFragment();
     }
 
-    if (content.outputTranscription?.text) appendModelTranscript(content.outputTranscription.text);
+    // Iris is silent for the WHOLE time listen-only mode is engaged
+    // (listen-mode-hears-system-audio): every reply turn is discarded here, at
+    // the client, and that discarding — not the in-band request the session
+    // also carries — is what guarantees it. The request can be evicted by
+    // context-window compression during a long meeting; this cannot.
+    //
+    // Activity detection is deliberately left untouched, so the model keeps
+    // being asked for replies as speakers pause and keeps producing them. That
+    // cost is accepted (D3/D6): turns completing is what makes the input
+    // transcription flush, which is what fills the meeting record.
+    //
+    // Main's own flag decides, never a value the renderer reported back, so it
+    // stays trustworthy even if the renderer is slow or gone.
+    const silenced = isListenOnlyEngaged();
+
+    if (content.outputTranscription?.text && !silenced) appendModelTranscript(content.outputTranscription.text);
 
     for (const part of content.modelTurn?.parts || []) {
-      if (part.text) appendModelTranscript(part.text);
+      // Not into the transcript, and not into any retention path that reads
+      // it: while engaged, nothing Iris produces is a record of the meeting.
+      if (part.text && !silenced) appendModelTranscript(part.text);
       const inlineData = part.inlineData;
       if (!inlineData?.data) continue;
       const mimeType = inlineData.mimeType || "audio/pcm;rate=24000";
       if (!mimeType.startsWith("audio/")) continue;
+      if (silenced) continue;
       emitToRenderer("live:audio", { data: inlineData.data, mimeType });
-      // A silent reply reads as silent, not as speech (design.md D6):
-      // main's own listen-only flag decides which state to report — never a
-      // value the renderer reported back — so it stays trustworthy even if
-      // the renderer is slow or crashed.
-      emitEvent({ type: "audio_state", state: isListenOnlyEngaged() ? "replying" : "speaking" });
+      // No speaking indication either — the orb holds the mode's own state for
+      // as long as the mode lasts (orb-expressions), and a per-turn "speaking"
+      // would flicker over it announcing a reply that reached nobody.
+      emitEvent({ type: "audio_state", state: "speaking" });
     }
 
     if (content.turnComplete) {
-      flushTranscripts();
+      closeUtterance();
       emitEvent({ type: "audio_state", state: "listening" });
     }
   }

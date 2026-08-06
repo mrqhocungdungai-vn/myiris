@@ -361,6 +361,119 @@ describe("second-brain capability: teardown", () => {
   });
 });
 
+// listen-mode-hears-system-audio D7. Meeting retention writes to its own area
+// on its own consent basis, and the two retentions must never both write the
+// same speech — that is what would make "delete what I recorded" unanswerable.
+describe("second-brain capability: meeting retention", () => {
+  function setAmbient(cap, enabled) {
+    return handlerFor(cap, "ambient-capture:set-enabled")(null, { enabled });
+  }
+
+  it("writes meeting records to inbox/meetings/, a different area from the session spool", () => {
+    const cap = make();
+    expect(cap.notesMeetingsDir).toBe(path.join(NOTES_VAULT_DIR, "inbox", "meetings"));
+    expect(cap.notesMeetingsDir).not.toBe(cap.notesSessionsDir);
+  });
+
+  it("is governed by the mode alone — the ambient preference neither starts nor stops it", async () => {
+    const cap = make();
+    expect(cap.isMeetingCaptureEngaged()).toBe(false);
+
+    await cap.setMeetingCaptureEngaged(true);
+    expect(cap.isMeetingCaptureEngaged()).toBe(true);
+
+    // Turning the unrelated preference on and off again leaves it engaged.
+    await setAmbient(cap, true);
+    await setAmbient(cap, false);
+    expect(cap.isMeetingCaptureEngaged()).toBe(true);
+
+    await cap.setMeetingCaptureEngaged(false);
+    expect(cap.isMeetingCaptureEngaged()).toBe(false);
+  });
+
+  it("makes ambient capture yield the span, then resume without back-filling it", async () => {
+    const cap = make();
+    await setAmbient(cap, true);
+    await cap.setAmbientCaptureAwake(true);
+    expect(handlerFor(cap, "ambient-capture:query")().live).toBe(true);
+
+    await cap.setMeetingCaptureEngaged(true);
+    // The mode owns what Iris hears while it is engaged, so ambient capture
+    // stops writing rather than producing a second copy under a second consent.
+    expect(handlerFor(cap, "ambient-capture:query")().live).toBe(false);
+    expect(handlerFor(cap, "ambient-capture:query")().enabled).toBe(true);
+
+    await cap.setMeetingCaptureEngaged(false);
+    expect(handlerFor(cap, "ambient-capture:query")().live).toBe(true);
+  });
+
+  it("ignores transcription fragments while the mode is not engaged", async () => {
+    const cap = make();
+    // No throw, and nothing accumulated to leak into the next engagement.
+    cap.appendMeetingFragment("said before the mode");
+    cap.closeMeetingUtterance();
+    await cap.setMeetingCaptureEngaged(true);
+    await cap.setMeetingCaptureEngaged(false);
+    expect(fs.existsSync(cap.notesMeetingsDir)).toBe(false);
+  });
+
+  it("writes the record on disengage, and a second engagement gets its own file", async () => {
+    const cap = make();
+
+    await cap.setMeetingCaptureEngaged(true);
+    cap.appendMeetingFragment("the deploy goes out Friday");
+    cap.closeMeetingUtterance();
+    await cap.setMeetingCaptureEngaged(false);
+
+    await cap.setMeetingCaptureEngaged(true);
+    cap.appendMeetingFragment("a second meeting entirely");
+    cap.closeMeetingUtterance();
+    await cap.setMeetingCaptureEngaged(false);
+
+    const files = fs.readdirSync(cap.notesMeetingsDir);
+    expect(files).toHaveLength(2);
+    const contents = files.map((file) => fs.readFileSync(path.join(cap.notesMeetingsDir, file), "utf8")).join("");
+    expect(contents).toContain("> the deploy goes out Friday");
+    expect(contents).toContain("> a second meeting entirely");
+    expect(contents).toContain("kind: meeting");
+  });
+
+  it("counts meeting records in the inbox backlog, so they are offered for curation", async () => {
+    const cap = make();
+    await cap.setMeetingCaptureEngaged(true);
+    cap.appendMeetingFragment("something worth weaving in");
+    cap.closeMeetingUtterance();
+    await cap.setMeetingCaptureEngaged(false);
+    expect(cap.notesInboxStatus().records).toBeGreaterThan(0);
+  });
+
+  it("flushes the record at teardown rather than losing it to a clean shutdown", async () => {
+    const cap = make();
+    await cap.setMeetingCaptureEngaged(true);
+    cap.appendMeetingFragment("said just before quit");
+    await cap.teardown();
+    const files = fs.readdirSync(cap.notesMeetingsDir);
+    expect(files).toHaveLength(1);
+    expect(fs.readFileSync(path.join(cap.notesMeetingsDir, files[0]), "utf8")).toContain("> said just before quit");
+  });
+
+  it("reports a failed write rather than raising it into the conversation", async () => {
+    const emitEvent = vi.fn();
+    const cap = make({ emitEvent });
+    await cap.setMeetingCaptureEngaged(true);
+    cap.appendMeetingFragment("this write will fail");
+    cap.closeMeetingUtterance();
+    // A file where the directory needs to be: the append cannot succeed.
+    fs.mkdirSync(path.dirname(cap.notesMeetingsDir), { recursive: true });
+    fs.writeFileSync(cap.notesMeetingsDir, "not a directory", "utf8");
+
+    await expect(cap.setMeetingCaptureEngaged(false)).resolves.toBeUndefined();
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "log", level: "warn", message: expect.stringContaining("meeting record") }),
+    );
+  });
+});
+
 // ambient-memory: the opt-in retention gate. Default off, gated on BOTH the
 // renderer's persisted preference and Iris being awake, and fails closed
 // against IRIS_AMBIENT_CAPTURE=off no matter what the renderer says.

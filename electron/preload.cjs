@@ -75,6 +75,11 @@ contextBridge.exposeInMainWorld("iris", {
   // never asserts the value.
   requestListenOnlyToggle: () => ipcRenderer.send("listen-only:toggle-request"),
   getListenOnlyState: () => ipcRenderer.invoke("listen-only:query"),
+  // Reports a system-audio capture that could not be acquired at all. Main
+  // owns the mode and decides what that means (listen-mode-hears-system-audio
+  // D4) — this is a fact, never an assertion of state.
+  reportSystemAudioUnavailable: (reason) =>
+    ipcRenderer.send("listen-only:system-audio-unavailable", { reason: String(reason ?? "") }),
   onListenOnlyState: (callback) => {
     const handler = (_event, payload) => callback(payload);
     ipcRenderer.on("listen-only:state", handler);

@@ -1,4 +1,4 @@
-export type ReactorState = "idle" | "online" | "listening" | "speaking" | "replying" | "working";
+export type ReactorState = "idle" | "online" | "listening" | "speaking" | "listenMode" | "working";
 
 // One Claude tool invocation, surfaced live from the DEV NDJSON / PO SDK
 // event stream (see electron/claude-stream.mjs). Keyed by the tool_use id

@@ -9,7 +9,8 @@ import path from "node:path";
 import os from "node:os";
 import { closeAllPoSessions } from "./po-session.mjs";
 import { shouldRefuseLaunch } from "./platform.mjs";
-import { loadEnvFile, envFlag, shutdownDeadlineMs } from "./user-config.mjs";
+import { loadEnvFile, envFlag, shutdownDeadlineMs, systemAudioEnabled } from "./user-config.mjs";
+import { loopbackAudioSwitch } from "./chromium-switches.mjs";
 import { installRendererSecurity } from "./renderer-security.mjs";
 import { registerIpc } from "./ipc.mjs";
 import { createWiring } from "./wiring.mjs";
@@ -30,6 +31,12 @@ const appIcon = fs.existsSync(iconPath) ? nativeImage.createFromPath(iconPath) :
 // construction time (e.g. user-config.mjs's own module state) — see
 // design.md task 1.5.
 loadEnvFile({ repoRoot });
+
+// Chromium switches must be appended before the app is ready — after that the
+// browser process has already read its command line (listen-mode-hears-system-
+// audio D1). Reads IRIS_SYSTEM_AUDIO, so it has to follow loadEnvFile above.
+const loopbackSwitch = loopbackAudioSwitch({ systemAudioEnabled: systemAudioEnabled() });
+if (loopbackSwitch) app.commandLine.appendSwitch(loopbackSwitch.name, loopbackSwitch.value);
 
 // Drawing panel scene seam (hud-drawing-canvas): the renderer pushes the
 // serialized excalidraw scene here; this is the same cache the
@@ -73,6 +80,8 @@ const {
   GreetGate,
   toggleListenOnly,
   isListenOnlyEngaged,
+  listenOnlyStatePayload,
+  handleSystemAudioUnavailable,
   sendCommand,
   sendAudioChunk,
   sessionsSnapshot,
@@ -144,7 +153,15 @@ app.whenReady().then(() => {
   // registered after a window is created never fires for that window,
   // leaving the app's only window with no navigation containment and no
   // error, no failing test, no log line (split-main-process-modules D7).
-  setRendererSecurity(installRendererSecurity({ repoRoot }));
+  setRendererSecurity(
+    installRendererSecurity({
+      repoRoot,
+      // System-audio capture is answered from main's own mode state, never
+      // from anything the renderer claims (renderer-content-security).
+      isListenOnlyEngaged,
+      isSystemAudioEnabled: systemAudioEnabled,
+    }),
+  );
 
   // The renderer↔main IPC channel surface (design.md D3): every
   // ipcMain.handle/on registration lives in ipc.mjs, and only there — this
@@ -162,6 +179,8 @@ app.whenReady().then(() => {
     notifyWakeReady,
     toggleListenOnly,
     isListenOnlyEngaged,
+    listenOnlyStatePayload,
+    handleSystemAudioUnavailable,
     sendCommand,
     sendAudioChunk,
     sessionsSnapshot,

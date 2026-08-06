@@ -7,6 +7,8 @@ import {
   createUserConfig,
   envFlag,
   envNumber,
+  systemAudioEnabled,
+  systemAudioGain,
   parseEnvFile,
   parsePromptReviewMode,
 } from "./user-config.mjs";
@@ -68,6 +70,38 @@ describe("user-config: env parsing", () => {
     parseEnvFile(file);
     expect(process.env.SOME_KEY).toBe("from_process");
     delete process.env.SOME_KEY;
+  });
+});
+
+// listen-mode-hears-system-audio 1.1/D8. The escape hatch defaults ON — the
+// feature is the mode — and a malformed gain falls back rather than producing
+// a silent or clipped mix.
+describe("user-config: the system-audio readers", () => {
+  it("defaults IRIS_SYSTEM_AUDIO on, and only an explicit falsey value turns it off", () => {
+    delete process.env.IRIS_SYSTEM_AUDIO;
+    expect(systemAudioEnabled()).toBe(true);
+    process.env.IRIS_SYSTEM_AUDIO = "0";
+    expect(systemAudioEnabled()).toBe(false);
+    process.env.IRIS_SYSTEM_AUDIO = "off";
+    expect(systemAudioEnabled()).toBe(false);
+    process.env.IRIS_SYSTEM_AUDIO = "1";
+    expect(systemAudioEnabled()).toBe(true);
+  });
+
+  it("defaults the gain to 0.7 and takes an in-range override", () => {
+    delete process.env.IRIS_SYSTEM_AUDIO_GAIN;
+    expect(systemAudioGain()).toBe(0.7);
+    process.env.IRIS_SYSTEM_AUDIO_GAIN = "0.4";
+    expect(systemAudioGain()).toBe(0.4);
+  });
+
+  it("falls back on a malformed or out-of-range gain rather than distorting the mix", () => {
+    process.env.IRIS_SYSTEM_AUDIO_GAIN = "loud";
+    expect(systemAudioGain()).toBe(0.7);
+    process.env.IRIS_SYSTEM_AUDIO_GAIN = "9";
+    expect(systemAudioGain()).toBe(0.7);
+    process.env.IRIS_SYSTEM_AUDIO_GAIN = "-1";
+    expect(systemAudioGain()).toBe(0.7);
   });
 });
 

@@ -434,6 +434,8 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     GreetGate: live.GreetGate,
     toggleListenOnly: live.toggleListenOnly,
     isListenOnlyEngaged: live.isListenOnlyEngaged,
+    listenOnlyStatePayload: live.listenOnlyStatePayload,
+    handleSystemAudioUnavailable: live.handleSystemAudioUnavailable,
     sendCommand: live.sendCommand,
     sendAudioChunk: live.sendAudioChunk,
     // Sessions / agents

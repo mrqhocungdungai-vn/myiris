@@ -1138,3 +1138,70 @@
   flex: 1;
   min-width: 0;
 }
+
+/* ===== Listen-only mode's consent notice and headphone advisory =====
+   (listen-mode-hears-system-audio 7.1/7.3.) Rendered at App level, so one
+   definition covers the deck and the HUD. `.hud-hit` on the element opts it
+   into pointer events in HUD mode; the styling here is deliberately the same
+   in both, since the text is a consent statement rather than chrome. */
+.listen-notice {
+  position: fixed;
+  left: 50%;
+  bottom: 28px;
+  transform: translateX(-50%);
+  z-index: 60;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  max-width: 640px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: rgba(10, 20, 26, 0.92);
+  box-shadow:
+    inset 0 0 0 1px rgba(var(--cyan-rgb), 0.35),
+    0 18px 44px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(14px);
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.listen-notice-icon {
+  display: flex;
+  padding-top: 2px;
+  color: var(--cyan-bright);
+}
+
+.listen-notice-body code {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: rgba(var(--cyan-rgb), 0.14);
+  font-size: 11.5px;
+}
+
+.listen-notice-dismiss {
+  flex: 0 0 auto;
+  align-self: center;
+  padding: 6px 12px;
+  border: none;
+  border-radius: 999px;
+  background: rgba(var(--cyan-rgb), 0.18);
+  box-shadow: inset 0 0 0 1px rgba(var(--cyan-rgb), 0.4);
+  color: var(--cyan-bright);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.listen-notice-dismiss:hover {
+  background: rgba(var(--cyan-rgb), 0.28);
+}
+
+/* The degraded system-audio state, on the headphone control in both surfaces.
+   Persistent (no animation to "finish"), because it lasts as long as the
+   failure does — a meeting Iris is not hearing looks exactly like one she is. */
+.t-btn.system-audio-degraded,
+.hud-btn.system-audio-degraded {
+  color: var(--amber);
+  box-shadow: inset 0 0 0 1px rgba(var(--amber-rgb), 0.6);
+}

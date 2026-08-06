@@ -15,12 +15,20 @@
 // main is the sole owner of this state — the tray item and the global
 // hotkey act on toggleListenOnly() directly rather than dispatching to the
 // renderer, and the renderer only displays what main pushes over
-// "listen-only:state". Ephemeral per session: reset to disengaged on every
-// transition to not-running (explicit stop, or reconnect attempts
-// exhausted), and never persisted to configuration.
+// "listen-only:state". Ephemeral per session: reset to disengaged by an
+// EXPLICIT stop and by nothing else — never by a transport-level event — and
+// never persisted to configuration.
+//
+// Listen-only mode is now Iris's MEETING mode (listen-mode-hears-system-
+// audio): engaging it additionally captures the audio the machine is playing,
+// makes Iris completely silent, and retains what she hears to its own vault
+// area. The transport is still never touched on either transition — the two
+// in-band requests below are conversation content, not configuration, and the
+// silence guarantee is the client discarding replies, not the model obeying.
 import { GoogleGenAI } from "@google/genai";
 import { poBillingStatus } from "./po-session.mjs";
 import { buildLiveConfig } from "./live-config.mjs";
+import { LISTEN_ONLY_ENGAGE_REQUEST, LISTEN_ONLY_DISENGAGE_REQUEST } from "./gemini-prompts.mjs";
 
 /**
  * @param {{
@@ -37,6 +45,9 @@ import { buildLiveConfig } from "./live-config.mjs";
  *   handleLiveMessage: (message: any) => void,
  *   onAwake?: () => void,
  *   onAsleep?: () => void,
+ *   systemAudioEnabled?: () => boolean,
+ *   systemAudioGain?: () => number,
+ *   onListenOnlyChange?: (engaged: boolean) => void,
  * }} deps
  */
 export function createLiveSession({
@@ -61,6 +72,17 @@ export function createLiveSession({
   // not a user-perceived sleep and must not flicker the retention indicator.
   onAwake = () => {},
   onAsleep = () => {},
+  // The system-audio half of the mode (listen-mode-hears-system-audio D8).
+  // Read through injected getters rather than process.env so this module stays
+  // as testable as the rest of it. Both are pushed to the renderer with the
+  // mode state so the capture graph never has to read them a second time —
+  // and so the renderer never attempts a capture the escape hatch disabled.
+  systemAudioEnabled = () => false,
+  systemAudioGain = () => 0.7,
+  // Meeting retention's lifecycle (D7): driven by the MODE, not by the
+  // ambient-capture preference, so it starts on engage and flushes-and-stops
+  // on disengage regardless of what that preference says.
+  onListenOnlyChange = () => {},
 }) {
   let liveSession = null;
   let ai = null;
@@ -90,13 +112,49 @@ export function createLiveSession({
     return listenOnlyEngaged;
   }
 
+  // The resolved system-audio configuration, pushed alongside the mode state
+  // so the renderer's capture graph reads one authority instead of two.
+  function listenOnlyStatePayload() {
+    return {
+      engaged: listenOnlyEngaged,
+      systemAudio: systemAudioEnabled(),
+      systemAudioGain: systemAudioGain(),
+    };
+  }
+
+  // Asks the model, in-band on the live session, to stay quiet (or to resume).
+  // `sendClientContent` with `turnComplete: false` ADDS conversation content
+  // without closing a turn, so the model is never asked to generate —
+  // `sendRealtimeInput` would provoke exactly the reply this is trying to
+  // prevent. Nothing about the transport or the session config is touched.
+  //
+  // Skipped entirely under the escape hatch: that path must behave exactly as
+  // it did before this change, in-band traffic included.
+  function requestModelSilence(engaged) {
+    if (!systemAudioEnabled()) return;
+    if (!liveSession) return;
+    try {
+      liveSession.sendClientContent({
+        turns: [{ role: "user", parts: [{ text: engaged ? LISTEN_ONLY_ENGAGE_REQUEST : LISTEN_ONLY_DISENGAGE_REQUEST }] }],
+        turnComplete: false,
+      });
+    } catch (error) {
+      // A best-effort cost reduction, never the guarantee — a send that fails
+      // must not stop the mode from engaging, because discarding at the client
+      // is what actually keeps Iris silent.
+      console.warn("[IRIS][listen-only] could not send the in-band silence request:", error?.message || error);
+    }
+  }
+
   // Pushes state one way, main -> renderer, and never the reverse (design.md
   // D3) — a renderer that reported this back would be a second writer for
   // state it does not own.
   function setListenOnlyEngaged(engaged) {
     if (listenOnlyEngaged === engaged) return;
     listenOnlyEngaged = engaged;
-    emitToRenderer("listen-only:state", { engaged });
+    emitToRenderer("listen-only:state", listenOnlyStatePayload());
+    requestModelSilence(engaged);
+    onListenOnlyChange(engaged);
     updateTrayMenu();
   }
 
@@ -156,6 +214,13 @@ export function createLiveSession({
   };
 
   function sendWelcomeGreeting() {
+    // A session re-established while the mode is engaged must not greet
+    // (listen-only-mode spec: "no reply is spoken aloud when the session is
+    // later re-established"). Discarding at the client would already swallow
+    // it, but asking for a greeting nobody can hear is pure cost — and after
+    // the reconnect-exhaustion fix below, a wake into an engaged mode is now
+    // a reachable state rather than an impossible one.
+    if (listenOnlyEngaged) return;
     (async () => {
       let reachable = false;
       try {
@@ -257,6 +322,12 @@ export function createLiveSession({
     // Send AFTER connect resolves: onopen can fire before liveSession is
     // assigned, so draining inside onopen would no-op (mirrors previewVoice).
     drainPendingAnnouncements();
+    // The in-band silence request lives in the CONVERSATION, so a session that
+    // could not be resumed starts without it. Re-stating it on every connect
+    // while the mode is engaged is the same cost reduction, applied to the same
+    // state — never a reconfiguration, and never a reason the mode itself
+    // changes.
+    if (listenOnlyEngaged) requestModelSilence(true);
   }
 
   function scheduleReconnect(reason) {
@@ -264,12 +335,14 @@ export function createLiveSession({
     reconnectAttempts += 1;
     if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
       liveStatus = { running: false, pid: null };
-      // A server-initiated teardown — reconnect attempts exhausted — is a
-      // transition to not-running, so listen-only mode resets here too
-      // (spec "Listen-only mode is ephemeral per session"), and ambient
-      // capture stops on the same terms it does for an explicit sleep — no
-      // further reconnect is coming, so the mic is genuinely not listening.
-      setListenOnlyEngaged(false);
+      // Listen-only mode is deliberately NOT reset here (listen-mode-hears-
+      // system-audio D4). It used to be, and that meant a network blip during
+      // a meeting restored Iris's voice: she would start speaking aloud into a
+      // room the user had silenced her for, at a moment when they are not
+      // looking at the screen. A transport failure is not a reason to become
+      // audible — only an explicit stop clears the mode. Ambient capture still
+      // stops on the same terms it does for an explicit sleep: no further
+      // reconnect is coming, so the mic is genuinely not listening.
       onAsleep();
       emitEvent({
         type: "fatal",
@@ -323,11 +396,47 @@ export function createLiveSession({
     return liveStatus;
   }
 
+  // The renderer window closed while the mode was engaged. Everything the mode
+  // owns lives behind that renderer — the capture graph, the loopback stream,
+  // the mixed audio the session is fed — so leaving the mode "engaged" with
+  // nothing behind it would claim a meeting is being recorded when nothing is
+  // reaching Iris at all. Disengaging here flushes the meeting record through
+  // the same path an explicit disengage takes. This is not a transport event:
+  // it is the mode's own machinery going away.
+  function handleRendererGone() {
+    if (!listenOnlyEngaged) return;
+    setListenOnlyEngaged(false);
+  }
+
+  // The renderer could not acquire the system-audio capture AT ALL as the mode
+  // was engaged. This is the one failure that does not end in "still engaged"
+  // (listen-mode-hears-system-audio D4): the asymmetry is deliberate, and it
+  // is the design's most load-bearing choice. Refusing to engage costs the
+  // user a retry, with Iris's voice never having been taken away. Disengaging
+  // mid-meeting — which is what a capture that fails LATER must never do —
+  // makes Iris audible in a room where the user engaged the mode specifically
+  // so she would not be, at a moment when they are not looking at the screen.
+  //
+  // Still main's decision: the renderer reports a fact and this module acts on
+  // it, so mode state keeps exactly one writer.
+  function handleSystemAudioUnavailable(reason) {
+    if (!listenOnlyEngaged) return;
+    emitEvent({
+      type: "log",
+      level: "error",
+      message: `Listen-only mode could not capture this machine's audio (${reason || "unknown error"}), so it was not engaged.`,
+    });
+    setListenOnlyEngaged(false);
+  }
+
   return {
     GreetGate,
     getLiveSession,
     getLiveStatus,
     getListenOnlyEngaged,
+    listenOnlyStatePayload,
+    handleRendererGone,
+    handleSystemAudioUnavailable,
     toggleListenOnly,
     getUserStopped,
     setResumptionHandle,

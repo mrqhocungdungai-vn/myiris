@@ -47,6 +47,55 @@ export function sessionsSpoolDir(vaultDir) {
 }
 
 /**
+ * Where listen-only mode's meeting record lands (listen-mode-hears-system-
+ * audio D7). A fourth area, inside `inbox/` like the other three, so
+ * vault-graph-parse.mjs's existing `inbox/` exclusion keeps it out of the
+ * galaxy with no new code — it matches on `segments[0]`, so any depth under
+ * `inbox/` is already covered.
+ */
+export function meetingsSpoolDir(vaultDir) {
+  return path.join(vaultDir, "inbox", "meetings");
+}
+
+/**
+ * An ISO-8601 timestamp in the MACHINE'S OWN time zone, offset included —
+ * `2026-08-06T09:30:15+07:00` rather than `toISOString()`'s `02:30:15Z`.
+ *
+ * Meeting records are read by the person who was in the meeting, so a UTC
+ * timestamp is not merely inconvenient: for anyone east of Greenwich an early
+ * meeting is filed under the PREVIOUS DAY, which breaks the one thing the
+ * per-engagement record exists to support — finding, or deleting, the meeting
+ * you recorded this morning. The offset is kept so the value stays unambiguous
+ * to anything reading it later.
+ */
+export function localIsoString(date = new Date()) {
+  const pad = (value, width = 2) => String(Math.abs(value)).padStart(width, "0");
+  // getTimezoneOffset() counts minutes WEST of UTC, so it is negated to read
+  // as the "+07:00" an ISO offset expects.
+  const offsetMinutes = -date.getTimezoneOffset();
+  const sign = offsetMinutes < 0 ? "-" : "+";
+  const offset = `${sign}${pad(Math.trunc(Math.abs(offsetMinutes) / 60))}:${pad(Math.abs(offsetMinutes) % 60)}`;
+  const day = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  return `${day}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}${offset}`;
+}
+
+/**
+ * One file per ENGAGEMENT of listen-only mode, not one per day like
+ * spoolFileFor above. A meeting is not a day, and the whole argument for a
+ * separate area is that a record must stay identifiable if consent is
+ * withdrawn — appending two meetings into one file makes "delete the one I
+ * recorded this morning" unanswerable.
+ *
+ * Named in local time (see localIsoString) so the name matches the clock the
+ * user was watching. The offset is dropped from the basename — it carries a
+ * colon, and a local name needs no qualifier — but it is kept in the record's
+ * own header, so nothing that reads the file has to guess.
+ */
+export function meetingFileFor(date = new Date()) {
+  return `meeting-${localIsoString(date).slice(0, 19).replace(/[:]/g, "-")}.md`;
+}
+
+/**
  * Appends `content` to today's spool file under `dir`, synchronously. Never
  * throws: bookkeeping must not be able to disturb work that has already
  * finished, and a full disk is not a reason to lose it. Reports the failure
@@ -77,7 +126,19 @@ export function appendSpoolRecordSync({ dir, content, now = () => new Date(), io
  * @returns {Promise<{ ok: boolean, file?: string, error?: string }>}
  */
 export async function appendSpoolRecord({ dir, content, now = () => new Date(), io = fs }) {
-  const file = path.join(dir, spoolFileFor(now()));
+  return appendSpoolRecordTo({ dir, name: spoolFileFor(now()), content, io });
+}
+
+/**
+ * The same append, to a NAMED file rather than to today's — what meeting
+ * retention needs, since its unit is one engagement of listen-only mode rather
+ * than one day (see meetingFileFor above). Never rejects, on the same terms.
+ *
+ * @param {{ dir: string, name: string, content: string, io?: typeof fs }} input
+ * @returns {Promise<{ ok: boolean, file?: string, error?: string }>}
+ */
+export async function appendSpoolRecordTo({ dir, name, content, io = fs }) {
+  const file = path.join(dir, name);
   try {
     await io.promises.mkdir(dir, { recursive: true });
     await io.promises.appendFile(file, content, "utf8");

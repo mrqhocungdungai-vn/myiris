@@ -18,6 +18,7 @@ import {
   XCircle,
 } from "lucide-react";
 import ReactorCore, { ORB_ACCENT, ORB_ENERGY } from "./ReactorCore";
+import { listenOnlyControlTitle, type SystemAudioState } from "../lib/system-audio";
 import WorkCard from "./WorkCard";
 import PoQuestionBanner from "./PoQuestionBanner";
 import ReviewBanner from "./ReviewBanner";
@@ -140,6 +141,7 @@ export default function HudShell({
   muted,
   onToggleMute,
   listenOnlyEngaged,
+  systemAudioState,
   onToggleListenOnly,
   ambientCaptureLive,
   onStopAmbientCapture,
@@ -206,6 +208,8 @@ export default function HudShell({
   // Listen-only mode's only affordance (replace-listening-mode-with-listen-only
   // design.md D3): pure display of main-owned state, toggled by request only.
   listenOnlyEngaged: boolean;
+  /** Whether the mode's system-audio half is actually delivering audio. */
+  systemAudioState: SystemAudioState;
   onToggleListenOnly: () => void;
   // ambient-memory (design D7): shown only while retention is actually live.
   ambientCaptureLive: boolean;
@@ -512,9 +516,11 @@ export default function HudShell({
                 {muted ? <MicOff size={14} /> : <Mic size={14} />}
               </button>
               <button
-                className={`hud-btn ${listenOnlyEngaged ? "" : "muted"}`}
+                className={`hud-btn ${listenOnlyEngaged ? "" : "muted"} ${
+                  listenOnlyEngaged && systemAudioState === "degraded" ? "system-audio-degraded" : ""
+                }`}
                 onClick={onToggleListenOnly}
-                title={listenOnlyEngaged ? "Disable listen-only mode" : "Enable listen-only mode"}
+                title={listenOnlyControlTitle(listenOnlyEngaged, systemAudioState)}
               >
                 {listenOnlyEngaged ? <Headphones size={14} /> : <HeadphoneOff size={14} />}
               </button>

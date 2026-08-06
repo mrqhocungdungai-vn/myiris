@@ -2,6 +2,16 @@
 
 type SidecarMode = "none" | "camera" | "screen";
 
+// Listen-only mode's pushed state (listen-mode-hears-system-audio 1.3): the
+// mode itself plus the system-audio configuration main resolved for it. One
+// payload for both the boot-time query and every later push, so a renderer
+// seeded on mount and one updated by a push are configured identically.
+type ListenOnlyState = {
+  engaged: boolean;
+  systemAudio: boolean;
+  systemAudioGain: number;
+};
+
 type SidecarEvent = {
   type: string;
   timestamp?: number;
@@ -352,8 +362,15 @@ type IrisApi = {
   onWindowFocus: (callback: (payload: { focused: boolean }) => void) => () => void;
   onWakeRequest: (callback: () => void) => () => void;
   requestListenOnlyToggle: () => void;
-  getListenOnlyState: () => Promise<{ engaged: boolean }>;
-  onListenOnlyState: (callback: (payload: { engaged: boolean }) => void) => () => void;
+  // The payload carries main's RESOLVED system-audio configuration alongside
+  // the mode state (listen-mode-hears-system-audio 1.3), so the renderer's
+  // capture graph never reads the environment a second time and never attempts
+  // a capture the main-side escape hatch disabled.
+  getListenOnlyState: () => Promise<ListenOnlyState>;
+  onListenOnlyState: (callback: (payload: ListenOnlyState) => void) => () => void;
+  // A capture that could not be acquired at all is REPORTED to main, which
+  // owns the mode and decides to disengage. Never a report of mode state.
+  reportSystemAudioUnavailable: (reason: string) => void;
   getConfig: () => Promise<IrisConfig>;
   saveConfig: (updates: Partial<Record<string, string>>) => Promise<IrisConfig>;
   savePoToken: (token: string, key?: ClaudeCredentialKey) => Promise<PoTokenResult>;

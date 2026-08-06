@@ -1,3 +1,7 @@
+## Purpose
+
+Listen-only mode is Iris's meeting mode. Engaging it makes her completely silent and widens what she hears to include the audio the machine is playing, so the remote participants of a call, a video, or anything else audible reach her as well as the room does — and everything she hears is retained to her own vault area for the length of the engagement. It exists for the one situation a microphone alone cannot cover, and the two halves are inseparable: system-audio capture picks up this app's own output, so a mode where Iris is silent is the only mode where that capture is clean. The mode is reached and left without ever reconnecting or reconfiguring the voice session, which is what distinguishes it from the retired listening mode it replaces.
+
 ## MODIFIED Requirements
 
 ### Requirement: Listen-only mode suppresses Gemini audio output without reconnecting

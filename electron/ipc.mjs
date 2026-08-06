@@ -31,6 +31,8 @@ const { ipcMain } = electron;
  *   notifyWakeReady: () => void,
  *   toggleListenOnly: () => void,
  *   isListenOnlyEngaged: () => boolean,
+ *   listenOnlyStatePayload?: () => any,
+ *   handleSystemAudioUnavailable?: (reason: string) => void,
  *   sendCommand: (command: any) => any,
  *   sendAudioChunk: (chunk: any) => void,
  *   sessionsSnapshot: () => any,
@@ -70,6 +72,8 @@ export function registerIpc(deps) {
     notifyWakeReady,
     toggleListenOnly,
     isListenOnlyEngaged,
+    listenOnlyStatePayload,
+    handleSystemAudioUnavailable,
     sendCommand,
     sendAudioChunk,
     sessionsSnapshot,
@@ -104,7 +108,19 @@ export function registerIpc(deps) {
   // renderer one-way over "listen-only:state" from setListenOnlyEngaged,
   // never the reverse.
   ipcMain.on("listen-only:toggle-request", () => toggleListenOnly());
-  ipcMain.handle("listen-only:query", () => ({ engaged: isListenOnlyEngaged() }));
+  // The query answers with the same payload the push carries — mode state plus
+  // the resolved system-audio configuration (listen-mode-hears-system-audio
+  // 1.3) — so a renderer seeded on mount and a renderer updated by a push are
+  // configured identically, and neither ever attempts a capture the main-side
+  // escape hatch has disabled.
+  ipcMain.handle("listen-only:query", () =>
+    listenOnlyStatePayload ? listenOnlyStatePayload() : { engaged: isListenOnlyEngaged() },
+  );
+  // A capture the renderer could not acquire at all. Main decides what that
+  // means for the mode; this only carries the fact across (D4).
+  ipcMain.on("listen-only:system-audio-unavailable", (_event, payload) => {
+    handleSystemAudioUnavailable?.(String(payload?.reason ?? ""));
+  });
   ipcMain.handle("sidecar:command", (_event, command) => sendCommand(command));
   ipcMain.handle("sessions:get", () => sessionsSnapshot());
   ipcMain.handle("sessions:select", (_event, id) => selectWorkstream(String(id || "")));

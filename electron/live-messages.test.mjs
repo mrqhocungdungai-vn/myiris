@@ -1,5 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
-import { createLiveMessages } from "./live-messages.mjs";
+import {
+  createLiveMessages,
+  utteranceBoundaryDelayMs,
+  UTTERANCE_IDLE_MS,
+  UTTERANCE_MAX_SPAN_MS,
+} from "./live-messages.mjs";
 
 function makeLiveSession() {
   return { sendToolResponse: vi.fn(), sendRealtimeInput: vi.fn() };
@@ -98,13 +103,47 @@ describe("live-messages: transcript and audio content", () => {
     expect(emitEvent).toHaveBeenCalledWith({ type: "audio_state", state: "speaking" });
   });
 
-  it("emits audio_state 'replying' for an audio chunk while listen-only is engaged", () => {
+  // listen-mode-hears-system-audio §3: while engaged, a reply reaches NOTHING.
+  // Discarding here is the guarantee that Iris is silent — the in-band request
+  // to the model is only a cost reduction, and can be evicted by context-window
+  // compression partway through a long meeting.
+  it("discards a whole reply turn while listen-only is engaged — audio, text, and speaking state", () => {
     const emitEvent = vi.fn();
-    const messages = make({ emitEvent, isListenOnlyEngaged: () => true });
+    const emitToRenderer = vi.fn();
+    const appendModelTranscript = vi.fn();
+    const messages = make({ emitEvent, emitToRenderer, appendModelTranscript, isListenOnlyEngaged: () => true });
     messages.handleLiveMessage({
-      serverContent: { modelTurn: { parts: [{ inlineData: { data: "abc", mimeType: "audio/pcm;rate=24000" } }] } },
+      serverContent: {
+        outputTranscription: { text: "a reply nobody asked for" },
+        modelTurn: {
+          parts: [{ text: "spoken text" }, { inlineData: { data: "abc", mimeType: "audio/pcm;rate=24000" } }],
+        },
+      },
     });
-    expect(emitEvent).toHaveBeenCalledWith({ type: "audio_state", state: "replying" });
+    expect(appendModelTranscript).not.toHaveBeenCalled();
+    expect(emitToRenderer).not.toHaveBeenCalledWith("live:audio", expect.anything());
+    expect(emitEvent).not.toHaveBeenCalledWith({ type: "audio_state", state: "speaking" });
+  });
+
+  it("keeps recording what Iris HEARS while engaged, which is the point of the mode", () => {
+    const appendUserTranscript = vi.fn();
+    const onInputTranscription = vi.fn();
+    const onUtteranceBoundary = vi.fn();
+    const messages = make({
+      appendUserTranscript,
+      onInputTranscription,
+      onUtteranceBoundary,
+      isListenOnlyEngaged: () => true,
+    });
+    messages.handleLiveMessage({ serverContent: { inputTranscription: { text: "someone said this" } } });
+    messages.handleLiveMessage({ serverContent: { turnComplete: true } });
+
+    // Fed to meeting retention as a RAW fragment, deliberately not through the
+    // bounded utterance ring — a busy meeting overruns that ring between two
+    // flushes and loses whatever was pruned.
+    expect(onInputTranscription).toHaveBeenCalledWith("someone said this");
+    expect(onUtteranceBoundary).toHaveBeenCalled();
+    expect(appendUserTranscript).toHaveBeenCalledWith("someone said this");
   });
 
   it("reads main's own flag, not a value the renderer reported — no such param exists to pass", () => {
@@ -172,5 +211,99 @@ describe("live-messages: sendAudioChunk/sendCommand", () => {
     expect(emitEvent).toHaveBeenCalledWith(
       expect.objectContaining({ type: "claude_task_update", status: "error", error: "Task is required." }),
     );
+  });
+});
+
+// listen-mode-hears-system-audio: an utterance boundary must not depend on the
+// model taking a turn. Measured on a real engagement, a continuously-narrated
+// video produced one or two turn boundaries in SEVERAL MINUTES — so both the
+// displayed transcript and the meeting record arrived in rare huge lumps, and
+// the 30-second retention flush usually had nothing to write.
+describe("live-messages: utterance boundaries while the mode is engaged", () => {
+  it("waits for a transcription gap normally", () => {
+    expect(utteranceBoundaryDelayMs({ elapsedMs: 0 })).toBe(UTTERANCE_IDLE_MS);
+    expect(utteranceBoundaryDelayMs({ elapsedMs: 3000 })).toBe(UTTERANCE_IDLE_MS);
+  });
+
+  it("caps the wait so continuous audio still closes on a bounded cadence", () => {
+    // The failure this fixes: narration that never pauses never goes idle, so
+    // an idle-only rule would keep one utterance open for the whole meeting.
+    expect(utteranceBoundaryDelayMs({ elapsedMs: UTTERANCE_MAX_SPAN_MS - 500 })).toBe(500);
+    expect(utteranceBoundaryDelayMs({ elapsedMs: UTTERANCE_MAX_SPAN_MS })).toBe(0);
+    expect(utteranceBoundaryDelayMs({ elapsedMs: UTTERANCE_MAX_SPAN_MS + 9999 })).toBe(0);
+  });
+
+  it("closes an utterance on a transcription gap, with no turn from the model at all", () => {
+    vi.useFakeTimers();
+    try {
+      const flushTranscripts = vi.fn();
+      const onUtteranceBoundary = vi.fn();
+      const messages = make({ flushTranscripts, onUtteranceBoundary, isListenOnlyEngaged: () => true });
+
+      messages.handleLiveMessage({ serverContent: { inputTranscription: { text: "a sentence" } } });
+      expect(flushTranscripts).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(UTTERANCE_IDLE_MS);
+      expect(flushTranscripts).toHaveBeenCalledTimes(1);
+      expect(onUtteranceBoundary).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("still closes under narration that never leaves a gap", () => {
+    vi.useFakeTimers();
+    try {
+      const flushTranscripts = vi.fn();
+      const messages = make({ flushTranscripts, isListenOnlyEngaged: () => true });
+
+      // A fragment every 500ms forever — the idle timer is re-armed each time
+      // and on its own would never fire.
+      for (let elapsed = 0; elapsed < UTTERANCE_MAX_SPAN_MS + 1000; elapsed += 500) {
+        messages.handleLiveMessage({ serverContent: { inputTranscription: { text: "more words " } } });
+        vi.advanceTimersByTime(500);
+      }
+      expect(flushTranscripts).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets a real turn boundary win, without closing the same utterance twice", () => {
+    vi.useFakeTimers();
+    try {
+      const flushTranscripts = vi.fn();
+      const onUtteranceBoundary = vi.fn();
+      const messages = make({ flushTranscripts, onUtteranceBoundary, isListenOnlyEngaged: () => true });
+
+      messages.handleLiveMessage({ serverContent: { inputTranscription: { text: "a sentence" } } });
+      messages.handleLiveMessage({ serverContent: { turnComplete: true } });
+      expect(onUtteranceBoundary).toHaveBeenCalledTimes(1);
+
+      // The pending idle timer was cancelled by that turn, so letting it run
+      // adds nothing.
+      vi.advanceTimersByTime(UTTERANCE_MAX_SPAN_MS * 2);
+      expect(onUtteranceBoundary).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("arms nothing at all outside the mode, so ordinary conversation is untouched", () => {
+    vi.useFakeTimers();
+    try {
+      const flushTranscripts = vi.fn();
+      const messages = make({ flushTranscripts, isListenOnlyEngaged: () => false });
+
+      messages.handleLiveMessage({ serverContent: { inputTranscription: { text: "talking to Iris" } } });
+      vi.advanceTimersByTime(UTTERANCE_MAX_SPAN_MS * 2);
+
+      // Still turn-gated exactly as before this change.
+      expect(flushTranscripts).not.toHaveBeenCalled();
+      messages.handleLiveMessage({ serverContent: { turnComplete: true } });
+      expect(flushTranscripts).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

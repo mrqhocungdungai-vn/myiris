@@ -11,9 +11,23 @@ import path from "node:path";
 const { app, session, shell } = electron;
 
 /**
- * @param {{ repoRoot: string }} deps
+ * @param {{
+ *   repoRoot: string,
+ *   isListenOnlyEngaged?: () => boolean,
+ *   isSystemAudioEnabled?: () => boolean,
+ * }} deps
  */
-export function installRendererSecurity({ repoRoot }) {
+export function installRendererSecurity({
+  repoRoot,
+  // System-audio capture is scoped to the mode that justifies it
+  // (listen-mode-hears-system-audio, renderer-content-security spec: "The mode
+  // state is read from its owner"). Read through main's own getter, never from
+  // anything the renderer reports back — the process asking the question must
+  // not also be the one answering it. Defaulted so a caller that predates
+  // system audio (and every test of the navigation half) still constructs.
+  isListenOnlyEngaged = () => false,
+  isSystemAudioEnabled = () => false,
+}) {
   // D9/D10 (harden-security-boundaries): the single source of truth for "is
   // this URL the app's own document" — used both to contain navigation and to
   // scope device permissions. Exact match, not a `file://` wildcard: a
@@ -61,8 +75,46 @@ export function installRendererSecurity({ repoRoot }) {
     // permission union for this handler (only "media" is) — see the change's
     // recorded findings. Cast rather than drop the checks: behavior-neutral.
     const perm = /** @type {string} */ (permission);
-    callback(isOwnDocument && (perm === "media" || perm === "audioCapture" || perm === "videoCapture"));
+    callback(
+      isOwnDocument &&
+        (perm === "media" ||
+          perm === "audioCapture" ||
+          perm === "videoCapture" ||
+          // The permission `getDisplayMedia` asks for. Granting it here is not
+          // on its own enough to capture anything — the display-media handler
+          // below decides what the stream actually carries, and refuses
+          // outright unless listen-only mode is engaged.
+          perm === "display-capture"),
+    );
   });
+
+  // System-audio capture for listen-only mode (listen-mode-hears-system-audio
+  // D1). Audio only, and deliberately nothing else: no `desktopCapturer`
+  // enumeration, no screen or window source, no system picker. Chromium's
+  // "loopback" audio source is what a `{ video: false, audio: true }`
+  // getDisplayMedia request resolves to, and it needs no permission of ours —
+  // macOS prompts once for its own system-audio consent and the grant sticks.
+  //
+  // Denial is `callback({})`: a stream with neither an audio nor a video source
+  // cancels the request, which is how the renderer's getDisplayMedia promise
+  // rejects rather than hanging.
+  session.defaultSession.setDisplayMediaRequestHandler(
+    (request, callback) => {
+      // The FRAME's URL, not `request.securityOrigin`: an origin is `file://`
+      // for every local document in a packaged build, so an origin check would
+      // either grant every local file or refuse the app's own document —
+      // exactly the dev-works/packaged-broken split the spec forbids. This is
+      // the same isAppOwnDocument the navigation containment above uses.
+      const frameUrl = request?.frame?.url || "";
+      if (!isAppOwnDocument(frameUrl)) return callback({});
+      // The escape hatch must leave no capture surface at all, and the mode is
+      // the only justification this capture has: outside it there is nothing
+      // to grant.
+      if (!isSystemAudioEnabled() || !isListenOnlyEngaged()) return callback({});
+      callback({ audio: "loopback" });
+    },
+    { useSystemPicker: false },
+  );
 
   return {
     isAppOwnDocument,

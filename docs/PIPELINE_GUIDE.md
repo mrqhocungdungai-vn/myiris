@@ -103,6 +103,48 @@ A headless run never blocks — if it hits a real product decision, it applies i
 **Switching models.**
 Ask, e.g. *"put the builder on the stronger model to debug this."* Note that the two shaping tools share one conversation, so changing either one's model changes both — Iris will say so.
 
+## 3b. Listen-only mode (meetings and calls)
+
+The headphone control — also a tray item, and the `IRIS_LISTEN_HOTKEY` global
+shortcut — puts Iris into her meeting mode. Two things happen at once:
+
+- **Iris goes completely silent.** Nothing she produces reaches you, as sound or
+  as text, until you turn the mode off. Turning it off does not make her
+  volunteer anything either: she waits until you next speak to her.
+- **She hears your machine as well as the room.** The audio your Mac is playing
+  is captured and mixed into the same stream, so the remote participants of a
+  call reach her rather than only your own side of it.
+
+Everything she hears while the mode is engaged is written to
+`inbox/meetings/` in your notes vault — one file per engagement, so a single
+meeting can be found, read, or deleted on its own. That record is the point:
+making sense of a meeting is work for Claude reading the file afterwards, not
+for the voice layer mid-call. The first time you engage the mode, Iris says
+exactly this, including that other people's speech may be retained.
+
+Muting the microphone is independent: with the mic muted and the mode engaged,
+Iris still hears the meeting.
+
+**What to expect:**
+
+- **macOS 14.2 or later** is required for system-audio capture. macOS prompts
+  once for its own system-audio consent; the grant sticks, and Iris does **not**
+  need Screen Recording permission and does **not** need to be relaunched.
+- **macOS shows its screen-recording indicator for the whole engagement**, even
+  though Iris captures no video at all — no screen, no window, audio only. This
+  is how the underlying capture works and cannot be turned off.
+- **Wear headphones if you can.** On speakers, every remote voice reaches Iris
+  twice — once captured, once back through the microphone. She will still work;
+  the transcript is just cleaner. Iris advises this when it applies, and never
+  blocks on it.
+- **If the capture goes silent or dies**, Iris drops to the microphone only,
+  shows a persistent warning on the headphone control, and **stays silent**. She
+  never starts talking mid-meeting because something failed.
+
+Set `IRIS_SYSTEM_AUDIO=0` in `.env` to turn the system-audio half off entirely:
+the mode then only silences her, captures nothing, retains nothing, and triggers
+no recording indicator.
+
 ## 4. Appendix: using the agents directly in Claude Code
 
 The personas and skills live inside Iris and are handed to each run in memory, so

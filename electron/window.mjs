@@ -26,6 +26,7 @@ const { app, BrowserWindow, Menu, Tray, screen } = electron;
  *   getLiveStatus: () => { running: boolean },
  *   isListenOnlyEngaged: () => boolean,
  *   toggleListenOnly: () => void,
+ *   onRendererGone?: () => void,
  * }} deps
  */
 export function createWindowModule({
@@ -40,6 +41,10 @@ export function createWindowModule({
   getLiveStatus,
   isListenOnlyEngaged,
   toggleListenOnly,
+  // Fires when the renderer that a mode's machinery lives behind goes away —
+  // both on a clean window close and on a renderer crash, since neither leaves
+  // a capture graph behind (listen-mode-hears-system-audio 4.7).
+  onRendererGone = () => {},
 }) {
   let mainWindow = null;
 
@@ -118,7 +123,10 @@ export function createWindowModule({
     // "closed" event, so an active vault-graph fs.watch stream would
     // otherwise orphan while a fresh renderer starts a second one
     // (second-brain-galaxy-view design.md D3 M3).
-    mainWindow.webContents.on("render-process-gone", () => stopVaultGraphWatch());
+    mainWindow.webContents.on("render-process-gone", () => {
+      stopVaultGraphWatch();
+      onRendererGone();
+    });
     mainWindow.webContents.on("did-start-navigation", (_event, _url, _isInPlace, isMainFrame) => {
       if (isMainFrame) stopVaultGraphWatch();
     });
@@ -137,6 +145,7 @@ export function createWindowModule({
       // A wake held for a renderer that never subscribed dies with the window
       // it was waiting on, rather than firing at whatever opens the next one.
       pendingWake = false;
+      onRendererGone();
     });
   }
 
@@ -205,7 +214,14 @@ export function createWindowModule({
           // Main owns this state directly (design.md D3) — calls
           // toggleListenOnly() itself rather than dispatching to the
           // renderer, so this still works with no window open.
-          label: isListenOnlyEngaged() ? "Disable Listen-only Mode" : "Enable Listen-only Mode",
+          // The mode's meaning changed (listen-mode-hears-system-audio): it is
+          // no longer "Iris replies in text", it is "Iris goes silent and also
+          // hears this machine". The label has to say so — engaging it starts
+          // a capture and a retained record, which is not something to discover
+          // afterwards.
+          label: isListenOnlyEngaged()
+            ? "Leave Listen-only Mode — Iris speaks again"
+            : "Enter Listen-only Mode — Iris goes silent and hears your machine",
           enabled: liveStatus.running,
           click: () => toggleListenOnly(),
         },

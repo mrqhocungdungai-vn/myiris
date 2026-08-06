@@ -28,6 +28,7 @@ import HudShell from "./components/HudShell";
 import CommsPanel from "./components/CommsPanel";
 import CameraDock from "./components/CameraDock";
 import CenterStage from "./components/CenterStage";
+import ListenOnlyNotice from "./components/ListenOnlyNotice";
 import WorkStream from "./components/WorkStream";
 import PipelineBar from "./components/PipelineBar";
 import PoQuestionBanner from "./components/PoQuestionBanner";
@@ -57,6 +58,11 @@ const AMBIENT_CAPTURE_STORAGE_KEY = "iris.ambientCaptureEnabled";
 // to it — the failure mode is "reverts to standard", never "stuck enlarged
 // with no way back".
 const HUD_CAMERA_SIZE_STORAGE_KEY = "iris.hudCameraEnlarged";
+// listen-mode-hears-system-audio: engaging the mode IS the consent point for
+// meeting retention, so the first engage states what is retained, that it may
+// include other people, and where it is written. Remembered so it is a
+// first-run notice rather than a nag.
+const LISTEN_ONLY_CONSENT_STORAGE_KEY = "iris.listenOnlyConsentSeen";
 
 function loadSoundsEnabled(): boolean {
   try {
@@ -109,6 +115,39 @@ function loadAmbientCaptureEnabled(): boolean {
 function loadHudCameraEnlarged(): boolean {
   try {
     return window.localStorage.getItem(HUD_CAMERA_SIZE_STORAGE_KEY) === "on";
+  } catch {
+    return false;
+  }
+}
+
+function loadListenOnlyConsentSeen(): boolean {
+  try {
+    return window.localStorage.getItem(LISTEN_ONLY_CONSENT_STORAGE_KEY) === "on";
+  } catch {
+    // Unreadable storage shows the notice again rather than swallowing it: a
+    // repeated consent statement is a nuisance, a missing one is not.
+    return false;
+  }
+}
+
+/**
+ * Whether audio output is going to speakers rather than headphones, so
+ * engaging the mode can advise headphones — speaker output re-enters the
+ * microphone and reaches Iris a second time, degraded and out of step with the
+ * captured copy. Advisory only: never blocks, and nothing tries to cancel or
+ * duck that second copy (a ducking bug eats the user's own voice, which is
+ * invisible until it matters).
+ *
+ * Errs toward NOT advising: an ambiguous device label is not worth a warning.
+ */
+async function outputIsSpeakers(): Promise<boolean> {
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const outputs = devices.filter((device) => device.kind === "audiooutput");
+    if (!outputs.length) return false;
+    const label = (outputs[0].label || "").toLowerCase();
+    if (!label) return false;
+    return !/headphone|headset|earphone|earbud|airpod|buds/.test(label);
   } catch {
     return false;
   }
@@ -216,6 +255,9 @@ export default function App() {
   // a query on mount/reload and updated only by main's push. Never asserted
   // back. Feeds the audio pipeline's suppression flag from the same push.
   const [listenOnlyEngaged, setListenOnlyEngaged] = useState(false);
+  // The first-run consent notice for meeting retention, and the (non-blocking)
+  // headphone advisory. Both are shown on the engaging edge only.
+  const [listenOnlyNotice, setListenOnlyNotice] = useState<"consent" | "headphones" | null>(null);
   // Records the HUD Comms panel's open/closed state from just before the
   // mode engaged, so disengaging restores it rather than forcing it shut
   // (design.md D7). Only the push handler below writes to it, on the
@@ -259,7 +301,17 @@ export default function App() {
     setLogs((current) => [{ id: crypto.randomUUID(), level, message, timestamp }, ...current].slice(0, MAX_LOGS));
   }
 
-  const audio = useAudioPipeline({ onLog: pushLog, micDeviceId });
+  const audio = useAudioPipeline({
+    onLog: pushLog,
+    micDeviceId,
+    // A capture that could not be acquired at all is reported to main, which
+    // owns the mode and decides to disengage (listen-mode-hears-system-audio
+    // D4). Reported, never decided here.
+    onSystemAudioUnavailable: (reason) => {
+      if (!hasBridge) return;
+      window.iris.reportSystemAudioUnavailable(reason);
+    },
+  });
   const { pulses, removePulse, orbFlash, clearOrbFlash, acceptedIds } = useHandoffFx(
     tasks,
     orbStageRef,
@@ -635,13 +687,34 @@ export default function App() {
   // state, the renderer only executes the audio drop and displays it.
   useEffect(() => {
     if (!hasBridge) return;
-    window.iris.getListenOnlyState().then(({ engaged }) => {
-      setListenOnlyEngaged(engaged);
-      audio.setOutputMutedValue(engaged);
+    window.iris.getListenOnlyState().then((state) => {
+      setListenOnlyEngaged(state.engaged);
+      audio.applyListenOnlyState(state);
     });
-    return window.iris.onListenOnlyState(({ engaged }) => {
+    return window.iris.onListenOnlyState((state) => {
+      const { engaged } = state;
       setListenOnlyEngaged(engaged);
-      audio.setOutputMutedValue(engaged);
+      audio.applyListenOnlyState(state);
+      // The consent point and the headphone advice both belong to the engaging
+      // edge, and only when there is actually a capture to consent to — under
+      // the escape hatch the mode retains nothing and captures nothing, so
+      // saying otherwise would be false.
+      if (engaged && state.systemAudio) {
+        if (!loadListenOnlyConsentSeen()) {
+          setListenOnlyNotice("consent");
+          try {
+            window.localStorage.setItem(LISTEN_ONLY_CONSENT_STORAGE_KEY, "on");
+          } catch {
+            // A notice we cannot remember is shown again next time; harmless.
+          }
+        } else {
+          outputIsSpeakers().then((speakers) => {
+            if (speakers) setListenOnlyNotice("headphones");
+          });
+        }
+      } else if (!engaged) {
+        setListenOnlyNotice(null);
+      }
       // The HUD reveal applies on the transition only (design.md D7): every
       // push here IS a transition (main only pushes on an actual change), so
       // the engaging edge records the panel's prior state and forces it
@@ -857,13 +930,18 @@ export default function App() {
 
   const reactorState = useMemo(() => {
     if (!sidecarRunning) return "idle" as const;
+    // Held for the whole time the mode is engaged, ahead of every per-turn
+    // state below it (orb-expressions): the mode is a condition, not a turn,
+    // and a "speaking" flash over it would announce a reply that reached
+    // nobody. Iris produces none of those replies visibly anyway — they are
+    // discarded in main — so this is the only thing the orb has to say.
+    if (listenOnlyEngaged) return "listenMode" as const;
     if (audioState === "speaking") return "speaking" as const;
-    if (audioState === "replying") return "replying" as const;
     if (audioState === "listening") return "listening" as const;
     if (working) return "working" as const;
     if (geminiStatus === "connected") return "online" as const;
     return "idle" as const;
-  }, [audioState, geminiStatus, sidecarRunning, working]);
+  }, [audioState, geminiStatus, listenOnlyEngaged, sidecarRunning, working]);
 
   function applySessions(snapshot: SessionsSnapshot) {
     setSessions(Array.isArray(snapshot.sessions) ? snapshot.sessions : []);
@@ -1706,6 +1784,7 @@ export default function App() {
           muted={audio.muted}
           onToggleMute={audio.toggleMute}
           listenOnlyEngaged={listenOnlyEngaged}
+          systemAudioState={audio.systemAudioState}
           onToggleListenOnly={toggleListenOnly}
           ambientCaptureLive={ambientCaptureLive}
           onStopAmbientCapture={stopAmbientCapture}
@@ -1827,6 +1906,7 @@ export default function App() {
             muted={audio.muted}
             onToggleMute={audio.toggleMute}
             listenOnlyEngaged={listenOnlyEngaged}
+            systemAudioState={audio.systemAudioState}
             onToggleListenOnly={toggleListenOnly}
             ambientCaptureLive={ambientCaptureLive}
             onStopAmbientCapture={stopAmbientCapture}
@@ -1963,6 +2043,8 @@ export default function App() {
       {handControl && hand.present ? (
         <HandReticles hand={hand} handRef={liveHandRef} dwelling={dwellActive && !dwellFired} />
       ) : null}
+
+      <ListenOnlyNotice kind={listenOnlyNotice} onDismiss={() => setListenOnlyNotice(null)} />
     </>
   );
 }

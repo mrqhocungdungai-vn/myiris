@@ -1,5 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { SYSTEM_DEFAULT_MIC, micConstraints } from "../lib/mic-device";
+import {
+  DEFAULT_SYSTEM_AUDIO_GAIN,
+  acquireLoopbackBranch,
+  releaseLoopbackBranch,
+  resolveInputMix,
+  watchCaptureLiveness,
+  type LoopbackBranch,
+  type SystemAudioState,
+} from "../lib/system-audio";
 
 function parsePcmRate(mimeType?: string): number {
   const match = /rate=(\d+)/i.exec(mimeType ?? "");
@@ -39,9 +48,15 @@ export function shouldDropChunk({
 export function useAudioPipeline({
   onLog,
   micDeviceId,
+  onSystemAudioUnavailable,
 }: {
   onLog?: (level: string, message: string) => void;
   micDeviceId?: string;
+  // A capture that cannot be acquired AT ALL is the one failure that does not
+  // end in "still engaged": the mode has nothing to offer, so main is told and
+  // it disengages (listen-mode-hears-system-audio D4). Reported, never
+  // decided here — the renderer does not own the mode.
+  onSystemAudioUnavailable?: (reason: string) => void;
 } = {}) {
   const inputContextRef = useRef<AudioContext | null>(null);
   const inputStreamRef = useRef<MediaStream | null>(null);
@@ -67,6 +82,22 @@ export function useAudioPipeline({
   // one has started is detected here and cleaned up rather than left as an
   // unreferenced, never-stopped MediaStream (hot mic, lit OS recording light).
   const captureEpochRef = useRef(0);
+
+  // ===== System audio (listen-mode-hears-system-audio D2) =====
+  // The second branch into the SAME worklet: one mixed PCM stream crosses IPC,
+  // exactly as before, so nothing downstream of the worklet changes. Held in
+  // explicit refs rather than being left to the context's teardown, because a
+  // mic hot-swap tears the graph down and rebuilds it — without these, a swap
+  // would either leak a live system capture (with the OS recording indicator
+  // still lit) or silently lose system audio for the rest of the meeting.
+  const micGainRef = useRef<GainNode | null>(null);
+  const loopbackRef = useRef<LoopbackBranch | null>(null);
+  const cancelLivenessRef = useRef<(() => void) | null>(null);
+  // Main's resolved configuration, pushed with the mode state — never read
+  // from the environment here, so there is one authority for both.
+  const systemAudioWantedRef = useRef(false);
+  const systemAudioGainRef = useRef(DEFAULT_SYSTEM_AUDIO_GAIN);
+  const [systemAudioState, setSystemAudioState] = useState<SystemAudioState>("off");
 
   // Passive audio level meters (mic in / Gemini out) for the reactive HUD.
   useEffect(() => {
@@ -104,6 +135,92 @@ export function useAudioPipeline({
     return navigator.mediaDevices.getUserMedia({
       audio: micConstraints(captureBaseConstraints, deviceId),
       video: false,
+    });
+  }
+
+  /** Applies the current mix to whichever branches exist right now. */
+  function applyMix(systemAudioActive: boolean) {
+    const mix = resolveInputMix({ systemAudioActive, systemAudioGain: systemAudioGainRef.current });
+    if (micGainRef.current) micGainRef.current.gain.value = mix.micGain;
+    if (loopbackRef.current) loopbackRef.current.gain.gain.value = mix.systemGain;
+    return mix;
+  }
+
+  /**
+   * Drops the system-audio source and nothing else: the mode stays engaged,
+   * Iris stays silent, and the microphone keeps flowing. Disengaging is the
+   * user's decision, never a consequence of the capture failing — an automatic
+   * disengage would restore Iris's voice in a room she was silenced for.
+   */
+  function detachSystemAudio(nextState: SystemAudioState) {
+    cancelLivenessRef.current?.();
+    cancelLivenessRef.current = null;
+    releaseLoopbackBranch(loopbackRef.current);
+    loopbackRef.current = null;
+    applyMix(false);
+    setSystemAudioState(nextState);
+  }
+
+  /**
+   * Opens the loopback capture and sums it into the existing worklet. A no-op
+   * when the mode does not want it, when there is no capture graph to attach
+   * to yet (startCapture attaches it itself once there is), or when it is
+   * already attached.
+   */
+  async function attachSystemAudio() {
+    if (!systemAudioWantedRef.current) return;
+    if (loopbackRef.current) return;
+    const context = inputContextRef.current;
+    const worklet = inputProcessorRef.current;
+    if (!context || !worklet) return;
+
+    const epoch = captureEpochRef.current;
+    let branch: LoopbackBranch;
+    try {
+      branch = await acquireLoopbackBranch({
+        context,
+        destination: worklet,
+        gain: resolveInputMix({ systemAudioActive: true, systemAudioGain: systemAudioGainRef.current }).systemGain,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      onLog?.("error", `System audio: could not start capturing this machine's audio (${message}).`);
+      setSystemAudioState("off");
+      onSystemAudioUnavailable?.(message);
+      return;
+    }
+    // A device swap (or a disengage) that landed while getDisplayMedia was
+    // resolving: the graph this branch was built for is gone, so stop the
+    // capture rather than attaching it to a context nobody reads.
+    if (captureEpochRef.current !== epoch || !systemAudioWantedRef.current || inputProcessorRef.current !== worklet) {
+      releaseLoopbackBranch(branch);
+      return;
+    }
+
+    loopbackRef.current = branch;
+    applyMix(true);
+    setSystemAudioState("live");
+
+    // A track that ends is the same failure as one that never carried audio —
+    // both mean Iris has stopped hearing the meeting.
+    branch.stream.getAudioTracks().forEach((track) => {
+      track.addEventListener("ended", () => {
+        if (loopbackRef.current !== branch) return;
+        onLog?.("error", "System audio: the capture ended. Iris is still listening, on the microphone only.");
+        detachSystemAudio("degraded");
+      });
+    });
+
+    cancelLivenessRef.current = watchCaptureLiveness({
+      analyser: branch.analyser,
+      onSilent: () => {
+        if (loopbackRef.current !== branch) return;
+        onLog?.(
+          "error",
+          "System audio: the capture is delivering silence. Iris is still listening, on the microphone only.",
+        );
+        detachSystemAudio("degraded");
+      },
     });
   }
 
@@ -170,7 +287,17 @@ export function useAudioPipeline({
         // retry against the public/ copy served relative to the app's base (design D4).
         await context.audioWorklet.addModule(`${import.meta.env.BASE_URL}worklets/mic-downsample.js`);
       }
-      workletNode = new AudioWorkletNode(context, "mic-downsample");
+      // channelCount/channelCountMode are pinned rather than left to default:
+      // the worklet reads `inputs[0][0]` only (mic-downsample.js), so a stereo
+      // source would have its right channel silently discarded. Forcing an
+      // explicit single channel makes the graph do a proper 0.5*(L+R) down-mix
+      // instead. The system-audio track is mono with default processing but
+      // stereo without it, so which one arrives depends on constraints a future
+      // change could reasonably alter — this holds either way.
+      workletNode = new AudioWorkletNode(context, "mic-downsample", {
+        channelCount: 1,
+        channelCountMode: "explicit",
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       onLog?.("error", `Mic capture failed: could not load the AudioWorklet (${message}).`);
@@ -193,23 +320,38 @@ export function useAudioPipeline({
       window.iris.sendAudioChunk(event.data);
     };
 
-    source.connect(workletNode);
+    // The mic reaches the worklet through its own gain node so the mix has one
+    // place to set both branches. Alone it sits at unity — nothing about a
+    // microphone-only session changes.
+    const micGain = context.createGain();
+    micGain.gain.value = 1;
+    source.connect(micGain);
+    micGain.connect(workletNode);
 
     inputContextRef.current = context;
     inputStreamRef.current = stream;
     inputSourceRef.current = source;
     inputProcessorRef.current = workletNode;
+    micGainRef.current = micGain;
     onLog?.("info", "WebRTC echo cancellation enabled for microphone.");
+    // A device swap rebuilds this whole graph, so the system-audio branch has
+    // to be re-acquired here rather than assumed to have survived it.
+    await attachSystemAudio();
     return activeDeviceId;
   }
 
   async function stopCapture() {
+    // Before the context closes: a loopback stream left running would keep the
+    // OS recording indicator lit with nothing reading it.
+    detachSystemAudio("off");
     inputProcessorRef.current?.disconnect();
+    micGainRef.current?.disconnect();
     inputSourceRef.current?.disconnect();
     inputStreamRef.current?.getTracks().forEach((track) => track.stop());
     await inputContextRef.current?.close().catch(() => undefined);
 
     inputProcessorRef.current = null;
+    micGainRef.current = null;
     inputSourceRef.current = null;
     inputStreamRef.current = null;
     inputContextRef.current = null;
@@ -292,13 +434,32 @@ export function useAudioPipeline({
   }
 
   // A pure setter, not a renderer-owned toggle: listen-only mode is owned by
-  // main, which pushes the resolved state; the renderer only executes the
-  // drop this flag decides (replace-listening-mode-with-listen-only
-  // design.md D3). flushPlayback() still fires on the engaging edge.
-  function setOutputMutedValue(engaged: boolean) {
+  // main, which pushes the resolved state — mode plus the system-audio
+  // configuration it resolved (listen-mode-hears-system-audio 1.3) — and the
+  // renderer only executes it. flushPlayback() still fires on the engaging
+  // edge, cutting whatever Iris was already saying.
+  //
+  // `systemAudio` false is the escape hatch: no capture is opened, so the mode
+  // behaves exactly as it did before this feature existed, indicator included.
+  function applyListenOnlyState({
+    engaged,
+    systemAudio = false,
+    systemAudioGain = DEFAULT_SYSTEM_AUDIO_GAIN,
+  }: {
+    engaged: boolean;
+    systemAudio?: boolean;
+    systemAudioGain?: number;
+  }) {
     outputMutedRef.current = engaged;
     setOutputMuted(engaged);
     if (engaged) flushPlayback();
+
+    systemAudioGainRef.current = systemAudioGain;
+    const wanted = engaged && systemAudio;
+    if (wanted === systemAudioWantedRef.current) return;
+    systemAudioWantedRef.current = wanted;
+    if (wanted) void attachSystemAudio();
+    else detachSystemAudio("off");
   }
 
   async function start(): Promise<string | null> {
@@ -316,6 +477,9 @@ export function useAudioPipeline({
   }
 
   async function stop() {
+    // The session ending releases everything the mode owned, capture included
+    // — no capture outlives the session that justified it.
+    systemAudioWantedRef.current = false;
     await stopCapture();
     flushPlayback();
     await outputContextRef.current?.close().catch(() => undefined);
@@ -335,12 +499,13 @@ export function useAudioPipeline({
     sessionStartRef,
     muted,
     outputMuted,
+    systemAudioState,
     start,
     stop,
     restartCapture,
     flushPlayback,
     playGeminiAudio,
     toggleMute,
-    setOutputMutedValue,
+    applyListenOnlyState,
   };
 }

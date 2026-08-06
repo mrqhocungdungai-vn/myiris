@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { createGeminiPrompts } from "./gemini-prompts.mjs";
+import {
+  createGeminiPrompts,
+  LISTEN_ONLY_ENGAGE_REQUEST,
+  LISTEN_ONLY_DISENGAGE_REQUEST,
+} from "./gemini-prompts.mjs";
 
 const modelChoices = [{ id: "claude-opus-5", label: "Opus 5" }];
 
@@ -40,5 +44,22 @@ describe("gemini-prompts", () => {
     const fakeCapability = { promptFragment: () => "FAKE_CAPABILITY_FRAGMENT" };
     const text = make({ capabilities: [fakeCapability] }).buildSystemInstructionText();
     expect(text).toContain("FAKE_CAPABILITY_FRAGMENT");
+  });
+});
+
+// listen-mode-hears-system-audio 2.2. These live here with the rest of the
+// prompt text rather than inside live-session.mjs, so the module that sends
+// them holds no prose of its own.
+describe("gemini-prompts: listen-only mode's in-band requests", () => {
+  it("asks for complete silence and says why, without asking for a reply", () => {
+    expect(LISTEN_ONLY_ENGAGE_REQUEST).toContain("SYSTEM_EVENT_LISTEN_ONLY_ENGAGED");
+    expect(LISTEN_ONLY_ENGAGE_REQUEST).toMatch(/do not reply/i);
+    expect(LISTEN_ONLY_ENGAGE_REQUEST).toMatch(/keep listening/i);
+  });
+
+  it("releases the model without volunteering a reply or a summary on the way out", () => {
+    expect(LISTEN_ONLY_DISENGAGE_REQUEST).toContain("SYSTEM_EVENT_LISTEN_ONLY_DISENGAGED");
+    expect(LISTEN_ONLY_DISENGAGE_REQUEST).toMatch(/do not say anything in response/i);
+    expect(LISTEN_ONLY_DISENGAGE_REQUEST).toMatch(/do not summarize/i);
   });
 });

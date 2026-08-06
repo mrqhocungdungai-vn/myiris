@@ -6,7 +6,7 @@ import type { Group, Mesh } from "three";
 import { deriveWebglSettings } from "../lib/webgl-quality";
 import "../styles/reactor.css";
 
-type ReactorState = "idle" | "online" | "listening" | "speaking" | "replying" | "working";
+type ReactorState = "idle" | "online" | "listening" | "speaking" | "listenMode" | "working";
 
 type Palette = {
   primary: string;
@@ -20,10 +20,14 @@ const PALETTES: Record<ReactorState, Palette> = {
   online: { primary: "18, 163, 148", secondary: "70, 200, 175", accent: "230, 255, 248", glow: "60, 195, 170" },
   listening: { primary: "40, 205, 170", secondary: "18, 163, 148", accent: "236, 255, 250", glow: "70, 214, 185" },
   speaking: { primary: "238, 122, 92", secondary: "255, 188, 108", accent: "255, 250, 230", glow: "255, 154, 104" },
-  // Listen-only mode's silent reply (replace-listening-mode-with-listen-only
-  // design.md D6): a cool blue, distinct in hue from listening's teal-green
-  // and never the warm speaking accent, at speaking's full energy.
-  replying: { primary: "72, 140, 232", secondary: "110, 175, 250", accent: "225, 238, 255", glow: "95, 165, 245" },
+  // Listen-only mode itself (listen-mode-hears-system-audio D9): a cool blue,
+  // distinct in hue from listening's teal-green and never the warm speaking
+  // accent, at speaking's full energy — Iris is equally engaged, she is just
+  // taking the conversation in rather than answering it. Unlike every other
+  // state here this one is NOT per-turn: it holds for as long as the mode does.
+  // The accent is inherited from the retired silent-reply state, which the mode
+  // no longer produces now that replies are discarded outright.
+  listenMode: { primary: "72, 140, 232", secondary: "110, 175, 250", accent: "225, 238, 255", glow: "95, 165, 245" },
   working: { primary: "120, 180, 120", secondary: "40, 200, 170", accent: "252, 255, 230", glow: "130, 195, 150" },
 };
 
@@ -63,7 +67,7 @@ export const ORB_ENERGY: Record<ReactorState, number> = {
   online: 0.45,
   listening: 0.72,
   speaking: 1,
-  replying: 1,
+  listenMode: 1,
   working: 0.88,
 };
 

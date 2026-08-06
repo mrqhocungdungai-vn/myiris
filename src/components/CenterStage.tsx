@@ -1,6 +1,7 @@
 import { useEffect, useState, type CSSProperties, type RefObject } from "react";
 import { Headphones, HeadphoneOff, Mic, MicOff, Power, Radio } from "lucide-react";
 import ReactorCore, { ORB_ACCENT, ORB_ENERGY } from "./ReactorCore";
+import { listenOnlyControlTitle, type SystemAudioState } from "../lib/system-audio";
 import Keycaps from "./Keycaps";
 import { acceleratorLabel } from "../lib/accelerator-label";
 import type { HandoffTone, ReactorState } from "../types";
@@ -76,6 +77,7 @@ export default function CenterStage({
   muted,
   onToggleMute,
   listenOnlyEngaged,
+  systemAudioState,
   onToggleListenOnly,
   ambientCaptureLive,
   onStopAmbientCapture,
@@ -111,6 +113,11 @@ export default function CenterStage({
   // Listen-only mode's only affordance (replace-listening-mode-with-listen-only
   // design.md D3): pure display of main-owned state, toggled by request only.
   listenOnlyEngaged: boolean;
+  // Whether the mode's system-audio half is actually delivering audio
+  // (listen-mode-hears-system-audio). "degraded" is shown for as long as it
+  // lasts, not as a dismissible one-off: a meeting Iris is not hearing looks
+  // exactly like one she is.
+  systemAudioState: SystemAudioState;
   onToggleListenOnly: () => void;
   // ambient-memory (design D7): shown only while retention is actually
   // live — never a settings mirror — with its own stop affordance so
@@ -172,9 +179,11 @@ export default function CenterStage({
             {muted ? <MicOff size={18} /> : <Mic size={18} />}
           </button>
           <button
-            className={`t-btn small ${listenOnlyEngaged ? "" : "muted"}`}
+            className={`t-btn small ${listenOnlyEngaged ? "" : "muted"} ${
+              listenOnlyEngaged && systemAudioState === "degraded" ? "system-audio-degraded" : ""
+            }`}
             onClick={onToggleListenOnly}
-            title={listenOnlyEngaged ? "Disable listen-only mode" : "Enable listen-only mode"}
+            title={listenOnlyControlTitle(listenOnlyEngaged, systemAudioState)}
           >
             {listenOnlyEngaged ? <Headphones size={18} /> : <HeadphoneOff size={18} />}
           </button>

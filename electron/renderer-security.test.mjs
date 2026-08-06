@@ -19,6 +19,7 @@ vi.mock("electron", () => {
       session: {
         defaultSession: {
           setPermissionRequestHandler: vi.fn(),
+          setDisplayMediaRequestHandler: vi.fn(),
         },
       },
       shell: {
@@ -136,5 +137,88 @@ describe("renderer-security: device permission scoping", () => {
     const callback = vi.fn();
     handler(null, "notifications", callback, { requestingUrl: "http://127.0.0.1:5173" });
     expect(callback).toHaveBeenCalledWith(false);
+  });
+
+  it("grants display-capture to the app's own document, and denies it to anything else", () => {
+    installRendererSecurity({ repoRoot: "/fake/repo" });
+    const handler = electron.session.defaultSession.setPermissionRequestHandler.mock.calls.at(-1)[0];
+
+    const own = vi.fn();
+    handler(null, "display-capture", own, { requestingUrl: "http://127.0.0.1:5173" });
+    expect(own).toHaveBeenCalledWith(true);
+
+    const foreign = vi.fn();
+    handler(null, "display-capture", foreign, { requestingUrl: "https://example.com" });
+    expect(foreign).toHaveBeenCalledWith(false);
+  });
+});
+
+// listen-mode-hears-system-audio 1.5-1.8. System-audio capture is scoped three
+// ways at once — to the app's own frame, to the mode that justifies it, and to
+// audio — and every one of those is a separate way for the feature to become a
+// screen-recording surface if it regresses.
+describe("renderer-security: system-audio capture scoping", () => {
+  beforeEach(() => {
+    delete process.env.VITE_DEV_SERVER_URL;
+  });
+
+  function install({ engaged = true, systemAudio = true } = {}) {
+    installRendererSecurity({
+      repoRoot: "/fake/repo",
+      isListenOnlyEngaged: () => engaged,
+      isSystemAudioEnabled: () => systemAudio,
+    });
+    return electron.session.defaultSession.setDisplayMediaRequestHandler.mock.calls.at(-1);
+  }
+
+  it("answers the app's own frame with a loopback AUDIO source and no video", () => {
+    const [handler, options] = install();
+    const callback = vi.fn();
+    handler({ frame: { url: "http://127.0.0.1:5173/" }, videoRequested: false, audioRequested: true }, callback);
+    expect(callback).toHaveBeenCalledWith({ audio: "loopback" });
+    // Never a video source, and never the system picker — a picker would be a
+    // second, unscoped way to choose a screen.
+    expect(callback.mock.calls.at(-1)[0].video).toBeUndefined();
+    expect(options).toEqual({ useSystemPicker: false });
+  });
+
+  it("grants the same request from a packaged file:// document", () => {
+    const security = installRendererSecurity({
+      repoRoot: "/fake/repo",
+      isListenOnlyEngaged: () => true,
+      isSystemAudioEnabled: () => true,
+    });
+    const handler = electron.session.defaultSession.setDisplayMediaRequestHandler.mock.calls.at(-1)[0];
+    const callback = vi.fn();
+    handler({ frame: { url: security.appPackagedUrl } }, callback);
+    expect(callback).toHaveBeenCalledWith({ audio: "loopback" });
+  });
+
+  it("denies a request from a frame that is not the app's own document", () => {
+    const [handler] = install();
+    const callback = vi.fn();
+    handler({ frame: { url: "file:///Users/someone/Downloads/evil.html" } }, callback);
+    expect(callback).toHaveBeenCalledWith({});
+  });
+
+  it("denies the request while listen-only mode is not engaged", () => {
+    const [handler] = install({ engaged: false });
+    const callback = vi.fn();
+    handler({ frame: { url: "http://127.0.0.1:5173/" } }, callback);
+    expect(callback).toHaveBeenCalledWith({});
+  });
+
+  it("denies the request under the IRIS_SYSTEM_AUDIO escape hatch", () => {
+    const [handler] = install({ systemAudio: false });
+    const callback = vi.fn();
+    handler({ frame: { url: "http://127.0.0.1:5173/" } }, callback);
+    expect(callback).toHaveBeenCalledWith({});
+  });
+
+  it("denies a request with no frame at all rather than falling through", () => {
+    const [handler] = install();
+    const callback = vi.fn();
+    handler({}, callback);
+    expect(callback).toHaveBeenCalledWith({});
   });
 });

@@ -4,6 +4,24 @@
 // that varies at runtime is injected rather than read from a module-level
 // binding.
 
+// Listen-only mode's in-band requests (listen-mode-hears-system-audio D3).
+// Sent as conversation content on the live session — never as a configuration
+// change, and never as a turn that asks for a reply. They are a COST
+// REDUCTION, not the mechanism: the guarantee that Iris is silent is the
+// client discarding every reply (live-messages.mjs), which is why it does not
+// matter that context-window compression will eventually evict these from a
+// long meeting.
+export const LISTEN_ONLY_ENGAGE_REQUEST =
+  "SYSTEM_EVENT_LISTEN_ONLY_ENGAGED: The user has put you into listen-only mode. From now until you are told " +
+  "otherwise, do not reply at all — no speech, no text, no acknowledgement, not even a short one. You are in a " +
+  "meeting or a call: keep listening and keep taking in everything you hear, including audio this machine is " +
+  "playing, so you can answer questions about it afterwards. Simply produce nothing until listen-only mode ends.";
+
+export const LISTEN_ONLY_DISENGAGE_REQUEST =
+  "SYSTEM_EVENT_LISTEN_ONLY_DISENGAGED: Listen-only mode has ended. You may reply normally again from now on. Do " +
+  "not say anything in response to this message and do not summarize what you heard — wait until the user next " +
+  "speaks to you, then answer them, using everything you took in while the mode was engaged.";
+
 // Capability contract: see gemini-tools.mjs's header comment (design.md D10).
 // This module splices each registered capability's promptFragment() into the
 // system instruction rather than concatenating (unlike tool declarations,
