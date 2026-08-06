@@ -2,23 +2,12 @@ import { useEffect, useRef } from "react";
 import * as ort from "onnxruntime-web";
 import { createWakeGate, type WakeGate } from "../lib/wake-gate";
 import { SYSTEM_DEFAULT_MIC, micConstraints } from "../lib/mic-device";
-import { configureOrt, createSession } from "../lib/onnx-runtime";
-import { createSpeechConfirmation, type SpeechConfirmation } from "../lib/speech-confirmation";
+import { resolveVendoredAssetUrl } from "../lib/asset-url";
 
 // Local "Hey Iris" wake word. Ports the livekit-wakeword / openWakeWord inference
 // pipeline (mel-spectrogram -> speech embedding -> classifier) to the browser via
 // onnxruntime-web. Fully on-device: audio never leaves the machine, and nothing is
 // sent to Gemini/Claude until a wake fires. Models live in public/wakeword/.
-//
-// A wake needs two agreeing signals, not one thresholded harder
-// (speech-confirmed-wake-word): the phrase chain above, and Silero VAD on the
-// same mic stream confirming a human voice. The phrase classifier was trained
-// on synthesized speech and scores confidently on non-speech sound, and no
-// threshold on its own output can detect that, because it is the model that is
-// wrong. The two run on different audio contracts — the phrase chain re-reads a
-// 2s ring buffer every 200 ms, while the VAD is recurrent and needs contiguous
-// non-overlapping 512-sample frames — so the VAD is fed through its own
-// accumulator rather than the ring buffer.
 
 const SAMPLE_RATE = 16000;
 const WINDOW_SAMPLES = SAMPLE_RATE * 2; // ~2s -> exactly 16 embeddings
@@ -35,18 +24,40 @@ const MAX_GAP_MS = PREDICT_INTERVAL_MS * 3;
 // as near-misses when diagnostics are on (design D6) — fixed, not configurable.
 const NEAR_MISS_FRACTION = 0.6;
 const NEAR_MISS_LOG_INTERVAL_MS = 1000;
-// How far apart the phrase detection and the speech confirmation may be, in
-// either direction. Sized off the phrase chain, not guessed: the classifier
-// scores a 2s window and needs `consecutive` evaluations 200 ms apart to
-// confirm, so a spoken "Hey Iris" is already over ~400-1200 ms before the
-// detection lands. Anything tighter would drop real wakes, which is the failure
-// mode that actually matters here.
-const SPEECH_WINDOW_MS = 1500;
-// After this many phrase detections in a row that speech never confirmed, the
-// listener says so (speech-confirmed-wake-word). Silence has a specified
-// meaning already; a VAD that loads fine and simply never agrees is a new way
-// to be silent — armed, caption inviting the phrase, nothing happening.
-const SPEECH_BLOCKED_NOTICE_COUNT = 3;
+
+let ortConfigured = false;
+function configureOrt() {
+  if (ortConfigured) return;
+  // Vendored under public/runtime/ort/ by scripts/vendor-runtime-assets.mjs
+  // (renderer-content-security: no runtime-fetched script/WASM glue) — kept
+  // in lockstep with the installed onnxruntime-web version by that script,
+  // never a hand-copied CDN URL.
+  //
+  // onnxruntime-web loads its own wasm glue via a runtime `import(url)`, which
+  // resolves a relative specifier against the *importing chunk's* URL
+  // (Vite emits the app chunk under dist/assets/), not against the document —
+  // so the path must be absolute before it is handed over, in every
+  // environment, or it silently resolves under dist/assets/ instead of the
+  // vendored dist/runtime/ort/ (design D1).
+  //
+  // Separately, observed in dev: BASE_URL is "/" there, so an un-resolved
+  // string is only path-absolute, not fully qualified, and Vite's dev-server
+  // transform refuses to serve public/ assets through a runtime dynamic
+  // import ("this file is in /public ... should not be imported from source
+  // code"). Pre-resolving against document.baseURI sidesteps that too, since
+  // Vite treats an already-absolute URL as resolved and leaves it alone (same
+  // as the CDN URL this replaced always did).
+  ort.env.wasm.wasmPaths = resolveVendoredAssetUrl("runtime/ort/", import.meta.env.BASE_URL, document.baseURI);
+  ort.env.wasm.numThreads = 1; // avoid SharedArrayBuffer / COOP-COEP requirements
+  ortConfigured = true;
+}
+
+async function createSession(url: string): Promise<ort.InferenceSession> {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Failed to fetch ${url}: ${response.status}`);
+  const bytes = await response.arrayBuffer();
+  return ort.InferenceSession.create(bytes, { executionProviders: ["wasm"] });
+}
 
 type WakeSessions = { mel: ort.InferenceSession; emb: ort.InferenceSession; cls: ort.InferenceSession };
 
@@ -90,13 +101,11 @@ export function useWakeWord(
   enabled: boolean,
   settings: WakeWordSettings,
   onWake: () => void,
-  // Non-fatal only: the listener is running, but something about it is
-  // degraded. Two cases today — the selected microphone was unavailable and it
-  // fell back to System Default (fallbackDeviceId is present), or speech
-  // confirmation could not be loaded and wake is running on the phrase signal
-  // alone (no fallbackDeviceId). A fatal init failure — the listener is not
-  // running — goes through onInitFailed instead, so one channel doesn't have to
-  // carry two opposite meanings (design D3).
+  // Non-fatal only: the selected microphone was unavailable and the listener
+  // fell back to System Default (fallbackDeviceId is always present) and then
+  // armed successfully. A fatal init failure — the listener is not running —
+  // goes through onInitFailed instead, so one channel doesn't have to carry
+  // two opposite meanings (design D3).
   onError?: (message: string, fallbackDeviceId?: string) => void,
   deviceId: string = SYSTEM_DEFAULT_MIC,
   // Fired once the prediction interval is installed and the effect has not
@@ -109,25 +118,16 @@ export function useWakeWord(
   // permanent "failed" affordance can't land on a working listener whose
   // saved microphone merely fell back to System Default.
   onInitFailed?: (message: string) => void,
-  // The listener is running and hearing the phrase, but speech confirmation
-  // has withheld every wake for SPEECH_BLOCKED_NOTICE_COUNT detections in a
-  // row. Fired once per arm. Not a fault — it is also what success looks like
-  // when a television says "Hey Iris" — but it is indistinguishable from one
-  // from where the user sits, and both have the same remedy, so it needs a
-  // surface rather than a debug log (speech-confirmed-wake-word).
-  onSpeechBlocked?: () => void,
 ) {
   const onWakeRef = useRef(onWake);
   const onErrorRef = useRef(onError);
   const onReadyRef = useRef(onReady);
   const onInitFailedRef = useRef(onInitFailed);
-  const onSpeechBlockedRef = useRef(onSpeechBlocked);
   const settingsRef = useRef(settings);
   onWakeRef.current = onWake;
   onErrorRef.current = onError;
   onReadyRef.current = onReady;
   onInitFailedRef.current = onInitFailed;
-  onSpeechBlockedRef.current = onSpeechBlocked;
   settingsRef.current = settings;
 
   useEffect(() => {
@@ -160,32 +160,6 @@ export function useWakeWord(
       consecutive: gateConsecutive,
       cooldownMs: COOLDOWN_MS,
       maxGapMs: MAX_GAP_MS,
-      speechWindowMs: SPEECH_WINDOW_MS,
-    });
-
-    // The gate's second input. `speechAvailable` and `lastSpeechAt` are
-    // mirrored here for two reasons: a settings change builds a *new* gate, and
-    // whether a detector exists is not a fact a sensitivity save should
-    // silently revoke; and the diagnostics below need to name which signal was
-    // missing without reading the decision back out of the gate.
-    let speechAvailable = false;
-    let lastSpeechAt: number | null = null;
-    const speech: SpeechConfirmation = createSpeechConfirmation({
-      onSpeech: (at) => {
-        lastSpeechAt = at;
-        gate.noteSpeech(at);
-      },
-      onAvailability: (available) => {
-        speechAvailable = available;
-        gate.setSpeechAvailable(available);
-      },
-      // Degraded, not fatal: the listener keeps running and the wake decision
-      // continues on the phrase signal alone, so this goes to onError (the
-      // "running but degraded" channel), never onInitFailed.
-      onDegraded: (reason, error) => {
-        console.error(`[wakeword] ${reason} — continuing on the phrase signal alone`, error);
-        onErrorRef.current?.(`${reason} — wake is running on the phrase signal alone`);
-      },
     });
 
     // Diagnostics-only bookkeeping (design D6): mirrors the gate's above-threshold
@@ -194,10 +168,6 @@ export function useWakeWord(
     let diagRun = 0;
     let diagLastEvalAt: number | null = null;
     let lastNearMissLogAt = -Infinity;
-    // Distinct phrase detections that speech never confirmed, counted since
-    // this arm. Reset by a wake, since a wake proves the pairing works.
-    let blockedCandidates = 0;
-    let speechBlockedNotified = false;
 
     async function predict() {
       if (busy || cancelled || !mel || !emb || !cls || filled < WINDOW_SAMPLES) return;
@@ -244,15 +214,7 @@ export function useWakeWord(
             consecutive: gateConsecutive,
             cooldownMs: COOLDOWN_MS,
             maxGapMs: MAX_GAP_MS,
-            speechWindowMs: SPEECH_WINDOW_MS,
           });
-          // A held candidate goes with the old gate, exactly as an in-flight
-          // run does (design D2) — it was counted against the previous
-          // threshold. The last-speech timestamp goes too, and is not restored:
-          // verdicts arrive every ~32 ms, so it repopulates within one frame if
-          // anyone is still speaking. Availability is not the gate's to
-          // rediscover, so it is re-applied.
-          gate.setSpeechAvailable(speechAvailable);
         }
 
         const now = performance.now();
@@ -261,38 +223,10 @@ export function useWakeWord(
         diagLastEvalAt = now;
         diagRun = score >= gateThreshold ? (diagGapTooLarge ? 1 : diagRun + 1) : 0;
 
-        // Which of the two signals was present, for diagnostics and for the
-        // blocked-candidate notice. Derived from what this hook already knows
-        // rather than read back out of the gate, so the decision stays the
-        // gate's alone (design D6).
-        const phraseHeard = diagRun >= gateConsecutive;
-        const voiceHeard = lastSpeechAt !== null && now - lastSpeechAt <= SPEECH_WINDOW_MS;
-        // How long ago the voice was last confirmed, not just whether it was
-        // inside the window. "absent" alone cannot tell "you were not speaking"
-        // from "the detector never fires at all", and those need opposite fixes.
-        const voiceAge =
-          !speechAvailable ? "no speech signal" : lastSpeechAt === null ? "voice never" : `voice ${Math.round(now - lastSpeechAt)}ms ago`;
-
         const fired = gate.step(score, now);
         if (fired) {
           onWakeRef.current();
-          blockedCandidates = 0;
           if (settings.debug) console.log(`[wakeword] fired score=${score.toFixed(3)} run=${diagRun}`);
-        } else if (phraseHeard && speechAvailable && !voiceHeard) {
-          // The phrase without a voice: the case this second signal exists for.
-          // Counted once per contiguous above-threshold run, since diagRun
-          // returns to zero on any evaluation below the threshold.
-          if (diagRun === gateConsecutive) blockedCandidates += 1;
-          if (blockedCandidates >= SPEECH_BLOCKED_NOTICE_COUNT && !speechBlockedNotified) {
-            speechBlockedNotified = true;
-            onSpeechBlockedRef.current?.();
-          }
-          if (settings.debug && now - lastNearMissLogAt >= NEAR_MISS_LOG_INTERVAL_MS) {
-            lastNearMissLogAt = now;
-            console.log(
-              `[wakeword] no wake: phrase heard (score=${score.toFixed(3)} run=${diagRun}) but no voice confirmed — ${voiceAge}`,
-            );
-          }
         } else if (
           settings.debug &&
           score < gateThreshold &&
@@ -300,9 +234,7 @@ export function useWakeWord(
           now - lastNearMissLogAt >= NEAR_MISS_LOG_INTERVAL_MS
         ) {
           lastNearMissLogAt = now;
-          console.log(
-            `[wakeword] near-miss score=${score.toFixed(3)} threshold=${gateThreshold} — phrase not heard (${voiceAge})`,
-          );
+          console.log(`[wakeword] near-miss score=${score.toFixed(3)} threshold=${gateThreshold}`);
         }
       } catch (error) {
         // Best-effort: a single failed frame shouldn't kill the listener.
@@ -374,13 +306,6 @@ export function useWakeWord(
             ring.set(input, ring.length - n);
             filled = Math.min(ring.length, filled + n);
           }
-
-          // Speech confirmation taps this same callback rather than opening a
-          // second capture — no getUserMedia change, so the no-capture-gap rule
-          // is untouched. It re-chunks internally; the ring buffer above cannot
-          // be reused for it, since that deliberately re-presents overlapping
-          // audio on every evaluation.
-          speech.push(input);
         };
 
         source.connect(processor);
@@ -408,11 +333,6 @@ export function useWakeWord(
       stream?.getTracks().forEach((track) => track.stop());
       audioCtx?.close().catch(() => undefined);
       gate.reset();
-      // The VAD's recurrent state and its half-filled frame both describe a
-      // stream that has now ended, so neither may carry into the next arm —
-      // stop() drops them, and the next arm builds a fresh detector over the
-      // same cached session.
-      speech.stop();
       // NOTE: ONNX sessions are cached module-level and intentionally NOT released
       // here, so re-arming after sleep is instant.
     };

@@ -17,7 +17,6 @@ so future changes don't reintroduce wrong/deprecated names or version drift.
 | Wake-word ONNX runtime | `onnxruntime-web` `^1.27.0` | `package.json` | npm |
 | Wake-word ONNX WASM fileset | `public/runtime/ort/ort-wasm-simd-threaded.jsep.{mjs,wasm}` | `src/hooks/useWakeWord.ts` (`ort.env.wasm.wasmPaths`) | vendored from `node_modules/onnxruntime-web/dist/` by `scripts/vendor-runtime-assets.mjs` |
 | Wake-word model assets | `melspectrogram.onnx`, `embedding_model.onnx`, `hey_iris.onnx` | `public/wakeword/` (bundled, no runtime fetch) | vendored from the "Hey Iris" openWakeWord training run |
-| Wake speech-confirmation model | Silero VAD **v5**, tag `v5.1.2`, `public/runtime/wakeword/silero_vad.onnx` (bundled, no runtime fetch) | `src/lib/silero-vad.ts` (`SILERO_VAD_MODEL_PATH`), URL in `scripts/vendor-runtime-assets.mjs` (`SILERO_VAD_MODEL_URL`) | vendored (downloaded once, cached) from `github.com/snakers4/silero-vad` at the pinned tag |
 | WebGL 3D engine | `three` `^0.181.2` | `package.json` | npm |
 | React renderer for Three.js | `@react-three/fiber` `^9.4.0` | `package.json` | npm |
 | Three.js helpers | `@react-three/drei` `^10.7.7` | `package.json` | npm |
@@ -67,15 +66,6 @@ entry and walking up.
   script and cached in `public/runtime/mediapipe/` (skipped on subsequent
   builds if already present) — the only remaining network dependency is that
   one-time vendoring step, not first app launch.
-- **The Silero VAD URL is pinned to a tag, and the major version is part of the
-  contract.** v4 and v5 are different graphs, not two builds of one: v5 takes
-  `input` `[1,512]` + `state` `[2,1,128]` + `sr`, v4 takes separate `h`/`c`
-  `[2,1,64]`. `src/lib/silero-vad.ts` is written against v5's signature, so a
-  URL pointing at `master` rather than `v5.1.2` could swap the signature out
-  from under it on a rebuild — and the download is skip-if-present, so the
-  swap would only surface on a machine with a cold cache. Frame size is
-  likewise fixed by the model: 512 samples at 16 kHz, fed contiguously with
-  the state tensor threaded call to call.
 - **Only one WASM variant is copied per runtime**, matching what the app's own
   import actually resolves at runtime (see design.md of
   `harden-security-boundaries` for how each was determined): onnxruntime-web
