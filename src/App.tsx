@@ -1838,13 +1838,17 @@ export default function App() {
 
         <footer className="deck-foot">
           <span className="build-meta">
-            IRIS · build 0.2.0 · by Ashutosh Shrivastava ·{" "}
-            <a href="https://x.com/ai_for_success" target="_blank" rel="noreferrer">
-              X
+            IRIS · build 0.2.0 · by MRQ Học Ứng Dụng AI ·{" "}
+            <a href="https://www.mrqhocungdungai.io.vn" target="_blank" rel="noreferrer">
+              Web
             </a>{" "}
             ·{" "}
-            <a href="https://github.com/ASHR12/iris" target="_blank" rel="noreferrer">
+            <a href="https://github.com/mrqhocungdungai-vn/myiris" target="_blank" rel="noreferrer">
               GitHub
+            </a>{" "}
+            · fork of{" "}
+            <a href="https://github.com/ASHR12/iris" target="_blank" rel="noreferrer">
+              ASHR12/iris
             </a>
           </span>
         </footer>

@@ -5,13 +5,17 @@
   "private": true,
   "license": "MIT",
   "description": "A futuristic Gemini Live voice companion that delegates real work to Claude Code running headless.",
-  "homepage": "https://github.com/ASHR12/iris#readme",
+  "author": {
+    "name": "MRQ Học Ứng Dụng AI",
+    "url": "https://www.mrqhocungdungai.io.vn"
+  },
+  "homepage": "https://github.com/mrqhocungdungai-vn/myiris#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ASHR12/iris.git"
+    "url": "git+https://github.com/mrqhocungdungai-vn/myiris.git"
   },
   "bugs": {
-    "url": "https://github.com/ASHR12/iris/issues"
+    "url": "https://github.com/mrqhocungdungai-vn/myiris/issues"
   },
   "type": "module",
   "main": "electron/main.mjs",
