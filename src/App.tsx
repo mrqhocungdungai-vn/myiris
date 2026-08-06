@@ -199,7 +199,15 @@ export default function App() {
   // galaxy off and back on rehydrates node positions instead of
   // re-scrambling the force-directed layout on every reopen.
   const galaxyPositionsRef = useRef<Map<string, GalaxyNode>>(new Map());
-  const [openNote, setOpenNote] = useState<{ id: string; title: string; markdown: string } | null>(null);
+  // `revision` is the token for the content in `markdown` (add-manual-note-editing):
+  // the editor hands it back on save so main can refuse a write when the file has
+  // since changed under it.
+  const [openNote, setOpenNote] = useState<{
+    id: string;
+    title: string;
+    markdown: string;
+    revision: string;
+  } | null>(null);
 
   // Listen-only mode (replace-listening-mode-with-listen-only design.md D3):
   // main is the sole owner of this state — this is pure display, seeded from
@@ -360,13 +368,21 @@ export default function App() {
     window.iris.reportNoteClosed();
   }
 
+  // A saved edit updates the open note in place — no reopen, no re-fetch. The
+  // new revision comes back from the write itself, so the next save in the same
+  // sitting is checked against what was actually written rather than against the
+  // content the reader was first opened on.
+  function noteSaved(content: string, revision: string) {
+    setOpenNote((current) => (current ? { ...current, markdown: content, revision } : current));
+  }
+
   async function openNoteFromGalaxy(id: string, title: string) {
     // Reader single-instance invariant (design.md D5/spec "At most one
     // reader open at a time") — opening a note closes the task reader.
     setExpandedTaskId(null);
     const result = await window.iris.readSecondBrainNote(id);
     if (!result.ok) return;
-    setOpenNote({ id, title, markdown: result.content });
+    setOpenNote({ id, title, markdown: result.content, revision: result.revision });
     // open-note-session: main is the single authority on which note is open —
     // the renderer reports every step of this lifecycle to it.
     window.iris.reportNoteOpened(id);
@@ -1843,11 +1859,14 @@ export default function App() {
 
       {secondBrainActive && openNote ? (
         <NoteReader
+          noteId={openNote.id}
           title={openNote.title}
           markdown={openNote.markdown}
+          revision={openNote.revision}
           hand={handControl ? hand : null}
           handRef={liveHandRef}
           onClose={closeNoteReader}
+          onSaved={noteSaved}
         />
       ) : null}
 

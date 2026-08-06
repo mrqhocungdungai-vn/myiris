@@ -239,7 +239,17 @@ type SecondBrainGraphResult = {
   available: boolean;
 };
 
-type SecondBrainReadNoteResult = { ok: true; content: string } | { ok: false };
+// `revision` is the token the note editor hands back on save
+// (add-manual-note-editing): a hash of the exact content served, so main can
+// refuse a write when the file no longer holds those bytes.
+type SecondBrainReadNoteResult = { ok: true; content: string; revision: string } | { ok: false };
+
+// `stale` means the file changed since it was read — the caller keeps the
+// user's draft and may re-issue with `force`. `refused` means the write was
+// rejected outright (unknown/ghost id, escaped the vault, unacceptable content).
+type SecondBrainWriteNoteResult =
+  | { ok: true; revision: string }
+  | { ok: false; reason: "stale" | "refused" };
 
 // second-brain-focus (design D1/D2): resolved fresh against the live graph on
 // every read — never a cached title/tag snapshot, so a renamed or deleted
@@ -358,6 +368,13 @@ type IrisApi = {
   getSecondBrainAvailability: () => Promise<SecondBrainAvailability>;
   getSecondBrainGraph: () => Promise<SecondBrainGraphResult>;
   readSecondBrainNote: (id: string) => Promise<SecondBrainReadNoteResult>;
+  writeSecondBrainNote: (
+    id: string,
+    content: string,
+    revision: string,
+    force?: boolean,
+  ) => Promise<SecondBrainWriteNoteResult>;
+  openSecondBrainNoteExternally: (id: string) => Promise<{ ok: boolean }>;
   activateSecondBrain: () => void;
   deactivateSecondBrain: () => void;
   onSecondBrainGraphUpdated: (callback: (graph: VaultGraph) => void) => () => void;

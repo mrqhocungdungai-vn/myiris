@@ -14,7 +14,7 @@ import { installRendererSecurity } from "./renderer-security.mjs";
 import { registerIpc } from "./ipc.mjs";
 import { createWiring } from "./wiring.mjs";
 
-const { app, BrowserWindow, nativeImage, dialog, globalShortcut } = electron;
+const { app, BrowserWindow, nativeImage, dialog, globalShortcut, shell } = electron;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
@@ -43,6 +43,10 @@ const wiring = createWiring({
   canvasStoreFile: CANVAS_STORE_FILE,
   envFlag,
   dialog,
+  // add-manual-note-editing design.md D3: the note reader's "open in the
+  // default app" route. Injected as a bare function so every module below
+  // stays Electron-free.
+  openPathExternally: (filePath) => shell.openPath(filePath),
   getIsPackaged: () => app.isPackaged,
 });
 const {

@@ -1043,3 +1043,98 @@
     animation: none;
   }
 }
+
+/* ===== Note editor (add-manual-note-editing) =====
+   The note reader's own header controls and its raw-markdown editing field.
+   Built on the same tokens as the reader chrome above so editing reads as part
+   of the reader rather than as a panel dropped into it. */
+.note-reader-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.note-reader-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  letter-spacing: 0.01em;
+  color: var(--text-soft);
+  background: rgba(255, 255, 255, 0.04);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+  transition: color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.note-reader-action:hover:not(:disabled) {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.note-reader-action.primary {
+  color: var(--mint);
+  background: rgba(var(--mint-rgb), 0.1);
+  box-shadow: inset 0 0 0 1px rgba(var(--mint-rgb), 0.3);
+}
+
+.note-reader-action:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Raw markdown, frontmatter included — monospace because what is being edited
+   is the file, not a rendering of it. */
+.note-reader-editor {
+  width: 100%;
+  min-height: 320px;
+  height: 100%;
+  resize: none;
+  padding: 12px 14px;
+  border-radius: 10px;
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.28);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12.5px;
+  line-height: 1.65;
+  tab-size: 2;
+  white-space: pre-wrap;
+}
+
+.note-reader-editor:focus {
+  outline: none;
+  box-shadow: inset 0 0 0 1px rgba(var(--mint-rgb), 0.35);
+}
+
+/* Inline ask, never a blocking dialog (main-thread-budget forbids one). */
+.note-reader-confirm,
+.note-reader-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.note-reader-confirm {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.05);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+}
+
+.note-reader-error {
+  color: var(--coral);
+  background: rgba(var(--coral-rgb), 0.08);
+  box-shadow: inset 0 0 0 1px rgba(var(--coral-rgb), 0.28);
+}
+
+.note-reader-confirm span,
+.note-reader-error span {
+  flex: 1;
+  min-width: 0;
+}

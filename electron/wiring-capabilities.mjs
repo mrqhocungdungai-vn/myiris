@@ -24,6 +24,7 @@ import { createSecondBrainCapability } from "./capabilities/second-brain.mjs";
  *   getPipelineAvailable: () => boolean,
  *   userDisplayName: () => string,
  *   dialog: { showOpenDialog: Function, showSaveDialog: Function },
+ *   openPathExternally?: (filePath: string) => Promise<any>,
  *   irisPluginDir: () => string | null,
  *   runQueue: any,
  *   findWorkstream: any,
@@ -59,6 +60,7 @@ export function createCapabilitiesWiring({
   getPipelineAvailable,
   userDisplayName,
   dialog,
+  openPathExternally,
   irisPluginDir,
   runQueue,
   findWorkstream,
@@ -104,6 +106,9 @@ export function createCapabilitiesWiring({
     irisPluginDir,
     userDisplayName,
     getPipelineAvailable,
+    // add-manual-note-editing design.md D3: Electron's `shell.openPath`,
+    // injected so the capability itself stays Electron-free.
+    openPathExternally,
     // Ambient session capture's flush reads the SAME ring runExec's own
     // prompt composition already reads below — no second buffer, no new
     // recording path (ambient-memory spec: "Only already-retained text is

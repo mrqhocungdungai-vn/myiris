@@ -3,6 +3,7 @@
 // the read-only galaxy graph watcher, and this capability's slice of Gemini
 // prose / IPC / teardown — gathered here per design.md D10 rather than
 // spread across the layered core modules. Electron-free.
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -49,6 +50,21 @@ const NOTES_SESSIONS_DIR = sessionsSpoolDir(NOTES_VAULT_DIR);
 // that a crash loses only a few seconds of conversation, without writing to
 // disk on every utterance.
 const AMBIENT_FLUSH_INTERVAL_MS = 30000;
+
+// Ceiling on a single hand-authored note write (add-manual-note-editing). Not a
+// security boundary — the writer is the vault's owner typing into their own note
+// — but a bound on what one IPC message may carry, on the same terms every other
+// renderer-supplied value in this module is length-checked. Counted in string
+// length (UTF-16 code units), not bytes, because that is what is actually being
+// bounded here; generous enough that no real note reaches it either way.
+const MAX_NOTE_WRITE_CHARS = 2_000_000;
+
+// The revision token read-note serves and write-note requires: a hash of the
+// exact content, so a save can be refused when the file no longer holds the
+// bytes the editor was opened on (add-manual-note-editing design.md D2).
+function revisionOf(content) {
+  return crypto.createHash("sha256").update(content, "utf8").digest("hex");
+}
 
 // How many un-synthesized records make it worth OFFERING to weave them in.
 // Offering too eagerly trains the user to say no; the number is a threshold for
@@ -151,6 +167,7 @@ const MUTATE_VAULT_NOTES_DECLARATION = {
  *   userDisplayName: () => string,
  *   getPipelineAvailable: () => boolean,
  *   recentUtterances?: () => Array<{ text: string, at: number }>,
+ *   openPathExternally?: (filePath: string) => Promise<any>,
  * }} deps
  */
 export function createSecondBrainCapability({
@@ -161,6 +178,16 @@ export function createSecondBrainCapability({
   userDisplayName,
   getPipelineAvailable,
   recentUtterances = () => [],
+  /**
+   * Hands a resolved, in-vault file path to the OS's default application for
+   * it. Injected rather than imported (design.md D3 of add-manual-note-editing)
+   * because it is Electron's `shell.openPath` and this module is Electron-free
+   * — `main-process-structure` confines Electron API access to four modules, and
+   * keeping this one out of that set is what makes it importable in a plain
+   * vitest file. The wiring layer supplies the real one; a test supplies a fake
+   * that records the path it was handed.
+   */
+  openPathExternally = async () => {},
 }) {
   // The wiki skills ship in the Iris plugin, so this checks the app bundle —
   // never ~/.claude, which Iris no longer reads or writes. It still gates the
@@ -369,6 +396,29 @@ This note is just a starting point — edit it, retag it, or delete it whenever 
         "- A deictic request now resolves against whatever is focused in the second-brain galaxy, if anything.",
       ]);
     }
+  }
+
+  // open-note-session "A hand edit to the open note invalidates the session's
+  // reading of it": a note now has two writers, and the session's value is that
+  // a reading and the edits referring to it come from one context. A hand edit
+  // between the two changes the text under the session's paragraph division, so
+  // "drop the second one" resolves against text that is no longer there — the
+  // same failure read-back-verbatim exists to prevent, reintroduced by a
+  // different route. Iris deliberately does NOT try to reconcile the old
+  // reading with the new text (there is no correct way to do that from outside
+  // the session); it says the reading is superseded and lets the session
+  // re-read. Silent and run-free, on exactly announceNoteOpened's terms.
+  function announceNoteEdited() {
+    const note = resolveOpenNote();
+    if (!note) return;
+    notifyIris([
+      "SYSTEM_EVENT_NOTE_EDITED",
+      openNoteLine(note),
+      "The user just edited this note by hand in the reader, so its text has changed.",
+      "instructions_to_iris:",
+      "- Silently remember that any earlier reading of this note is superseded. Do NOT speak or respond to this message.",
+      "- Before changing a named part of it, have the note read again — a part named against the earlier reading may no longer be the same text.",
+    ]);
   }
 
   // Live push (mirrors announceWorkspaceUpdate, for the identical reason: the
@@ -842,6 +892,14 @@ This note is just a starting point — edit it, retag it, or delete it whenever 
     },
     // Read-by-node-id only, resolved against the single graph cache — never a
     // renderer-supplied filesystem path (design.md D8/L-1).
+    //
+    // `revision` is the token the editor hands back on save
+    // (add-manual-note-editing design.md D2): a hash of the exact bytes served,
+    // so a save can be refused when the file no longer holds them. A content
+    // hash rather than an mtime — mtime answers "when was it touched", can
+    // collide inside a millisecond, and can change without the content
+    // changing, which would refuse a save the user should have been allowed to
+    // make.
     {
       channel: "secondbrain:read-note",
       kind: "handle",
@@ -849,7 +907,61 @@ This note is just a starting point — edit it, retag it, or delete it whenever 
         const realNotePath = resolveVaultNotePath(id);
         if (!realNotePath) return { ok: false };
         try {
-          return { ok: true, content: fs.readFileSync(realNotePath, "utf8") };
+          const content = fs.readFileSync(realNotePath, "utf8");
+          return { ok: true, content, revision: revisionOf(content) };
+        } catch {
+          return { ok: false };
+        }
+      },
+    },
+    // personal-knowledge-notes "A user-authored content write SHALL be
+    // permitted": the ONLY arbitrary-content write in the app, and deliberately
+    // reachable from nowhere but the note reader's editor — it is not a verb,
+    // not an MCP tool, and not in any skills surface, which is what keeps the
+    // model-facing side of that requirement ("only enumerated operations")
+    // still true. Guarded by the same resolveVaultNotePath as the read above,
+    // so a ghost node, an unknown id, a since-deleted file and a symlink
+    // escaping the vault are all already refused without restating any of it.
+    {
+      channel: "secondbrain:write-note",
+      kind: "handle",
+      fn: (_event, payload) => {
+        const { id, content, revision, force } = payload ?? {};
+        if (typeof content !== "string" || content.length > MAX_NOTE_WRITE_CHARS) return { ok: false, reason: "refused" };
+        const realNotePath = resolveVaultNotePath(id);
+        if (!realNotePath) return { ok: false, reason: "refused" };
+        try {
+          // Concurrent-write refusal (design.md D2): Claude's note session, a
+          // voice capture, or another app may have written the file since the
+          // reader read it. Iris refuses rather than picking a winner; the
+          // renderer keeps the user's draft and can re-issue with `force` once
+          // the user has explicitly said to overwrite.
+          if (force !== true) {
+            const onDisk = fs.readFileSync(realNotePath, "utf8");
+            if (revisionOf(onDisk) !== revision) return { ok: false, reason: "stale" };
+          }
+          fs.writeFileSync(realNotePath, content, "utf8");
+        } catch {
+          return { ok: false, reason: "refused" };
+        }
+        // Only when the saved note is the one the reader has open — a save to
+        // anything else is not a stale-reading hazard for the resident session.
+        if (openNoteId && resolveVaultNotePath(openNoteId) === realNotePath) announceNoteEdited();
+        return { ok: true, revision: revisionOf(content) };
+      },
+    },
+    // The route out to a real editor. Resolved by identity like every other
+    // vault path, then handed to the injected opener — this module never
+    // imports Electron (design.md D3).
+    {
+      channel: "secondbrain:open-note-externally",
+      kind: "handle",
+      fn: async (_event, id) => {
+        const realNotePath = resolveVaultNotePath(id);
+        if (!realNotePath) return { ok: false };
+        try {
+          await openPathExternally(realNotePath);
+          return { ok: true };
         } catch {
           return { ok: false };
         }

@@ -31,10 +31,11 @@ import { createLiveWiring } from "./wiring-live.mjs";
  *   canvasStoreFile: string,
  *   envFlag: (name: string, fallback?: boolean) => boolean,
  *   dialog: { showOpenDialog: Function, showSaveDialog: Function },
+ *   openPathExternally?: (filePath: string) => Promise<any>,
  *   getIsPackaged: () => boolean,
  * }} deps
  */
-export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, envFlag, dialog, getIsPackaged }) {
+export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, envFlag, dialog, openPathExternally, getIsPackaged }) {
   // windowModule and liveSessionModule are constructed in wiring-live.mjs
   // (this phase's own module-scope bindings, needed by consumers here that
   // exist before that phase runs — rendererBridge, sessionStoreModule,
@@ -345,6 +346,7 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     getPipelineAvailable: () => getPipelineAvailable(),
     userDisplayName,
     dialog,
+    openPathExternally,
     irisPluginDir: () => pipelineInstall.irisPluginDir(),
     runQueue,
     findWorkstream,

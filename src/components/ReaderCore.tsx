@@ -19,6 +19,7 @@ export default function ReaderCore({
   handRef,
   gesturesEnabled,
   onClose,
+  closeGuard,
 }: {
   title: string;
   body: ReactNode;
@@ -39,6 +40,18 @@ export default function ReaderCore({
    */
   gesturesEnabled: boolean;
   onClose: () => void;
+  /**
+   * Consulted before every close. Returning false means the caller has handled
+   * the attempt and the reader must stay open — the note reader uses it to
+   * intercept a close that would discard unsaved edits
+   * (add-manual-note-editing design.md D4).
+   *
+   * One hook covers every route because they all funnel through
+   * `closeWithSnap()`: `Escape`, the fist-closes-reader gesture, the × control,
+   * and a click on the backdrop. A caller adding its own key listener instead
+   * would race this component's on the same `Escape`.
+   */
+  closeGuard?: () => boolean;
 }) {
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [readerScale, setReaderScale] = useState(1);
@@ -53,6 +66,7 @@ export default function ReaderCore({
 
   function closeWithSnap() {
     if (closing) return;
+    if (closeGuard && !closeGuard()) return;
     setClosing(true);
     window.setTimeout(onClose, 180);
   }

@@ -96,7 +96,14 @@ The entire second-brain IPC surface (`electron/preload.cjs:112-120`):
 | `secondbrain:graph-updated` | read (push) |
 
 **There is no write channel.** From inside the galaxy the user cannot create,
-edit, link, tag, rename, or delete a note. They also cannot search or filter —
+edit, link, tag, rename, or delete a note.
+
+> **Superseded in part.** `mutate_vault_notes` since added the three enumerated
+> structural edits (link / unlink / set tags), and `add-manual-note-editing`
+> added `secondbrain:write-note` + `secondbrain:open-note-externally` — the note
+> reader can now be edited by hand and handed off to an external editor. Create,
+> rename and delete are still absent, and there is still no query surface, so
+> the rest of this section stands. They also cannot search or filter —
 there is no query surface at all.
 
 What the graph shows is thin, too: a node's label is its **filename stem**

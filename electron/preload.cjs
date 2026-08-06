@@ -112,6 +112,14 @@ contextBridge.exposeInMainWorld("iris", {
   getSecondBrainAvailability: () => ipcRenderer.invoke("secondbrain:availability"),
   getSecondBrainGraph: () => ipcRenderer.invoke("secondbrain:get-graph"),
   readSecondBrainNote: (id) => ipcRenderer.invoke("secondbrain:read-note", id),
+  // add-manual-note-editing: the note reader's editor. `revision` is the token
+  // read-note served for the content the editor was opened on — main refuses the
+  // write if the file no longer holds it, so a concurrent write (Claude's note
+  // session, a capture, another app) is never silently clobbered. `force: true`
+  // is the user's explicit "overwrite anyway" after such a refusal.
+  writeSecondBrainNote: (id, content, revision, force) =>
+    ipcRenderer.invoke("secondbrain:write-note", { id, content, revision, force }),
+  openSecondBrainNoteExternally: (id) => ipcRenderer.invoke("secondbrain:open-note-externally", id),
   activateSecondBrain: () => ipcRenderer.send("secondbrain:activate"),
   deactivateSecondBrain: () => ipcRenderer.send("secondbrain:deactivate"),
   onSecondBrainGraphUpdated: (callback) => {

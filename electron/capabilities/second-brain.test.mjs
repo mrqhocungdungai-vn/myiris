@@ -306,6 +306,12 @@ describe("second-brain capability: ipcHandlers", () => {
       "secondbrain:activate": "on",
       "secondbrain:deactivate": "on",
       "secondbrain:read-note": "handle",
+      // add-manual-note-editing: the note reader's editor and its route out to
+      // a real editor. Neither is reachable from any model-facing surface —
+      // personal-knowledge-notes, "A user-authored write is not reachable by a
+      // model".
+      "secondbrain:write-note": "handle",
+      "secondbrain:open-note-externally": "handle",
       "secondbrain:set-focus": "handle",
       "secondbrain:get-focus": "handle",
       "secondbrain:clear-focus": "handle",
@@ -936,5 +942,170 @@ describe("second-brain capability: mutate_vault_notes tool", () => {
       expect(result.status).toBe("ok");
       expect(fs.readFileSync(path.join(NOTES_VAULT_DIR, "a.md"), "utf8")).toContain("urgent");
     });
+  });
+});
+
+// add-manual-note-editing: the app's only arbitrary-content write, reachable
+// from the note reader's editor and from nowhere else. These cover the guard it
+// inherits from resolveVaultNotePath, the concurrent-write refusal, and the
+// stale-reading announcement to the voice layer.
+describe("second-brain capability: hand-authored note write", () => {
+  const NODES = [
+    { id: "a", title: "Alpha", tags: ["x"], ghost: false, body: "# Alpha\noriginal\n" },
+    { id: "b", title: "Beta", tags: [], ghost: false, body: "# Beta\n" },
+    { id: "missing", title: "Missing", tags: [], ghost: true },
+  ];
+
+  function notePath(id) {
+    return path.join(NOTES_VAULT_DIR, `${id}.md`);
+  }
+
+  async function openWithRead(cap, id = "a") {
+    await seedGraph(cap, NODES);
+    return handlerFor(cap, "secondbrain:read-note")(null, id);
+  }
+
+  it("read-note serves a revision token for the content it returned", async () => {
+    const cap = make();
+    const read = await openWithRead(cap);
+    expect(read.ok).toBe(true);
+    expect(read.content).toBe("# Alpha\noriginal\n");
+    expect(read.revision).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("writes the note when the revision still matches, and returns the new revision", async () => {
+    const cap = make();
+    const read = await openWithRead(cap);
+    const result = handlerFor(cap, "secondbrain:write-note")(null, {
+      id: "a",
+      content: "# Alpha\nedited by hand\n",
+      revision: read.revision,
+    });
+    expect(result.ok).toBe(true);
+    expect(fs.readFileSync(notePath("a"), "utf8")).toBe("# Alpha\nedited by hand\n");
+    // The returned revision is the one a second save in the same sitting must
+    // present — i.e. of what was just written, not of what was first read.
+    expect(result.revision).not.toBe(read.revision);
+    const second = handlerFor(cap, "secondbrain:write-note")(null, {
+      id: "a",
+      content: "# Alpha\nagain\n",
+      revision: result.revision,
+    });
+    expect(second.ok).toBe(true);
+  });
+
+  it("refuses a stale revision and leaves the file untouched", async () => {
+    const cap = make();
+    const read = await openWithRead(cap);
+    // Something else writes the note after the reader read it — Claude's note
+    // session, a capture, or another app.
+    fs.writeFileSync(notePath("a"), "# Alpha\nwritten by someone else\n");
+    const result = handlerFor(cap, "secondbrain:write-note")(null, {
+      id: "a",
+      content: "# Alpha\nmy edit\n",
+      revision: read.revision,
+    });
+    expect(result).toEqual({ ok: false, reason: "stale" });
+    expect(fs.readFileSync(notePath("a"), "utf8")).toBe("# Alpha\nwritten by someone else\n");
+  });
+
+  it("force overwrites a note that changed underneath", async () => {
+    const cap = make();
+    const read = await openWithRead(cap);
+    fs.writeFileSync(notePath("a"), "# Alpha\nwritten by someone else\n");
+    const result = handlerFor(cap, "secondbrain:write-note")(null, {
+      id: "a",
+      content: "# Alpha\nmy edit wins\n",
+      revision: read.revision,
+      force: true,
+    });
+    expect(result.ok).toBe(true);
+    expect(fs.readFileSync(notePath("a"), "utf8")).toBe("# Alpha\nmy edit wins\n");
+  });
+
+  it("refuses a ghost node, an unknown id, a malformed id, and non-string content", async () => {
+    const cap = make();
+    const read = await openWithRead(cap);
+    const write = handlerFor(cap, "secondbrain:write-note");
+    for (const id of ["missing", "nope", "", 42, "x".repeat(513)]) {
+      expect(write(null, { id, content: "hi", revision: read.revision })).toEqual({ ok: false, reason: "refused" });
+    }
+    expect(write(null, { id: "a", content: 42, revision: read.revision })).toEqual({ ok: false, reason: "refused" });
+    expect(write(null, undefined)).toEqual({ ok: false, reason: "refused" });
+    expect(fs.readFileSync(notePath("a"), "utf8")).toBe("# Alpha\noriginal\n");
+  });
+
+  it("announces the edit to the voice layer only when the saved note is the open one", async () => {
+    const notifyIris = vi.fn();
+    const cap = make({ notifyIris });
+    const read = await openWithRead(cap);
+
+    // Nothing open yet: a save announces nothing.
+    handlerFor(cap, "secondbrain:write-note")(null, { id: "a", content: "one\n", revision: read.revision });
+    expect(notifyIris.mock.calls.flat(2).join("\n")).not.toContain("SYSTEM_EVENT_NOTE_EDITED");
+
+    // Open "b", then save "a" — a different note is not a stale-reading hazard.
+    handlerFor(cap, "secondbrain:note-opened")(null, "b");
+    notifyIris.mockClear();
+    const readA = handlerFor(cap, "secondbrain:read-note")(null, "a");
+    handlerFor(cap, "secondbrain:write-note")(null, { id: "a", content: "two\n", revision: readA.revision });
+    expect(notifyIris.mock.calls.flat(2).join("\n")).not.toContain("SYSTEM_EVENT_NOTE_EDITED");
+
+    // Save the note that IS open.
+    notifyIris.mockClear();
+    const readB = handlerFor(cap, "secondbrain:read-note")(null, "b");
+    handlerFor(cap, "secondbrain:write-note")(null, { id: "b", content: "# Beta\nedited\n", revision: readB.revision });
+    const announced = notifyIris.mock.calls.flat(2).join("\n");
+    expect(announced).toContain("SYSTEM_EVENT_NOTE_EDITED");
+    expect(announced).toContain("Beta");
+    expect(announced).toContain("superseded");
+  });
+
+  it("a refused write announces nothing", async () => {
+    const notifyIris = vi.fn();
+    const cap = make({ notifyIris });
+    const read = await openWithRead(cap);
+    handlerFor(cap, "secondbrain:note-opened")(null, "a");
+    fs.writeFileSync(notePath("a"), "changed\n");
+    notifyIris.mockClear();
+    handlerFor(cap, "secondbrain:write-note")(null, { id: "a", content: "mine\n", revision: read.revision });
+    expect(notifyIris.mock.calls.flat(2).join("\n")).not.toContain("SYSTEM_EVENT_NOTE_EDITED");
+  });
+
+  it("hands the external opener a resolved in-vault path, never the caller's id", async () => {
+    const openPathExternally = vi.fn(async () => "");
+    const cap = make({ openPathExternally });
+    await seedGraph(cap, NODES);
+    const open = handlerFor(cap, "secondbrain:open-note-externally");
+
+    await expect(open(null, "a")).resolves.toEqual({ ok: true });
+    expect(openPathExternally).toHaveBeenCalledWith(fs.realpathSync(notePath("a")));
+
+    openPathExternally.mockClear();
+    for (const id of ["missing", "nope", "", 42]) {
+      await expect(open(null, id)).resolves.toEqual({ ok: false });
+    }
+    expect(openPathExternally).not.toHaveBeenCalled();
+  });
+
+  // personal-knowledge-notes "A user-authored write is not reachable by a model":
+  // the write lives on the IPC surface only. Asserting the EXACT declaration
+  // roster is what makes that checkable — a future change that exposed the write
+  // (or any other arbitrary-content write) as a tool fails here rather than
+  // merely being in poor taste.
+  it("exposes no arbitrary-content write to a model", () => {
+    const cap = make();
+    expect(cap.toolDeclarations.map((d) => d.name)).toEqual(["capture_note", "mutate_vault_notes"]);
+    const mutate = cap.toolDeclarations.find((d) => d.name === "mutate_vault_notes");
+    // The one note-editing tool a model has takes an enumerated operation, never
+    // note content.
+    expect(mutate.parameters.properties.operation.enum).toEqual(["link", "unlink", "set_tags"]);
+    expect(Object.keys(mutate.parameters.properties)).not.toContain("content");
+  });
+
+  it("reports failure rather than throwing when the opener rejects", async () => {
+    const cap = make({ openPathExternally: vi.fn(async () => { throw new Error("no handler"); }) });
+    await seedGraph(cap, NODES);
+    await expect(handlerFor(cap, "secondbrain:open-note-externally")(null, "a")).resolves.toEqual({ ok: false });
   });
 });
