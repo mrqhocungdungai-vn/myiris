@@ -31,23 +31,24 @@
 
 ## 5. Manual verification on a real vault
 
-- [ ] 5.1 Open the galaxy on a vault with enough notes to frame far out: confirm titles are too small to read at that distance and the view reads as before (superseded by 5.12/design.md D11 — titles are no longer literally absent, only illegible at distance)
-- [ ] 5.2 Fly in toward a cluster: its titles grow into legibility; other clusters also carry titles (shrunk if far), not permanently unlabelled; pull back and they shrink again (superseded by 5.12/design.md D11)
-- [ ] 5.3 Confirm titles track their nodes while the layout is still settling (open the galaxy and watch during the initial settle)
-- [ ] 5.4 Focus a note (Cmd/Ctrl-click or pinch-tap): confirm no dimmed node carries a title, and the focused node and its one-hop neighbours do
-- [ ] 5.5 Confirm titles work with hand control off (mouse-drag navigation only) and with it on
-- [ ] 5.6 Toggle the galaxy off and on several times: no leaked labels, no growing memory, and titles still correct after remount
-- [ ] 5.7 Put Iris to sleep with the galaxy open: rendering pauses and titles stop; on wake they resume correctly positioned
-- [ ] 5.8 Verify on the high-fidelity quality path specifically that bloom does not smear the text illegibly, and adjust the label colour if it does
-- [ ] 5.9 (superseded by 5.12/design.md D11) ~~Confirm the tuning constants feel right on a real vault at both ends — titles are not permanently on, and not unreachably far — and adjust `LABEL_MAX_DISTANCE`/`LABEL_BUDGET` if not~~ — replaced by: confirm every note in the test vault gets a title (vault is under `LABEL_BUDGET_CEILING`), and that a title far from the camera is small enough to read as noise rather than as competing text
-- [ ] 5.10 Create a note whose filename contains `<img src=x onerror=alert(1)>`, get close enough to name it, and confirm the characters render literally with no script execution (spec: "A crafted note title is inert as an in-scene title")
+- [x] 5.1 Open the galaxy on a vault with enough notes to frame far out: confirm titles are too small to read at that distance and the view reads as before (superseded by 5.12/design.md D11 — titles are no longer literally absent, only illegible at distance)
+- [x] 5.2 Fly in toward a cluster: its titles grow into legibility; other clusters also carry titles (shrunk if far), not permanently unlabelled; pull back and they shrink again (superseded by 5.12/design.md D11)
+- [x] 5.3 Confirm titles track their nodes while the layout is still settling (open the galaxy and watch during the initial settle)
+- [x] 5.4 Focus a note (Cmd/Ctrl-click or pinch-tap): confirm no dimmed node carries a title, and the focused node and its one-hop neighbours do
+- [x] 5.5 Confirm titles work with hand control off (mouse-drag navigation only) and with it on
+- [x] 5.6 Toggle the galaxy off and on several times: no leaked labels, no growing memory, and titles still correct after remount
+- [x] 5.7 Put Iris to sleep with the galaxy open: rendering pauses and titles stop; on wake they resume correctly positioned
+- [x] 5.8 Verify on the high-fidelity quality path specifically that bloom does not smear the text illegibly, and adjust the label colour if it does
+- [x] 5.9 (superseded by 5.12/design.md D11) ~~Confirm the tuning constants feel right on a real vault at both ends — titles are not permanently on, and not unreachably far — and adjust `LABEL_MAX_DISTANCE`/`LABEL_BUDGET` if not~~ — replaced by: confirm every note in the test vault gets a title (vault is under `LABEL_BUDGET_CEILING`), and that a title far from the camera is small enough to read as noise rather than as competing text
+- [x] 5.10 Create a note whose filename contains `<img src=x onerror=alert(1)>`, get close enough to name it, and confirm the characters render literally with no script execution (spec: "A crafted note title is inert as an in-scene title")
 - [x] 5.11 (found during manual pass) With mouse-only navigation (scroll-wheel zoom, no pan), a note off the camera's exact line of sight never revealed its title no matter how far zoomed in, while one on that line did — traced to selecting by the camera's eye position, which `TrackballControls`' zoom dollies toward a fixed orbit target rather than toward whatever's on screen. Fixed: measure from `controls.target` instead (design.md D10); spec.md and this file updated to record the requirement change.
 - [x] 5.12 (found during manual pass) Even with 5.11's fix, mouse-only navigation (rotate + scroll-zoom, no pan) can only ever bring ONE region within the orbit target's reach — every other cluster stayed permanently unlabelled, which read as broken rather than as decluttering. Reversed per explicit request: distance-based reveal removed entirely (`LABEL_MAX_DISTANCE = Infinity`); every eligible note always carries a title, legibility left to `sizeAttenuation`'s perspective shrink; the sprite pool is now sized to the vault's note count (capped at `LABEL_BUDGET_CEILING = 500`) instead of a small fixed budget (design.md D11). proposal.md/design.md/spec.md updated to record the reversal; 5.1/5.2/5.9 above amended accordingly.
+- [x] 5.13 (found during manual pass, unrelated to labels — second-brain-gesture-nav) Rotating the galaxy with a fist felt fine, but releasing the fist to look at the now-centered note swung the camera to a different one. Two contributing causes fixed: (a) `TrackballControls`' rotation momentum (`_lastAngle`) freezes mid-decay while `controls.enabled = false` during a gesture drive, then applies as one undamped jump on release — now zeroed in `restoreControlsIfNeeded` before re-enabling; (b) the dominant cause — orbit's movement delta was read from the index fingertip (`hand.point`), which moves a long way purely from curling/uncurling into a fist, independent of actual hand translation, right at the engage/release boundary. Fixed by adding `wristPoint` (the wrist landmark, pose-independent) to `TrackedHand`/`HandState` and driving orbit's delta from it instead. Confirmed fixed by manual test.
 
 ## 6. Gates
 
-- [ ] 6.1 `npm run build`
-- [ ] 6.2 `npm test`
-- [ ] 6.3 `npm run lint`
-- [ ] 6.4 `npm run scan:secrets`
-- [ ] 6.5 `npm run spec:check`
+- [x] 6.1 `npm run build`
+- [x] 6.2 `npm test`
+- [x] 6.3 `npm run lint`
+- [x] 6.4 `npm run scan:secrets`
+- [x] 6.5 `npm run spec:check`
