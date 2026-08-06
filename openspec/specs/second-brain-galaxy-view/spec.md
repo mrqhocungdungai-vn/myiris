@@ -1,6 +1,6 @@
 ## Purpose
 
-Iris renders the `~/iris-second-brain` vault (the `personal-knowledge-notes` capability's write target) as a live 3D link-graph galaxy inside the Glass HUD — a main-process graph owner (scan + parse + RAM cache + `fs.watch` live refresh), a toggleable immersive galaxy layer with a deep-space backdrop, and a note-reader overlay for opening a node's markdown. Viewing is gated only on the vault existing, independent of the Claude pipeline, since it is pure-local reading of markdown.
+Iris renders the `~/iris-second-brain` vault (the `personal-knowledge-notes` capability's write target) as a live 3D link-graph galaxy inside the Glass HUD — a main-process graph owner (scan + parse + RAM cache + `fs.watch` live refresh), a toggleable immersive galaxy layer with a deep-space backdrop, and a note-reader overlay for reading a node's markdown and editing it by hand. Viewing is gated only on the vault existing, independent of the Claude pipeline, since it is pure-local reading of markdown.
 ## Requirements
 ### Requirement: The second-brain vault is rendered as a 3D galaxy in the Glass HUD
 
@@ -123,9 +123,119 @@ The spool exclusion is not cosmetic. Without it the scan admits one date-named n
 - **WHEN** a note file is deleted from the vault while the galaxy is displayed
 - **THEN** after the debounce its node is removed from the galaxy and the surrounding nodes keep their positions
 
+### Requirement: The node being pointed at reveals its link cluster
+
+The galaxy SHALL render a **pointed-at** node distinctly and SHALL light up the links incident to it, so that what a note is connected to is answerable by pointing at it. The pointed-at node together with its one-hop neighbours SHALL be drawn at full strength.
+
+**The lit links SHALL be unmistakably prominent** — the point of the requirement is that a cluster reads at a glance, so the difference between a lit link and a resting one SHALL NOT be a subtle shift in an already-faint line. Any graph-wide opacity or intensity ceiling the renderer applies SHALL be accounted for, so that raising a link's own intensity actually reaches the view rather than being scaled back down by a global factor. Making lit links prominent SHALL NOT brighten the resting links: at rest the graph SHALL look exactly as it did before this requirement existed.
+
+**Everything outside the pointed-at cluster SHALL be dimmed for as long as it is pointed at.** Brightening the cluster is not enough on its own: in a dense galaxy a brighter cluster still sits inside a mesh of other links, so the answer to "what is this note connected to" has to be the only thing lit. The reveal is a spotlight, not an accent.
+
+The dimming SHALL use the same treatment the focus declutter uses, so the galaxy has one visual language for "this is what matters right now" rather than two that have to be told apart.
+
+The one-hop neighbourhood used here SHALL be the same one the focus declutter uses, so the highlight and the dimming can never disagree about what one hop means.
+
+**Pointing SHALL take precedence over the focus's own dimming** rather than adding to it: while something is pointed at, what stays bright is that node's cluster, and when nothing is pointed at it is the focus's. One question is answered at a time, and a second bright island beside the first would answer neither clearly. It follows that pointing at a node the focus has dimmed reveals what that node connects to without the user having to change the focus first, and that releasing restores the focus's dimming exactly as it was.
+
+A **focused** node SHALL remain visibly focused even while the spotlight is elsewhere: losing sight of a selection because the user pointed at something else is a worse loss than the spotlight is worth.
+
+**The highlight SHALL be transient and SHALL change no state.** It SHALL NOT select anything, SHALL NOT alter the focus, SHALL NOT move the camera, and SHALL NOT open a note. Ceasing to point SHALL restore exactly the previous rendering, including whatever dimming a live focus was applying. Nothing SHALL accumulate: at most one node is pointed at at any moment, and moving on leaves nothing behind.
+
+A node SHALL be pointed at only by an input that **means** to point at it, with no difference in what is drawn between them:
+
+- the **mouse hovering** it;
+- when hand control is on, the **inspect pose** held near it (see `second-brain-gesture-nav`, "A held two-finger pose reveals a node's link cluster");
+- the node a **`Pointing_Up` dwell is charging against**, since that dwell is already deliberate and already gives the node visible feedback.
+
+A hand that is merely present in frame in some other pose SHALL NOT point at anything. When more than one input could apply, the hand SHALL win, so the highlight follows whichever input the user is actually using rather than flickering between them.
+
+A **ghost node** (an unresolved `[[wikilink]]` target) SHALL NOT be pointed at by any producer. They are held to the same eligibility deliberately: the hand's target resolution already excludes ghosts because a ghost is not openable, and a highlight that appeared under the mouse but never under the hand would make the same node behave differently depending on the input device.
+
+Repainting for a highlight change SHALL be coalesced so that sweeping a pointer across a dense region cannot force one full-graph repaint per node crossed.
+
+#### Scenario: Pointing at a node lights its links
+
+- **WHEN** the user points at a real note-node — by mouse hover, or by the inspect pose with hand control on
+- **THEN** the links incident to that node are drawn prominently, and that node and its one-hop neighbours are drawn at full strength
+
+#### Scenario: A lit link is obviously lit
+
+- **WHEN** a node's cluster is lit while the rest of the graph is at rest
+- **THEN** the difference is immediately visible rather than a faint change to an already-faint line — no graph-wide opacity or intensity ceiling scales the lit links back down
+
+#### Scenario: Resting links look exactly as they did before
+
+- **WHEN** nothing is pointed at
+- **THEN** the links are drawn exactly as they were before the highlight existed — making lit links prominent did not brighten the graph at rest
+
+#### Scenario: Ceasing to point restores the view
+
+- **WHEN** the user stops pointing at the node (moves the mouse off it, releases the inspect pose, or moves the hand away)
+- **THEN** the links and nodes return to exactly how they were drawn before, including any dimming a live focus was applying
+
+#### Scenario: The highlight selects nothing
+
+- **WHEN** a node's cluster is highlighted by pointing
+- **THEN** the focus is unchanged, no note opens, the camera does not move, and nothing the voice layer or a run reads has changed
+
+#### Scenario: Nothing accumulates across nodes
+
+- **WHEN** the user points at one node after another
+- **THEN** exactly one cluster is lit at a time and each previous one returns to normal — no growing set of lit nodes builds up
+
+#### Scenario: The rest of the galaxy dims around the pointed-at cluster
+
+- **WHEN** the user points at a node while nothing is focused
+- **THEN** everything outside that node's one-hop cluster is dimmed for as long as it is pointed at, so the cluster is the only lit thing in the view
+
+#### Scenario: Pointing at a dimmed node reveals its cluster
+
+- **WHEN** a focus is active, everything outside its one-hop neighbourhood is dimmed, and the user points at one of those dimmed nodes
+- **THEN** that node and its own one-hop neighbours are drawn at full strength while it is pointed at, everything else — including what the focus was keeping bright — is dimmed, and the focus itself is not changed
+
+#### Scenario: Releasing restores the focus's dimming
+
+- **WHEN** the user stops pointing while a focus is still active
+- **THEN** the dimming returns to exactly what the focus was applying before
+
+#### Scenario: A selection stays visible under a spotlight elsewhere
+
+- **WHEN** notes are focused and the user points at an unrelated node
+- **THEN** the focused notes are still visibly focused, even though they are outside the lit cluster
+
+#### Scenario: Every producer draws the same thing
+
+- **WHEN** the same node is pointed at by mouse hover on one occasion and by the inspect pose on another
+- **THEN** the rendering is identical in both cases
+
+#### Scenario: The hand's target wins over the mouse
+
+- **WHEN** hand control is on, the hand is pointing at one node, and the mouse pointer happens to rest over a different node
+- **THEN** the hand's target is the node whose cluster is highlighted
+
+#### Scenario: A ghost node is not pointed at
+
+- **WHEN** the user hovers or points at a faded ghost node
+- **THEN** no cluster highlight is drawn for it
+
+#### Scenario: Sweeping across a dense region does not repaint per node
+
+- **WHEN** the pointer moves rapidly across many nodes in a dense cluster
+- **THEN** highlight repaints are coalesced rather than one full-graph repaint being performed for every node crossed
+
 ### Requirement: Opening a node shows the note's content
 
 Clicking a real note-node in the galaxy SHALL open that note in a note-reader overlay that renders the note's markdown (title plus body). The note's content SHALL be fetched by node id and resolved to a file in the main process (never by a renderer-supplied path); a ghost node (unresolved link with no backing file) SHALL NOT be openable. The overlay SHALL present the note's own content without the task-specific chrome of the run reader (no run/session id, agent, or status badges), and at most one reader (task or note) SHALL be open at a time. Closing the overlay SHALL return to the galaxy with the layer still active. The note reader SHALL exist only while the galaxy layer does: whenever the galaxy is not active the note reader SHALL NOT be shown **and** the stored open-note state SHALL be cleared — the first makes the invariant hold by construction even for a fetch that lands after the close, the second prevents a stale note from reappearing the next time the galaxy is opened — so that **no** galaxy-close path — the toggle, opening the drawing panel, leaving the HUD by button/hotkey/tray, or a force-close after a render crash — and no in-flight note fetch that completes after the galaxy closed can leave a note reader stranded over the transparent HUD or the deck.
+
+**The reader SHALL also be able to edit the note.** A control SHALL switch the body between the rendered markdown and the note's **raw text** in an editable field, and saving SHALL write that text to the note's file. Raw text, not a rendered editor: what the vault stores is markdown with frontmatter, and an editor that hid either would make the note's own structure unavailable to the person who owns it. Saving SHALL be an explicit action; there SHALL be no autosave, because a keystroke is not a decision. Discarding SHALL leave the file untouched.
+
+**Unsaved edits SHALL NOT be lost by any route that closes the reader.** While edits are pending, every close route — the × control, `Esc`, and the fist-closes-reader gesture alike — SHALL stop closing the reader and SHALL ask what to do instead, and the asking SHALL NOT use a blocking modal dialog. While the editor is active, the reader's hand-gesture bindings SHALL be suspended entirely, so a gesture cannot scroll, resize, or close away work in progress.
+
+**A save SHALL be refused rather than allowed to overwrite a concurrent change.** The content served when the note was opened SHALL carry a revision token, a save SHALL carry that token back, and the save SHALL be refused if the note's file no longer matches it — because Claude's note session, a voice capture, or another application may have written the file in between. A refused save SHALL preserve the user's unsaved text and SHALL report what happened; overwriting anyway SHALL be possible only as a further explicit action by the user. Iris SHALL NOT choose a winner on its own, in either direction.
+
+**The reader SHALL offer opening the note in the system's default application** for its file type, resolved by note identity in the main process like every other vault path. This exists because the in-app field is deliberately a small editor and some edits want a real one; it is a route out, not a replacement for editing in place.
+
+A successful save SHALL be reflected in the galaxy without a reload, on the same terms as any other change to the vault, and SHALL NOT disturb the settled layout beyond what the change itself implies.
 
 #### Scenario: Clicking a node opens its note
 
@@ -166,6 +276,51 @@ Clicking a real note-node in the galaxy SHALL open that note in a note-reader ov
 
 - **WHEN** the user opens a node and the galaxy closes before the note's content finishes loading
 - **THEN** no note reader appears when the fetch completes
+
+#### Scenario: Editing and saving a note by hand
+
+- **WHEN** the user switches the open note into editing, changes its text, and saves
+- **THEN** the note's file contains exactly the saved text, and the reader shows the updated note
+
+#### Scenario: The editor shows raw markdown
+
+- **WHEN** the user switches a note with frontmatter into editing
+- **THEN** the field contains the note's raw text including its frontmatter, not a rendered or stripped version of it
+
+#### Scenario: Nothing is written without an explicit save
+
+- **WHEN** the user types in the editor and then discards instead of saving
+- **THEN** the note's file is unchanged
+
+#### Scenario: A close route with unsaved edits asks first
+
+- **WHEN** edits are pending and the user presses `Esc`, activates the × control, or makes the fist-closes-reader gesture
+- **THEN** the reader does not close, the unsaved text is intact, and the user is asked what to do without a blocking dialog
+
+#### Scenario: Gestures cannot destroy work in progress
+
+- **WHEN** the editor is active and hand control is on
+- **THEN** the reader's scroll, resize and close gesture bindings are suspended for as long as the editor is active
+
+#### Scenario: A save is refused when the note changed underneath
+
+- **WHEN** the note's file has been written by something else since it was opened, and the user saves
+- **THEN** the save is refused, the file is not modified, the user's unsaved text is preserved, and the reader reports that the note changed
+
+#### Scenario: Overwriting a changed note is a separate explicit act
+
+- **WHEN** a save has been refused because the note changed, and the user chooses to overwrite anyway
+- **THEN** the note's file is written with the user's text, and nothing else about the flow was implicit
+
+#### Scenario: Opening the note in another application
+
+- **WHEN** the user activates the open-externally control on an open note
+- **THEN** that note's file is opened in the system's default application for it, resolved from the note's identity rather than from any path the renderer supplied
+
+#### Scenario: A saved note updates the galaxy live
+
+- **WHEN** a hand edit that changes the note's title, tags, or links is saved while the galaxy is displayed
+- **THEN** the galaxy reflects it after the usual debounce, with the surrounding nodes keeping their positions
 
 ### Requirement: Untrusted note content is contained
 
@@ -209,4 +364,3 @@ The "show second brain" capability SHALL be available exactly when the vault dir
 
 - **WHEN** the vault did not exist and the user captures their first note (which creates `~/iris-second-brain`)
 - **THEN** the "show second brain" toggle becomes available without relaunching Iris
-

@@ -44,15 +44,15 @@
 
 ## 7. Manual verification
 
-- [ ] 7.1 Open a note, Edit, change a word, Save → the file on disk contains the change and the reader shows it
-- [ ] 7.2 Confirm the editor shows raw frontmatter for a note that has it, and that saving it back unchanged leaves the file byte-identical
-- [ ] 7.3 Edit, then Cancel → the file is untouched
-- [ ] 7.4 Edit, then press `Esc` → the reader does not close and the discard prompt appears with the text intact; then Esc again → the prompt is answered, the reader closes, and nothing was written
-- [ ] 7.5 Edit with hand control on and make a fist → the reader does not close
-- [ ] 7.6 Edit a note, change the same note on disk in another app, then Save → the save is refused with the draft preserved; then Overwrite → the file is written
-- [ ] 7.7 Save an edit that changes a title/tag/`[[wikilink]]` while the galaxy is open → the graph updates after the debounce and the layout is not re-randomised
-- [ ] 7.8 Open a note externally → it opens in the default markdown application
-- [ ] 7.9 With a note open, ask Iris by voice to read it back, then edit it by hand, then ask for a change to a named paragraph → the change lands against the current text, not the superseded reading
+- [x] 7.1 Open a note, Edit, change a word, Save → the file on disk contains the change and the reader shows it
+- [x] 7.2 Confirm the editor shows raw frontmatter for a note that has it, and that saving it back unchanged leaves the file byte-identical
+- [x] 7.3 Edit, then Cancel → the file is untouched
+- [x] 7.4 Edit, then press `Esc` → the reader does not close and the discard prompt appears with the text intact; then Esc again → the prompt is answered, the reader closes, and nothing was written
+- [x] 7.5 Edit with hand control on and make a fist → the reader does not close
+- [x] 7.6 Edit a note, change the same note on disk in another app, then Save → the save is refused with the draft preserved; then Overwrite → the file is written
+- [x] 7.7 Save an edit that changes a title/tag/`[[wikilink]]` while the galaxy is open → the graph updates after the debounce and the layout is not re-randomised
+- [x] 7.8 Open a note externally → it opens in the default markdown application
+- [x] 7.9 With a note open, ask Iris by voice to read it back, then edit it by hand, then ask for a change to a named paragraph → the change lands against the current text, not the superseded reading
 - [x] 7.10 Confirm no model-facing surface gained a write: check the verb registry and the notes tool surface for any arbitrary-content write — verified statically and guarded by a test asserting the exact tool-declaration roster
 
 ## 8. Gates

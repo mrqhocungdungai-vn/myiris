@@ -45,21 +45,21 @@
 
 ## 6. Manual verification
 
-- [ ] 6.1 Mouse: hover a node → its links are **obviously** lit AND the rest of the galaxy dims around it; move off → everything returns exactly as before
-- [ ] 6.1b Judge the spotlight's magnitude on a hover *sweep* — the whole graph dims and undims as the pointer moves between nodes. If it reads as flashing rather than as a spotlight, soften `DIM_NODE_ALPHA`/`DIM_LINK_ALPHA` for the transient case (design.md D7 records this as the one judgement call to confirm in use)
-- [ ] 6.2 Compare the graph at rest against the previous build → resting and focus-dimmed links look identical (this is what the alpha rebalance has to preserve)
-- [ ] 6.3 Mouse: hover a node while a focus is active → the hovered cluster becomes the only lit thing (including over what the focus was keeping bright), the focused nodes are still visibly focused, the focus chip does not change, and releasing restores the focus's dimming exactly
-- [ ] 6.3b Hand: hold `Victory` near a node → the rest of the galaxy dims around its cluster, and releasing restores everything
-- [ ] 6.4 Mouse: sweep quickly across a dense cluster → no stutter, and the highlight keeps up
-- [ ] 6.5 Mouse: hover a ghost node → no cluster highlight
-- [ ] 6.6 Hand: hold `Victory` near a node → its links blaze; **release → the view returns to normal with nothing left lit and nothing selected**
-- [ ] 6.7 Hand: sweep `Victory` across several nodes → one cluster at a time, nothing accumulates, the focus chip stays empty
-- [ ] 6.8 Hand: move a hand across the graph in a neutral pose → **nothing lights up at all**
-- [ ] 6.9 Hand: engage an orbit and a zoom → no highlight follows the hand during either
-- [ ] 6.10 Hand: confirm `Victory` is not misread as `Pointing_Up` — a sustained misread would *open a note* instead of revealing it. Check with the gesture debug readout on (`localStorage.setItem("iris.galaxyGestureDebug", "on")`): the drive line must read `inspect`, not `dwell`
-- [ ] 6.11 Hand: with two hands in frame, one showing `Victory` near a node and the other in another pose → the `Victory` hand's node is the one revealed
-- [ ] 6.12 Confirm the focus still works by Cmd/Ctrl-click, and that no gesture changes it
-- [ ] 6.13 Confirm `Pointing_Up` still opens a node at the same speed as before, and that the fist orbit / two-palm zoom are unchanged
+- [x] 6.1 Mouse: hover a node → its links are **obviously** lit AND the rest of the galaxy dims around it; move off → everything returns exactly as before
+- [x] 6.1b Judge the spotlight's magnitude on a hover *sweep* — the whole graph dims and undims as the pointer moves between nodes. If it reads as flashing rather than as a spotlight, soften `DIM_NODE_ALPHA`/`DIM_LINK_ALPHA` for the transient case (design.md D7 records this as the one judgement call to confirm in use)
+- [x] 6.2 Compare the graph at rest against the previous build → resting and focus-dimmed links look identical (this is what the alpha rebalance has to preserve)
+- [x] 6.3 Mouse: hover a node while a focus is active → the hovered cluster becomes the only lit thing (including over what the focus was keeping bright), the focused nodes are still visibly focused, the focus chip does not change, and releasing restores the focus's dimming exactly
+- [x] 6.3b Hand: hold `Victory` near a node → the rest of the galaxy dims around its cluster, and releasing restores everything
+- [x] 6.4 Mouse: sweep quickly across a dense cluster → no stutter, and the highlight keeps up
+- [x] 6.5 Mouse: hover a ghost node → no cluster highlight
+- [x] 6.6 Hand: hold `Victory` near a node → its links blaze; **release → the view returns to normal with nothing left lit and nothing selected**
+- [x] 6.7 Hand: sweep `Victory` across several nodes → one cluster at a time, nothing accumulates, the focus chip stays empty
+- [x] 6.8 Hand: move a hand across the graph in a neutral pose → **nothing lights up at all**
+- [x] 6.9 Hand: engage an orbit and a zoom → no highlight follows the hand during either
+- [x] 6.10 Hand: confirm `Victory` is not misread as `Pointing_Up` — a sustained misread would *open a note* instead of revealing it. Check with the gesture debug readout on (`localStorage.setItem("iris.galaxyGestureDebug", "on")`): the drive line must read `inspect`, not `dwell`
+- [x] 6.11 Hand: with two hands in frame, one showing `Victory` near a node and the other in another pose → the `Victory` hand's node is the one revealed
+- [x] 6.12 Confirm the focus still works by Cmd/Ctrl-click, and that no gesture changes it
+- [x] 6.13 Confirm `Pointing_Up` still opens a node at the same speed as before, and that the fist orbit / two-palm zoom are unchanged
 
 ## 7. Gates
 
