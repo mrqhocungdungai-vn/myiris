@@ -128,26 +128,46 @@ mid-wait aborts rather than reading as a successful quit.
 
 ## Verification status
 
-Verified on **Intel x64** (`uname -m` = `x86_64`, not under Rosetta), macOS 24.6.
+Verified on **both architectures**: **Intel x64** (`uname -m` = `x86_64`, not
+under Rosetta) on macOS 24.6, and **Apple M4 arm64** on macOS 26.4.1. The arm64
+column below records the second pass, which re-ran the two open items.
 
-| Scenario | Result |
-| --- | --- |
-| 6.4 clean install, nothing in /Applications | pass |
-| 6.5 reinstall over an existing, non-running copy | pass |
-| 6.6 reinstall while the installed Iris is running | pass — quit path fires, then replaces |
-| 6.7 reinstall while `npm run dev` also runs | **not verified** — see below |
-| 6.8 installed app launches | pass (confirmed visually by the maintainer) |
-| 6.9 exactly one Iris in Finder/Spotlight | pass — `mdfind` returns only `/Applications/Iris.app`; `release/` is unindexed |
-| 6.10 decoy `.app` at the destination | pass — refuses on a foreign `CFBundleIdentifier` and on an unreadable one, and leaves the decoy intact |
+| Scenario | Intel x64 | Apple M4 arm64 |
+| --- | --- | --- |
+| 6.4 clean install, nothing in /Applications | pass | pass |
+| 6.5 reinstall over an existing, non-running copy | pass | pass |
+| 6.6 reinstall while the installed Iris is running | pass — quit path fires, then replaces | pass — same |
+| 6.7 reinstall while `npm run dev` also runs | not verified (confounded) | **pass** — see below |
+| 6.8 installed app launches | pass (confirmed visually by the maintainer) | pass (confirmed visually by the maintainer) |
+| 6.9 exactly one Iris in Finder/Spotlight | pass | pass — confirmed by the maintainer in Finder and Spotlight |
+| 6.10 decoy `.app` at the destination | pass — refuses on a foreign `CFBundleIdentifier` and on an unreadable one, and leaves the decoy intact | not re-run |
 
-**6.7 is unverified, not passed.** The run was confounded: the dev session's
-processes were quit by hand while the installer was mid-run, so the "did the dev
-session survive" comparison had no clean before/after to make. The scoping it
-tests is asserted at the unit level (the probe pattern is the installed
-executable path, and a dev run launches from `node_modules/.bin/electron`), but
-that is an argument, not an observation. Re-run it before relying on it.
+**6.7 now passes, on the arm64 re-run.** The first attempt was confounded — the
+dev session's processes were quit by hand while the installer was mid-run, so
+there was no clean before/after. The re-run held both an installed Iris and a
+full `npm run dev` session (vite, Electron, and a sidecar already connected to
+Gemini) alive across the install, sampling process state every second. The quit
+path did fire — the log shows `an installed Iris is running — asking it to
+quit…` — so the by-name `tell application "Iris" to quit` was exercised with a
+second Electron running, which is the hazard the scoping exists to survive. All
+seven dev pids were byte-identical before and after, vite kept serving 5173, and
+only the installed copy's six pids were replaced. This is now an observation,
+not an argument.
 
-**The arm64 path is unverified**: arm64 requires a valid Mach-O signature to
-execute and this bundle has none, so an unsigned arm64 build may not launch at
-all. The maintainer intends to test it on an Apple Silicon machine separately.
-Nothing here should be read as a claim that it works today.
+**The arm64 doubt is resolved, and the premise behind it was wrong.** arm64 does
+require a valid Mach-O signature, but the bundle is not without one:
+electron-builder skips only *Developer ID* signing (`0 valid identities found`),
+while the linker still emits an ad-hoc signature —
+`flags=0x20002(adhoc,linker-signed)`, `Signature=adhoc`. That satisfies the
+execution requirement. The app launched and stayed up with its full six-process
+tree (main, GPU, network, renderer, audio, video capture) and no crash report.
+"Unsigned" in this document means unnotarized and undistributable to third
+parties, **not** unexecutable on the machine that built it.
+
+**6.9 passes on both architectures**, confirmed by the maintainer in Finder and
+Spotlight directly. One note for anyone re-checking it: a raw
+`mdfind "kMDItemFSName == 'Iris.app'"` still lists `release/mac-arm64/Iris.app`
+next to `/Applications/Iris.app`. That is a query against the metadata index,
+which is not what this scenario measures — the criterion is what a user sees in
+Finder and Spotlight, and there it is one Iris. Do not treat an `mdfind` hit on
+`release/` as a regression on its own.

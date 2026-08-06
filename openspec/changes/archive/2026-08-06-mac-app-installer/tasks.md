@@ -96,13 +96,23 @@
 - [x] 6.4 Manual: clean install with no prior Iris in `/Applications`
 - [x] 6.5 Manual: reinstall over an existing installed copy
 - [x] 6.6 Manual: reinstall while Iris is **running**
-- [ ] 6.7 Manual: reinstall while a `npm run dev` session is also running, and confirm
-      the dev session is not killed — **NOT VERIFIED**: the run was confounded (the dev
-      processes were quit by hand mid-run, so there was no clean before/after). The
-      scoping is asserted at the unit level only. See design.md "Verification status"
+- [x] 6.7 Manual: reinstall while a `npm run dev` session is also running, and confirm
+      the dev session is not killed — verified on Apple M4 with a clean before/after this
+      time. The quit path did fire (an installed Iris was running), so the by-name
+      `tell application "Iris" to quit` was exercised with a second Electron alive: all
+      seven dev pids were identical across the run and vite kept serving 5173, while the
+      installed copy's pids were replaced. See design.md "Verification status"
 - [x] 6.8 Manual: launch the installed app from Finder and confirm it opens
-- [x] 6.9 Manual: confirm exactly one Iris appears in Finder and Spotlight
+- [x] 6.9 Manual: confirm exactly one Iris appears in Finder and Spotlight — pass on both
+      Intel and arm64, confirmed by the maintainer in Finder and Spotlight directly. Note
+      for anyone re-checking: a raw `mdfind` still lists `release/mac-arm64/Iris.app`, but
+      the raw index is not the criterion here — what a user sees in Finder and Spotlight
+      is, and that is one Iris
 - [x] 6.10 Manual: point the resolver at a decoy `.app` that is not Iris and confirm it
       refuses instead of deleting it
-- [x] 6.11 Record whether this was verified on Intel, Apple Silicon, or both. The arm64
-      path is unverified and an unsigned arm64 bundle may not execute at all
+- [x] 6.11 Record whether this was verified on Intel, Apple Silicon, or both. Now **both**:
+      Intel x64 on macOS 24.6, and Apple M4 arm64 on macOS 26.4.1. The arm64 doubt is
+      resolved and the premise behind it was wrong — electron-builder skips *Developer ID*
+      signing, but the linker still emits an ad-hoc signature
+      (`flags=0x20002(adhoc,linker-signed)`), which is what arm64 requires to execute
+      locally. "Unsigned" here means unnotarized and undistributable, not unexecutable
