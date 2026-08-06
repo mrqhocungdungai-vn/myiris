@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import type { HandPoint, HandState } from "../hooks/useHandControl";
+import type { HandPoint, HandState, TrackedHand } from "../hooks/useHandControl";
 
 // Pure policy for the second-brain galaxy's gesture layer (second-brain-
 // gesture-nav design.md D1-D4b): node hit-testing, the dwell state machine,
@@ -180,25 +180,58 @@ export function dwellStep(
   return { state: next, target: state.target, fire: false };
 }
 
-export type GalaxyDrive = "dwell" | "orbit" | "zoom" | null;
+export type GalaxyDrive = "dwell" | "select" | "orbit" | "zoom" | null;
 
 type DriveHand = Pick<HandState, "pointing" | "fist" | "hands">;
+
+// MediaPipe's canned class for the two-finger pose. Reaching it through the
+// raw `gesture` name rather than a `TrackedHand` boolean is deliberate: the
+// booleans exist for the three poses the whole app shares, and adding a
+// fourth would put a galaxy-only binding into the hand layer every surface
+// reads. `useHandControl` already gates every published pose on 3 consecutive
+// frames above a 0.55 score, so this arrives pre-debounced.
+const SELECT_GESTURE = "Victory";
+
+/**
+ * The tracked hand making the selection pose, or null.
+ *
+ * Resolved per hand rather than from `HandState`'s primary-hand fields for a
+ * concrete reason (design.md D4): `choosePrimary` prefers *pointing* hands, so
+ * a `Victory` hand competing with any other hand in frame can lose primacy —
+ * and the caller needs this hand's own `point` to hit-test with, not the
+ * primary's. Same pattern the two-palm zoom already uses for its distance.
+ */
+export function selectingHand(hand: Pick<HandState, "hands">): TrackedHand | null {
+  return hand.hands.find((item) => item.gesture === SELECT_GESTURE) ?? null;
+}
 
 /**
  * Partitions the frame's hand pose into exactly one galaxy drive, with no
  * overlap (design.md D5): two open palms (the general two-hand-gestures
- * rule, "scale the layer that owns the gesture surface") -> zoom,
- * `Pointing_Up` -> dwell targeting only, `Closed_Fist` -> orbit, and
- * anything else — a single open palm, an unrecognized pose, or a hand
- * merely resting in frame — -> null. A pinch has no meaning here: a tight
- * pinch reads as `Closed_Fist` and orbits like any other fist.
+ * rule, "scale the layer that owns the gesture surface") -> zoom, `Victory`
+ * -> select targeting only, `Pointing_Up` -> dwell targeting only,
+ * `Closed_Fist` -> orbit, and anything else — a single open palm, an
+ * unrecognized pose, or a hand merely resting in frame — -> null. A pinch has
+ * no meaning here: a tight pinch reads as `Closed_Fist` and orbits like any
+ * other fist.
  *
- * Stateless (design.md D5): with pinch gone, no drive needs to remember
- * anything across frames — a hand cannot be both `Open_Palm` and
- * `Closed_Fist` at once, so each frame's pose alone decides the drive.
+ * Zoom is tested first and so wins over a `Victory` hand: it is the two-hand
+ * rule, which must outrank whatever either hand looks like individually.
+ * Select is tested before dwell so a `Victory` hand selects even while the
+ * primary hand is pointing — the poses name different actions on the same
+ * node, and the one the user is making is the one that should act.
+ *
+ * Note this partition decides only what *acts*. The pointed-at highlight is
+ * feedback, not a drive, and the caller deliberately paints it under any pose
+ * that is not a camera drive (second-brain-gesture-nav: "Highlighting is
+ * feedback, not a drive, and is therefore outside this partition").
+ *
+ * Stateless (design.md D5): no drive needs to remember anything across frames
+ * — a hand cannot be two poses at once, so each frame's poses alone decide.
  */
 export function driveFor(hand: DriveHand): GalaxyDrive {
   if (hand.hands.filter((h) => h.openPalm).length >= 2) return "zoom";
+  if (selectingHand(hand)) return "select";
   if (hand.pointing) return "dwell";
   if (hand.fist) return "orbit";
   return null;

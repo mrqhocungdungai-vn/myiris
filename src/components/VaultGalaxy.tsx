@@ -5,6 +5,7 @@ import type { HandState } from "../hooks/useHandControl";
 import {
   dwellStep,
   driveFor,
+  selectingHand,
   orbitStep,
   zoomRadius,
   handDistance,
@@ -106,6 +107,16 @@ const FOCUS_HIGHLIGHT_COLOR = "#39ff88";
 const DIM_NODE_ALPHA = 0.08;
 const DIM_LINK_ALPHA = 0.05;
 const LINK_BASE_COLOR = "rgba(140, 170, 255, 0.35)";
+// The links incident to whatever node is being pointed at, lifted from the
+// faint base colour to near-opaque so the cluster reads at a glance
+// (second-brain-galaxy-view: "The node being pointed at reveals its link
+// cluster"). Colour is the ONLY lever used, deliberately — in
+// three-forcegraph `useCylinder = !!linkWidth`, so a non-zero width switches
+// that link from a `Line` primitive to cylinder geometry, and changing the
+// `linkWidth` accessor clears `linkDataMapper` outright and rebuilds every
+// link object in the graph. Per hover. `linkColor` changes only update
+// materials — the same path the focus dimming below already takes.
+const LINK_HIGHLIGHT_COLOR = "rgba(255, 242, 168, 0.95)";
 
 // Both node and link colors above are CSS color strings, some already
 // carrying their own alpha (colorForNode's ghost gray, LINK_BASE_COLOR) —
@@ -129,17 +140,30 @@ function withAlpha(color: string, alpha: number): string {
 // closes over) is what forces 3d-force-graph to re-digest and repaint
 // (design.md D2/M6) — a fresh closure each call is simplest since the caller
 // only invokes this on an actual target change, already debounced by
-// dwellStep's own dead-band/hold (M14). The dwell highlight wins over the
-// focus highlight when both apply to the same node — dwell is a momentary
-// pre-open indicator, not a second selection state. `relevantIds` is null
-// (never dims anything) while nothing is focused, and the focus/neighborhood
-// set while something is — a focused or directly-linked node is never
-// dimmed, only nodes outside that one-hop neighborhood are.
-function makeNodeColor(targetId: string | null, focusIds: Set<string>, relevantIds: Set<string> | null) {
+// nearestNodeAt's own dead-band (M14) and, for the mouse, coalesced to one
+// repaint per frame. The pointed-at highlight wins over the focus highlight
+// when both apply to the same node — being pointed at is a momentary
+// indicator, not a second selection state. `relevantIds` is null (never dims
+// anything) while nothing is focused, and the focus/neighborhood set while
+// something is — a focused or directly-linked node is never dimmed, only
+// nodes outside that one-hop neighborhood are.
+//
+// `pointedIds` is the pointed-at node plus ITS one hop, and it exempts those
+// nodes from the dimming: pointing at a dimmed node reveals what it connects
+// to without the user having to change the focus first
+// (second-brain-galaxy-view, "Pointing at a dimmed node reveals its
+// cluster"). It never lifts the dimming from anything else.
+function makeNodeColor(
+  pointedAtId: string | null,
+  focusIds: Set<string>,
+  relevantIds: Set<string> | null,
+  pointedIds: Set<string> | null,
+) {
   return (node: GalaxyNode) => {
-    if (node.id === targetId) return DWELL_HIGHLIGHT_COLOR;
+    if (node.id === pointedAtId) return DWELL_HIGHLIGHT_COLOR;
     if (focusIds.has(node.id)) return FOCUS_HIGHLIGHT_COLOR;
     const base = colorForNode(node);
+    if (pointedIds?.has(node.id)) return base;
     if (relevantIds && !relevantIds.has(node.id)) return withAlpha(base, DIM_NODE_ALPHA);
     return base;
   };
@@ -156,8 +180,19 @@ function linkEndpointId(endpoint: string | GalaxyNode): string {
 // Mirrors makeNodeColor's dimming for the edges themselves — otherwise a
 // dense mesh of undimmed link lines would still read as clutter even with
 // the nodes they connect dimmed.
-function makeLinkColor(relevantIds: Set<string> | null) {
+//
+// A link INCIDENT to the pointed-at node is drawn bright and outranks both the
+// base colour and the dimming — that brightening is the substance of "what is
+// this note connected to". Only incident links, not links among the
+// neighborhood: lighting the neighbors' own edges too would draw a blob rather
+// than a star, and the question being answered is what THIS node touches.
+function makeLinkColor(relevantIds: Set<string> | null, pointedAtId: string | null) {
   return (link: GalaxyLink) => {
+    if (pointedAtId !== null) {
+      const source = linkEndpointId(link.source);
+      const target = linkEndpointId(link.target);
+      if (source === pointedAtId || target === pointedAtId) return LINK_HIGHLIGHT_COLOR;
+    }
     if (!relevantIds) return LINK_BASE_COLOR;
     const touchesRelevant = relevantIds.has(linkEndpointId(link.source)) || relevantIds.has(linkEndpointId(link.target));
     return touchesRelevant ? LINK_BASE_COLOR : withAlpha(LINK_BASE_COLOR, DIM_LINK_ALPHA);
@@ -301,9 +336,9 @@ function GalaxyCanvas({
   const focusIdsRef = useRef(new Set(focusIds));
   focusIdsRef.current = new Set(focusIds);
   // The one-hop declutter set (focusNeighborhood) — null while nothing is
-  // focused (no dimming). Recomputed by repaintFocus() below, whenever the
+  // focused (no dimming). Recomputed by repaintHighlight() below, whenever the
   // focus OR the graph's own links change, from whichever is current at that
-  // moment (never stale — see repaintFocus's own callers).
+  // moment (never stale — see repaintHighlight's own callers).
   const relevantIdsRef = useRef<Set<string> | null>(null);
 
   // Orbit center (design.md D3/6.1): recomputed from positionsRef at most
@@ -315,7 +350,27 @@ function GalaxyCanvas({
   // src/lib/galaxy-nav.ts, plus the imperative camera-drive bookkeeping the
   // thin driver below owns.
   const dwellStateRef = useRef<DwellState>(INITIAL_DWELL_STATE);
-  const lastHighlightedRef = useRef<string | null>(null);
+  // The select drive's own dwell, entirely independent of the opening one
+  // above (second-brain-gesture-nav: "The two dwells do not interfere").
+  // Nothing has to enforce that: dwellStep resets to INITIAL_DWELL_STATE
+  // whenever its candidate is null, and each machine is fed a candidate only
+  // while its own drive is live — so changing pose abandons the other's charge
+  // by construction rather than by extra bookkeeping.
+  const selectDwellStateRef = useRef<DwellState>(INITIAL_DWELL_STATE);
+  // The node the HAND is pointing at. Written by the gesture loop under any
+  // pose that is not a camera drive — not only while a dwell charges — so a
+  // hand that drives nothing can still show what it is over.
+  const handTargetRef = useRef<string | null>(null);
+  // The node the MOUSE is hovering, from `onNodeHover`. The effective
+  // pointed-at node is `handTargetRef ?? mouseHoverRef` (design.md D2): two
+  // separate refs, not one written by both, because with hand control on the
+  // hand writes `null` on every frame it has no target and would erase a live
+  // mouse hover ~60 times a second.
+  const mouseHoverRef = useRef<string | null>(null);
+  // Coalesces mouse-hover repaints to at most one per frame: a repaint
+  // re-digests every node's material, and sweeping a pointer across a dense
+  // cluster fires `onNodeHover` once per node crossed.
+  const hoverRepaintRafRef = useRef(0);
   const sphericalRef = useRef<THREE.Spherical | null>(null);
   const cameraEngagedRef = useRef<"orbit" | "zoom" | null>(null);
   const prevOrbitPointRef = useRef<{ x: number; y: number } | null>(null);
@@ -364,21 +419,40 @@ function GalaxyCanvas({
       fg.cooldownTicks(Infinity); // 3d-force-graph's own default — let new/changed topology settle
       fg.graphData({ nodes, links });
     }
-    repaintFocus();
+    repaintHighlight();
   }
 
-  // Recomputes the one-hop declutter set from whatever is CURRENT in both
-  // refs (never stale) and repaints both node and link colors from it. The
-  // single place both applyGraph (graph changed — e.g. a fresh link from
-  // "connect these two") and the focus-change effect below funnel through,
-  // so the two can never compute it differently.
-  function repaintFocus() {
+  // Recomputes BOTH one-hop sets from whatever is CURRENT in the refs (never
+  // stale) and repaints node and link colors from them. The single place every
+  // producer funnels through — applyGraph (graph changed — e.g. a fresh link
+  // from "connect these two"), the focus-change effect, the mouse's hover
+  // handler and the gesture loop's target change alike — so no two of them can
+  // compute the sets differently.
+  //
+  // Both sets come from the same `focusNeighborhood`: the declutter's hop set
+  // and the pointed-at hop set are the same question asked about different
+  // ids, and one function answering it is what keeps the dimming and the
+  // highlight agreeing about what "one hop" means.
+  function repaintHighlight() {
     const fg = fgRef.current;
     if (!fg) return;
+    const links = pendingGraphRef.current.links;
     const focus = focusIdsRef.current;
-    relevantIdsRef.current = focus.size ? focusNeighborhood(focus, pendingGraphRef.current.links) : null;
-    fg.nodeColor(makeNodeColor(lastHighlightedRef.current, focus, relevantIdsRef.current));
-    fg.linkColor(makeLinkColor(relevantIdsRef.current));
+    relevantIdsRef.current = focus.size ? focusNeighborhood(focus, links) : null;
+    const pointedAt = handTargetRef.current ?? mouseHoverRef.current;
+    const pointedIds = pointedAt ? focusNeighborhood([pointedAt], links) : null;
+    fg.nodeColor(makeNodeColor(pointedAt, focus, relevantIdsRef.current, pointedIds));
+    fg.linkColor(makeLinkColor(relevantIdsRef.current, pointedAt));
+  }
+
+  // The mouse's producer never repaints inline — it records the id and lets at
+  // most one repaint land per frame.
+  function scheduleHighlightRepaint() {
+    if (hoverRepaintRafRef.current) return;
+    hoverRepaintRafRef.current = requestAnimationFrame(() => {
+      hoverRepaintRafRef.current = 0;
+      repaintHighlight();
+    });
   }
 
   useEffect(() => {
@@ -404,6 +478,18 @@ function GalaxyCanvas({
             return;
           }
           onOpenNoteRef.current(node.id, node.title);
+        })
+        // The mouse's half of the pointed-at highlight
+        // (second-brain-galaxy-view: "The node being pointed at reveals its
+        // link cluster"). A ghost is never pointed at — the hand's target
+        // resolution already excludes it as unopenable, and a highlight that
+        // appeared under the mouse but never under the hand would make the same
+        // node behave differently per input device.
+        .onNodeHover((node) => {
+          const next = node && !node.ghost ? node.id : null;
+          if (next === mouseHoverRef.current) return;
+          mouseHoverRef.current = next;
+          scheduleHighlightRepaint();
         });
       // The other half of the dirty-flag center (design.md D3/6.1): the sim
       // settling long after applyGraph last ran (cooldownTicks(Infinity) on
@@ -424,7 +510,7 @@ function GalaxyCanvas({
       if (highFidelity) await addBloom(fg);
       if (disposed) return;
       fgRef.current = fg;
-      // applyGraph's own repaintFocus() call paints the ring/dimming on
+      // applyGraph's own repaintHighlight() call paints the ring/dimming on
       // whatever is already focused (second-brain-focus "survives a
       // remount") — the focus-change effect below only fires on a LATER
       // change, so the very first paint has to happen here too.
@@ -433,6 +519,12 @@ function GalaxyCanvas({
     });
     return () => {
       disposed = true;
+      // A coalesced repaint must not land after the instance is gone — it
+      // would call into a destructed graph.
+      if (hoverRepaintRafRef.current) {
+        cancelAnimationFrame(hoverRepaintRafRef.current);
+        hoverRepaintRafRef.current = 0;
+      }
       const fg = fgRef.current;
       fgRef.current = null;
       if (fg) {
@@ -464,7 +556,7 @@ function GalaxyCanvas({
   // parent render.
   const focusIdsKey = focusIds.join(",");
   useEffect(() => {
-    repaintFocus();
+    repaintHighlight();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusIdsKey]);
 
@@ -554,45 +646,89 @@ function GalaxyCanvas({
       el.textContent = lines.join("\n");
     }
 
+    // The hand's highlight must not outlive the hand driving it: a reader
+    // opening, hand control switching off, or Iris sleeping mid-point would
+    // otherwise leave a node lit with nothing pointing at it. A live mouse
+    // hover is untouched — repaintHighlight falls back to it.
+    function clearHandTarget() {
+      if (handTargetRef.current === null) return;
+      handTargetRef.current = null;
+      repaintHighlight();
+    }
+
     function loop() {
       try {
         const fg = fgRef.current;
         if (!fg || readerOpenRef.current) {
           restoreControlsIfNeeded(fg);
           cameraEngagedRef.current = null;
+          clearHandTarget();
           raf = requestAnimationFrame(loop);
           return;
         }
 
         const hand = handRef.current;
         const drive = driveFor(hand);
+        const activeCameraDrive = drive === "orbit" || drive === "zoom" ? drive : null;
 
-        // Node-dwell: dwellStep runs every frame (candidate null when the
-        // pose isn't Pointing_Up) so leaving the pose immediately drops any
-        // charging dwell — "leave the node" per design.md D2.
+        // Which hand's point targets a node. The select drive uses the point of
+        // the hand actually making the pose, not the primary hand's: the
+        // primary is chosen with a preference for POINTING hands, so a Victory
+        // hand can lose primacy while still being the hand the user is
+        // selecting with (design.md D4).
+        const selectHand = drive === "select" ? selectingHand(hand) : null;
+        const targetPoint = drive === "select" ? selectHand?.point ?? null : hand.point;
+
+        // The pointed-at node is resolved under ANY pose that is not a camera
+        // drive — not only while a dwell charges — because highlighting is
+        // feedback rather than a drive (second-brain-gesture-nav: "A resting
+        // hand still shows what it points at"). During an orbit or a zoom the
+        // hand's position means "camera", not "target", so nothing is resolved.
+        //
+        // The incumbent handed to nearestNodeAt is the currently-PAINTED target
+        // rather than a dwell's committed one: the dead-band exists to stop the
+        // highlight flickering between neighbours in a dense cluster, so the
+        // thing it protects should be the thing on screen.
         const candidate =
-          drive === "dwell" && hand.point && containerRef.current
+          !activeCameraDrive && targetPoint && containerRef.current
             ? nearestNodeAt(
                 positionsRef.current.values(),
                 fg.camera(),
                 containerRef.current.getBoundingClientRect(),
-                hand.point,
+                targetPoint,
                 DWELL_THRESHOLD_PX,
-                dwellStateRef.current.target,
+                handTargetRef.current,
               )
             : null;
-        const dwellResult = dwellStep(dwellStateRef.current, candidate, performance.now(), DWELL_HOLD_MS);
-        dwellStateRef.current = dwellResult.state;
-        if (dwellResult.target !== lastHighlightedRef.current) {
-          lastHighlightedRef.current = dwellResult.target;
-          fg.nodeColor(makeNodeColor(dwellResult.target, focusIdsRef.current, relevantIdsRef.current));
+
+        // Each dwell sees a candidate only while its own drive is live, so
+        // leaving the pose immediately drops that machine's charge —
+        // dwellStep resets on a null candidate — and switching between the two
+        // poses abandons rather than transfers a charge.
+        const now = performance.now();
+        const openCandidate = drive === "dwell" ? candidate : null;
+        const selectCandidate = drive === "select" ? candidate : null;
+        const openResult = dwellStep(dwellStateRef.current, openCandidate, now, DWELL_HOLD_MS);
+        dwellStateRef.current = openResult.state;
+        const selectResult = dwellStep(selectDwellStateRef.current, selectCandidate, now, DWELL_HOLD_MS);
+        selectDwellStateRef.current = selectResult.state;
+
+        const pointedAt = candidate?.id ?? null;
+        if (pointedAt !== handTargetRef.current) {
+          handTargetRef.current = pointedAt;
+          repaintHighlight();
         }
-        if (dwellResult.fire && candidate) onOpenNoteRef.current(candidate.id, candidate.title);
+        if (openResult.fire && openCandidate) onOpenNoteRef.current(openCandidate.id, openCandidate.title);
+        // Feeds the ONE authoritative focus through the same call the mouse's
+        // Cmd/Ctrl-click makes (second-brain-focus: "a gesture producer added
+        // later SHALL feed this same focus rather than introduce a second
+        // one"). dwellStep's leave-and-re-acquire rule is what stops a held
+        // pose from toggling the same node on and off every 300ms.
+        if (selectResult.fire && selectCandidate) onToggleNodeRef.current(selectCandidate.id);
 
         // Camera drive: orbit and zoom share one spherical — re-derived from
         // the LIVE camera on every engage (fist<->zoom switch or mouse-drag
         // handoff, design.md M13), never carried over stale.
-        const activeCameraDrive = drive === "orbit" || drive === "zoom" ? drive : null;
         if (activeCameraDrive !== cameraEngagedRef.current) {
           if (activeCameraDrive) {
             ensureCenterFresh();
@@ -657,6 +793,7 @@ function GalaxyCanvas({
     return () => {
       cancelAnimationFrame(raf);
       restoreControlsIfNeeded(fgRef.current);
+      clearHandTarget();
     };
   }, [handControl, running]);
 

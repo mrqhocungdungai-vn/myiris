@@ -5,6 +5,7 @@ import {
   dwellStep,
   INITIAL_DWELL_STATE,
   driveFor,
+  selectingHand,
   orbitStep,
   handDistance,
   zoomRadius,
@@ -198,6 +199,43 @@ describe("driveFor", () => {
 
     const looselyPinchedRest = makeTrackedHand({ pinchDistance: 0.15 });
     expect(driveFor(makeHand({ hands: [looselyPinchedRest] }))).toBeNull();
+  });
+
+  it("returns select for Victory", () => {
+    const victory = makeTrackedHand({ gesture: "Victory" });
+    expect(driveFor(makeHand({ gesture: "Victory", hands: [victory] }))).toBe("select");
+  });
+
+  // Zoom is the two-hand rule and must outrank whatever either hand looks
+  // like on its own (design.md D4) — otherwise a recognizer that briefly
+  // reads one of two spread palms as Victory would drop the zoom mid-gesture.
+  it("two open palms still win over a Victory hand", () => {
+    const hands = [makeTrackedHand({ id: "left", openPalm: true }), makeTrackedHand({ id: "right", openPalm: true })];
+    expect(driveFor(makeHand({ openPalm: true, hands }))).toBe("zoom");
+
+    const palmAndVictory = [
+      makeTrackedHand({ id: "left", openPalm: true }),
+      makeTrackedHand({ id: "right", gesture: "Victory" }),
+    ];
+    expect(driveFor(makeHand({ openPalm: true, hands: palmAndVictory }))).toBe("select");
+  });
+
+  // The pose is resolved per hand, not from the primary-hand fields:
+  // choosePrimary prefers pointing hands, so the Victory hand can lose
+  // primacy while still being the hand the user is selecting with.
+  it("selects from a non-primary Victory hand while the primary hand points", () => {
+    const hands = [
+      makeTrackedHand({ id: "left", pointing: true }),
+      makeTrackedHand({ id: "right", gesture: "Victory" }),
+    ];
+    expect(driveFor(makeHand({ pointing: true, hands }))).toBe("select");
+  });
+
+  it("exposes the selecting hand itself, so the caller hit-tests with that hand's point", () => {
+    const victory = makeTrackedHand({ id: "right", gesture: "Victory", point: { x: 42, y: 7 } });
+    const hands = [makeTrackedHand({ id: "left", pointing: true, point: { x: 0, y: 0 } }), victory];
+    expect(selectingHand(makeHand({ pointing: true, hands }))?.point).toEqual({ x: 42, y: 7 });
+    expect(selectingHand(makeHand())).toBeNull();
   });
 });
 

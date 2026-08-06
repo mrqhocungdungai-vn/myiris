@@ -105,19 +105,39 @@ is open and no reader is open over it:
 
 | Pose | Action |
 | --- | --- |
-| `Pointing_Up` | Node dwell — hold over a node to open it (same dwell mechanic as the deck) |
+| `Pointing_Up` | Node dwell — hold over a node 300 ms to **open** it (same dwell mechanic as the deck) |
+| `Victory` (two fingers) | Node dwell — hold over a node 300 ms to **toggle its focus**, without opening it |
 | `Closed_Fist` | Orbit the camera around the graph |
-| A pinch, released quickly (a **tap**) | Toggles the pointed-at node's focus — see `second-brain-focus` |
-| A pinch, held past the tap window | Dollies the camera (zoom) |
-| Anything else (open palm, unrecognized, resting) | Drives nothing |
+| Two open palms | Zoom the camera — not a galaxy binding but the general two-hand rule applied to whichever layer owns the surface |
+| Anything else (a single open palm, unrecognized, resting) | Drives nothing |
 
-The pinch is deliberately split into two outcomes rather than always meaning
-zoom: a quick pinch-and-release selects (toggles focus), while a held pinch
-zooms. The two are told apart by a discrimination window (`TAP_MAX_MS` in
-`galaxy-nav.ts`) — the camera does not move at all until the window elapses,
-so the graph never shifts under the hand between the gesture and its effect,
-and a pinch that has already become a zoom never fires a tap on release no
-matter how slowly it is released.
+**A pinch has no meaning in the galaxy at all.** Whatever canned class the
+recognizer assigns a pinched hand is what drives it — a tight pinch reads as
+`Closed_Fist` and orbits like any other fist, and the thumb-index distance is
+never read. An earlier design split the pinch into a quick tap that selected
+and a held pinch that zoomed; `two-palm-galaxy-zoom` replaced both with the
+two-open-palms rule above and removed the pinch entirely, which also removed
+the need for a tap/hold discrimination window.
+
+**The two dwells are independent.** Each is fed a target only while its own
+pose is live, and `dwellStep` resets whenever its candidate is null, so
+changing pose abandons a charge rather than transferring it. Both carry the
+same leave-and-re-acquire rule — for the selection dwell that matters more
+than for the opening one: without it, a held `Victory` would toggle the same
+node on and off every 300 ms and the user could not tell from the pose which
+state they had ended in.
+
+**Pointing at a node lights up its links.** The links incident to whatever
+node is pointed at are drawn bright, and that node plus its one-hop
+neighbours are drawn at full strength — including when the focus declutter
+below has dimmed them, so pointing at a dimmed node reveals what it connects
+to without changing the focus. Two producers, one rendering: the mouse
+hovering a node, and the hand targeting one. The hand's target wins when both
+apply. It is deliberately **feedback, not a drive** — it selects nothing,
+opens nothing and moves nothing, which is why it follows a hand in *any* pose
+(including one that drives nothing) as long as no camera drive is engaged.
+During an orbit or a zoom the hand's position means "camera", not "target", so
+no highlight follows it.
 
 **Clearing the focus is a control, not a gesture** — a button in the HUD's
 control island, reachable by dwell like every other control there. An
@@ -126,7 +146,11 @@ clears), so a deliberately-built selection can't be discarded by a stray
 gesture with no undo.
 
 Selection is also reachable with hand control off, by mouse: a plain click
-still opens a note, and a Cmd/Ctrl-click toggles its focus instead.
+still opens a note, and a Cmd/Ctrl-click toggles its focus instead. Both
+producers — the `Victory` dwell and the modifier-click — feed the same single
+main-process focus through the same call; neither keeps a selection of its own.
+No route to the focus requires hands, so the feature is never gated on having
+a camera on.
 
 **The galaxy frames its whole graph in view once, the first time a fresh open
 settles** (`zoomToFit`, on the first `onEngineStop`) — otherwise the default
