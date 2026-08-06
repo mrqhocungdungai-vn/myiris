@@ -246,7 +246,15 @@ function makeLinkColor(litIds: Set<string> | null, pointedAtId: string | null) {
 // source (tick() gates its `.update()` on `.enabled`; `cameraPosition`'s
 // `setLookAt` only writes `.target` while `.enabled` is true, replacing the
 // Vector3 outright rather than mutating it — R1/M5/L16).
-type TrackballControlsLike = { enabled: boolean; target?: THREE.Vector3 };
+// `_lastAngle` is TrackballControls' own rotation-momentum scalar (private,
+// unexported): normally it decays toward 0 every `update()` call once a
+// mouse-drag rotate ends (`dynamicDampingFactor`), but `update()` itself is
+// gated on `.enabled` (three-render-objects' own render loop), so a
+// momentum left over from mouse rotation freezes UNDECAYED for as long as
+// the gesture loop holds `.enabled = false` — then applies in one sudden,
+// undamped jump the instant controls are re-enabled. Read at the same call
+// site as `target` for exactly that reason.
+type TrackballControlsLike = { enabled: boolean; target?: THREE.Vector3; _lastAngle?: number };
 
 // Deep-space backdrop mechanism (design.md D4, spike-resolved 3.2b): the
 // composer's UnrealBloomPass forces full-screen opacity, so the backdrop is
@@ -715,6 +723,14 @@ function GalaxyCanvas({
       // on every enabled `cameraPosition()` call, so it must be re-read
       // (never cached) and copied into, not assumed still valid, here.
       controls.target?.copy(centerRef.current);
+      // Clear TrackballControls' own rotation momentum before handing
+      // control back (see TrackballControlsLike) — otherwise a mouse-drag
+      // rotate from earlier in the session, frozen mid-decay for however
+      // long the gesture drive held `.enabled = false`, applies as one
+      // sudden undamped jump the moment the mouse regains control: the exact
+      // "camera swings past the note I was looking at" symptom a fist
+      // release produced.
+      if (controls._lastAngle !== undefined) controls._lastAngle = 0;
       controls.enabled = true;
     }
 
