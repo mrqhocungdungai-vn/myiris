@@ -267,6 +267,11 @@ export function useWakeWord(
         // gate's alone (design D6).
         const phraseHeard = diagRun >= gateConsecutive;
         const voiceHeard = lastSpeechAt !== null && now - lastSpeechAt <= SPEECH_WINDOW_MS;
+        // How long ago the voice was last confirmed, not just whether it was
+        // inside the window. "absent" alone cannot tell "you were not speaking"
+        // from "the detector never fires at all", and those need opposite fixes.
+        const voiceAge =
+          !speechAvailable ? "no speech signal" : lastSpeechAt === null ? "voice never" : `voice ${Math.round(now - lastSpeechAt)}ms ago`;
 
         const fired = gate.step(score, now);
         if (fired) {
@@ -285,7 +290,7 @@ export function useWakeWord(
           if (settings.debug && now - lastNearMissLogAt >= NEAR_MISS_LOG_INTERVAL_MS) {
             lastNearMissLogAt = now;
             console.log(
-              `[wakeword] no wake: phrase heard (score=${score.toFixed(3)} run=${diagRun}) but no voice confirmed`,
+              `[wakeword] no wake: phrase heard (score=${score.toFixed(3)} run=${diagRun}) but no voice confirmed — ${voiceAge}`,
             );
           }
         } else if (
@@ -296,8 +301,7 @@ export function useWakeWord(
         ) {
           lastNearMissLogAt = now;
           console.log(
-            `[wakeword] near-miss score=${score.toFixed(3)} threshold=${gateThreshold} — phrase not heard` +
-              `${speechAvailable ? ` (voice ${voiceHeard ? "present" : "absent"})` : " (no speech signal)"}`,
+            `[wakeword] near-miss score=${score.toFixed(3)} threshold=${gateThreshold} — phrase not heard (${voiceAge})`,
           );
         }
       } catch (error) {
