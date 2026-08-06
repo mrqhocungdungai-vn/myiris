@@ -12,13 +12,16 @@
   /* The window is transparent; the deck owns its background + rounded frame. */
   border-radius: 14px;
   overflow: hidden;
+  /* Flat base, not a ramp: a window-height gradient between two stops a few
+     code values apart has fewer levels than it has pixels to cross, so it
+     renders as plateaus with hard edges (tokens.css — the 8-bit floor). */
   background:
     radial-gradient(85% 70% at 50% 30%, rgba(17, 34, 64, 0.5), transparent 70%),
-    linear-gradient(180deg, var(--bg-1) 0%, var(--bg-0) 100%);
+    var(--bg-1);
   box-shadow: inset 0 0 0 1px rgba(148, 196, 255, 0.06);
 }
 
-.deck > *:not(.hud-nebula):not(.hud-glow):not(.hud-vignette) {
+.deck > *:not(.hud-nebula):not(.hud-glow) {
   position: relative;
   z-index: 1;
 }

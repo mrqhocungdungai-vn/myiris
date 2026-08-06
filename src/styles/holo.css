@@ -1,12 +1,13 @@
 /* Holo deck backdrop — additive WebGL layer, deliberately NOT part of the
-   upstream-verbatim Deep Space sheets (tokens.css/base.css/deck.css/fx.css/
+   adopted Deep Space sheets (tokens.css/base.css/deck.css/fx.css/
    overlays.css/index.css). deck.css's own `.deck > *:not(.hud-nebula)
-   :not(.hud-glow):not(.hud-vignette)` rule promotes any other direct child of
-   `.deck` to position:relative/z-index:1 (the panel layer). The extra
-   :not() chain below matches that selector's specificity so this rule wins
-   the cascade and keeps the backdrop sitting with the ambient layers
-   (z-index 0) — without ever editing deck.css itself. */
-.deck > .holo-backdrop:not(.hud-nebula):not(.hud-glow):not(.hud-vignette) {
+   :not(.hud-glow)` rule promotes any other direct child of `.deck` to
+   position:relative/z-index:1 (the panel layer). The :not() chain below
+   matches that selector's specificity so this rule wins the cascade and keeps
+   the backdrop sitting with the ambient layers (z-index 0) — without ever
+   editing deck.css itself. Keep the two chains in step: dropping a :not()
+   from one alone flips which rule wins. */
+.deck > .holo-backdrop:not(.hud-nebula):not(.hud-glow) {
   position: absolute;
   inset: 0;
   z-index: 0;

@@ -1760,7 +1760,6 @@ export default function App() {
       >
         <div className="hud-nebula" />
         <div className="hud-glow" />
-        <div className="hud-vignette" />
         {webglSettings.backdrop.mount ? (
           <HoloBackdrop running={surfaceAdvancesFrames("backdrop", surfaceActivity)} />
         ) : null}

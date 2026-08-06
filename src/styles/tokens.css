@@ -5,10 +5,26 @@
    ===================================================================== */
 
 :root {
-  /* Base space */
-  --bg-0: #030509;
-  --bg-1: #05070d;
-  --bg-2: #0a0f1a;
+  /* Base space.
+
+     #0b111c is a floor, not a preference. Below the sRGB toe luminance is
+     roughly proportional to code value, so one code step at value 7 is a ~14%
+     relative brightness jump — a long straight edge at that ratio reads as a
+     line — while the same step at value 21 is ~5% and does not. The previous
+     values (3–13) left a window-height ramp with about two code levels to
+     cross, which is why large dark areas showed plateaus with hard edges
+     rather than a gradient.
+
+     Anything added later — surface, overlay, scrim, vignette — respects this
+     floor, and no gradient spans a window-scale distance between two stops a
+     few code values apart. Nothing in the gate chain can detect a violation:
+     banding is visible only to a person looking at the running app in its dim
+     states, where the accent washes stop masking the base. This comment is the
+     enforcement. (deepspace-skin — "Dark surfaces stay out of the 8-bit crush
+     zone"; values from upstream ASHR12/iris@a4a81d4.) */
+  --bg-0: #0b111c;
+  --bg-1: #0e1522;
+  --bg-2: #151d2c;
 
   /* Accents */
   --cyan: #22d3ee;
@@ -31,7 +47,10 @@
   --text-soft: #a9b9cd;
   --muted: #64748e;
 
-  /* Glass surfaces */
+  /* Glass surfaces — all three clear the --bg-0 floor above, composited or
+     solid, so the palette lift needs nothing here. The shadow tokens below do
+     ramp toward pure black, but at panel scale (64/110px) against a lit edge,
+     not across the window, so they are not the ramp the floor is about. */
   --panel: rgba(13, 20, 33, 0.52);
   --panel-strong: rgba(12, 19, 32, 0.86);
   --panel-solid: #0b1220;
