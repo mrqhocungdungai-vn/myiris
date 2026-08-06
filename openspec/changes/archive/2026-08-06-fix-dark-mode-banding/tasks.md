@@ -32,13 +32,13 @@
       `npm run scan:secrets`, `npm run spec:check`
 - [x] 3.2 Confirm the dead-rule sweep still passes and its scope is unchanged — this
       change edits adopted sheets, which that check deliberately does not examine
-- [ ] 3.3 Visual, and this is the real gate: run the app and look at large dark areas
+- [x] 3.3 Visual, and this is the real gate: run the app and look at large dark areas
       **in the dim states specifically**, which is where the accent washes stop
       masking the base. No plateaus, no hard edges
-- [ ] 3.4 Visual: confirm the backdrop still sits behind the panel layer rather than
+- [x] 3.4 Visual: confirm the backdrop still sits behind the panel layer rather than
       on top of it — that is what task 2.3 puts at risk
-- [ ] 3.5 Visual: check the deck, boot screen, overlays and note reader together, not
+- [x] 3.5 Visual: check the deck, boot screen, overlays and note reader together, not
       just one surface. The palette moved under all of them
-- [ ] 3.6 If banding survives 3.3, stop and record which surface still shows it
+- [x] 3.6 If banding survives 3.3, stop and record which surface still shows it
       rather than widening this change — `.hud-nebula`, `.hud-glow` and
       `deck.css:16`'s radial are the named follow-up candidates
