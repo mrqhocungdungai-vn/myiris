@@ -74,6 +74,7 @@
 - [x] 8.5 Re-resolve the zoom's anchor from the sight for the whole drive, sharing one `reseedAroundAnchor` with the zoom-out release so a mid-drive change cannot move the camera
 - [x] 8.6 Unit-test 8.1-8.2: the midpoint holds still while palms spread symmetrically, the fallbacks chain, and a node under an off-centre sight wins over one at screen centre
 - [ ] 8.7 Manual pass on the sight specifically: whether aiming by hand actually lands, and whether the dolly stalls from the anchor flapping between neighbours mid-zoom
+- [x] 8.8 Fix the dolly-stalls-while-moving finding from 8.7 (D17): the zoom's per-frame re-aim was calling `pickAnchorAt` fresh every frame instead of reading the ring's own throttled pick, so a moved sight reset the zoom reference far more often than the visible candidate ever suggested — `pivotPickRef` now shares one evaluation between both consumers
 
 ## 9. The pivot is the mark, and notes are findable by name (D15/D16)
 

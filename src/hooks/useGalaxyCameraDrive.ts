@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import type { ForceGraph3DInstance } from "3d-force-graph";
 import type { GalaxyNode, GalaxyLink, TrackballControlsLike } from "../lib/galaxy-types";
-import type { HandPoint, HandState } from "./useHandControl";
+import type { HandState } from "./useHandControl";
 import {
   dwellStep,
   driveFor,
@@ -16,7 +16,6 @@ import {
   INITIAL_DWELL_STATE,
   type DwellState,
   type GalaxyDrive,
-  type ScreenRect,
 } from "../lib/galaxy-nav";
 import {
   CENTROID_ANCHOR,
@@ -118,6 +117,13 @@ export function useGalaxyCameraDrive({
   // D10) — the search is proportional to the node count and a candidate that
   // changed at frame rate would read as flicker.
   const candidateIdRef = useRef<string | null>(null);
+  // The same rate-limited pick above, kept whole rather than reduced to an id
+  // — this is what the live zoom re-aim reads (manual-pass finding after
+  // 8.7/9.8: moving the sight during a zoom felt laggy because the re-aim was
+  // recomputing its own pick every frame, up to 6x the ring's own cadence, so
+  // the dolly's reference reset far more often than what was even visible on
+  // screen). One evaluation, one cadence, read by both.
+  const pivotPickRef = useRef<GalaxyAnchor | null>(null);
 
   // Gesture drive (design.md D4b/D5): a thin driver over the pure policy in
   // src/lib/galaxy-nav.ts. Schedules NOTHING while gestures are off or the
@@ -326,6 +332,7 @@ export function useGalaxyCameraDrive({
             anchorThresholdPx,
           );
           candidateIdRef.current = picked.kind === "node" ? picked.id : null;
+          pivotPickRef.current = picked;
         }
 
         const drive = driveFor(hand);
@@ -490,7 +497,7 @@ export function useGalaxyCameraDrive({
             // new anchor would displace the camera by exactly the anchor delta:
             // the same trap D3 records for sharing one value between the orbit
             // origin and the look-at.
-            if (rect && sight) reaimZoomFromSight(fg, rect, sight, curDist);
+            if (pivotPickRef.current) reaimZoomFromSight(fg, pivotPickRef.current, curDist);
             const zoomOrigin = anchor.resolveCurrent();
             const next = zoomRadius({
               refRadius: zoomReferenceRef.current.radius,
@@ -558,15 +565,15 @@ export function useGalaxyCameraDrive({
     // frame would then walk the pivot sideways, chasing itself. A node is a
     // fixed thing in the world with no such feedback, so re-targeting between
     // notes mid-zoom is stable. Over empty space the engage-time pivot stands.
-    function reaimZoomFromSight(fg: Fg, rectNow: ScreenRect, sightNow: HandPoint, curDist: number) {
-      const picked = pickAnchorAt(
-        positionsRef.current.values(),
-        fg.camera(),
-        rectNow,
-        sightNow,
-        anchor.anchorRef.current,
-        anchorThresholdPx,
-      );
+    //
+    // Reads `pivotPickRef` — the SAME throttled, dead-banded pick the candidate
+    // ring shows — rather than picking again here. It used to: a fresh
+    // `pickAnchorAt` every frame reset the dolly's reference up to 6x more often
+    // than the ring's own 100ms cadence, so moving the sight while zooming
+    // stalled the dolly far more than the visible candidate ever suggested it
+    // would (manual pass after 8.7/9.8). One evaluation, one cadence, both
+    // consumers reading it, is the fix — not a slower reaim, a shared one.
+    function reaimZoomFromSight(fg: Fg, picked: GalaxyAnchor, curDist: number) {
       if (!anchor.setAnchor(picked, { ease: false })) return;
       reseedAroundAnchor(fg, curDist);
     }

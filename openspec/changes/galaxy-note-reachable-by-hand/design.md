@@ -260,6 +260,9 @@ accumulated so far, so a sight flapping between two nodes would stall the dolly.
 `nearestNodeAt`'s incumbent dead-band is what should prevent it — the same
 mechanism, in the same place, that D2 relied on for the same reason.
 
+> **Confirmed by the manual pass, and fixed by D17 below.** The dead-band alone
+> was not enough — see D17 for why and what changed.
+
 *What this does not fix.* The report also concluded that hand gestures are the
 wrong instrument for FINDING a note at all — that hands suit zoom, open, close and
 scroll, and finding wants something else. That judgement is about the step rail
@@ -351,6 +354,56 @@ coincidence of the library's cancel-on-write behaviour rather than by intent.
 world origin and sizes the distance from the origin to the filtered bbox, so
 filtering down to one distant node makes it zoom *out*. Verified in
 `three-render-objects/dist/three-render-objects.mjs`.
+
+### D17 — The zoom's re-aim shares the ring's throttle, not its own
+
+*Added after the manual pass on the sight (8.7): "moving the + causes lag and
+is very hard to use" — holding the sight still zoomed cleanly; moving it while
+zooming did not.*
+
+D14 said the zoom's re-aim runs every frame, on the grounds that its input —
+the distance between the hands — is stable under a moving midpoint in a way
+the orbit's input is not. That reasoning is still right about *when* to
+re-aim. It said nothing about *how often to re-decide what to re-aim at*, and
+the implementation conflated the two: `pickAnchorAt` was called fresh every
+frame from inside the zoom branch, independent of and unthrottled against the
+candidate ring's own evaluation of the identical question — which the ring
+answers on `SELECT_INTERVAL_MS` (100 ms), per D10, specifically so the search
+does not run at frame rate.
+
+So while zooming, the pivot could change up to six times more often than the
+ring ever showed changing, and D5's mechanism — `reseedAroundAnchor` — fires on
+every one of those changes, discarding the hand-spread reference each time.
+Sweeping the sight across a moderately dense region during a live pinch
+therefore rebased the dolly's zero point far more often than anything on
+screen predicted, which reads as exactly what was reported: static aim zooms
+fine, moving aim stalls.
+
+The dead-band in `nearestNodeAt` (D2) was the mechanism this design expected to
+prevent exactly this, and it does what it was built for — it stops flapping
+between two nodes that are both within `thresholdPx` of a nearly-still sight.
+It cannot stop a genuinely moving sight from crossing into a new node's
+threshold every few frames, because at that point the new node really is the
+nearer one; the dead-band was never the right tool for a different problem
+that happened to look similar.
+
+**Fix: one evaluation, one cadence, two consumers.** The throttled pick
+`useGalaxyCameraDrive.ts` already computes for the ring is now stored whole
+(`pivotPickRef`, not just the id the ring reads) and is what the zoom's
+per-frame branch reads too — no second `pickAnchorAt` call. The re-aim still
+runs every frame in the sense that it still *applies* the current pick every
+frame (so a pick that lands mid-zoom is not delayed by an extra beat), but
+what it can pick from only changes on the ring's own 100 ms tick. The visible
+candidate and the zoom's actual pivot are therefore reading the same value by
+construction, which is also what makes the ring an honest preview of the zoom
+again — before this fix the two could silently disagree.
+
+*Alternative considered:* widen the dead-band further, or add a minimum dwell
+time before a pivot change commits. Rejected — both add a second timing
+knob to tune against the ring's existing one instead of removing the
+duplicate evaluation that caused the disagreement, and neither explains why
+the ring and the zoom were allowed to see different answers to the same
+question in the first place.
 
 ### D9 — The rail is chrome, and that is the whole of its reachability
 
