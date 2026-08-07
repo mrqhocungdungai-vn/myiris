@@ -45,6 +45,7 @@ function make(overrides = {}) {
     getUiContextSnapshot: () => ({ uiMode: "deck" }),
     resolvePendingPoQuestion: vi.fn(() => ({ status: "ok" })),
     captureNote: vi.fn(async () => ({ status: "ok", message: "Saved to your notes.", file: "/vault/inbox/captures/x.md" })),
+    findNoteByName: vi.fn(async () => ({ status: "ok", matches: [], count: 0 })),
     mutateVaultNotes: vi.fn(async () => ({ status: "ok", message: "Linked." })),
     ...overrides,
   });

@@ -42,6 +42,7 @@ const DEPRECATED_TASK_TOOL = "submit_claude_task";
  *   getUiContextSnapshot: () => any,
  *   resolvePendingPoQuestion: (answers: any) => any,
  *   captureNote: (args: any) => Promise<any>,
+ *   findNoteByName: (args: any) => Promise<any>,
  *   mutateVaultNotes: (args: any) => Promise<any>,
  * }} deps
  */
@@ -64,6 +65,7 @@ export function createRunDispatch({
   getUiContextSnapshot,
   resolvePendingPoQuestion,
   captureNote,
+  findNoteByName,
   mutateVaultNotes,
 }) {
   // Parks a Gemini-authored brief for Approve/Edit/Cancel before any Claude
@@ -501,6 +503,15 @@ export function createRunDispatch({
         // worker, so it must survive chat-only mode (design D4/D7,
         // pipeline-availability spec "A worker-free local tool still works").
         return captureNote(args);
+      case "find_note_by_name":
+        // Also NOT in PIPELINE_ONLY_TOOLS, and for the same reason read the
+        // other way round: comparing a spoken name against a list of titles
+        // needs no model at all, so the cheapest question the second brain can
+        // answer must not be the one that requires a Claude credential
+        // (personal-knowledge-notes: "The lookup works with no Claude
+        // credential"). It also must not queue behind a long run — it does not
+        // touch the execution slot.
+        return findNoteByName(args);
       case "mutate_vault_notes":
         // Also NOT in PIPELINE_ONLY_TOOLS, for the identical reason: a
         // structural edit is a direct write, not a run (personal-knowledge-

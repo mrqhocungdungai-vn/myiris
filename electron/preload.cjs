@@ -141,6 +141,11 @@ contextBridge.exposeInMainWorld("iris", {
   getSecondBrainAvailability: () => ipcRenderer.invoke("secondbrain:availability"),
   getSecondBrainGraph: () => ipcRenderer.invoke("secondbrain:get-graph"),
   readSecondBrainNote: (id) => ipcRenderer.invoke("secondbrain:read-note", id),
+  // voice-finds-a-note D2: the rail's find field asks main rather than
+  // filtering its own graph copy, so the typed route and Iris's spoken lookup
+  // run the one matcher. Debounced by the caller — this is a round trip, not a
+  // local array filter.
+  findSecondBrainNotes: (query) => ipcRenderer.invoke("secondbrain:find-notes", query),
   // add-manual-note-editing: the note reader's editor. `revision` is the token
   // read-note served for the content the editor was opened on — main refuses the
   // write if the file no longer holds it, so a concurrent write (Claude's note
@@ -155,6 +160,23 @@ contextBridge.exposeInMainWorld("iris", {
     const handler = (_event, payload) => callback(payload);
     ipcRenderer.on("secondbrain:graph-updated", handler);
     return () => ipcRenderer.removeListener("secondbrain:graph-updated", handler);
+  },
+  // voice-finds-a-note D4: the capability's own channels, never iris:ui-action —
+  // `voice-ui-control` enumerates a fixed UI vocabulary that is not about the
+  // second brain, and growing it here would put one capability's business into
+  // another capability's spec.
+  //
+  // Matches are how the rail learns what Iris found; the open instruction is
+  // how "open it" reaches the renderer's existing note-open path.
+  onSecondBrainNameMatches: (callback) => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on("secondbrain:name-matches", handler);
+    return () => ipcRenderer.removeListener("secondbrain:name-matches", handler);
+  },
+  onSecondBrainOpenNote: (callback) => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on("secondbrain:open-note", handler);
+    return () => ipcRenderer.removeListener("secondbrain:open-note", handler);
   },
   // open-note-session: the renderer reports open/close from the note
   // reader's existing lifecycle — main is the single authority on which note

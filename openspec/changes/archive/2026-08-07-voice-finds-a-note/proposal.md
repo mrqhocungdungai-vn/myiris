@@ -39,17 +39,25 @@ distinction has to be enforced where Gemini reads it, not left to prose.
 spoken search fills the rail with the matches, steppable by dwell on exactly the
 terms every other rail entry already is. Finding a note therefore becomes
 hands-free end to end: ask, then point and hold. When the galaxy is shut the
-lookup still answers — Iris just says what she found, and can open one.
+lookup still answers — Iris just says what she found, and opening one from there
+brings the galaxy up around it.
 
 **Iris can open a found note by voice**, which leaves the camera anchored on it —
 behaviour `second-brain-galaxy-view` already requires of *any* note-open, so the
-voice route inherits it rather than introducing it.
+voice route inherits it rather than introducing it. Asked with the galaxy shut,
+opening **brings the galaxy up with it**: the note reader is part of that layer
+and does not exist without it, so the alternative was to answer a request that
+named a note by telling the user to go open something first.
 
-**One matcher, in the main process.** The renderer's `railSearch` is replaced by
-the main-process one it duplicates. Two implementations of "does this title
-match" that must agree is the defect class this repo already names in its
-conventions, and the lookup has to work with the galaxy closed — where there is
-no renderer state to match against — so main is where it has to live regardless.
+**One matcher, in the main process — in its own module.** The renderer's
+`railSearch` moves to a new `electron/note-name-match.mjs`, pure and
+Electron-free like `vault-graph.mjs` beside it, and the typed field reads it over
+IPC. Two implementations of "does this title match" that must agree is the defect
+class this repo already names in its conventions, and the lookup has to work with
+the galaxy closed — where there is no renderer state to match against — so main
+is where it has to live regardless. Its own module rather than the capability's,
+because `second-brain.mjs` is already 1211 lines against a 250–450 convention and
+a pure string comparison is the last thing that needs to live inside it.
 
 Explicitly **not** in this change:
 
@@ -59,10 +67,13 @@ Explicitly **not** in this change:
   the same thing.
 - *Creating, editing or deleting notes by this route.* `capture_note` and
   `mutate_vault_notes` already own writing; this reads.
-- *A voice-driven camera drive.* The user's own conclusion from the galaxy's
-  manual pass was that hands suit zoom/open/close/scroll and not finding. This
-  change takes the finding; it adds no spoken control of the camera beyond
-  opening a note, which the anchor rules already handle.
+- *A voice-driven camera drive, or a spoken galaxy switch.* The user's own
+  conclusion from the galaxy's manual pass was that hands suit
+  zoom/open/close/scroll and not finding. This change takes the finding; it adds
+  no spoken control of the camera beyond opening a note, which the anchor rules
+  already handle. Opening a found note while the galaxy is shut does activate
+  it — but as an implied part of opening that note, not as a layer the user can
+  ask Iris to toggle on its own.
 - *Fuzzy or phonetic matching beyond case- and diacritic-folding.* A spoken title
   arrives already transcribed by Gemini, so the hard part of hearing it is done;
   what remains is worth judging on the simple rule before a cleverer one is added
@@ -84,25 +95,38 @@ across two specs for the sake of one function.
   boundary between that lookup and the curation verb's retrieval.
 - `second-brain-gesture-nav`: the step rail's matches may be produced by voice as
   well as by typing, so reaching a note by hand no longer requires a keyboard to
-  begin.
+  begin. Added as its own requirement rather than folded into the rail's stepping
+  requirement — that one is about what the rail *is*, this is about where its
+  words come from.
 
 `second-brain-galaxy-view` needs no delta: its "Opening a note anchors the camera
-on it" requirement is already unqualified as to *how* the note was opened, which
-the voice route satisfies rather than changes.
+on it" scenario is already unqualified as to *how* the note was opened, which the
+voice route satisfies rather than changes — verified still present in the living
+spec after `galaxy-note-reachable-by-hand` archived.
 
 ## Impact
 
-- `electron/capabilities/second-brain.mjs` — the tool declaration, the matcher
-  over the graph it already keeps, the prompt fragment's account of when to use
-  which, and the IPC handlers the renderer reads.
+- `electron/note-name-match.mjs` + `electron/note-name-match.test.mjs` — **new.**
+  The matcher and its folding, pure and Electron-free, holding the assertions
+  ported from `galaxy-rail.test.ts`.
+- `electron/capabilities/second-brain.mjs` — the tool declaration, the call into
+  the matcher over the graph it already reads, the prompt fragment's account of
+  when to use which, the IPC handler the renderer reads, and the emit that
+  carries matches and the open instruction to the galaxy.
 - `electron/run-dispatch.mjs` — one dispatch case, on the non-pipeline side
-  alongside `capture_note` and `mutate_vault_notes`.
-- `electron/vault-graph.mjs` — a read of the cached graph; no new scan, no new
-  watcher.
-- `src/lib/galaxy-rail.ts` — `railSearch` and its folding move out to main;
-  what remains is the rail's own shaping.
+  alongside `capture_note` and `mutate_vault_notes`. `UI_ACTIONS` is deliberately
+  **not** touched.
+- `electron/vault-graph.mjs` — read only, via the existing `getGraph()`; no new
+  scan path, no new watcher, no signature change.
+- `src/lib/galaxy-rail.ts` — `railSearch` (line 247) and `foldForSearch` move out
+  to main; what remains is the rail's own shaping (`railRoots`,
+  `railNeighbours`, `connectedRegions`, the island class).
+- `src/lib/galaxy-rail.test.ts` — its `railSearch` block moves with the code.
 - `src/components/VaultGalaxy.tsx`, `GalaxyStepRail.tsx` — matches arriving from
   main, whether the user typed them or said them.
+- `src/App.tsx` — activating the galaxy when an open arrives with it shut (D5).
+  The dwell rule is not touched.
 - `electron/preload.cjs` + `src/vite-env.d.ts` — the new channels.
+- `docs/GESTURES.md` — the "this half is typed, not hands-free" paragraph.
 - No new dependency. No change to the vault's on-disk shape, the verb registry,
-  or the run queue.
+  the run queue, or `voice-ui-control`'s action vocabulary.

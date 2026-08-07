@@ -48,6 +48,14 @@ spoken title arrives transcribed with whatever accents the transcription chose �
 so requiring them to agree exactly would make the feature fail most often in the
 languages that have them.
 
+The lookup SHALL read the vault as it is at the moment it is asked, not a copy
+kept fresh by something else. A note written moments ago SHALL be findable in the
+same conversation — which this capability already requires of capture and
+retrieval ("a note captured in one turn is findable in a later turn") and which
+the lookup SHALL NOT be the exception to. Nothing watches this vault except while
+the galaxy is on screen, so a lookup reading a kept copy would answer for an
+empty vault whenever the galaxy had not been opened.
+
 Iris SHALL report what she found. When several notes match she SHALL be able to
 name them so the user can choose; when none do she SHALL say so rather than
 offering the nearest unrelated note as though it were the answer.
@@ -75,6 +83,16 @@ confident wrong answer, which is worse than the slower correct one.
 
 - **WHEN** the user names a note whose title carries diacritics and the transcription omits or alters them
 - **THEN** the note is still found
+
+#### Scenario: A note captured moments ago is findable at once
+
+- **WHEN** the user captures a note by voice and then, in the same conversation, asks for it by name
+- **THEN** it is found — the lookup reads the vault as it stands, rather than a copy last refreshed when the galaxy was open
+
+#### Scenario: The lookup answers a vault it has never displayed
+
+- **WHEN** the galaxy has not been opened in this session and the user asks for a note by name
+- **THEN** the vault's notes are matched normally, rather than the lookup finding nothing because no view had populated anything
 
 #### Scenario: Several matches are offered rather than guessed between
 

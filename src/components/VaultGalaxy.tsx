@@ -9,7 +9,7 @@ import { useGalaxyAnchor } from "../hooks/useGalaxyAnchor";
 import { selectLabels } from "../lib/galaxy-labels";
 import { createLabelPool, type LabelPool } from "../lib/galaxy-label-sprites";
 import { createRingPair, type AnchorRings } from "../lib/galaxy-anchor-rings";
-import { railNeighbours, railRoots, railSearch, RAIL_ISLAND_CLASS } from "../lib/galaxy-rail";
+import { railNeighbours, railRoots, railEntriesFromMatches, RAIL_ISLAND_CLASS } from "../lib/galaxy-rail";
 import GalaxyStepRail from "./GalaxyStepRail";
 import type { GalaxyNode, GalaxyLink, TrackballControlsLike } from "../lib/galaxy-types";
 
@@ -106,6 +106,13 @@ const STEP_FLIGHT_DISTANCE = 60;
 // universal dwell's own 300 ms hold, or a still-held hand would charge a fresh
 // dwell on the repopulated rail and fire a second step.
 const STEP_LOCK_MS = 700;
+// How long the find field waits before asking main (voice-finds-a-note D2).
+// Matching moved out of the renderer, so each query is now a local IPC round
+// trip rather than an array filter — short enough that typing still feels
+// answered, long enough that a fast typist does not fire one scan per
+// character. This is the number to change if the field ever reads as laggy;
+// the answer is never a second matcher in the renderer.
+const RAIL_SEARCH_DEBOUNCE_MS = 120;
 
 // add-galaxy-node-labels tuning constants (design.md D9, revised D11).
 // No distance cutoff: every eligible note's title is always a selection
@@ -433,13 +440,83 @@ function GalaxyCanvas({
   // Inert for a moment after a step, so a hand still held over the rail cannot
   // step again (design.md D11).
   const [railLocked, setRailLocked] = useState(false);
-  // The note-name search (design.md D16). Local to this component: the renderer
-  // already holds the whole graph, so matching titles needs no IPC at all.
+  // The note-name search (design.md D16). No longer matched locally: which
+  // notes a name matches is decided once in `electron/note-name-match.mjs` and
+  // asked over IPC (voice-finds-a-note D2), because Iris's spoken lookup has to
+  // reach the same answer and has to work with the galaxy closed, where there
+  // is no renderer graph to filter. What arrives is already ordered; this
+  // component only colours it.
   const [railQuery, setRailQuery] = useState("");
+  const [railMatches, setRailMatches] = useState<NoteNameMatchResult[]>([]);
   const railLockTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => {
     if (railLockTimerRef.current) clearTimeout(railLockTimerRef.current);
   }, []);
+
+  // What Iris found when asked aloud (voice-finds-a-note D4), arriving on the
+  // capability's own channel. It lands in exactly the same state the typed
+  // field's matches do, so the rail offers them on identical terms — steppable
+  // by the universal point-and-hold, with no new gesture and no galaxy-specific
+  // pointing rule. That equivalence is the point of the feature: the hand can
+  // step the results of a search it has no way to start, and asking is what
+  // supplies the words.
+  //
+  // The query is mirrored into the field so the rail says what it is showing
+  // matches OF — a rail full of notes with an empty search box reads as the
+  // view having changed on its own.
+  // Matches that arrived already answered, so the effect below does not ask
+  // main the same question a second time. Without this, mirroring the spoken
+  // query into the field would trip the debounce and spend a second vault scan
+  // to be told what Iris just said — and a scan is a filesystem walk, not a
+  // cache read (design.md D6).
+  const voiceAnsweredQueryRef = useRef<string | null>(null);
+  useEffect(() => {
+    return window.iris.onSecondBrainNameMatches(({ query, matches: found }) => {
+      voiceAnsweredQueryRef.current = query;
+      setRailQuery(query);
+      setRailMatches(found);
+    });
+  }, []);
+
+  // Ask main for the matches, debounced (voice-finds-a-note D2). The trade this
+  // makes is explicit in the design: a local IPC round trip per debounced
+  // keystroke, in place of a synchronous array filter, bought with the
+  // guarantee that what the user hears from Iris and what the user sees in the
+  // rail cannot disagree. If it ever reads as laggy the answer is a shorter
+  // debounce, never a second matcher here.
+  //
+  // Re-runs on `graph` too, so a note written while the galaxy is open joins
+  // the matches for a query already typed rather than waiting for a keystroke.
+  useEffect(() => {
+    if (railQuery.trim().length === 0) {
+      setRailMatches([]);
+      return;
+    }
+    // This exact query has just been answered by the spoken lookup; typing
+    // anything else clears the claim and the field asks for itself again.
+    if (voiceAnsweredQueryRef.current === railQuery) {
+      voiceAnsweredQueryRef.current = null;
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      window.iris
+        .findSecondBrainNotes(railQuery)
+        .then((result) => {
+          // A late reply for a query the user has already moved past must not
+          // overwrite the current one: the effect's cleanup runs before the
+          // next one, so this flag is what makes the ordering safe.
+          if (!cancelled) setRailMatches(result.matches);
+        })
+        .catch(() => {
+          if (!cancelled) setRailMatches([]);
+        });
+    }, RAIL_SEARCH_DEBOUNCE_MS);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [railQuery, graph]);
 
   // The node the HAND is pointing at — written by the gesture loop while the
   // pose is `dwell` or `inspect`, and null otherwise. The inspect pose needs no
@@ -869,10 +946,8 @@ function GalaxyCanvas({
     () => (railCentreId === null ? [] : railNeighbours({ centreId: railCentreId, nodes: graph.nodes, links: graph.links })),
     [graph, railCentreId],
   );
-  const matches = useMemo(
-    () => railSearch({ query: railQuery, nodes: graph.nodes, links: graph.links }),
-    [graph, railQuery],
-  );
+  // Colouring only — the order arrived decided (voice-finds-a-note D2).
+  const matches = useMemo(() => railEntriesFromMatches(railMatches), [railMatches]);
   const centreTitle = railCentreId === null ? null : graph.nodes.find((n) => n.id === railCentreId)?.title ?? railCentreId;
 
   return (

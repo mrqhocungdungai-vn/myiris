@@ -9,6 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import matter from "gray-matter";
 import { createVaultGraph } from "../vault-graph.mjs";
+import { matchNotesByName } from "../note-name-match.mjs";
 import { appendRunRecord, inboxBacklog } from "../run-inbox.mjs";
 import {
   appendSpoolRecord,
@@ -156,6 +157,58 @@ const MUTATE_VAULT_NOTES_DECLARATION = {
       tags: { type: "string", description: "Comma-separated tags, for the set_tags operation. Replaces the note's existing tags." },
     },
     required: ["operation"],
+  },
+};
+
+// Finding a note by NAME (personal-knowledge-notes: "A note is findable by
+// name, spoken, without spending a run"). NOT a verb, for the same reason
+// capture_note is not one read the other way: comparing what the user said
+// against a list of titles needs no model, so routing it through a worker would
+// make the cheapest question this capability can answer the slowest, the only
+// one that could fail for reasons unrelated to the vault, and the only one a
+// user without a Claude credential could not ask.
+//
+// The description carries the boundary against `capture_learning` (design.md
+// D3, mechanism 2), on the pattern capture_note's already uses against the same
+// verb. This is the change's central hazard: "find my note about the deployment"
+// and "what do my notes say about the deployment" are one word apart and route
+// to completely different machinery, and choosing wrong is not symmetrical —
+// answering a contents question from a filename is a confident wrong answer,
+// which is worse than the slower correct one.
+//
+// The parameter is `name`, not `query`/`subject`/`question` (mechanism 1): a
+// schema is a contract the calling interface enforces, where prose is only
+// advice, so the strongest statement of "this takes a name" is the name of the
+// thing it takes.
+const FIND_NOTE_DECLARATION = {
+  name: "find_note_by_name",
+  description:
+    "Find the user's notes whose TITLE matches a name they said — an instant local lookup: no Claude run, no tokens, " +
+    "no execution slot, and it works even with no Claude credential configured. Use for 'find my note called X', " +
+    "'which note is X', 'open my X note', 'tìm ghi chú tên là X'. Matching ignores case and accents. Returns the " +
+    "matching titles: when several match, name them and let the user choose rather than picking one; when none match, " +
+    "say so rather than offering an unrelated note. " +
+    "Do NOT use this to answer what the user's notes SAY about a subject, to summarise or synthesise across notes, or " +
+    "for 'what do my notes say about X' / 'what do I know about X' — that is retrieval, it reads the notes' contents, " +
+    "and it is the capture_learning verb, not this lookup. This only ever sees titles, so answering a question about " +
+    "contents from it would be guessing from a filename.",
+  parameters: {
+    type: "object",
+    properties: {
+      name: {
+        type: "string",
+        description:
+          "The note's name, as the user said it — a title or part of one, NOT a subject, question, or description of " +
+          "what the note is about.",
+      },
+      open: {
+        type: "boolean",
+        description:
+          "True only when the user asked to OPEN the note as well as find it ('open my X note'). Opens it when exactly " +
+          "one note matches. Omit for a plain lookup.",
+      },
+    },
+    required: ["name"],
   },
 };
 
@@ -726,16 +779,31 @@ This note is just a starting point — edit it, retag it, or delete it whenever 
       'your notes?"). Never auto-save and never repeat the offer for the same exchange; if declined or ignored, drop it ' +
       "silently. Always honor an explicit save request whether or not you offered.";
 
+    // The third and weakest of design.md D3's three mechanisms against the
+    // change's central hazard — the schema (a parameter called `name`) and the
+    // declaration's own explicit negative case are the two that carry it. Said
+    // here as well because the failure is a routing choice made before either
+    // declaration is read closely, and it is not symmetrical: a contents
+    // question answered from a title list is a confident wrong answer, where a
+    // name lookup sent to the verb merely costs time and money.
+    //
+    // Ungated, like capture: the lookup needs no worker and no credential.
+    const findGuidance =
+      " find_note_by_name answers WHICH NOTE IS CALLED something — a title lookup, instantly and locally. " +
+      'Use it for "find my note called X" or "open my X note". It never reads what a note says, so do NOT use it for ' +
+      '"what do my notes say about X"; that question is about contents and belongs to retrieval.';
+
     const base = !getPipelineAvailable() || !checkNotesSkillsStatus().ok
-      ? captureGuidance
+      ? captureGuidance + findGuidance
       : (() => {
           const backlog = notesInboxStatus();
           const nudge = backlog.worthProcessing
             ? ` Right now ${backlog.records} items are waiting to be woven in — you MAY mention that once, in one short line, and offer to do it. Never start it unprompted.`
             : "";
           return (
-            `${captureGuidance} Retrieving from notes ("what do my notes say about X") or weaving accumulated captures into ` +
-            `the wiki goes through the capture_learning verb; always honor an explicit request for either.${nudge}`
+            `${captureGuidance}${findGuidance} Retrieving from notes ("what do my notes say about X") or weaving accumulated ` +
+            `captures into the wiki goes through the capture_learning verb — that verb reads the notes themselves, which is ` +
+            `what separates it from the title lookup above; always honor an explicit request for either.${nudge}`
           );
         })();
 
@@ -928,6 +996,102 @@ This note is just a starting point — edit it, retag it, or delete it whenever 
     return { status: "error", error: `Unknown operation: ${operation}` };
   }
 
+  // How long a spoken or typed name may be. Not a security bound — the matcher
+  // touches no filesystem — but a query longer than any title can be is a bug
+  // or a paste, and folding a megabyte of it per keystroke is work for nothing.
+  const FIND_QUERY_MAX_CHARS = 200;
+
+  /**
+   * The notes whose title matches `query` (personal-knowledge-notes: "A note is
+   * findable by name, spoken, without spending a run").
+   *
+   * **The single point both routes reach.** The typed find field calls it over
+   * `secondbrain:find-notes`; the spoken lookup calls it through the tool
+   * dispatch. The spec requires the two to return the same notes in the same
+   * order, and they do so by being one call into one matcher rather than two
+   * that agree today.
+   *
+   * Always a fresh scan (design.md D6), never `latestGraph`. With the galaxy
+   * closed the watcher is off and nothing is keeping a copy current — and on a
+   * cold session that copy is the empty initial graph, so a cached read would
+   * answer "no matches" for an entire vault. The scan is also what primes
+   * `vault-graph`'s own cache, which is what lets a note found this way then be
+   * opened (`resolveVaultNotePath` reads that cache).
+   *
+   * Costs no run, no tokens and no execution slot, and works with no Claude
+   * credential — it is a string comparison over titles, on exactly the terms
+   * capture is a direct write.
+   */
+  async function findNotesByName(query) {
+    const text = typeof query === "string" ? query.slice(0, FIND_QUERY_MAX_CHARS) : "";
+    if (!probeSecondBrainAvailability()) return { matches: [], available: false };
+    const graph = await notesVaultGraph.getGraph();
+    latestGraph = graph;
+    return { matches: matchNotesByName({ query: text, nodes: graph.nodes, links: graph.links }), available: true };
+  }
+
+  /**
+   * The spoken lookup (`find_note_by_name`) — a direct read, dispatched outside
+   * `PIPELINE_ONLY_TOOLS` so it survives chat-only mode.
+   *
+   * Calls the same `findNotesByName` the typed field does, which is what makes
+   * "spoken and typed searches agree" structural rather than aspirational.
+   *
+   * Two things happen with the result, and they are separate on purpose
+   * (design.md D4): the matches are EMITTED so the rail can offer them, and
+   * they are RETURNED so Iris can speak them. Emitting is how the rail learns;
+   * returning is how the question gets answered — and the question has to have
+   * an answer when there is no galaxy to emit into.
+   *
+   * Nothing here selects: no focus is set, no note is opened unless the user
+   * asked for one, and what the voice layer reads is unchanged. Navigating is
+   * not selecting — the rule stepping already holds to.
+   */
+  /** @param {{ name?: string, open?: boolean }} [params] */
+  async function findNoteByName({ name, open = false } = {}) {
+    const { matches, available } = await findNotesByName(name);
+    if (!available) return { status: "error", error: "The notes vault is not available." };
+
+    // The rail learns even when nothing matched, so a search that found nothing
+    // clears the previous search's matches rather than leaving them standing as
+    // though they answered this question.
+    emitToRenderer("secondbrain:name-matches", { query: String(name ?? ""), matches });
+
+    const found = matches.map((m) => ({ title: m.title, openable: m.openable }));
+    if (!open) return { status: "ok", matches: found, count: found.length };
+
+    if (matches.length === 0) return { status: "ok", matches: found, count: 0, opened: false };
+    // Several matched: name them and let the user choose. Opening one silently
+    // would be picking on their behalf between notes they can distinguish and
+    // this lookup cannot.
+    if (matches.length > 1) {
+      return { status: "ok", matches: found, count: found.length, opened: false, reason: "several_matched" };
+    }
+
+    const [only] = matches;
+    // A ghost is an unresolved `[[wikilink]]` target: named by another note,
+    // but there is no file behind it. Refused with that reason rather than with
+    // a read error — and the galaxy is NOT brought up, because there would be
+    // nothing to show in it (design.md D5).
+    if (!only.openable) {
+      return {
+        status: "ok",
+        matches: found,
+        count: 1,
+        opened: false,
+        reason: "no_file",
+        message: `"${only.title}" is a link to a note that does not exist yet, so there is nothing to open.`,
+      };
+    }
+
+    // Opening goes through the renderer's existing note-open path, so the
+    // camera anchoring applies without being reimplemented — and brings the
+    // galaxy up with it when it is shut, since the reader lives in that layer
+    // and does not exist outside it (design.md D5).
+    emitToRenderer("secondbrain:open-note", { id: only.id, title: only.title });
+    return { status: "ok", matches: found, count: 1, opened: true, title: only.title };
+  }
+
   /** @type {Array<{ channel: string, kind: "handle"|"on", fn: Function }>} */
   const ipcHandlers = [
     // Second-brain galaxy view (second-brain-galaxy-view design.md D3/D7/D8):
@@ -952,6 +1116,16 @@ This note is just a starting point — edit it, retag it, or delete it whenever 
         return { graph, available };
       },
     },
+    // The typed find field's route into the one matcher (voice-finds-a-note
+    // D2). It reads the same `findNotesByName` the spoken lookup does, which is
+    // what makes "spoken and typed searches agree" true by construction rather
+    // than by two implementations happening to match.
+    //
+    // The cost of this over the array filter the renderer used to do is one
+    // local IPC round trip per debounced keystroke, accepted deliberately: the
+    // guarantee bought is that what the user hears and what the user sees
+    // cannot disagree.
+    { channel: "secondbrain:find-notes", kind: "handle", fn: (_event, query) => findNotesByName(query) },
     // Start/stop the watcher exactly on galaxy toggle-on/off (design.md D3
     // M-2) — an always-on recursive watcher would rebuild constantly during
     // normal note-capture use for a view that's off by default. start() is
@@ -1174,7 +1348,7 @@ This note is just a starting point — edit it, retag it, or delete it whenever 
     // its declaration belongs to the capability that owns it, the same way
     // canvas's MCP tools are declared by a run's `mcpServers`, not a capability
     // toolDeclaration — this is the one place a non-verb tool is declared.
-    toolDeclarations: [CAPTURE_NOTE_DECLARATION, MUTATE_VAULT_NOTES_DECLARATION],
+    toolDeclarations: [CAPTURE_NOTE_DECLARATION, FIND_NOTE_DECLARATION, MUTATE_VAULT_NOTES_DECLARATION],
     notesVaultDir: NOTES_VAULT_DIR,
     notesInboxDir: NOTES_INBOX_DIR,
     notesCapturesDir: NOTES_CAPTURES_DIR,
@@ -1182,6 +1356,7 @@ This note is just a starting point — edit it, retag it, or delete it whenever 
     notesMeetingsDir: NOTES_MEETINGS_DIR,
     captureRunOutcome,
     captureNote,
+    findNoteByName,
     notesInboxStatus,
     checkNotesSkillsStatus,
     ensureNotesVaultReady,

@@ -307,6 +307,7 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     // this tool can only actually be called once the live session is up, long
     // after wiring finishes.
     captureNote: (args) => secondBrainCapability.captureNote(args),
+    findNoteByName: (args) => secondBrainCapability.findNoteByName(args),
     mutateVaultNotes: (args) => secondBrainCapability.mutateVaultNotes(args),
   });
   const {

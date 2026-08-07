@@ -379,15 +379,34 @@ They do not change as the user steps, which is what makes them a fixed frame of
 reference: the first step needs no aiming, and leaving a cloud — or returning to
 the start — never requires walking back hop by hop or closing the galaxy.
 
-**Notes are findable by name.** A search field at the top of the rail matches note
-titles — case- and diacritic-folded, so a Vietnamese title is found without typing
-its accents — and the matches step exactly like any other entry. Stepping is only
-as good as the reachability of a starting point, and link topology cannot supply
-one: someone looking for a note is thinking about its subject, not about what it
-links to. **This half is typed, not hands-free**: the universal dwell fires
-`.click()` on buttons, and clicking a text field does not type into it, so the hand
-can step the results but cannot produce the query. Voice input for it is a separate
-change, because there is no second-brain tool on the Gemini surface at all today.
+**Notes are findable by name, typed or spoken.** A search field at the top of the
+rail matches note titles — case- and diacritic-folded, so a Vietnamese title is
+found without typing its accents — and the matches step exactly like any other
+entry. Stepping is only as good as the reachability of a starting point, and link
+topology cannot supply one: someone looking for a note is thinking about its
+subject, not about what it links to.
+
+**Asking is what makes this half hands-free.** The universal dwell fires
+`.click()` on buttons, and clicking a text field does not type into it, so the
+hand can step the results of a search it has no way to start. Saying the name
+supplies the words: ask Iris to find a note, and the matches fill the rail to be
+stepped by the same point-and-hold as everything else — no keyboard, no new
+gesture. That route is `find_note_by_name`, a direct local lookup on the same
+terms as `capture_note`: no Claude run, no tokens, no execution slot, and it
+works with no Claude credential. It answers with the galaxy closed too, where
+there is no rail to fill — and "open my X note" from there brings the galaxy up
+around the note, since the reader lives in that layer and does not exist outside
+it.
+
+Which notes a name matches is decided in **one** place,
+`electron/note-name-match.mjs`, and both routes call it — so what Iris says she
+found and what the rail shows cannot disagree. The renderer no longer matches
+anything itself; it colours what main ranked.
+
+**Titles only.** The lookup answers *which note is called that*. What the notes
+*say* about something is retrieval, and that stays the `capture_learning` verb on
+the worker — answering a contents question from a filename would be a confident
+wrong answer, which is worse than the slower correct one.
 
 Its one-hop set comes from the same `focusNeighborhood` the declutter and the
 highlight use, so nothing in the galaxy can disagree about what one hop means —

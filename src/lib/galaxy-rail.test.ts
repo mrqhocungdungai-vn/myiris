@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   railNeighbours,
   railRoots,
-  railSearch,
+  railEntriesFromMatches,
   connectedRegions,
   linkDegrees,
   RAIL_ISLAND_CLASS,
@@ -10,7 +10,7 @@ import {
   type RailNode,
 } from "./galaxy-rail";
 import { HUD_CHROME_CLASS } from "./hudChrome";
-import { colorForNode } from "./galaxy-colors";
+import { colorForNode, GHOST_COLOR } from "./galaxy-colors";
 import { focusNeighborhood } from "./galaxy-nav";
 
 const NODES: RailNode[] = [
@@ -211,55 +211,39 @@ describe("railRoots — the entry points", () => {
   });
 });
 
-describe("railSearch — finding a note by name", () => {
-  const NAMED: RailNode[] = [
-    { id: "gh", title: "Ghi chú kiến trúc", tags: [] },
-    { id: "alpha", title: "Alpha", tags: [] },
-    { id: "alphabet", title: "Alphabet soup", tags: [] },
-    { id: "sub", title: "The alpha channel", tags: [] },
-  ];
-  const NAMED_LINKS = [{ source: "sub", target: "alpha" }];
-
-  it("returns nothing for an empty or whitespace query", () => {
-    expect(railSearch({ query: "", nodes: NAMED, links: NAMED_LINKS })).toEqual([]);
-    expect(railSearch({ query: "   ", nodes: NAMED, links: NAMED_LINKS })).toEqual([]);
-  });
-
-  it("ranks exact, then prefix, then substring", () => {
-    const ids = railSearch({ query: "alpha", nodes: NAMED, links: NAMED_LINKS }).map((e) => e.id);
-    expect(ids).toEqual(["alpha", "alphabet", "sub"]);
-  });
-
-  it("ignores case", () => {
-    expect(railSearch({ query: "ALPHABET", nodes: NAMED, links: NAMED_LINKS }).map((e) => e.id)).toEqual(["alphabet"]);
-  });
-
-  it("ignores diacritics, so a title in Vietnamese is findable without typing them", () => {
-    expect(railSearch({ query: "ghi chu", nodes: NAMED, links: NAMED_LINKS }).map((e) => e.id)).toEqual(["gh"]);
-    expect(railSearch({ query: "kien truc", nodes: NAMED, links: NAMED_LINKS }).map((e) => e.id)).toEqual(["gh"]);
-  });
-
-  it("orders equally-ranked matches by connectedness", () => {
-    const nodes: RailNode[] = [
-      { id: "quiet", title: "Note quiet", tags: [] },
-      { id: "busy", title: "Note busy", tags: [] },
-      { id: "x", title: "X", tags: [] },
+describe("railEntriesFromMatches — colouring what main matched", () => {
+  it("preserves the order it was given, rather than re-ranking it", () => {
+    // The ordering contract lives in electron/note-name-match.mjs and is tested
+    // there. What matters here is that the renderer does not have a second
+    // opinion about it: a mapper that sorted would silently break
+    // "spoken and typed searches agree" without failing that module's tests.
+    const matches = [
+      { id: "c", title: "C", tags: [], ghost: false, linkCount: 0, openable: true },
+      { id: "a", title: "A", tags: [], ghost: false, linkCount: 99, openable: true },
+      { id: "b", title: "B", tags: [], ghost: false, linkCount: 5, openable: true },
     ];
-    const links = [
-      { source: "busy", target: "x" },
-      { source: "busy", target: "quiet" },
-    ];
-    expect(railSearch({ query: "note", nodes, links }).map((e) => e.id)).toEqual(["busy", "quiet"]);
+    expect(railEntriesFromMatches(matches).map((e) => e.id)).toEqual(["c", "a", "b"]);
   });
 
-  it("caps the result list", () => {
-    const nodes: RailNode[] = [];
-    for (let i = 0; i < 50; i++) nodes.push({ id: `n${i}`, title: `Note ${i}`, tags: [] });
-    expect(railSearch({ query: "note", nodes, links: [], limit: 5 })).toHaveLength(5);
+  it("colours an entry with the same function the node's dot uses", () => {
+    const tagged = { id: "n", title: "N", tags: ["arch"], ghost: false, linkCount: 0, openable: true };
+    const [entry] = railEntriesFromMatches([tagged]);
+    expect(entry.tagColor).toBe(colorForNode({ tags: ["arch"] }));
   });
 
-  it("marks a ghost match as not openable, like every other entry", () => {
-    const nodes: RailNode[] = [{ id: "g", title: "Ghost note", tags: [], ghost: true }];
-    expect(railSearch({ query: "ghost", nodes, links: [] })[0].openable).toBe(false);
+  it("colours a ghost match as a ghost, and keeps it not openable", () => {
+    const ghost = { id: "g", title: "G", tags: [], ghost: true, linkCount: 0, openable: false };
+    const [entry] = railEntriesFromMatches([ghost]);
+    expect(entry.tagColor).toBe(GHOST_COLOR);
+    expect(entry.openable).toBe(false);
+  });
+
+  it("carries the link count through rather than recomputing it", () => {
+    const match = { id: "n", title: "N", tags: [], ghost: false, linkCount: 7, openable: true };
+    expect(railEntriesFromMatches([match])[0].linkCount).toBe(7);
+  });
+
+  it("yields nothing for no matches", () => {
+    expect(railEntriesFromMatches([])).toEqual([]);
   });
 });

@@ -34,11 +34,11 @@ export const RAIL_ISLAND_CLASS = `hud-galaxy-rail hud-hit ${HUD_CHROME_CLASS}`;
 // cut would break for a well-connected note. The island scrolls in both cases.
 export const RAIL_ENTRY_POINT_BUDGET = 12;
 
-// How many name matches the rail shows. Capped without apology, unlike the two
-// lists above: a search's job is to narrow, and a query broad enough to return
-// more than this has not narrowed anything — the answer is a better query, not a
-// longer list.
-export const RAIL_SEARCH_LIMIT = 20;
+// How many name matches the rail shows is NOT declared here: it belongs to the
+// matcher, which moved to `electron/note-name-match.mjs` as
+// `NOTE_NAME_MATCH_LIMIT` (voice-finds-a-note D2). A second cap here would be a
+// second answer to "how many matches are there", which is the drift that move
+// exists to prevent.
 
 export type RailNode = { id: string; title: string; tags: string[]; ghost?: boolean };
 
@@ -227,55 +227,47 @@ export function railRoots({
 }
 
 /**
- * Notes whose title matches `query` (galaxy-note-reachable-by-hand design.md
- * D16).
+ * One match as the main process hands it over — the shape
+ * `electron/note-name-match.mjs` returns.
  *
- * Stepping is only as good as the reachability of a starting point, and link
- * topology alone cannot supply one: a user looking for a note is thinking about
- * its SUBJECT, not about what it happens to link to. Matching on the name is what
- * turns the rail from "walk the graph and hope" into "go there".
- *
- * Ranked exact, then prefix, then substring — a user who types a whole title
- * means that note, and one who types a first word means the notes beginning with
- * it. Within a rank the most connected come first, on the same reasoning the
- * entry points use.
- *
- * Matching is case- and accent-insensitive: a vault's titles are prose, so
- * requiring the diacritics to be typed exactly would make the feature useless in
- * any language that has them.
+ * Everything the ordering depends on has already been decided by the time this
+ * arrives: it is a list, and its order is the answer.
  */
-export function railSearch({
-  query,
-  nodes,
-  links,
-  limit = RAIL_SEARCH_LIMIT,
-}: {
-  query: string;
-  nodes: Iterable<RailNode>;
-  links: Iterable<GalaxyLinkRef>;
-  limit?: number;
-}): RailEntry[] {
-  const needle = foldForSearch(query);
-  if (needle.length === 0) return [];
-  const degrees = linkDegrees(Array.from(links));
-  const ranked: { rank: number; entry: RailEntry }[] = [];
-  for (const node of nodes) {
-    const title = foldForSearch(node.title);
-    const rank = title === needle ? 0 : title.startsWith(needle) ? 1 : title.includes(needle) ? 2 : -1;
-    if (rank < 0) continue;
-    ranked.push({ rank, entry: toEntry(node, degrees) });
-  }
-  ranked.sort((a, b) => (a.rank !== b.rank ? a.rank - b.rank : byConnectedness(a.entry, b.entry)));
-  return ranked.slice(0, limit).map((item) => item.entry);
-}
+export type NoteNameMatch = {
+  id: string;
+  title: string;
+  tags: string[];
+  ghost: boolean;
+  linkCount: number;
+  openable: boolean;
+};
 
-// Lowercased with diacritics stripped. NFD splits a letter from its combining
-// marks, and the range below is exactly those marks — so "Ghi chú" is found by
-// typing "ghi chu", which is the whole point of folding at all.
-function foldForSearch(text: string): string {
-  return text
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .trim();
+/**
+ * Name matches, as rail entries (voice-finds-a-note design.md D2).
+ *
+ * **A mapper, not a matcher.** Which notes match a name, and in what order, is
+ * decided once in `electron/note-name-match.mjs` and reached from both routes
+ * that ask: the typed find field, over IPC, and Iris's spoken lookup, in the
+ * capability. `personal-knowledge-notes` requires those two to return the same
+ * notes in the same order, and a second implementation here is exactly how that
+ * stops being true — the folding rule (case, then diacritics) is precisely the
+ * kind of detail one side gets updated without the other. The matcher also has
+ * to answer with the galaxy closed, where there is no renderer state to match
+ * against, so main needed one regardless.
+ *
+ * What stays here is the one thing main has no business deciding: a note's
+ * colour. `colorForNode` is the same function the dot behind the rail is drawn
+ * with, so an entry and its node cannot disagree — which is why a match carries
+ * `tags` and `ghost` rather than a colour computed upstream.
+ *
+ * The received order is preserved exactly.
+ */
+export function railEntriesFromMatches(matches: Iterable<NoteNameMatch>): RailEntry[] {
+  return Array.from(matches, (match) => ({
+    id: match.id,
+    title: match.title,
+    tagColor: colorForNode(match),
+    linkCount: match.linkCount,
+    openable: match.openable,
+  }));
 }

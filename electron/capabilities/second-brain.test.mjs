@@ -297,7 +297,7 @@ describe("second-brain capability: capture_note tool", () => {
 });
 
 describe("second-brain capability: ipcHandlers", () => {
-  it("registers exactly the 10 secondbrain:* channels plus the 2 ambient-capture:* channels, with the correct handle/on split", () => {
+  it("registers exactly the 13 secondbrain:* channels plus the 2 ambient-capture:* channels, with the correct handle/on split", () => {
     const cap = make();
     const byChannel = Object.fromEntries(cap.ipcHandlers.map((h) => [h.channel, h.kind]));
     expect(byChannel).toEqual({
@@ -306,6 +306,9 @@ describe("second-brain capability: ipcHandlers", () => {
       "secondbrain:activate": "on",
       "secondbrain:deactivate": "on",
       "secondbrain:read-note": "handle",
+      // voice-finds-a-note D2: the typed find field's route into the one
+      // matcher Iris's spoken lookup also calls.
+      "secondbrain:find-notes": "handle",
       // add-manual-note-editing: the note reader's editor and its route out to
       // a real editor. Neither is reachable from any model-facing surface —
       // personal-knowledge-notes, "A user-authored write is not reachable by a
@@ -1231,7 +1234,15 @@ describe("second-brain capability: hand-authored note write", () => {
   // merely being in poor taste.
   it("exposes no arbitrary-content write to a model", () => {
     const cap = make();
-    expect(cap.toolDeclarations.map((d) => d.name)).toEqual(["capture_note", "mutate_vault_notes"]);
+    expect(cap.toolDeclarations.map((d) => d.name)).toEqual([
+      "capture_note",
+      "find_note_by_name",
+      "mutate_vault_notes",
+    ]);
+    // The lookup reads titles and nothing else — it takes no content and has no
+    // write in it, so it does not weaken what this test guards.
+    const find = cap.toolDeclarations.find((d) => d.name === "find_note_by_name");
+    expect(Object.keys(find.parameters.properties)).toEqual(["name", "open"]);
     const mutate = cap.toolDeclarations.find((d) => d.name === "mutate_vault_notes");
     // The one note-editing tool a model has takes an enumerated operation, never
     // note content.
@@ -1243,5 +1254,233 @@ describe("second-brain capability: hand-authored note write", () => {
     const cap = make({ openPathExternally: vi.fn(async () => { throw new Error("no handler"); }) });
     await seedGraph(cap, NODES);
     await expect(handlerFor(cap, "secondbrain:open-note-externally")(null, "a")).resolves.toEqual({ ok: false });
+  });
+});
+
+// voice-finds-a-note: the spoken lookup. What is asserted here is the half no
+// manual pass can check repeatably — that the declaration exists and survives a
+// missing credential, that the boundary against the curation verb is stated in
+// the contract rather than only in prose, and that opening refuses the cases it
+// must refuse.
+describe("second-brain capability: find_note_by_name", () => {
+  const NODES = [
+    { id: "deploy", title: "Deploy runbook", tags: ["ops"], ghost: false },
+    { id: "deploy-notes", title: "Deploy runbook notes", tags: [], ghost: false },
+    { id: "kt", title: "Ghi chú kiến trúc", tags: [], ghost: false },
+    { id: "phantom", title: "Phantom page", tags: [], ghost: true },
+  ];
+
+  // Unlike seedGraph's mockResolvedValueOnce, this stays resolved: the lookup
+  // performs a FRESH scan per call (design.md D6), so a test that calls it twice
+  // would otherwise get undefined the second time.
+  function seedFindableGraph(cap, nodes = NODES) {
+    fs.mkdirSync(NOTES_VAULT_DIR, { recursive: true });
+    for (const node of nodes) {
+      if (node.ghost) continue;
+      fs.writeFileSync(path.join(NOTES_VAULT_DIR, `${node.id}.md`), `# ${node.title}\n`);
+    }
+    const graphInstance = createVaultGraph.mock.results.at(-1).value;
+    graphInstance.getGraph.mockResolvedValue({ nodes, links: [] });
+    return graphInstance;
+  }
+
+  it("declares the lookup with a parameter named for a NAME, not a subject or question", () => {
+    // design.md D3 mechanism 1: a schema is a contract the calling interface
+    // enforces, where prose is only advice. The strongest available statement
+    // of "this takes a title" is the name of the thing it takes.
+    const declaration = make().toolDeclarations.find((d) => d.name === "find_note_by_name");
+    expect(declaration).toBeDefined();
+    expect(declaration.parameters.required).toEqual(["name"]);
+    expect(Object.keys(declaration.parameters.properties)).not.toContain("query");
+    expect(Object.keys(declaration.parameters.properties)).not.toContain("subject");
+    expect(Object.keys(declaration.parameters.properties)).not.toContain("question");
+  });
+
+  it("states the negative case and names capture_learning as the alternative", () => {
+    // design.md D3 mechanism 2, on the pattern capture_note's declaration
+    // already uses against the same verb.
+    const { description } = make().toolDeclarations.find((d) => d.name === "find_note_by_name");
+    expect(description).toContain("Do NOT use this");
+    expect(description).toContain("capture_learning");
+    expect(description.toLowerCase()).toContain("what do my notes say about");
+  });
+
+  it("is declared with no Claude credential, exactly as capture is", () => {
+    // personal-knowledge-notes: "The lookup works with no Claude credential" —
+    // comparing strings against a list of titles needs no model, so the cheapest
+    // question this capability answers must not be the one that requires a
+    // credential to ask.
+    const cap = make({ getPipelineAvailable: vi.fn(() => false) });
+    expect(cap.toolDeclarations.map((d) => d.name)).toContain("find_note_by_name");
+  });
+
+  it("describes the lookup in the prompt even with no pipeline", () => {
+    const cap = make({ getPipelineAvailable: vi.fn(() => false) });
+    expect(cap.promptFragment()).toContain("find_note_by_name");
+  });
+
+  it("finds a note by name and returns its title", async () => {
+    const cap = make();
+    seedFindableGraph(cap);
+    const result = await cap.findNoteByName({ name: "deploy runbook" });
+    expect(result.status).toBe("ok");
+    expect(result.matches.map((m) => m.title)).toEqual(["Deploy runbook", "Deploy runbook notes"]);
+  });
+
+  it("ignores case and diacritics, so a transcribed title still matches", async () => {
+    const cap = make();
+    seedFindableGraph(cap);
+    const result = await cap.findNoteByName({ name: "ghi chu kien truc" });
+    expect(result.matches.map((m) => m.title)).toEqual(["Ghi chú kiến trúc"]);
+  });
+
+  it("reports no match as no match rather than offering the nearest note", async () => {
+    const cap = make();
+    seedFindableGraph(cap);
+    const result = await cap.findNoteByName({ name: "something nobody wrote" });
+    expect(result).toMatchObject({ status: "ok", count: 0 });
+    expect(result.matches).toEqual([]);
+  });
+
+  it("performs a fresh scan per call rather than reading a kept copy", async () => {
+    // design.md D6: with the galaxy closed the watcher is off and nothing keeps
+    // a copy current — on a cold session that copy is the empty initial graph,
+    // so a cached read would answer "no matches" for a whole vault.
+    const cap = make();
+    const graphInstance = seedFindableGraph(cap);
+    await cap.findNoteByName({ name: "deploy" });
+    await cap.findNoteByName({ name: "deploy" });
+    expect(graphInstance.getGraph).toHaveBeenCalledTimes(2);
+  });
+
+  it("emits the matches to the rail on the capability's own channel", async () => {
+    // design.md D4: never through iris:ui-action, whose vocabulary is fixed and
+    // is not about the second brain.
+    const emitToRenderer = vi.fn();
+    const cap = make({ emitToRenderer });
+    seedFindableGraph(cap);
+    await cap.findNoteByName({ name: "deploy" });
+    const channels = emitToRenderer.mock.calls.map(([channel]) => channel);
+    expect(channels).toContain("secondbrain:name-matches");
+    expect(channels.every((c) => c.startsWith("secondbrain:"))).toBe(true);
+  });
+
+  it("clears the rail's matches when a later search finds nothing", async () => {
+    const emitToRenderer = vi.fn();
+    const cap = make({ emitToRenderer });
+    seedFindableGraph(cap);
+    await cap.findNoteByName({ name: "nothing at all" });
+    const emitted = emitToRenderer.mock.calls.find(([c]) => c === "secondbrain:name-matches");
+    expect(emitted[1].matches).toEqual([]);
+  });
+
+  it("opens nothing unless asked, and selects nothing when it does not", async () => {
+    const emitToRenderer = vi.fn();
+    const cap = make({ emitToRenderer });
+    seedFindableGraph(cap);
+    const result = await cap.findNoteByName({ name: "ghi chu kien truc" });
+    expect(result.opened).toBeUndefined();
+    expect(emitToRenderer.mock.calls.map(([c]) => c)).not.toContain("secondbrain:open-note");
+  });
+
+  it("opens the note when exactly one matches and the user asked", async () => {
+    const emitToRenderer = vi.fn();
+    const cap = make({ emitToRenderer });
+    seedFindableGraph(cap);
+    const result = await cap.findNoteByName({ name: "ghi chu kien truc", open: true });
+    expect(result).toMatchObject({ opened: true, title: "Ghi chú kiến trúc" });
+    const open = emitToRenderer.mock.calls.find(([c]) => c === "secondbrain:open-note");
+    expect(open[1]).toEqual({ id: "kt", title: "Ghi chú kiến trúc" });
+  });
+
+  it("names the candidates rather than picking one when several match", async () => {
+    const emitToRenderer = vi.fn();
+    const cap = make({ emitToRenderer });
+    seedFindableGraph(cap);
+    const result = await cap.findNoteByName({ name: "deploy runbook", open: true });
+    expect(result).toMatchObject({ opened: false, reason: "several_matched" });
+    expect(result.matches).toHaveLength(2);
+    expect(emitToRenderer.mock.calls.map(([c]) => c)).not.toContain("secondbrain:open-note");
+  });
+
+  it("refuses to open a ghost with that reason, and brings up no galaxy for it", async () => {
+    // design.md D5: an unresolved [[wikilink]] target has no file. Refused with
+    // the reason rather than with a read error — and nothing is activated,
+    // because there would be nothing to show.
+    const emitToRenderer = vi.fn();
+    const cap = make({ emitToRenderer });
+    seedFindableGraph(cap);
+    const result = await cap.findNoteByName({ name: "phantom page", open: true });
+    expect(result).toMatchObject({ opened: false, reason: "no_file" });
+    expect(result.message).toContain("does not exist yet");
+    expect(emitToRenderer.mock.calls.map(([c]) => c)).not.toContain("secondbrain:open-note");
+  });
+
+  it("returns titles and openability, never note contents", async () => {
+    // The lookup answers "which note is called that". Returning content would
+    // let a contents question be answered from here, which is the routing
+    // failure D3 exists to prevent.
+    const cap = make();
+    seedFindableGraph(cap);
+    const result = await cap.findNoteByName({ name: "deploy runbook" });
+    for (const match of result.matches) expect(Object.keys(match)).toEqual(["title", "openable"]);
+  });
+
+  it("reports an unavailable vault rather than answering for an empty one", async () => {
+    const cap = make();
+    fs.rmSync(NOTES_VAULT_DIR, { recursive: true, force: true });
+    await expect(cap.findNoteByName({ name: "anything" })).resolves.toMatchObject({ status: "error" });
+  });
+
+  it("selects nothing: no focus change, no note opened, no voice-layer context touched", async () => {
+    // second-brain-gesture-nav: "A spoken search SHALL NOT change what is
+    // selected" — the same rule stepping already holds to, for the same reason:
+    // navigating is not selecting.
+    const emitEvent = vi.fn();
+    const notifyIris = vi.fn();
+    const emitToRenderer = vi.fn();
+    const cap = make({ emitEvent, notifyIris, emitToRenderer });
+    seedFindableGraph(cap);
+    const focusBefore = await handlerFor(cap, "secondbrain:get-focus")();
+
+    await cap.findNoteByName({ name: "deploy" });
+
+    expect(await handlerFor(cap, "secondbrain:get-focus")()).toEqual(focusBefore);
+    expect(emitToRenderer.mock.calls.map(([c]) => c)).not.toContain("secondbrain:open-note");
+    // Nothing about the referent announced to Gemini, and nothing pushed at the
+    // user: the answer is the tool's return value, which Iris speaks herself.
+    // (An availability transition may fire — that is the vault appearing on
+    // disk for this test, not the lookup changing what anything reads.)
+    // What the voice layer reads about the referent is pushed with notifyIris
+    // (SYSTEM_EVENT_FOCUS_UPDATE / SYSTEM_EVENT_NOTE_OPENED) — so this is the
+    // assertion that "nothing the voice layer or a run reads has changed".
+    expect(notifyIris).not.toHaveBeenCalled();
+    // The only thing emitted at all is the vault appearing on disk for this
+    // test, which is availability, not selection.
+    expect(emitEvent.mock.calls.map(([event]) => event.type)).toEqual(["secondbrain_availability"]);
+  });
+
+  it("answers with the galaxy closed — the rail is where matches are shown, not a precondition", async () => {
+    // second-brain-gesture-nav: "Asking to find a note while the galaxy is NOT
+    // active SHALL still be answered." The emit is how the rail learns; the
+    // return is how the question gets answered, and only one of those needs a
+    // galaxy.
+    const cap = make();
+    seedFindableGraph(cap);
+    // Never activated: no secondbrain:activate, so the watcher was never
+    // started and nothing has been keeping a graph copy current.
+    const result = await cap.findNoteByName({ name: "deploy runbook" });
+    expect(result.status).toBe("ok");
+    expect(result.matches.map((m) => m.title)).toEqual(["Deploy runbook", "Deploy runbook notes"]);
+  });
+
+  it("answers the same as the typed field, through the same call", async () => {
+    // personal-knowledge-notes: "Spoken and typed searches agree". They do so
+    // by being one call into one matcher, which is what this asserts.
+    const cap = make();
+    seedFindableGraph(cap);
+    const spoken = await cap.findNoteByName({ name: "deploy" });
+    const typed = await handlerFor(cap, "secondbrain:find-notes")(null, "deploy");
+    expect(typed.matches.map((m) => m.title)).toEqual(spoken.matches.map((m) => m.title));
   });
 });

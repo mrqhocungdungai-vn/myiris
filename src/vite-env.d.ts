@@ -278,6 +278,24 @@ type SecondBrainGraphResult = {
   available: boolean;
 };
 
+// voice-finds-a-note: one name match, as `electron/note-name-match.mjs` ranks
+// it. `tags`/`ghost` travel so the renderer can colour the entry with the same
+// `colorForNode` the node's own dot uses — main decides the order, never the
+// colour. The array's order IS the answer; nothing downstream re-ranks it.
+type NoteNameMatchResult = {
+  id: string;
+  title: string;
+  tags: string[];
+  ghost: boolean;
+  linkCount: number;
+  openable: boolean;
+};
+
+type SecondBrainFindNotesResult = {
+  matches: NoteNameMatchResult[];
+  available: boolean;
+};
+
 // `revision` is the token the note editor hands back on save
 // (add-manual-note-editing): a hash of the exact content served, so main can
 // refuse a write when the file no longer holds those bytes.
@@ -429,6 +447,7 @@ type IrisApi = {
   getSecondBrainAvailability: () => Promise<SecondBrainAvailability>;
   getSecondBrainGraph: () => Promise<SecondBrainGraphResult>;
   readSecondBrainNote: (id: string) => Promise<SecondBrainReadNoteResult>;
+  findSecondBrainNotes: (query: string) => Promise<SecondBrainFindNotesResult>;
   writeSecondBrainNote: (
     id: string,
     content: string,
@@ -439,6 +458,10 @@ type IrisApi = {
   activateSecondBrain: () => void;
   deactivateSecondBrain: () => void;
   onSecondBrainGraphUpdated: (callback: (graph: VaultGraph) => void) => () => void;
+  onSecondBrainNameMatches: (
+    callback: (payload: { query: string; matches: NoteNameMatchResult[] }) => void,
+  ) => () => void;
+  onSecondBrainOpenNote: (callback: (payload: { id: string; title: string }) => void) => () => void;
   // open-note-session: reports the note reader's open/close lifecycle to
   // main, which is the single authority on which note is open.
   reportNoteOpened: (id: string) => void;

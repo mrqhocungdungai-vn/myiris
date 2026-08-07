@@ -435,6 +435,38 @@ tokens, and was **unavailable without a Claude credential**.
   attempt (or a failed capture) is at least as worth keeping/reporting as a
   successful one, and a capture whose write fails is reported as failed, never
   as saved.
+- **Finding a note by name is a direct read, on exactly those terms.** The same
+  capability declares `find_note_by_name` (params: `name` required, `open`
+  optional), dispatched outside `PIPELINE_ONLY_TOOLS` beside `capture_note` for
+  the identical reason read the other way round: comparing what the user said
+  against a list of titles needs no model, so routing it through a worker would
+  make the cheapest question the second brain can answer the slowest, the only
+  one that could fail for reasons unrelated to the vault, and the only one a
+  user without a Claude credential could not ask.
+  - **The matcher is `electron/note-name-match.mjs`** — pure, Electron-free, and
+    the *only* implementation. The galaxy's typed find field reads it over
+    `secondbrain:find-notes`; the spoken lookup calls it through the dispatch.
+    One matcher is what makes "spoken and typed searches agree" structural
+    rather than aspirational, and it has to live in main regardless because the
+    lookup answers with the galaxy closed, where there is no renderer state.
+  - **Always a fresh `getGraph()`, never the cached copy.** The vault watcher is
+    scoped to galaxy-active, so with the galaxy shut nothing keeps a copy
+    current — and on a cold session that copy is the empty initial graph, so a
+    cached read would answer "no matches" for an entire vault. The scan also
+    primes `vault-graph`'s cache, which is what lets a note found this way then
+    be *opened* (`resolveNotePath` reads that cache).
+  - **The boundary against `capture_learning` is declared, not just described.**
+    The parameter is `name` (not `query`/`subject`), the declaration states the
+    negative case and names the verb as the alternative, and the prompt fragment
+    says when to use which — in that order of strength. "Find my note about X"
+    and "what do my notes say about X" are one word apart and route to
+    completely different machinery, and the mistake is not symmetrical.
+  - Matches reach the rail on the capability's **own** channel
+    (`secondbrain:name-matches`), never `iris:ui-action` — `voice-ui-control`
+    enumerates a fixed vocabulary that is not about the second brain. Same for
+    `secondbrain:open-note`, which activates the galaxy as part of opening a
+    named note (the reader does not exist outside that layer) and is
+    deliberately not a spoken galaxy toggle.
 - Recording a run outcome is **not conditional on the voice layer** choosing to
   record something. Accumulated knowledge that requires a model to remember to
   save it is knowledge that will be lost.

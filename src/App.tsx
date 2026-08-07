@@ -835,6 +835,28 @@ export default function App() {
     }
   }, [secondBrainActive]);
 
+  // "Open my X note" (voice-finds-a-note D5). Main has already decided there is
+  // exactly one openable match — a ghost, an ambiguous name and a miss are all
+  // refused before this is emitted, so nothing here re-litigates the choice.
+  //
+  // Activating the galaxy is part of OPENING, not a spoken control of its own:
+  // `NoteReader` renders only under `secondBrainActive && openNote`, so the note
+  // has nowhere to appear otherwise, and answering a request that already named
+  // the note by asking the user to open something first would make the shortest
+  // route to a note the longest. There is deliberately no emit that activates
+  // the galaxy without a note to show in it.
+  //
+  // The read this leads to resolves against `vault-graph`'s cache, which the
+  // lookup's own fresh scan primed on the way here (design.md D6) — which is
+  // what lets this work with the galaxy cold and its watcher never started.
+  useEffect(() => {
+    return window.iris.onSecondBrainOpenNote(({ id, title }) => {
+      setDrawingActive(false); // single active-layer invariant, as toggleSecondBrain holds it
+      setSecondBrainActive(true);
+      void openNoteFromGalaxy(id, title);
+    });
+  }, []);
+
   // First-run onboarding + settings affordance (design.md D3/D4): load the
   // effective config once, auto-open the wizard if no Gemini key is set yet.
   useEffect(() => {
