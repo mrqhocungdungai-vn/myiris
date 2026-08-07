@@ -1,9 +1,7 @@
 ## Purpose
 
 A Claude-oriented setup and settings panel (adopted from upstream, Deep Space styled) that lets the user configure the Gemini API key, verify Claude availability and subscription auth, preview the voice, and toggle wake word / interface sounds / demo test data — backed by a config IPC pair that persists changes to the effective `.env` file.
-
 ## Requirements
-
 ### Requirement: Claude-oriented setup and settings panel
 
 The app SHALL provide a SetupPanel (adopted from upstream, Deep Space styled) that offers: Gemini API key entry with a live connection test, a Claude runtime check (the same bundled binary the worker uses; the host `PATH` is never probed), subscription-auth status derived from the existing subscription billing-path logic (`CLAUDE_CODE_OAUTH_TOKEN` present vs missing) together with an entry field that lets the user set or remove that token, a voice preview, toggles for wake word, interface sounds, demo test data, and Google Search, a wake-word sensitivity control, a camera device selector for gesture control, and a microphone device selector for voice capture (see `microphone-device-selection` spec for its enumeration/persistence/hot-swap/fallback behavior). No Hermes endpoint configuration SHALL exist.
@@ -46,7 +44,7 @@ The microphone device selector SHALL render directly below the Microphone permis
 #### Scenario: Packaged user pastes a subscription token
 
 - **WHEN** a user of a packaged build has the Claude CLI installed, has run `claude setup-token`, and pastes the result into the token field and saves
-- **THEN** the token is persisted to the effective `.env` for the run mode, the Claude check re-runs, and the billing line reports that a subscription token is configured — with no hand-editing of `~/.iris/.env` and no app restart
+- **THEN** the token is persisted to the effective `.env` for the run mode, the Claude check re-runs, and the billing line reports that a subscription token is configured — with no hand-editing of `~/.myiris/.env` and no app restart
 
 #### Scenario: Token control hidden in chat-only mode
 
@@ -95,7 +93,7 @@ The microphone device selector SHALL render directly below the Microphone permis
 
 ### Requirement: Config persistence via config IPC to .env
 
-A `config:get`/`config:save` IPC pair SHALL back the panel: reads return effective config with secrets reduced to presence/masked form; saves upsert keys line-wise into the existing `.env` location (repo `.env` in dev, `~/.iris/.env` packaged), preserving unrelated lines and comments, and never logging secret values. Settings that cannot hot-apply SHALL surface a reconnect/restart prompt instead of silently requiring one.
+A `config:get`/`config:save` IPC pair SHALL back the panel: reads return effective config with secrets reduced to presence/masked form; saves upsert keys line-wise into the existing `.env` location (repo `.env` in dev, `~/.myiris/.env` packaged), preserving unrelated lines and comments, and never logging secret values. Settings that cannot hot-apply SHALL surface a reconnect/restart prompt instead of silently requiring one.
 
 The writable key set SHALL include the subscription token (`CLAUDE_CODE_OAUTH_TOKEN`), the Google Search flag (`IRIS_ENABLE_GOOGLE_SEARCH`), and the wake-word sensitivity keys defined in `wake-sleep-voice`. The token's value SHALL never be returned to the renderer in any form — the config read SHALL expose only a boolean presence flag for it. A save carrying an empty value for the token SHALL be treated as "no change" so that a global save cannot erase a stored token; clearing it SHALL require the panel's explicit remove action. The Google Search flag is a non-secret boolean read back to the renderer as its current value; because it is consumed only when the Gemini Live session is created, it is a setting that cannot hot-apply and SHALL surface the standard reconnect prompt on change rather than forcing a mid-session disconnect. The wake-word sensitivity keys are non-secret values read back to the renderer as their effective values; they hot-apply on the next arm of the listener and SHALL NOT trigger a reconnect or restart prompt.
 
@@ -235,3 +233,4 @@ The control SHALL carry text making clear what the user is trading: turning it o
 
 - **WHEN** the user reads the row
 - **THEN** it communicates that turning it on costs materially more GPU, and that it is off by default
+

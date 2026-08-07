@@ -13,7 +13,7 @@ The credential requirement SHALL be documented in the app's configuration surfac
 
 ### Requirement: The subscription token is configurable at runtime from the app
 
-The app SHALL let an operator set and clear `CLAUDE_CODE_OAUTH_TOKEN` from its own settings surface, persisted to the same effective `.env` the app already reads (repo `.env` in dev, `~/.iris/.env` packaged) and applied to the running process environment on save, so a packaged install never requires hand-editing a hidden file to enable subscription billing. The token SHALL be stored in plaintext in that file, consistent with the other credentials the app manages, because it must reach the Claude subprocess environment in cleartext.
+The app SHALL let an operator set and clear `CLAUDE_CODE_OAUTH_TOKEN` from its own settings surface, persisted to the same effective `.env` the app already reads (repo `.env` in dev, `~/.myiris/.env` packaged) and applied to the running process environment on save, so a packaged install never requires hand-editing a hidden file to enable subscription billing. The token SHALL be stored in plaintext in that file, consistent with the other credentials the app manages, because it must reach the Claude subprocess environment in cleartext.
 
 #### Scenario: Token set from the app takes effect without restart
 
@@ -118,3 +118,4 @@ Exclusion by environment subtraction is deliberately stronger than relying on th
 
 - **WHEN** only `ANTHROPIC_API_KEY` is present and a run starts
 - **THEN** the key is present in that run's environment and the run authenticates with it
+

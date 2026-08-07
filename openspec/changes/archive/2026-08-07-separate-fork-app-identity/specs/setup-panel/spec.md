@@ -114,3 +114,13 @@ The writable key set SHALL include the subscription token (`CLAUDE_CODE_OAUTH_TO
 
 - **WHEN** a config save is submitted with an empty or whitespace-only value for the subscription token
 - **THEN** the previously stored token is left intact in both `.env` and the process environment
+
+#### Scenario: Toggling Google Search persists and offers a reconnect
+
+- **WHEN** the user toggles Google Search and saves
+- **THEN** `IRIS_ENABLE_GOOGLE_SEARCH` is written to the correct `.env` for the run mode, unrelated lines are preserved, and the UI offers to reconnect the live session because the flag applies only on the next connect, not mid-session
+
+#### Scenario: Saving wake-word sensitivity does not prompt a reconnect
+
+- **WHEN** the user changes wake-word sensitivity and saves
+- **THEN** the value is written to the correct `.env` for the run mode, unrelated lines are preserved, and no reconnect or restart prompt is shown because the setting applies on the next arm of the listener
