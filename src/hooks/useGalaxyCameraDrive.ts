@@ -12,8 +12,9 @@ import {
   aimPoint,
   orbitStep,
   preferredHand,
+  reelsToLock,
+  zoomSpan,
   zoomRadius,
-  handDistance,
   nearestNodeAt,
   MIN_ZOOM_HAND_DISTANCE_PX,
   INITIAL_DWELL_STATE,
@@ -215,15 +216,6 @@ export function useGalaxyCameraDrive({
       );
     }
 
-    // two-hand-gestures: the zoom reads the distance between the two open
-    // palms — null when fewer than two are present, which driveFor's own
-    // partition already guarantees never happens while "zoom" is live.
-    function twoPalmDistance(hand: HandState): number | null {
-      const palms = hand.hands.filter((item) => item.openPalm);
-      if (palms.length < 2) return null;
-      return handDistance(palms[0].point, palms[1].point);
-    }
-
     // design.md D7: every defect this change fixed traced to a runtime
     // number nobody could see — this makes them observable while tuning.
     // Direct DOM write, not React state (design.md D7/M-A1): an enabled
@@ -232,7 +224,7 @@ export function useGalaxyCameraDrive({
       const el = debugRef.current;
       if (!el) return;
       const fps = dt > 0 ? 1000 / dt : 0;
-      const curDist = twoPalmDistance(hand);
+      const curDist = zoomSpan(hand);
       const ref = zoomReferenceRef.current;
       const refDist = ref?.dist ?? null;
       const ratio = curDist !== null && refDist !== null ? curDist / Math.max(80, refDist) : null;
@@ -506,8 +498,15 @@ export function useGalaxyCameraDrive({
             // is already looking down. Anchoring to the graph's centroid
             // instead would drift the view sideways whenever the centroid sat
             // off-centre, which after any travel it usually does.
+            //
+            // WHICH zoom this is, is carried by the hands (D26): a fist holding
+            // while the other palm moves reels in on the LOCKED note, while two
+            // open palms zoom the middle of the view. An orbit always turns
+            // around the lock too, so the two camera drives never disagree
+            // about what they are working around.
+            const useLock = activeCameraDrive === "orbit" || reelsToLock(hand);
             const engageTarget =
-              pivotPickRef.current ??
+              (useLock ? pivotPickRef.current : null) ??
               ({
                 kind: "point",
                 position: viewCentrePoint(
@@ -537,7 +536,7 @@ export function useGalaxyCameraDrive({
                 .position.clone()
                 .sub(new THREE.Vector3(engageOrigin.x, engageOrigin.y, engageOrigin.z)),
             );
-            const engageDist = twoPalmDistance(hand);
+            const engageDist = zoomSpan(hand);
             zoomReferenceRef.current =
               engageDist !== null ? { dist: engageDist, radius: sphericalRef.current.radius } : null;
             // Read from the hand actually making the fist, preferring the right
@@ -575,8 +574,9 @@ export function useGalaxyCameraDrive({
             // A dropout (one palm briefly not open_palm) has already released
             // the reference above on the frame `activeCameraDrive` goes null —
             // here `zoomReferenceRef.current` staying set means both palms are
-            // still live, so `twoPalmDistance` cannot return null.
-            const curDist = twoPalmDistance(hand)!;
+            // still live, so `zoomSpan` cannot return null — it reads the two open
+            // palms, or the fist and the palm while reeling in (D26).
+            const curDist = zoomSpan(hand)!;
             // Re-aim FIRST, so this frame's radius is measured against the
             // anchor the sight is on right now — and re-read the origin after
             // it. `origin` above was resolved before the re-aim, and writing the

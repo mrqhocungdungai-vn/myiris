@@ -878,6 +878,51 @@ space. With nothing locked it turns around the point at the centre of the view
 two camera drives always agree about what they are working around, which is the
 property D19 and D21 kept discovering they needed.
 
+### D26 — Which zoom you get is carried by the hands, not by hidden state
+
+*The user, after D25: "there is still a problem when a target is locked — the
+zoom is not as intended, because one hand is a fist, so the other hand can move
+to zoom in/out on the locked note. That is different from zooming with no
+target, which is two open hands. One fist + locked target + the other hand an
+open palm = zoom in/out on the locked note."*
+
+Two open palms zoomed toward the locked note when one existed and toward the
+view centre when none did. That is mode carried in **hidden state**: the same
+hands mean different things depending on something the user has to remember.
+Splitting it into two pose pairs makes the mode visible —
+
+- **two open palms** → zoom the middle of the view,
+- **fist + open palm** → reel in on the locked note,
+
+— and the fist reads as exactly what it is doing: holding the note while the
+other hand pulls you toward it.
+
+**It also removes a defect the hidden-state form could not avoid.** `aimPoint`
+returns a point when exactly one open palm is in frame. During a two-palm zoom,
+one hand's pose dropping below the recognizer's confidence for a few frames
+leaves *one* palm in frame — which reads as aiming. By then the hands are spread
+wide apart, so the surviving palm is nowhere near where the user was aiming, and
+the picker could **re-lock onto a different note in the middle of a zoom**. That
+is a plausible reading of "the zoom is not as intended", and no amount of
+tuning the lock would have found it, because the fault is upstream of the lock:
+the frame was misclassified as aiming at all.
+
+The fix generalises the D25 rule from a pose to the frame: **while ANY hand
+drives the camera, nothing aims.** A fist in frame means a drive is live, so the
+palm beside it belongs to that drive. A dropped pose can then no longer be
+mistaken for an aim, whichever hand drops.
+
+`zoomSpan` measures between the two open palms, or between the fist and the
+palm — one measurement for both pairs, in the pure module, so the two can never
+disagree about what "distance" means. That was already the reason
+`handDistance` was put there.
+
+*Cost, named:* a fist meant to turn the view while the other hand happens to be
+resting open now reels instead of orbits. Orbiting therefore wants the other
+hand out of frame or not open — which is a real constraint, and the first thing
+the manual pass should judge. The alternative was leaving the two zooms
+indistinguishable, which is what was reported as broken.
+
 ### D9 — The rail is chrome, and that is the whole of its reachability
 
 The rail island carries `HUD_CHROME_CLASS` and `hud-hit`. It then inherits both the

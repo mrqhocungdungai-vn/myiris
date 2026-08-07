@@ -14,6 +14,8 @@ import {
   isHandLowered,
   aimPoint,
   preferredHand,
+  reelsToLock,
+  zoomSpan,
   type DwellState,
   type GalaxyNavNode,
 } from "./galaxy-nav";
@@ -182,6 +184,20 @@ describe("driveFor", () => {
 
   // D20 removed the fist orbit; D25 restored it, now turning around the LOCKED
   // note rather than around whatever the anchor happened to be.
+  // D26: a fist HOLDING while the other palm moves reels in on the locked note.
+  // Tested before the fist-alone orbit because it is the more specific pair.
+  it("returns zoom for a fist plus an open palm — reeling in on the locked note", () => {
+    const hands = [makeTrackedHand({ id: "l", fist: true }), makeTrackedHand({ id: "r", openPalm: true })];
+    expect(driveFor(makeHand({ fist: true, hands }))).toBe("zoom");
+    expect(reelsToLock({ hands })).toBe(true);
+  });
+
+  it("a fist with no palm beside it still turns the view", () => {
+    const hands = [makeTrackedHand({ id: "l", fist: true })];
+    expect(driveFor(makeHand({ fist: true, hands }))).toBe("orbit");
+    expect(reelsToLock({ hands })).toBe(false);
+  });
+
   it("returns orbit for Closed_Fist", () => {
     expect(driveFor(makeHand({ fist: true, hands: [makeTrackedHand({ fist: true })] }))).toBe("orbit");
   });
@@ -254,6 +270,37 @@ describe("handDistance", () => {
     const a = { x: 12, y: 40 };
     const b = { x: 100, y: 5 };
     expect(handDistance(a, b)).toBe(handDistance(b, a));
+  });
+});
+
+describe("zoomSpan", () => {
+  function h(id: string, x: number, opts: { openPalm?: boolean; fist?: boolean } = {}): TrackedHand {
+    return {
+      id,
+      point: { x, y: 300 },
+      wristPoint: { x, y: 300 },
+      landmarks: [],
+      gesture: "None",
+      gestureScore: 0.9,
+      pointing: false,
+      openPalm: opts.openPalm ?? false,
+      fist: opts.fist ?? false,
+      pinchDistance: 0,
+    } as TrackedHand;
+  }
+
+  it("measures between the two open palms", () => {
+    expect(zoomSpan({ hands: [h("a", 100, { openPalm: true }), h("b", 400, { openPalm: true })] })).toBe(300);
+  });
+
+  it("measures between the fist and the palm while reeling in", () => {
+    expect(zoomSpan({ hands: [h("f", 100, { fist: true }), h("p", 400, { openPalm: true })] })).toBe(300);
+  });
+
+  it("is null when neither pose pair is present", () => {
+    expect(zoomSpan({ hands: [h("f", 100, { fist: true })] })).toBeNull();
+    expect(zoomSpan({ hands: [h("p", 100, { openPalm: true })] })).toBeNull();
+    expect(zoomSpan({ hands: [] })).toBeNull();
   });
 });
 
@@ -449,6 +496,16 @@ describe("aimPoint", () => {
     expect(preferredHand([left, right])?.id).toBe("r");
     expect(preferredHand([right, left])?.id).toBe("r");
     expect(preferredHand([])).toBeNull();
+  });
+
+  // The bug D26 removes: with two open palms, one hand's pose flickering off
+  // leaves a single palm in frame, which used to read as aiming — and since the
+  // hands are spread apart by then, it could re-lock onto a different note
+  // mid-zoom. A fist in frame means the camera is being driven, so nothing aims.
+  it("does not aim while any hand is a fist — a driving hand never aims", () => {
+    const hands = [palm("f", 100, 200, false), palm("p", 600, 200)];
+    (hands[0] as { fist: boolean }).fist = true;
+    expect(aimPoint({ hands })).toBeNull();
   });
 
   it("returns null with no open palm in frame, rather than falling back to the view centre", () => {

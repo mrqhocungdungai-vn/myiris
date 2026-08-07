@@ -135,7 +135,8 @@ chrome above it:
 | `Victory` (two fingers) | **Inspect** — hold near a node to light up its link cluster while held. Selects nothing, opens nothing, leaves nothing behind |
 | A single `Open_Palm` | **Aims** — the sight follows it and chooses the note to lock (D24/D25). Commits nothing. With both hands up, the one further RIGHT on screen wins, which the mirrored preview makes the user's right hand |
 | `Closed_Fist` | **Turns the camera** around the locked note (D25). A fist does not aim — one job per pose, or the turn would re-target on its own movement |
-| Two open palms | Fly the camera toward/away from the **locked note** — and while both palms are up nothing is being aimed, so the sight is hidden and an uneven spread cannot re-target (D24). With no note locked, moves along the axis the camera already looks down |
+| Two open palms | Zoom **the middle of the view** — along the axis the camera already looks down |
+| `Closed_Fist` + an open palm | **Reels in** on the locked note: the fist holds it while the other hand pulls you toward it (D26). Which zoom you get is carried by the hands, not by whether something happens to be locked |
 | Anything else (a single open palm, unrecognized, resting) | Drives nothing |
 | A hand in the **bottom third of the frame**, whatever it is doing | Drives nothing, and releases a drive in progress |
 
@@ -313,6 +314,10 @@ re-aim re-seeds the spherical so the view does not jump — and deliberately doe
 **not** re-read the hands' separation as the new reference, which would silently
 discard the spread already made and stall the remaining travel (D21). It keeps
 the reference distance and rescales instead.
+
+While ANY hand is a fist the camera is being driven, so **nothing aims** — that
+is what stops a hand's pose dropping out mid-zoom from leaving one palm in
+frame, reading as an aim, and re-locking onto a different note (D26).
 
 **Switching to another note takes a deliberate hold** (`ZOOM_LOCK_HOLD_MS`,
 `zoomLockStep`, D23). Acquiring a note when none is locked is instant — nothing

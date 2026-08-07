@@ -1581,7 +1581,13 @@ export default function App() {
       // pinchDistance from republishing, so that field never forced this
       // memo to recompute — the label would show whatever it was when some
       // OTHER field last changed. openPalm is compared per hand, so it does.
-      if (hand.hands.filter((item) => item.openPalm).length >= 2) return { label: "Two palms · fly to note", tone: "open" };
+      if (hand.hands.filter((item) => item.openPalm).length >= 2) return { label: "Two palms · zoom the view", tone: "open" };
+      // Fist + palm reels in on the locked note (design.md D26) — a different
+      // zoom from two palms, and the indicator has to separate them or the one
+      // thing carried in the hands rather than in hidden state goes unnamed.
+      if (hand.hands.some((item) => item.fist) && hand.hands.some((item) => item.openPalm)) {
+        return { label: "Fist + palm · reel to note", tone: "open" };
+      }
       if (hand.pointing) return { label: "Pointing_Up · open a node", tone: "move" };
       if (hand.fist) return { label: "Closed_Fist · turn the view", tone: "fist" };
       if (hand.openPalm) return { label: "Open_Palm · aim", tone: "open" };

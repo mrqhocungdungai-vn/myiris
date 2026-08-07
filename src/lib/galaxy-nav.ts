@@ -241,6 +241,10 @@ export function inspectingHand(hand: Pick<HandState, "hands">): TrackedHand | nu
  */
 export function driveFor(hand: DriveHand): GalaxyDrive {
   if (hand.hands.filter((h) => h.openPalm).length >= 2) return "zoom";
+  // A fist holding while the other palm moves reels in on the locked note
+  // (D26). Tested BEFORE the fist-alone orbit, since it is the more specific
+  // pose pair — a fist with no palm beside it still turns the view.
+  if (reelsToLock(hand)) return "zoom";
   if (inspectingHand(hand)) return "inspect";
   if (hand.pointing) return "dwell";
   if (hand.fist) return "orbit";
@@ -306,7 +310,43 @@ export function isHandLowered(point: HandPoint | null, viewportHeight: number): 
 export function aimPoint(hand: Pick<HandState, "hands">): HandPoint | null {
   const palms = hand.hands.filter((item) => item.openPalm);
   if (palms.length !== 1) return null;
+  // A fist means the camera is being driven — turning (fist alone) or reeling
+  // in on the locked note (fist + palm, D26). Either way the open palm is part
+  // of that drive, not an aim: the rule "a pose that drives the camera may not
+  // also aim it" extends to "while ANY hand drives it, nothing aims".
+  if (hand.hands.some((item) => item.fist)) return null;
   return palms[0].point;
+}
+
+/**
+ * Whether this frame's pose pair reels in on the LOCKED note rather than
+ * zooming the middle of the view (galaxy-note-reachable-by-hand design.md D26).
+ *
+ * A fist holding while the other palm moves. The metaphor is grabbing the note
+ * and pulling yourself toward it, and the reason it is a distinct pose pair
+ * rather than "two palms, but targeted when something is locked" is that the
+ * user can then SEE which zoom they are getting. Mode carried in the hands is
+ * checkable; mode carried in hidden state is not — and the hidden version had a
+ * failure the visible one cannot have: with two open palms, one hand's pose
+ * flickering off for a few frames left a single palm in frame, which reads as
+ * aiming, which could re-lock onto a different note mid-zoom.
+ */
+export function reelsToLock(hand: Pick<HandState, "hands">): boolean {
+  return hand.hands.some((item) => item.fist) && hand.hands.some((item) => item.openPalm);
+}
+
+/**
+ * The span the zoom drives read, in window pixels — between the two open palms,
+ * or between the fist and the palm when reeling in (design.md D26). One
+ * measurement for both pose pairs, so they can never disagree about what
+ * "distance" means.
+ */
+export function zoomSpan(hand: Pick<HandState, "hands">): number | null {
+  const palms = hand.hands.filter((item) => item.openPalm);
+  if (palms.length >= 2) return handDistance(palms[0].point, palms[1].point);
+  const fist = hand.hands.find((item) => item.fist);
+  if (fist && palms.length === 1) return handDistance(fist.point, palms[0].point);
+  return null;
 }
 
 /**
