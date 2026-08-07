@@ -78,19 +78,18 @@ const ZOOM_MAX_RADIUS = 2500;
 // candidate ring are what keep a wider radius predictable — the user can see
 // which node it has picked before committing.
 const ANCHOR_THRESHOLD_PX = 130;
-// How far the sight has to move, in screen pixels, before a live zoom's pivot
-// retargets to a new candidate — node or point alike (design.md D19). Without
-// this, a sight merely grazing any node's generous 130px capture radius, or
-// drifting a few noisy pixels over empty space, committed a retarget on
-// proximity alone: `nearestNodeAt`'s own dead-band only breaks a tie between
-// near-equal candidates, and a point pivot has no id at all, so neither ever
-// asked "has the sight actually travelled far enough to justify retargeting
-// an already-LIVE drive" — which is a different question from "is something
-// near it right now." Every such spurious commit reseeds the zoom's
-// reference off a single, unfiltered hand-distance sample, which is what
-// made the zoom feel like it got WORSE, not just still-imprecise, once this
-// file started retargeting mid-zoom at all (D17/D18).
-const PIVOT_RETARGET_DEAD_BAND_PX = 24;
+// How long a NEW note must stay under the sight before the camera commits to it
+// (design.md D23). This replaced a sight-movement dead-band, which asked the
+// wrong question: "has the hand travelled far enough" cannot separate a
+// deliberate move to another note from a hand wobbling between two of them in a
+// dense region, and the wobble is what made the camera jump note to note. "Has
+// the sight STAYED on it" separates them exactly.
+//
+// Acquiring a target when there is none stays instant — only SWITCHING costs
+// this. The acquiring ring closes over the same interval, so the wait is
+// visible; that is what lets it be this long without reading as lag. This is
+// the one number to change if it still feels twitchy, or now too slow.
+const ZOOM_LOCK_HOLD_MS = 1500;
 // A rail step's flight: long enough that the user sees where in the galaxy they
 // were taken (the spec requires the travel to be visible), short enough not to
 // feel like waiting.
@@ -784,7 +783,7 @@ function GalaxyCanvas({
     dwellThresholdPx: DWELL_THRESHOLD_PX,
     dwellHoldMs: DWELL_HOLD_MS,
     anchorThresholdPx: ANCHOR_THRESHOLD_PX,
-    pivotRetargetDeadBandPx: PIVOT_RETARGET_DEAD_BAND_PX,
+    zoomLockHoldMs: ZOOM_LOCK_HOLD_MS,
     candidateIntervalMs: SELECT_INTERVAL_MS,
     zoomMinRadius: ZOOM_MIN_RADIUS,
     zoomMaxRadius: ZOOM_MAX_RADIUS,

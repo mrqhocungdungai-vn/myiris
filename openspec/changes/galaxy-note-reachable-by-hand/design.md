@@ -712,6 +712,66 @@ them distinguishable without spending a colour.
 from the label geometry rather than measured, and the next manual pass should
 say whether the engaged mark is still unmistakable at the new weight.
 
+### D23 — The lock needs hysteresis in TIME, not more of it in space
+
+*Added after the manual pass confirmed D20-D22: "the note-locking is a bit too
+sensitive, so inside the galaxy sphere it often jumps because it keeps changing
+notes — e.g. hold 3 seconds to lock a new note, plus an effect for detecting and
+starting to lock a new note so it is distinguishable from empty space."*
+
+Every guard built so far is **spatial**: `ZOOM_INCUMBENT_BIAS_PX`,
+`ZOOM_INCUMBENT_DEPTH_FACTOR`, `OCCLUSION_PX`, and the
+`PIVOT_RETARGET_DEAD_BAND_PX` sight-movement gate from D19. All of them answer
+some form of "is the new candidate far enough / near enough / has the hand moved
+enough". None can answer the question that actually matters here, because it is
+not a question about distance: **a hand deliberately moving to another note and
+a hand wobbling between two notes in a dense cloud travel the same pixels.**
+Only elapsed time separates them. That is why each spatial guard reduced the
+jumping without ending it — they were the wrong instrument, not badly tuned.
+
+`dwellStep` already had the right shape, for the same reason in a different
+place, so `zoomLockStep` mirrors it rather than inventing a mechanism. Three
+rules, and the asymmetry between the first two is the substance:
+
+- **Acquiring** a target when none is locked is **free**. Nothing is being taken
+  away, so a wait would be delay for its own sake.
+- **Switching** away from a locked note costs `ZOOM_LOCK_HOLD_MS` of the sight
+  staying on the new one. This is the only case the user was complaining about.
+- **Losing** the candidate abandons the charge rather than banking it, so
+  drifting off a note mid-charge cannot quietly commit to it on the way back.
+
+`PIVOT_RETARGET_DEAD_BAND_PX` is **removed**, not stacked with this. It existed
+to stop commits happening on proximity alone, which is precisely what the hold
+now prevents — and better, since it asks "did the sight stay" rather than "did
+the hand travel". Keeping both would mean a deliberate retarget could be refused
+for having moved too little, which is the opposite of the intent.
+
+**The wait has to be visible, or it reads as the feature being broken.** This is
+the user's second request and it is not decoration: an invisible 1.5-second
+refusal to retarget is indistinguishable from a bug. The acquiring mark is the
+same ring drawn at a size that **shrinks from `ACQUIRE_START_WORLD_SIZE` onto
+`ANCHOR_WORLD_SIZE`** as the charge completes — a closing reticle. Shrinking
+rather than a colour or opacity ramp, because it must answer two questions at
+once: *is there a note here at all* (a ring appears, where empty space shows
+nothing — exactly the distinction that was asked for) and *how much longer*
+(it closes). It is animated by `scale.set()`, so it repaints no canvas and
+allocates nothing in the loop, and it shows while a drive is engaged as well as
+idle — that is when "the camera is about to switch note" most needs saying.
+
+Two consequences that would otherwise be bugs. **Engaging takes the note the
+lock is already on**, not a fresh pick: the ring has been showing that note, and
+a second independent pick at engage could differ from the mark by a frame of
+hand movement and grab something else. **Backing out to the overview drops the
+lock**, so the next note is acquired instantly rather than charging — otherwise
+the camera would stay "locked" to a note it is no longer anywhere near.
+
+*On the number:* 1500 ms, where 3000 was suggested. The suggestion was made
+against a build with no acquiring mark, where the only way to discover the hold
+was to wait it out; with the charge visible, a shorter hold reads as deliberate
+rather than sluggish, and it keeps mid-flight retargeting (D20/D21) usable
+rather than nominal. It is one constant, named and commented as the knob to
+turn, and the manual pass is what settles it.
+
 ### D9 — The rail is chrome, and that is the whole of its reachability
 
 The rail island carries `HUD_CHROME_CLASS` and `hud-hit`. It then inherits both the

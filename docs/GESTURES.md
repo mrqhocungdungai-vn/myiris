@@ -313,6 +313,18 @@ re-aim re-seeds the spherical so the view does not jump — and deliberately doe
 discard the spread already made and stall the remaining travel (D21). It keeps
 the reference distance and rescales instead.
 
+**Switching to another note takes a deliberate hold** (`ZOOM_LOCK_HOLD_MS`,
+`zoomLockStep`, D23). Acquiring a note when none is locked is instant — nothing
+is being taken away — but taking the camera off a locked note costs the sight
+staying on the new one for the full interval, and drifting away abandons the
+charge rather than banking it. Every earlier guard was spatial (a pixel bias, a
+depth factor, a movement gate), and none of them could separate a hand moving
+deliberately to another note from a hand wobbling between two of them in a dense
+cloud: those travel the same pixels, and only time tells them apart. While a new
+note charges, a ring **closes onto it** — which says both "there is a note here"
+(empty space shows nothing) and "how much longer", and makes the wait legible
+instead of feeling like a fault.
+
 **What a grab will take hold of is visible before the grab.** A faint ring marks the
 node a grab would anchor to, and a stronger ring marks the live anchor
 (`galaxy-anchor-rings.ts`). While a drive is engaged the candidate ring gives way to

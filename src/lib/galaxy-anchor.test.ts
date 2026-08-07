@@ -5,6 +5,8 @@ import {
   anchorsEqual,
   easeAnchor,
   pickZoomTarget,
+  zoomLockStep,
+  INITIAL_ZOOM_LOCK,
   rectCentre,
   resolveAnchor,
   shouldReleaseAnchor,
@@ -170,6 +172,85 @@ describe("pickZoomTarget", () => {
     const ghost: GalaxyNavNode = { id: "ghost", title: "Ghost", x: 0, y: 0, z: 0, ghost: true };
     const behind: GalaxyNavNode = { id: "behind", title: "Behind", x: 0, y: 0, z: 20 };
     expect(pickZoomTarget([ghost, behind], camera, RECT, rectCentre(RECT), CENTROID_ANCHOR, 500)).toBe(CENTROID_ANCHOR);
+  });
+});
+
+describe("zoomLockStep", () => {
+  const HOLD = 1000;
+
+  it("acquires instantly when nothing is locked yet — waiting would take nothing away", () => {
+    const r = zoomLockStep(INITIAL_ZOOM_LOCK, "a", 0, HOLD);
+    expect(r.lockedId).toBe("a");
+    expect(r.acquiringId).toBeNull();
+  });
+
+  it("does NOT switch to another note before the hold elapses", () => {
+    let state = zoomLockStep(INITIAL_ZOOM_LOCK, "a", 0, HOLD).state;
+    let last = zoomLockStep(state, "b", 10, HOLD);
+    state = last.state;
+    for (let t = 20; t < HOLD; t += 50) {
+      last = zoomLockStep(state, "b", t, HOLD);
+      state = last.state;
+      expect(last.lockedId).toBe("a");
+      expect(last.acquiringId).toBe("b");
+    }
+  });
+
+  it("switches once the new note has been held for the full interval", () => {
+    let state = zoomLockStep(INITIAL_ZOOM_LOCK, "a", 0, HOLD).state;
+    state = zoomLockStep(state, "b", 10, HOLD).state;
+    const fired = zoomLockStep(state, "b", 10 + HOLD, HOLD);
+    expect(fired.lockedId).toBe("b");
+    expect(fired.acquiringId).toBeNull();
+  });
+
+  // The actual complaint: a hand crossing a dense region brushes note after
+  // note. None of them may take the camera.
+  it("a candidate that keeps changing never switches the lock", () => {
+    let state = zoomLockStep(INITIAL_ZOOM_LOCK, "a", 0, HOLD).state;
+    let lockedId: string | null = "a";
+    for (let t = 0; t < HOLD * 6; t += 100) {
+      const flapping = t % 200 === 0 ? "b" : "c";
+      const r = zoomLockStep(state, flapping, t, HOLD);
+      state = r.state;
+      lockedId = r.lockedId;
+    }
+    expect(lockedId).toBe("a");
+  });
+
+  it("abandons a charge when the sight leaves the note, rather than committing it later", () => {
+    let state = zoomLockStep(INITIAL_ZOOM_LOCK, "a", 0, HOLD).state;
+    state = zoomLockStep(state, "b", 0, HOLD).state;
+    // Drift off onto empty space part-way through the charge.
+    state = zoomLockStep(state, null, HOLD / 2, HOLD).state;
+    // Coming straight back must start the charge over, not inherit the old one.
+    const back = zoomLockStep(state, "b", HOLD / 2 + 10, HOLD);
+    expect(back.lockedId).toBe("a");
+    expect(back.progress).toBe(0);
+  });
+
+  it("keeps the lock while the sight is over empty space", () => {
+    const state = zoomLockStep(INITIAL_ZOOM_LOCK, "a", 0, HOLD).state;
+    const r = zoomLockStep(state, null, 5000, HOLD);
+    expect(r.lockedId).toBe("a");
+    expect(r.acquiringId).toBeNull();
+  });
+
+  it("reports progress across the charge, so the mark can show the wait", () => {
+    let state = zoomLockStep(INITIAL_ZOOM_LOCK, "a", 0, HOLD).state;
+    state = zoomLockStep(state, "b", 0, HOLD).state;
+    expect(zoomLockStep(state, "b", HOLD / 4, HOLD).progress).toBeCloseTo(0.25, 5);
+    expect(zoomLockStep(state, "b", HOLD / 2, HOLD).progress).toBeCloseTo(0.5, 5);
+    expect(zoomLockStep(state, "b", HOLD, HOLD).progress).toBe(1);
+  });
+
+  it("re-settling on the note already locked clears any charge and costs nothing", () => {
+    let state = zoomLockStep(INITIAL_ZOOM_LOCK, "a", 0, HOLD).state;
+    state = zoomLockStep(state, "b", 0, HOLD).state;
+    const back = zoomLockStep(state, "a", 100, HOLD);
+    expect(back.lockedId).toBe("a");
+    expect(back.acquiringId).toBeNull();
+    expect(back.state.pendingId).toBeNull();
   });
 });
 

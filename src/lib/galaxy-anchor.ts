@@ -165,6 +165,90 @@ export function pickZoomTarget(
   return bestId === incumbentId ? current : { kind: "node", id: bestId };
 }
 
+/**
+ * How long a NEW note has to stay under the sight before the camera commits to
+ * it (design.md D23). Mirrors `dwellStep`'s pending-hold, for the same reason
+ * in a different place: every other guard here is spatial — a pixel bias, a
+ * depth factor — and spatial hysteresis cannot tell a hand deliberately moving
+ * to another note from a hand wobbling between two of them in a dense cloud.
+ * Only time can.
+ *
+ * Tunable, and deliberately the one number to change if this still reads as
+ * twitchy (or as sluggish): the acquiring mark makes the wait visible, which is
+ * what lets it be this long without feeling like lag.
+ */
+export const ZOOM_LOCK_HOLD_MS = 1500;
+
+export type ZoomLockState = {
+  /** The note the camera is committed to. */
+  lockedId: string | null;
+  /** A different note currently charging toward a lock. */
+  pendingId: string | null;
+  pendingSince: number;
+};
+
+export const INITIAL_ZOOM_LOCK: ZoomLockState = { lockedId: null, pendingId: null, pendingSince: 0 };
+
+/**
+ * Whether the zoom's target may change yet (design.md D23) — the temporal half
+ * of the lock, run every frame against the throttled picker's latest candidate.
+ *
+ * The asymmetry is the whole point, and it is the same one `dwellStep` uses:
+ *
+ * - **Acquiring** a target when there is none is FREE. Nothing is being taken
+ *   away, so making the user wait would be delay for its own sake.
+ * - **Switching** away from a locked note costs `holdMs` of the sight staying
+ *   on the new one. That is what stops the camera being dragged from note to
+ *   note by a hand crossing a dense region, which is what "it keeps jumping"
+ *   actually is.
+ * - **Losing** the candidate entirely (the sight over empty space) keeps the
+ *   lock and abandons any charge, so drifting off a note mid-charge does not
+ *   quietly commit to it later.
+ *
+ * `progress` is 0..1 over the charge, so the mark can show it: an invisible
+ * wait reads as the feature being broken, a visible one reads as the feature
+ * working.
+ */
+export function zoomLockStep(
+  state: ZoomLockState,
+  candidateId: string | null,
+  now: number,
+  holdMs: number,
+): { state: ZoomLockState; lockedId: string | null; acquiringId: string | null; progress: number } {
+  if (candidateId === null) {
+    const next = state.pendingId === null ? state : { ...state, pendingId: null, pendingSince: 0 };
+    return { state: next, lockedId: state.lockedId, acquiringId: null, progress: 0 };
+  }
+
+  if (candidateId === state.lockedId) {
+    const next = state.pendingId === null ? state : { ...state, pendingId: null, pendingSince: 0 };
+    return { state: next, lockedId: state.lockedId, acquiringId: null, progress: 0 };
+  }
+
+  // Nothing is locked yet — take it immediately.
+  if (state.lockedId === null) {
+    const next: ZoomLockState = { lockedId: candidateId, pendingId: null, pendingSince: 0 };
+    return { state: next, lockedId: candidateId, acquiringId: null, progress: 0 };
+  }
+
+  if (candidateId === state.pendingId) {
+    const elapsed = now - state.pendingSince;
+    if (elapsed >= holdMs) {
+      const next: ZoomLockState = { lockedId: candidateId, pendingId: null, pendingSince: 0 };
+      return { state: next, lockedId: candidateId, acquiringId: null, progress: 1 };
+    }
+    return {
+      state,
+      lockedId: state.lockedId,
+      acquiringId: candidateId,
+      progress: holdMs > 0 ? Math.max(0, Math.min(1, elapsed / holdMs)) : 1,
+    };
+  }
+
+  const next: ZoomLockState = { ...state, pendingId: candidateId, pendingSince: now };
+  return { state: next, lockedId: state.lockedId, acquiringId: candidateId, progress: 0 };
+}
+
 /** The centre of `rect` in window pixels — the sight's fallback when no hand is in frame. */
 export function rectCentre(rect: ScreenRect): { x: number; y: number } {
   return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };

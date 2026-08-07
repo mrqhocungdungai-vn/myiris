@@ -53,6 +53,20 @@ const ENGAGED_LINE_PX = 9;
 // behind them. These were 16/24/34 with 5/9/14px strokes, which at the new
 // arrival distance read as a white disc around the note rather than a ring on
 // it. Narrower and dimmer marks say the same thing and cover less of it.
+// The ACQUIRING mark (design.md D23): a new note is under the sight and
+// charging toward a lock. It is the same ring, drawn at a size that shrinks
+// from `ACQUIRE_START_WORLD_SIZE` down onto `ANCHOR_WORLD_SIZE` as the charge
+// completes — a closing reticle. Scaling a sprite is a `scale.set()`, so
+// animating it per frame costs nothing and repaints no canvas.
+//
+// Shrinking rather than filling, because it has to answer two questions at
+// once: "is there a note here at all" (a ring appears, where empty space shows
+// nothing) and "how much longer" (it closes). A colour or opacity ramp answers
+// only the second.
+const ACQUIRE_COLOR = "rgba(255, 255, 255, 0.85)";
+const ACQUIRE_LINE_PX = 6;
+const ACQUIRE_START_WORLD_SIZE = 44;
+
 const CANDIDATE_WORLD_SIZE = 13;
 const ANCHOR_WORLD_SIZE = 17;
 const ENGAGED_WORLD_SIZE = 23;
@@ -108,7 +122,13 @@ export type AnchorRings = {
    * while a drive holds the camera, so leaving it drawn would mark a choice the
    * user can no longer make (6.5).
    */
-  apply(candidatePos: Vec3Like | null, anchorPos: Vec3Like | null, engaged: boolean): void;
+  apply(
+    candidatePos: Vec3Like | null,
+    anchorPos: Vec3Like | null,
+    engaged: boolean,
+    acquiringPos: Vec3Like | null,
+    acquireProgress: number,
+  ): void;
   /** Disposes every texture/material and removes `group` from its parent. */
   dispose(): void;
 };
@@ -122,11 +142,28 @@ export function createRingPair(): AnchorRings {
   const candidate = createRingSprite(CANDIDATE_COLOR, CANDIDATE_LINE_PX, CANDIDATE_WORLD_SIZE);
   const anchor = createRingSprite(ANCHOR_COLOR, ANCHOR_LINE_PX, ANCHOR_WORLD_SIZE);
   const engagedRing = createRingSprite(ENGAGED_COLOR, ENGAGED_LINE_PX, ENGAGED_WORLD_SIZE);
+  const acquiring = createRingSprite(ACQUIRE_COLOR, ACQUIRE_LINE_PX, ACQUIRE_START_WORLD_SIZE);
   group.add(candidate);
   group.add(anchor);
   group.add(engagedRing);
+  group.add(acquiring);
 
-  function apply(candidatePos: Vec3Like | null, anchorPos: Vec3Like | null, engaged: boolean) {
+  function apply(
+    candidatePos: Vec3Like | null,
+    anchorPos: Vec3Like | null,
+    engaged: boolean,
+    acquiringPos: Vec3Like | null,
+    acquireProgress: number,
+  ) {
+    if (acquiringPos) {
+      acquiring.position.set(acquiringPos.x, acquiringPos.y, acquiringPos.z);
+      const t = Math.max(0, Math.min(1, acquireProgress));
+      const size = ACQUIRE_START_WORLD_SIZE + (ANCHOR_WORLD_SIZE - ACQUIRE_START_WORLD_SIZE) * t;
+      acquiring.scale.set(size, size, 1);
+      acquiring.visible = true;
+    } else {
+      acquiring.visible = false;
+    }
     if (candidatePos) {
       candidate.position.set(candidatePos.x, candidatePos.y, candidatePos.z);
       candidate.visible = true;
@@ -145,7 +182,7 @@ export function createRingPair(): AnchorRings {
   }
 
   function dispose() {
-    for (const sprite of [candidate, anchor, engagedRing]) {
+    for (const sprite of [candidate, anchor, engagedRing, acquiring]) {
       const material = sprite.material as THREE.SpriteMaterial;
       material.map?.dispose();
       material.dispose();

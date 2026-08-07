@@ -20,11 +20,14 @@ import {
 } from "../lib/galaxy-nav";
 import {
   CENTROID_ANCHOR,
+  INITIAL_ZOOM_LOCK,
   easeAnchor,
   pickZoomTarget,
+  zoomLockStep,
   rectCentre,
   shouldReleaseAnchor,
   type GalaxyAnchor,
+  type ZoomLockState,
 } from "../lib/galaxy-anchor";
 import type { AnchorRings } from "../lib/galaxy-anchor-rings";
 import type { GalaxyAnchorApi } from "./useGalaxyAnchor";
@@ -66,7 +69,7 @@ export type GalaxyCameraDriveParams = {
   dwellThresholdPx: number;
   dwellHoldMs: number;
   anchorThresholdPx: number;
-  pivotRetargetDeadBandPx: number;
+  zoomLockHoldMs: number;
   candidateIntervalMs: number;
   zoomMinRadius: number;
   zoomMaxRadius: number;
@@ -92,7 +95,7 @@ export function useGalaxyCameraDrive({
   dwellThresholdPx,
   dwellHoldMs,
   anchorThresholdPx,
-  pivotRetargetDeadBandPx,
+  zoomLockHoldMs,
   candidateIntervalMs,
   zoomMinRadius,
   zoomMaxRadius,
@@ -123,15 +126,15 @@ export function useGalaxyCameraDrive({
   // the dolly's reference reset far more often than what was even visible on
   // screen). One evaluation, one cadence, read by both.
   const pivotPickRef = useRef<GalaxyAnchor | null>(null);
-  // The sight position the last COMMITTED live-zoom retarget was computed
-  // from. Gates whether a throttled pick reaches `pivotPickRef` (the camera)
-  // at all — it does NOT gate the ring's own `candidateIdRef`, which stays
-  // immediate/honest feedback regardless (design.md D19). A node graze is
-  // not exempt: `nearestNodeAt`'s own dead-band only breaks a tie between
-  // near-equal candidates, it says nothing about whether the SIGHT has
-  // actually travelled far enough to justify retargeting an already-live
-  // zoom, and neither does a point's lack of an id — both need this gate.
-  const lastPivotSightRef = useRef<{ x: number; y: number } | null>(null);
+  // The temporal half of the lock (design.md D23). Replaces the sight-movement
+  // dead-band that used to gate commits: that asked "has the hand travelled far
+  // enough", which cannot tell a deliberate move to another note from a wobble
+  // between two of them. This asks "has the sight STAYED on it", which can.
+  const zoomLockRef = useRef<ZoomLockState>(INITIAL_ZOOM_LOCK);
+  // What the lock is charging toward right now, and how far along — read only
+  // by the marks, so the wait is visible rather than dead time.
+  const acquiringIdRef = useRef<string | null>(null);
+  const acquireProgressRef = useRef(0);
 
   // Gesture drive (design.md D4b/D5): a thin driver over the pure policy in
   // src/lib/galaxy-nav.ts. Schedules NOTHING while gestures are off or the
@@ -285,11 +288,20 @@ export function useGalaxyCameraDrive({
       const live = anchor.anchorRef.current;
       const anchoredId = live.kind === "node" ? live.id : null;
       const candidateId = engaged || candidateIdRef.current === anchoredId ? null : candidateIdRef.current;
-      rings.apply(positionOf(candidateId), positionOf(anchoredId), engaged);
+      // The acquiring mark shows in BOTH states, unlike the candidate ring:
+      // while a drive is engaged is exactly when "the camera is about to
+      // switch note" most needs saying, since that is when it would move.
+      rings.apply(
+        positionOf(candidateId),
+        positionOf(anchoredId),
+        engaged,
+        positionOf(acquiringIdRef.current),
+        acquireProgressRef.current,
+      );
     }
 
     function clearRings() {
-      ringsRef.current?.apply(null, null, false);
+      ringsRef.current?.apply(null, null, false, null, 0);
       setReticleEngaged(false);
     }
 
@@ -357,25 +369,16 @@ export function useGalaxyCameraDrive({
             anchorThresholdPx,
           );
           candidateIdRef.current = picked.kind === "node" ? picked.id : null;
-          // `pivotPickRef` — what the LIVE ZOOM actually reads — commits only
-          // once the sight has moved past the dead-band since the last commit
-          // (design.md D19). Applies to a node result too, not only a point:
-          // `nearestNodeAt`'s incumbent dead-band answers "which of two nearby
-          // candidates" and a node has no analogue of "did the sight travel
-          // far enough to retarget a live drive" at all — so a sight merely
-          // grazing ANY node's 130px capture radius for one tick, without the
-          // hand meaningfully moving, used to commit unconditionally and
-          // reseed the zoom reference on the strength of that graze alone
-          // (the regression this fixes). A point pivot additionally has no id
-          // for "did this change" to even ask about — the gate is what makes
-          // that question answerable for either kind.
-          const last = lastPivotSightRef.current;
-          const movedEnough = !last || Math.hypot(sight.x - last.x, sight.y - last.y) >= pivotRetargetDeadBandPx;
-          if (movedEnough) {
-            pivotPickRef.current = picked;
-            lastPivotSightRef.current = sight;
-          }
         }
+
+        // The lock runs EVERY frame, not on the throttle, because `progress` is
+        // what the acquiring mark draws — sampled at 10Hz it would step rather
+        // than close. The candidate it reads is still the throttled one.
+        const lock = zoomLockStep(zoomLockRef.current, candidateIdRef.current, now, zoomLockHoldMs);
+        zoomLockRef.current = lock.state;
+        acquiringIdRef.current = lock.acquiringId;
+        acquireProgressRef.current = lock.progress;
+        pivotPickRef.current = lock.lockedId === null ? null : { kind: "node", id: lock.lockedId };
 
         const drive = driveFor(hand);
         // A lowered hand drives nothing (design.md D6). Collapsing the drive to
@@ -469,21 +472,18 @@ export function useGalaxyCameraDrive({
             // range keeps the current anchor, so a grab over empty space
             // neither throws the view back to the middle of the vault nor
             // sends it chasing some distant note the user never aimed at.
-            engageMovedAnchorRef.current =
-              rect && sight
-                ? anchor.setAnchor(
-                  pickZoomTarget(
-                    positionsRef.current.values(),
-                    fg.camera(),
-                    rect,
-                    sight,
-                    anchor.anchorRef.current,
-                    anchorThresholdPx,
-                  ),
+            //
+            // Takes the note the lock is ALREADY on (design.md D23) rather than
+            // picking afresh here. The anchor ring has been showing that note,
+            // and a grab must take hold of what the user was shown it would —
+            // a second, independent pick at engage could differ from the mark
+            // by a frame's worth of hand movement and grab something else.
+            engageMovedAnchorRef.current = pivotPickRef.current
+              ? anchor.setAnchor(pivotPickRef.current, {
                   // The drive's own per-frame write eases the aim; the mouse-path
                   // ease must not also run and fight it.
-                  { ease: false },
-                )
+                  ease: false,
+                })
               : false;
             // Seeded from the LIVE camera against the TARGET anchor, and the
             // camera's position is never written — so "engaging never teleports"
@@ -662,6 +662,13 @@ export function useGalaxyCameraDrive({
       if (anchor.anchorRef.current.kind === "centroid") return;
       if (!shouldReleaseAnchor(radius, anchor.boundingRadiusRef.current, zoomMaxRadius)) return;
       if (!anchor.setAnchor(CENTROID_ANCHOR, { ease: false })) return;
+      // Backing out to the overview drops the lock too, so the next note the
+      // sight settles on is acquired instantly rather than charging for the
+      // full hold (design.md D23: acquiring is free, only switching is not).
+      // Without this, returning to the overview would leave the camera still
+      // "locked" to a note it is no longer near.
+      zoomLockRef.current = INITIAL_ZOOM_LOCK;
+      pivotPickRef.current = null;
       anchor.displayedAnchorRef.current = anchor.resolveCurrent();
       reseedAroundAnchor(fg, curDist);
     }
