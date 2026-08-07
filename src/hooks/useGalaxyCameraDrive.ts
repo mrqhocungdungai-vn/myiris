@@ -10,6 +10,8 @@ import {
   inspectingHand,
   isHandLowered,
   aimPoint,
+  orbitStep,
+  preferredHand,
   zoomRadius,
   handDistance,
   nearestNodeAt,
@@ -69,6 +71,7 @@ export type GalaxyCameraDriveParams = {
   dwellThresholdPx: number;
   dwellHoldMs: number;
   anchorThresholdPx: number;
+  orbitSensitivity: number;
   zoomLockHoldMs: number;
   candidateIntervalMs: number;
   zoomMinRadius: number;
@@ -95,6 +98,7 @@ export function useGalaxyCameraDrive({
   dwellThresholdPx,
   dwellHoldMs,
   anchorThresholdPx,
+  orbitSensitivity,
   zoomLockHoldMs,
   candidateIntervalMs,
   zoomMinRadius,
@@ -107,7 +111,12 @@ export function useGalaxyCameraDrive({
   // lifetime they had as component refs.
   const dwellStateRef = useRef<DwellState>(INITIAL_DWELL_STATE);
   const sphericalRef = useRef<THREE.Spherical | null>(null);
-  const cameraEngagedRef = useRef<"zoom" | null>(null);
+  const cameraEngagedRef = useRef<"orbit" | "zoom" | null>(null);
+  // The wrist of the hand driving an orbit, from the previous frame. The WRIST,
+  // not the fingertip: curling into a fist moves the fingertip a long way on
+  // its own, and the orbit's delta would read that curl as hand travel —
+  // exactly at the engage boundary, where the curl is happening.
+  const prevOrbitPointRef = useRef<{ x: number; y: number } | null>(null);
   const zoomReferenceRef = useRef<{ dist: number; radius: number } | null>(null);
   // Whether THIS engagement moved the anchor. The release path copies the
   // anchor into `controls.target` only when it did — otherwise a grab over
@@ -399,7 +408,7 @@ export function useGalaxyCameraDrive({
         // all follow with no new code. Window pixels, because that is the space
         // `HandPoint` is already in.
         const lowered = isHandLowered(hand.point, window.innerHeight);
-        const activeCameraDrive = !lowered && drive === "zoom" ? drive : null;
+        const activeCameraDrive = !lowered && (drive === "orbit" || drive === "zoom") ? drive : null;
         applyRings(activeCameraDrive !== null);
         setReticleEngaged(activeCameraDrive !== null);
 
@@ -531,15 +540,38 @@ export function useGalaxyCameraDrive({
             const engageDist = twoPalmDistance(hand);
             zoomReferenceRef.current =
               engageDist !== null ? { dist: engageDist, radius: sphericalRef.current.radius } : null;
+            // Read from the hand actually making the fist, preferring the right
+            // one when both are in frame (D25) — so a hand resting in the other
+            // half of the frame cannot take the camera.
+            prevOrbitPointRef.current =
+              activeCameraDrive === "orbit" ? preferredHand(hand.hands.filter((h) => h.fist))?.wristPoint ?? null : null;
           } else {
             zoomReferenceRef.current = null;
+            prevOrbitPointRef.current = null;
           }
           cameraEngagedRef.current = activeCameraDrive;
         } else if (activeCameraDrive) {
           const origin = anchor.resolveCurrent();
           anchor.displayedAnchorRef.current = easeAnchor(anchor.displayedAnchorRef.current, origin, dt);
 
-          if (sphericalRef.current && zoomReferenceRef.current) {
+          if (activeCameraDrive === "orbit" && sphericalRef.current) {
+            // Turning around the LOCKED note (D25). A fist does not aim — only
+            // an open palm does — so the hand's travel here means "turn the
+            // view" and nothing else, which is what the deleted D20 orbit could
+            // never promise while one signal carried both meanings.
+            const wrist = preferredHand(hand.hands.filter((h) => h.fist))?.wristPoint ?? null;
+            const previous = prevOrbitPointRef.current;
+            if (wrist && previous) {
+              const next = orbitStep(
+                sphericalRef.current,
+                { x: wrist.x - previous.x, y: wrist.y - previous.y },
+                orbitSensitivity,
+              );
+              sphericalRef.current.set(next.radius, next.phi, next.theta);
+              writeCameraFromSpherical(fg, origin);
+            }
+            if (wrist) prevOrbitPointRef.current = wrist;
+          } else if (activeCameraDrive === "zoom" && sphericalRef.current && zoomReferenceRef.current) {
             // A dropout (one palm briefly not open_palm) has already released
             // the reference above on the frame `activeCameraDrive` goes null —
             // here `zoomReferenceRef.current` staying set means both palms are

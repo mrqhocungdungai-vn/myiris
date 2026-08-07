@@ -107,4 +107,8 @@
 - [x] 10.13 Split aiming from zooming (D24, proposed by the user from use): `sightPoint` becomes `aimPoint`, returning null while two open palms are up — one hand aims in any pose, two hands supply distance only, so an uneven spread can no longer re-target the camera
 - [x] 10.14 Hide the sight mark while two palms zoom, and add `viewCentrePoint` so an un-targeted zoom runs along the view axis rather than toward an off-centre centroid
 - [x] 10.15 Unit-test `aimPoint`: null with two palms up, the single hand's own point in any pose, null with no hand at all rather than a centre fallback
-- [ ] 10.16 Manual pass on the new model: whether aiming at a note and spreading actually arrives at it, whether the far side of the sphere is still reachable by hand alone now that the orbit is gone, and whether spreading covers distance steadily instead of stalling
+- [x] 10.16 Restore the fist orbit (D25), now turning around the LOCKED note rather than around whatever the anchor happened to be — with nothing locked it turns around the view centre, on the same terms the un-targeted zoom does
+- [x] 10.17 Narrow `aimPoint` to the open palm alone: a pose that drives the camera may not also aim it, or a fist would re-target on the very movement doing the turning
+- [x] 10.18 Add `preferredHand` (rightmost on screen = the user's right hand, derived from the `1 - x` mirroring rather than MediaPipe's handedness convention), used for the aim tiebreak and for which fist drives an orbit
+- [x] 10.19 Restore the gesture indicator's galaxy labels so it names every live binding again — aim, open, turn, fly
+- [ ] 10.20 Manual pass on the completed vocabulary: whether aiming at a note and spreading actually arrives at it, whether the far side of the sphere is still reachable by hand alone now that the orbit is gone, and whether spreading covers distance steadily instead of stalling

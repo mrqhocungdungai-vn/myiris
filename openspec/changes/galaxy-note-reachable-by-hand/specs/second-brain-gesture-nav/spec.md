@@ -7,19 +7,21 @@
 
 ## ADDED Requirements
 
-### Requirement: Two open palms fly the galaxy camera to a note
+### Requirement: Each hand pose has one job, and together they navigate the galaxy
 
 When hand control is enabled and the galaxy is active with no reader open, two open palms SHALL be the galaxy's **only** camera drive, and spreading or closing them SHALL move the camera toward or away from **a note** — never toward an arbitrary point in space. Zooming is not a galaxy-specific binding: it is the two-open-palms rule that scales whatever layer owns the gesture surface (see `two-hand-gestures`), and it applies here because the galaxy is such a layer.
 
-`Closed_Fist` SHALL drive nothing in the galaxy. It previously orbited the camera, and its removal is deliberate rather than an omission: the galaxy is a sphere, so an orbit only pays once it has been flown accurately, and the single thing the user needs — arriving at a particular note in order to open it — is better served by one drive that goes *to* a note than by two that between them go anywhere. Reaching the far side of the graph SHALL remain possible without it, because flying to a note both moves the camera and turns its aim onto that note, and because mouse drag SHALL continue to orbit freely whenever no hand drive is engaged.
+**`Closed_Fist` SHALL turn the camera around the locked note**, by the hand's movement delta. Together with the two-palm travel this is what makes the galaxy navigable in three dimensions: an open palm chooses where to go, a fist chooses the angle to see it from, and two palms cover the distance. Turning around a note the user deliberately chose is navigation; turning around whatever the anchor happened to be — which is what an earlier revision did — was drift, and is why the pose was briefly given no job at all.
 
-The galaxy drives SHALL be partitioned by hand pose so they never act at once on the same hand: `Pointing_Up` targets a node dwell (no camera motion), `Victory` **inspects** a node (no camera motion, and nothing selected or opened — see "A held two-finger pose reveals a node's link cluster"), two open palms fly the camera, and **any other pose — a fist, a single open palm, an unrecognized gesture, or a hand merely resting in frame — SHALL drive nothing**. In particular a pinch SHALL have no meaning in the galaxy: the thumb-index distance SHALL NOT move the camera, select anything, or disturb a charging dwell, however tightly the fingers are closed.
+**A pose that drives the camera SHALL NOT also aim it.** Only the open palm aims. A fist that also aimed would re-target on the very movement that is turning the view, which is the same defect as a two-palm midpoint carrying the aim while the palms part.
+
+The galaxy drives SHALL be partitioned by hand pose so they never act at once on the same hand: a single `Open_Palm` **aims** (choosing the note to lock, committing nothing), `Pointing_Up` targets a node dwell, `Victory` **inspects** a node (no camera motion, and nothing selected or opened — see "A held two-finger pose reveals a node's link cluster"), `Closed_Fist` turns the camera, two open palms fly it, and **any other pose — an unrecognized gesture, or a hand merely resting in frame — SHALL drive nothing**. In particular a pinch SHALL have no meaning in the galaxy: the thumb-index distance SHALL NOT move the camera, select anything, or disturb a charging dwell, however tightly the fingers are closed.
 
 **A hand that drives nothing SHALL also show nothing.** The pointed-at highlight (see `second-brain-galaxy-view`, "The node being pointed at reveals its link cluster") SHALL be produced only by a pose that means to point at something — the inspect pose, or a charging `Pointing_Up` dwell — and SHALL NOT follow a hand that is merely present in frame. A highlight that tracks any hand in any pose lights a cluster the user did not ask about, then another as the hand drifts, which is noise rather than feedback: it reads as the view reacting to the user's hand rather than answering their question. A camera drive SHALL suppress it too, because while the camera is being flown the hand's position means "camera", not "target".
 
 The camera SHALL look at the galaxy's **anchor** (see `second-brain-galaxy-view`, "The camera turns and dollies around a movable anchor") — never at an assumed world origin, and no longer at the graph's centroid unconditionally. **The anchor a camera drive takes SHALL always be a note**, resolved as the note nearest the sight (see `second-brain-galaxy-view`, "The camera is aimed by a sight that follows the hands") within a bounded screen distance and excluding nodes behind the camera. Where two candidate notes overlap on screen, the one **nearer the camera** SHALL win, because that is the one drawn over the other and therefore the only one the user can see to aim at; depth SHALL NOT otherwise outrank aim, since a note's distance is invisible to the user except through that overlap. When no note is near enough the current anchor SHALL be kept, so aiming at empty space neither throws the view back to the middle of the vault nor sends it to some distant note the user never aimed at.
 
-**Aiming and zooming SHALL be carried by different numbers of hands.** A SINGLE hand — in any pose — SHALL aim, and while two open palms are up there SHALL be no aim point at all, so a zoom cannot re-target however unevenly the hands move. Aiming SHALL commit to nothing and SHALL therefore require no pose of its own; the poses remain reserved for what does commit. The sight mark SHALL be shown only while the user is actually aiming, and SHALL be hidden while two palms are zooming, since a mark shown then would claim the zoom is going where it is not.
+**Aiming and zooming SHALL be carried by different numbers of hands.** A SINGLE open palm SHALL aim, and while two open palms are up there SHALL be no aim point at all, so a zoom cannot re-target however unevenly the hands move. Aiming SHALL commit to nothing, and where more than one hand could aim, the one furthest RIGHT on screen SHALL win — the preview is mirrored, so that is the user's right hand. The sight mark SHALL be shown only while the user is actually aiming, and SHALL be hidden while two palms are zooming, since a mark shown then would claim the zoom is going where it is not.
 
 When a note is locked, the drive SHALL travel toward it. When NO note is locked, the drive SHALL move in and out along the axis the camera is already looking down — the point at the centre of the view, at the distance the camera is currently working at — rather than toward the graph's centroid, which after any travel is usually off-centre and would drift the view sideways.
 
@@ -32,10 +34,15 @@ Seeding SHALL re-derive from the **live** camera, so a gesture drive that begins
 - **WHEN** hand control is on, the galaxy is active, no reader is open, and the user spreads two open palms with the sight over a note
 - **THEN** the camera travels toward that note and its aim settles onto it, so the note ends up framed at the centre of the view where it can be dwelled on
 
-#### Scenario: A fist drives nothing in the galaxy
+#### Scenario: A fist turns the view around the locked note
 
-- **WHEN** the galaxy is active, no reader is open, and the user makes a `Closed_Fist` and moves it
-- **THEN** the camera does not move at all, and mouse drag still orbits the camera freely
+- **WHEN** a note is locked, the galaxy is active with no reader open, and the user makes a `Closed_Fist` and moves it
+- **THEN** the camera turns around that note following the hand's movement, and what is locked does not change — a fist does not aim
+
+#### Scenario: Choosing, turning and travelling compose into navigation
+
+- **WHEN** the user aims an open palm at a note to lock it, then makes a fist to turn around it, then raises two open palms and spreads
+- **THEN** the same note stays locked throughout, the view angle changes on the fist, and the camera travels toward it on the spread
 
 #### Scenario: The drive takes hold of the note the hand is over
 

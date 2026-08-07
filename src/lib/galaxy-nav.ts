@@ -180,7 +180,7 @@ export function dwellStep(
   return { state: next, target: state.target, fire: false };
 }
 
-export type GalaxyDrive = "dwell" | "inspect" | "zoom" | null;
+export type GalaxyDrive = "dwell" | "inspect" | "orbit" | "zoom" | null;
 
 type DriveHand = Pick<HandState, "pointing" | "fist" | "hands">;
 
@@ -211,16 +211,17 @@ export function inspectingHand(hand: Pick<HandState, "hands">): TrackedHand | nu
  * two-hand-gestures rule, "scale the layer that owns the gesture surface")
  * -> zoom, `Victory` -> inspect (reveal a node's link cluster while held;
  * commits to nothing), `Pointing_Up` -> dwell targeting only, and anything
- * else — a fist, a single open palm, an unrecognized pose, or a hand merely
- * resting in frame — -> null.
+ * `Closed_Fist` -> orbit, and anything else — an unrecognized pose, or a hand
+ * merely resting in frame — -> null.
  *
- * `Closed_Fist` drives NOTHING here (D20). It used to orbit the camera, and
- * removing it is the point rather than an omission: the galaxy is a sphere,
- * so an orbit is the gesture that has to be flown well before it pays, and
- * four rounds of tuning it never made reaching a particular note easier. One
- * camera gesture that goes TO a note beats two that together go anywhere.
- * A pinch still has no meaning: a tight pinch reads as `Closed_Fist`, which
- * now drives nothing, so there is nothing for it to fight with either.
+ * `Closed_Fist` turns the camera around the LOCKED note (D25). D20 deleted
+ * this drive, correctly for what it then was: it turned around whatever the
+ * anchor happened to be, which is drift rather than navigation. Turning around
+ * a note the user deliberately chose is a different gesture wearing the same
+ * pose — and with an open palm now carrying the aim, a fist can turn the view
+ * without also re-aiming it, which is what made the old one unusable.
+ * A pinch still has no meaning of its own: a tight pinch reads as
+ * `Closed_Fist` and orbits like any other fist.
  *
  * Zoom is tested first and so wins over a `Victory` hand: it is the two-hand
  * rule, which must outrank whatever either hand looks like individually.
@@ -242,6 +243,7 @@ export function driveFor(hand: DriveHand): GalaxyDrive {
   if (hand.hands.filter((h) => h.openPalm).length >= 2) return "zoom";
   if (inspectingHand(hand)) return "inspect";
   if (hand.pointing) return "dwell";
+  if (hand.fist) return "orbit";
   return null;
 }
 
@@ -274,40 +276,72 @@ export function isHandLowered(point: HandPoint | null, viewportHeight: number): 
 
 /**
  * Where the user is **aiming**, in window pixels — or `null` when they are not
- * aiming at all (galaxy-note-reachable-by-hand design.md D24).
+ * aiming (galaxy-note-reachable-by-hand design.md D24, narrowed by D25).
  *
- * **One hand aims; two hands zoom.** The two jobs are split between different
- * numbers of hands rather than being carried by the same pair, and that split is
- * the whole point. This used to return the midpoint between two open palms,
- * on the reasoning that spreading them symmetrically leaves their midpoint
- * still — true of the geometry, and false of hands. Real palms part
- * asymmetrically, so every zoom was also, slightly, a re-aim; the camera then
- * re-targeted on the very motion that was meant only to change distance. Every
- * defect from D14 through D23 was a symptom of that one coupling, and each was
- * damped rather than removed. Splitting the roles removes it: while two palms
- * are up there is no aim point at all, so a zoom cannot re-aim however
- * unevenly the hands move.
+ * **An OPEN PALM aims. Nothing else does.** Each pose now has exactly one job:
+ * an open palm chooses, a fist turns the camera, `Pointing_Up` opens, `Victory`
+ * reveals, and two open palms zoom. D24 let a single hand aim in any pose,
+ * which was fine while a fist meant nothing — but a fist drives the camera
+ * again (D25), and a fist that also aimed would re-target on the very motion
+ * that is turning the view. That is the D14 coupling in a new place, and the
+ * rule that prevents it is the same one: a pose that drives the camera must not
+ * also aim it.
  *
- * With one hand — in ANY pose, not only `Pointing_Up` — the aim follows that
- * hand. Aiming is not itself a drive and commits to nothing, so it needs no
- * pose of its own; the poses stay reserved for the things that DO commit
- * (opening a note, revealing its links).
+ * **Two open palms zoom rather than aim**, so this returns null then. Real
+ * palms part asymmetrically, so a midpoint carried as the aim made every zoom a
+ * slight re-aim; while both are up there is deliberately no aim point at all.
  *
- * Returns `null` with no hand in frame. There is deliberately no fallback to
- * the centre of the view: a fallback would mean the camera is always aiming at
- * something, and "nothing is being aimed at" is a state the caller must be able
- * to see — it is what makes an un-targeted zoom fall back to the middle of the
- * screen instead of at some note the user never chose.
+ * Where more than one hand could aim, the **rightmost on screen** wins. The
+ * preview is mirrored (`1 - x` in `useHandControl`), which is what makes it read
+ * as a mirror, so the hand furthest right on screen is the user's right hand.
+ * That is derived from the geometry rather than from MediaPipe's own
+ * handedness label, whose meaning depends on whether the input is treated as
+ * already mirrored — a convention that cannot be confirmed without the camera.
+ *
+ * Returns `null` with no open palm in frame. There is deliberately no fallback
+ * to the centre of the view: "nothing is being aimed at" is a state the caller
+ * must be able to see, since it is what makes an un-targeted zoom run down the
+ * middle of the screen instead of at a note the user never chose.
  */
-export function aimPoint(hand: Pick<HandState, "hands" | "point">): HandPoint | null {
-  if (hand.hands.filter((item) => item.openPalm).length >= 2) return null;
-  return hand.point ?? null;
+export function aimPoint(hand: Pick<HandState, "hands">): HandPoint | null {
+  const palms = hand.hands.filter((item) => item.openPalm);
+  if (palms.length !== 1) return null;
+  return palms[0].point;
 }
 
-// `orbitStep` and its `Spherical` type lived here until D20 removed the fist
-// orbit. Nothing replaced them: the zoom's spherical is seeded from the live
-// camera against the target note and only its RADIUS is driven, so no
-// angle-stepping policy is needed any more.
+/**
+ * The hand a single-hand drive should read, preferring the user's RIGHT hand
+ * when both are in frame (design.md D25).
+ *
+ * Rightmost on screen, for the mirroring reason above. Used by the drives that
+ * act on one hand's movement — so that resting the other hand in frame cannot
+ * silently hand the camera to it.
+ */
+export function preferredHand(hands: TrackedHand[]): TrackedHand | null {
+  if (hands.length === 0) return null;
+  return hands.reduce((best, hand) => (hand.point.x > best.point.x ? hand : best), hands[0]);
+}
+
+export type Spherical = { radius: number; phi: number; theta: number };
+
+// Keeps the camera off the poles, where azimuth (theta) becomes degenerate.
+const POLAR_EPSILON = 0.001;
+
+/**
+ * Relative orbit step (design.md D3/D4, restored by D25): the caller seeds
+ * `spherical` fresh on every drive (re)engage from the live camera and applies
+ * only the delta from that reference each frame, so engaging a fist never snaps
+ * the camera.
+ *
+ * The orbit turns around the **locked note** now, which is what makes it worth
+ * having where D20's version was not: turning around a thing you chose is
+ * navigation, turning around whatever the anchor happened to be was drift.
+ */
+export function orbitStep(spherical: Spherical, delta: { x: number; y: number }, sensitivity: number): Spherical {
+  const theta = spherical.theta - delta.x * sensitivity;
+  const phi = Math.max(POLAR_EPSILON, Math.min(Math.PI - POLAR_EPSILON, spherical.phi - delta.y * sensitivity));
+  return { radius: spherical.radius, phi, theta };
+}
 
 /**
  * The distance between two tracked hands' points, in the same window-pixel

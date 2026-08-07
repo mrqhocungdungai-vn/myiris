@@ -827,6 +827,57 @@ walks.
 **The sight mark is hidden while zooming**, not parked somewhere. A mark shown
 while nothing is being aimed at would claim the zoom is going there.
 
+### D25 — The fist comes back, because now there is something to turn around
+
+*The user's completed model, proposed after D24: "open palm is aim, prefer the
+right hand if both are up; Victory lights the neighbouring notes as it already
+does; dwell opens the note; a fist turns the camera — and then you can choose or
+zoom to the next note. So you can travel and move through the 3D galaxy space:
+open hand locks a note, fist turns the angle, two hands zoom to the locked
+note."*
+
+D20 deleted the fist orbit at the user's request and that was right **for what
+the orbit then was**. It turned around whatever the anchor happened to be — a
+point in space, the last-opened note, the centroid — which is drift, not
+navigation, and no amount of tuning makes drift useful. What changed is not the
+gesture but what sits at its centre: after D20-D24 there is always a
+**deliberately locked note**, and turning around a thing you chose is a
+different act wearing the same pose. Restoring it now costs nothing that D20
+was protecting, and completes the vocabulary:
+
+| open palm | choose where to go |
+| fist | choose the angle to see it from |
+| two palms | cover the distance |
+| `Victory` | see what it connects to |
+| `Pointing_Up` | open it |
+
+Five poses, five jobs, no overlap — and between them, actual travel through a
+3D space rather than a camera that can only approach.
+
+**Each pose has exactly ONE job, and that is now load-bearing rather than
+tidy.** D24 let a single hand aim in *any* pose, which was harmless while a fist
+meant nothing. It stops being harmless the moment a fist drives the camera: a
+fist that also aimed would re-target on the very movement doing the turning —
+the D14 coupling reappearing in a new place, and it would have reintroduced
+every symptom D17-D23 spent five decisions removing. So `aimPoint` narrows to
+the open palm alone. The rule worth keeping is general: **a pose that drives the
+camera may not also aim it.**
+
+**Right-hand preference is derived from the mirroring, not from MediaPipe.**
+`useHandControl` remaps with `1 - x`, which is what makes the preview read as a
+mirror — so the hand furthest RIGHT on screen is the user's right hand.
+MediaPipe does report handedness, but its meaning depends on whether the input
+is treated as already mirrored, a convention that cannot be confirmed without
+the camera in hand. Screen position is checkable from the code and matches what
+the user sees. `preferredHand` also picks which fist drives an orbit, so a hand
+resting in the other half of the frame cannot silently take the camera.
+
+*What this does NOT restore:* the orbit's old freedom to turn around empty
+space. With nothing locked it turns around the point at the centre of the view
+(D24's `viewCentrePoint`), on the same terms the un-targeted zoom does — so the
+two camera drives always agree about what they are working around, which is the
+property D19 and D21 kept discovering they needed.
+
 ### D9 — The rail is chrome, and that is the whole of its reachability
 
 The rail island carries `HUD_CHROME_CLASS` and `hud-hit`. It then inherits both the

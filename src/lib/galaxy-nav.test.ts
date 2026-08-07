@@ -13,6 +13,7 @@ import {
   focusNeighborhood,
   isHandLowered,
   aimPoint,
+  preferredHand,
   type DwellState,
   type GalaxyNavNode,
 } from "./galaxy-nav";
@@ -179,11 +180,10 @@ describe("driveFor", () => {
     expect(driveFor(makeHand({ pointing: true, hands: [makeTrackedHand({ pointing: true })] }))).toBe("dwell");
   });
 
-  // D20 removed the fist orbit: a fist drives nothing in the galaxy now. This
-  // asserts the ABSENCE deliberately — the removal is the feature, so a fist
-  // silently regaining a camera binding must fail here.
-  it("returns null for Closed_Fist — the orbit was removed (D20)", () => {
-    expect(driveFor(makeHand({ fist: true, hands: [makeTrackedHand({ fist: true })] }))).toBeNull();
+  // D20 removed the fist orbit; D25 restored it, now turning around the LOCKED
+  // note rather than around whatever the anchor happened to be.
+  it("returns orbit for Closed_Fist", () => {
+    expect(driveFor(makeHand({ fist: true, hands: [makeTrackedHand({ fist: true })] }))).toBe("orbit");
   });
 
   it("returns null for a single open palm, an unrecognized gesture, and a resting hand", () => {
@@ -193,12 +193,12 @@ describe("driveFor", () => {
 
   // The pinch has no meaning in the galaxy at all (proposal.md "What
   // Changes"): whatever canned class the recognizer assigns a pinched hand
-  // is what drives it — and since D20 removed the orbit, a tight pinch reads
-  // as Closed_Fist and therefore drives NOTHING, exactly like anything else it
-  // might read as. Never a zoom, at any thumb-index distance.
+  // is what drives it — a tight pinch reads as Closed_Fist and so orbits like
+  // any other fist; anything else it might read as drives nothing. Never a
+  // zoom, at any thumb-index distance.
   it("a pinch drives whatever its canned class says, never a zoom", () => {
     const pinchedFist = makeTrackedHand({ fist: true, pinchDistance: 0.02 });
-    expect(driveFor(makeHand({ fist: true, hands: [pinchedFist] }))).toBeNull();
+    expect(driveFor(makeHand({ fist: true, hands: [pinchedFist] }))).toBe("orbit");
 
     const pinchedRest = makeTrackedHand({ pinchDistance: 0.02 });
     expect(driveFor(makeHand({ hands: [pinchedRest] }))).toBeNull();
@@ -427,19 +427,33 @@ describe("aimPoint", () => {
   // aiming at all. Real palms part asymmetrically, so a midpoint carried as
   // the aim made every zoom a slight re-aim.
   it("returns null while two open palms are up — two hands zoom, they do not aim", () => {
-    const hand = { hands: [palm("a", 100, 200), palm("b", 300, 400)], point: { x: 999, y: 999 } };
-    expect(aimPoint(hand)).toBeNull();
+    expect(aimPoint({ hands: [palm("a", 100, 200), palm("b", 300, 400)] })).toBeNull();
   });
 
-  it("aims at the single hand's own point, whatever pose it is in", () => {
-    expect(aimPoint({ hands: [palm("a", 100, 200)], point: { x: 111, y: 222 } })).toEqual({ x: 111, y: 222 });
-    // A resting hand aims too — aiming commits to nothing, so it needs no pose.
-    expect(aimPoint({ hands: [palm("a", 100, 200, false)], point: { x: 5, y: 6 } })).toEqual({ x: 5, y: 6 });
+  it("aims at a single OPEN PALM's own point", () => {
+    expect(aimPoint({ hands: [palm("a", 100, 200)] })).toEqual({ x: 100, y: 200 });
   });
 
-  it("returns null with no hand in frame, rather than falling back to the view centre", () => {
+  // D25: each pose has exactly one job. A fist turns the camera, so it must not
+  // also aim it — that would re-target on the very motion doing the turning,
+  // which is the D14 coupling in a new place.
+  it("does not aim from a hand that is not an open palm", () => {
+    expect(aimPoint({ hands: [palm("a", 100, 200, false)] })).toBeNull();
+  });
+
+  it("prefers the RIGHTMOST hand on screen, which the mirrored preview makes the user's right", () => {
+    const left = palm("l", 200, 300);
+    const right = palm("r", 900, 300);
+    // Only one may aim at a time (two open palms zoom), so this fires as the
+    // tiebreak wherever several hands are eligible.
+    expect(preferredHand([left, right])?.id).toBe("r");
+    expect(preferredHand([right, left])?.id).toBe("r");
+    expect(preferredHand([])).toBeNull();
+  });
+
+  it("returns null with no open palm in frame, rather than falling back to the view centre", () => {
     // "Nothing is being aimed at" has to be visible to the caller: it is what
     // makes an un-targeted zoom fall back to the middle of the screen.
-    expect(aimPoint({ hands: [], point: null })).toBeNull();
+    expect(aimPoint({ hands: [] })).toBeNull();
   });
 });

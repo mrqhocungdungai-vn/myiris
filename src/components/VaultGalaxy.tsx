@@ -78,6 +78,10 @@ const ZOOM_MAX_RADIUS = 2500;
 // candidate ring are what keep a wider radius predictable — the user can see
 // which node it has picked before committing.
 const ANCHOR_THRESHOLD_PX = 130;
+// Radians per pixel of hand travel for the fist orbit (design.md D25), matching
+// the orb loop's feel — the same value this carried before D20 removed the
+// drive, restored with it.
+const ORBIT_SENSITIVITY = 0.006;
 // How long a NEW note must stay under the sight before the camera commits to it
 // (design.md D23). This replaced a sight-movement dead-band, which asked the
 // wrong question: "has the hand travelled far enough" cannot separate a
@@ -783,6 +787,7 @@ function GalaxyCanvas({
     dwellThresholdPx: DWELL_THRESHOLD_PX,
     dwellHoldMs: DWELL_HOLD_MS,
     anchorThresholdPx: ANCHOR_THRESHOLD_PX,
+    orbitSensitivity: ORBIT_SENSITIVITY,
     zoomLockHoldMs: ZOOM_LOCK_HOLD_MS,
     candidateIntervalMs: SELECT_INTERVAL_MS,
     zoomMinRadius: ZOOM_MIN_RADIUS,
