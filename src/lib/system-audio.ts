@@ -79,6 +79,18 @@ export function isCaptureSilent(samples: ArrayLike<number>): boolean {
 }
 
 /**
+ * What engaging listen-only mode captures, in one sentence.
+ *
+ * One definition, because three surfaces now state it: the mode's own consent
+ * notice, the Permissions step's system-audio entry, and the self-test's
+ * disclosure that pressing it opens the same capture. A second description
+ * written in the panel is a second thing to be wrong
+ * (setup-panel-reports-real-permissions 3.9).
+ */
+export const SYSTEM_AUDIO_CAPTURE_DISCLOSURE =
+  "While this mode is on she hears the room AND the audio your machine plays.";
+
+/**
  * The tooltip on the headphone control, in both the deck and the HUD. One
  * definition so the two surfaces cannot describe the same mode differently —
  * and so the degraded state is named wherever the control is, since that is
@@ -160,11 +172,20 @@ export function releaseLoopbackBranch(branch: LoopbackBranch | null) {
  * quiet must not be reported as broken, so the watch ends on first evidence
  * rather than running for the whole engagement.
  *
+ * `onLive` is the other half of that, and it is optional because the mode does
+ * not need it: engaging is not a question, so there is nothing to answer with
+ * "heard". The Permissions step's self-test IS a question, and without this
+ * callback "heard" is not observable at all — the watch simply cancels itself
+ * and returns nothing (setup-panel-reports-real-permissions D6). Inferring it
+ * from "onSilent did not fire within N ms" would invent a second timing
+ * definition of the very thing sharing this function was meant to prevent.
+ *
  * Returns a canceller, which is also what a disengage or a device swap calls.
  */
 export function watchCaptureLiveness({
   analyser,
   onSilent,
+  onLive,
   intervalMs = LIVENESS_PROBE_INTERVAL_MS,
   ticks = LIVENESS_PROBE_TICKS,
   setInterval: setTimer = globalThis.setInterval,
@@ -172,6 +193,7 @@ export function watchCaptureLiveness({
 }: {
   analyser: AnalyserNode;
   onSilent: () => void;
+  onLive?: () => void;
   intervalMs?: number;
   ticks?: number;
   setInterval?: typeof globalThis.setInterval;
@@ -179,16 +201,28 @@ export function watchCaptureLiveness({
 }): () => void {
   const buffer = new Float32Array(analyser.fftSize);
   let remaining = ticks;
+  // The watch reports exactly one verdict. Cancelling the timer is the
+  // mechanism; this is the rule — a probe that still runs after the verdict
+  // (a timer that fires once more before it is torn down) must not produce a
+  // second one, least of all a contradicting one.
+  let settled = false;
   const timer = setTimer(() => {
+    if (settled) return;
     analyser.getFloatTimeDomainData(buffer);
     if (!isCaptureSilent(buffer)) {
+      settled = true;
       clearTimer(timer);
+      onLive?.();
       return;
     }
     remaining -= 1;
     if (remaining > 0) return;
+    settled = true;
     clearTimer(timer);
     onSilent();
   }, intervalMs);
-  return () => clearTimer(timer);
+  return () => {
+    settled = true;
+    clearTimer(timer);
+  };
 }

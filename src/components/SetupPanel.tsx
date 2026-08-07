@@ -1,23 +1,12 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import {
-  Camera,
-  Check,
-  ChevronDown,
-  ChevronLeft,
-  ChevronRight,
-  Loader2,
-  Mic,
-  Play,
-  Wand2,
-  X,
-} from "lucide-react";
-import { SYSTEM_DEFAULT_MIC } from "../lib/mic-device";
+import { useEffect, useState, type ReactNode } from "react";
+import { Check, ChevronLeft, ChevronRight, Loader2, Play, Wand2, X } from "lucide-react";
 import { acceleratorParts } from "../lib/accelerator-label";
 import Keycaps from "./Keycaps";
+import PermissionsStep from "./PermissionsStep";
+import { Section, ThemedSelect, type Option } from "./SetupControls";
 
 type Mode = "onboarding" | "settings";
 type TestState = { status: "idle" | "testing" | "ok" | "error"; message?: string };
-type PermState = "idle" | "granted" | "denied";
 
 type Draft = {
   GEMINI_API_KEY: string;
@@ -31,8 +20,6 @@ type Draft = {
 };
 
 const WIZARD_STEPS = ["welcome", "gemini", "claude", "you", "permissions", "finish"] as const;
-
-const SYSTEM_DEFAULT_CAMERA = "default";
 
 // Wake-word sensitivity presets (design D5) — anchored to the values the code
 // itself recorded: 0.10 caused false wakes, 0.18 missed too much, 0.15 is
@@ -120,90 +107,26 @@ export default function SetupPanel({
   const [apiKey, setApiKey] = useState("");
   const [apiKeySet, setApiKeySet] = useState(config.anthropicApiKeySet);
   const [preview, setPreview] = useState<TestState>({ status: "idle" });
-  const [mic, setMic] = useState<PermState>("idle");
-  const [cam, setCam] = useState<PermState>("idle");
-  const [camDevices, setCamDevices] = useState<MediaDeviceInfo[]>([]);
-  const [micDevices, setMicDevices] = useState<MediaDeviceInfo[]>([]);
+  const [micGranted, setMicGranted] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
   const set = (key: keyof Draft, value: string) => setDraft((current) => ({ ...current, [key]: value }));
 
-  // Reflect the OS/browser's actual permission state so previously-granted mic or
-  // camera shows as "Granted" instead of asking again every time Settings opens.
+  // The wizard's closing summary names the microphone, and it reports the OS's
+  // answer for the same reason every row does — the renderer's own permission
+  // store answers with the app's unconditional internal grant. Read here
+  // because the summary renders on the finish step, where the Permissions step
+  // is no longer mounted.
   useEffect(() => {
-    if (!navigator.permissions?.query) return;
     let cancelled = false;
-    const toState = (state: PermissionState): PermState =>
-      state === "granted" ? "granted" : state === "denied" ? "denied" : "idle";
-
-    const watch = async (name: "microphone" | "camera", setter: (value: PermState) => void) => {
-      try {
-        const status = await navigator.permissions.query({ name: name as PermissionName });
-        if (cancelled) return;
-        setter(toState(status.state));
-        status.onchange = () => setter(toState(status.state));
-      } catch {
-        // Some platforms don't support querying these names; leave as idle.
-      }
-    };
-
-    watch("microphone", setMic);
-    watch("camera", setCam);
+    window.iris.queryOsPermissions().then((snapshot) => {
+      if (!cancelled) setMicGranted(snapshot.states.microphone === "granted");
+    });
     return () => {
       cancelled = true;
     };
-  }, []);
-
-  // Device labels only come through once camera permission is granted, so the
-  // picker stays empty/hidden until then. While granted, keep the list live so
-  // a device that appears or disappears at runtime (e.g. starting OBS Virtual
-  // Camera) shows up without reopening Settings.
-  useEffect(() => {
-    if (cam !== "granted") {
-      setCamDevices([]);
-      return;
-    }
-    let cancelled = false;
-    const refresh = async () => {
-      try {
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        if (!cancelled) setCamDevices(devices.filter((device) => device.kind === "videoinput"));
-      } catch {
-        // Leave the list as-is; enumeration can fail transiently.
-      }
-    };
-    refresh();
-    navigator.mediaDevices.addEventListener?.("devicechange", refresh);
-    return () => {
-      cancelled = true;
-      navigator.mediaDevices.removeEventListener?.("devicechange", refresh);
-    };
-  }, [cam]);
-
-  // Same live-refresh pattern as the camera list above, filtered to audio
-  // input devices and gated on Microphone permission instead of Camera.
-  useEffect(() => {
-    if (mic !== "granted") {
-      setMicDevices([]);
-      return;
-    }
-    let cancelled = false;
-    const refresh = async () => {
-      try {
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        if (!cancelled) setMicDevices(devices.filter((device) => device.kind === "audioinput"));
-      } catch {
-        // Leave the list as-is; enumeration can fail transiently.
-      }
-    };
-    refresh();
-    navigator.mediaDevices.addEventListener?.("devicechange", refresh);
-    return () => {
-      cancelled = true;
-      navigator.mediaDevices.removeEventListener?.("devicechange", refresh);
-    };
-  }, [mic]);
+  }, [step]);
 
   // Probe the bundled runtime + credential once when the panel opens, so
   // Settings shows current status without an extra click.
@@ -313,26 +236,6 @@ export default function SetupPanel({
       key: draft.GEMINI_API_KEY.trim(),
     });
     setPreview(result.ok ? { status: "idle" } : { status: "error", message: result.error });
-  }
-
-  async function requestMic() {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      stream.getTracks().forEach((track) => track.stop());
-      setMic("granted");
-    } catch {
-      setMic("denied");
-    }
-  }
-
-  async function requestCam() {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-      stream.getTracks().forEach((track) => track.stop());
-      setCam("granted");
-    } catch {
-      setCam("denied");
-    }
   }
 
   // A save can be refused (e.g. a control character in a value, see
@@ -723,78 +626,17 @@ export default function SetupPanel({
     </Section>
   );
 
-  const cameraOptions: Option[] = [{ value: SYSTEM_DEFAULT_CAMERA, label: "System Default" }].concat(
-    camDevices.map((device, index) => ({
-      value: device.deviceId,
-      label: device.label || `Camera ${index + 1}`,
-    })),
-  );
-  const cameraSelectionMissing =
-    cameraDeviceId !== SYSTEM_DEFAULT_CAMERA && !camDevices.some((device) => device.deviceId === cameraDeviceId);
-  if (cameraSelectionMissing) {
-    cameraOptions.push({ value: cameraDeviceId, label: "Previously selected camera (unavailable)" });
-  }
-
-  const micOptions: Option[] = [{ value: SYSTEM_DEFAULT_MIC, label: "System Default" }].concat(
-    micDevices.map((device, index) => ({
-      value: device.deviceId,
-      label: device.label || `Microphone ${index + 1}`,
-    })),
-  );
-  // Unlike the camera list, this entry is self-correcting: once either mic
-  // consumer actually tries to open the missing device it auto-falls-back to
-  // System Default and App.tsx reconciles micDeviceId to match, at which
-  // point this condition stops matching on its own — no extra "already
-  // corrected" flag needed.
-  const micSelectionMissing =
-    micDeviceId !== SYSTEM_DEFAULT_MIC && !micDevices.some((device) => device.deviceId === micDeviceId);
-  if (micSelectionMissing) {
-    micOptions.push({ value: micDeviceId, label: "Previously selected microphone (unavailable)" });
-  }
-
+  // The Permissions step owns its own OS-permission state and device
+  // enumeration (setup-panel-reports-real-permissions D7) — the panel passes
+  // only the device-selector props it already computes. Rendered from two call
+  // sites: the settings body and the wizard step.
   const permissionsSection = (
-    <Section title="Permissions" hint="Iris needs your mic to hear you. Camera is optional (hand gestures).">
-      <div className="setup-perms">
-        <PermRow icon={<Mic size={16} />} label="Microphone" required state={mic} onRequest={requestMic} />
-        <PermRow icon={<Camera size={16} />} label="Camera (gestures)" state={cam} onRequest={requestCam} />
-      </div>
-      <label className="setup-field">
-        <span>Microphone</span>
-        {mic === "granted" ? (
-          <ThemedSelect
-            ariaLabel="Microphone"
-            value={micDeviceId}
-            options={micOptions}
-            onChange={onChangeMicDevice}
-          />
-        ) : (
-          <p className="setup-note">Grant Microphone permission above to choose a specific device.</p>
-        )}
-        <small className="setup-note">
-          Governs both voice conversation and local “Hey Iris” wake-word listening — pick a specific device (e.g. a
-          USB mic) instead of the system default. Applies immediately to whichever is currently listening. If the
-          chosen device fails or is unplugged, Iris automatically falls back to System Default rather than going
-          silent.
-        </small>
-      </label>
-      <label className="setup-field">
-        <span>Gesture camera</span>
-        {cam === "granted" ? (
-          <ThemedSelect
-            ariaLabel="Gesture camera"
-            value={cameraDeviceId}
-            options={cameraOptions}
-            onChange={onChangeCameraDevice}
-          />
-        ) : (
-          <p className="setup-note">Grant Camera permission above to choose a specific device.</p>
-        )}
-        <small className="setup-note">
-          Which camera gesture control reads from — pick a specific device (e.g. OBS Virtual Camera) instead of the
-          system default. Applies immediately, including while gesture control is running.
-        </small>
-      </label>
-    </Section>
+    <PermissionsStep
+      cameraDeviceId={cameraDeviceId}
+      onChangeCameraDevice={onChangeCameraDevice}
+      micDeviceId={micDeviceId}
+      onChangeMicDevice={onChangeMicDevice}
+    />
   );
 
   const advancedSection = (
@@ -904,7 +746,7 @@ export default function SetupPanel({
           </li>
           <li>Voice · {draft.GEMINI_LIVE_VOICE}</li>
           <li>Name · {draft.IRIS_USER_NAME || "(not set)"}</li>
-          <li>Mic · {mic === "granted" ? "granted" : "ask on start"}</li>
+          <li>Mic · {micGranted ? "granted" : "ask on start"}</li>
         </ul>
       </div>
     );
@@ -955,131 +797,6 @@ export default function SetupPanel({
         </footer>
       </div>
     </div>
-  );
-}
-
-type Option = { value: string; label: string };
-
-// Fully themed dropdown (native <select> popups can't be styled to match on macOS).
-// The menu is position:fixed off the trigger rect so the panel's scroll/overflow
-// never clips it.
-function ThemedSelect({
-  value,
-  options,
-  onChange,
-  ariaLabel,
-  disabled,
-}: {
-  value: string;
-  options: Option[];
-  onChange: (value: string) => void;
-  ariaLabel?: string;
-  disabled?: boolean;
-}) {
-  const [open, setOpen] = useState(false);
-  const [pos, setPos] = useState<{ left: number; width: number; top?: number; bottom?: number } | null>(null);
-  const btnRef = useRef<HTMLButtonElement | null>(null);
-  const current = options.find((option) => option.value === value);
-
-  useEffect(() => {
-    if (!open) return;
-    const close = () => setOpen(false);
-    const onDoc = (event: MouseEvent) => {
-      const target = event.target as HTMLElement;
-      if (btnRef.current?.contains(target) || target.closest(".ts-menu")) return;
-      setOpen(false);
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    // Close when the page/panel scrolls, but NOT when scrolling inside the menu.
-    const onScroll = (event: Event) => {
-      const target = event.target as HTMLElement | null;
-      if (target && typeof target.closest === "function" && target.closest(".ts-menu")) return;
-      setOpen(false);
-    };
-    document.addEventListener("mousedown", onDoc);
-    document.addEventListener("keydown", onKey);
-    window.addEventListener("scroll", onScroll, true);
-    window.addEventListener("resize", close);
-    return () => {
-      document.removeEventListener("mousedown", onDoc);
-      document.removeEventListener("keydown", onKey);
-      window.removeEventListener("scroll", onScroll, true);
-      window.removeEventListener("resize", close);
-    };
-  }, [open]);
-
-  function toggle() {
-    if (disabled) return;
-    if (open) {
-      setOpen(false);
-      return;
-    }
-    const rect = btnRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const menuMax = 260;
-    const dropUp = rect.bottom + menuMax > window.innerHeight && rect.top > window.innerHeight - rect.bottom;
-    setPos({
-      left: rect.left,
-      width: rect.width,
-      ...(dropUp ? { bottom: window.innerHeight - rect.top + 6 } : { top: rect.bottom + 6 }),
-    });
-    setOpen(true);
-  }
-
-  return (
-    <div className={`ts ${disabled ? "disabled" : ""}`}>
-      <button
-        ref={btnRef}
-        type="button"
-        className={`ts-trigger ${open ? "open" : ""}`}
-        onClick={toggle}
-        disabled={disabled}
-        aria-label={ariaLabel}
-        aria-expanded={open}
-      >
-        <span className="ts-value">{current?.label ?? value}</span>
-        <ChevronDown size={14} className="ts-chev" />
-      </button>
-      {open && pos ? (
-        <div
-          className="ts-menu"
-          style={{
-            position: "fixed",
-            left: pos.left,
-            width: pos.width,
-            top: pos.top,
-            bottom: pos.bottom,
-          }}
-        >
-          {options.map((option) => (
-            <button
-              key={option.value}
-              type="button"
-              className={`ts-option ${option.value === value ? "sel" : ""}`}
-              onClick={() => {
-                onChange(option.value);
-                setOpen(false);
-              }}
-            >
-              <span>{option.label}</span>
-              {option.value === value ? <Check size={13} /> : null}
-            </button>
-          ))}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function Section({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
-  return (
-    <section className="setup-section">
-      <h3>{title}</h3>
-      {hint ? <p className="setup-hint">{hint}</p> : null}
-      {children}
-    </section>
   );
 }
 
@@ -1136,40 +853,6 @@ function BundledRow({
         {ok ? <Check size={13} /> : <X size={13} />}
         {ok ? "Bundled" : "Damaged"}
       </span>
-    </div>
-  );
-}
-
-function PermRow({
-  icon,
-  label,
-  required,
-  state,
-  onRequest,
-}: {
-  icon: ReactNode;
-  label: string;
-  required?: boolean;
-  state: PermState;
-  onRequest: () => void;
-}) {
-  return (
-    <div className={`setup-perm ${state}`}>
-      <span className="perm-icon">{icon}</span>
-      <span className="perm-label">
-        {label}
-        {required ? <em>required</em> : <em>optional</em>}
-      </span>
-      {state === "granted" ? (
-        <span className="setup-result ok">
-          <Check size={13} />
-          Granted
-        </span>
-      ) : (
-        <button className="setup-btn ghost" onClick={onRequest}>
-          {state === "denied" ? "Retry" : "Allow"}
-        </button>
-      )}
     </div>
   );
 }

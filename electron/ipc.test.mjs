@@ -3,13 +3,19 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 vi.mock("electron", () => {
   const handleCalls = new Map();
   const onCalls = new Map();
+  const mediaAccessStatus = { microphone: "granted", camera: "not-determined" };
   return {
     default: {
       ipcMain: {
         handle: vi.fn((channel, fn) => handleCalls.set(channel, fn)),
         on: vi.fn((channel, fn) => onCalls.set(channel, fn)),
       },
-      __test: { handleCalls, onCalls },
+      systemPreferences: {
+        getMediaAccessStatus: vi.fn((name) => mediaAccessStatus[name]),
+        askForMediaAccess: vi.fn(() => Promise.resolve(true)),
+      },
+      shell: { openExternal: vi.fn(() => Promise.resolve()) },
+      __test: { handleCalls, onCalls, mediaAccessStatus },
     },
   };
 });
@@ -53,9 +59,14 @@ const EXPECTED_HANDLE = [
   "config:test-claude",
   "pipeline:status",
   "config:preview-voice",
+  "permissions:query",
+  "permissions:request",
+  "permissions:open-settings",
+  "system-audio-self-test:arm",
 ].sort();
 
 const EXPECTED_ON = [
+  "system-audio-self-test:disarm",
   "listen-only:system-audio-unavailable",
   "listen-only:toggle-request",
   "hud:interactive",
@@ -170,6 +181,75 @@ describe("ipc: handlers marshal and delegate", () => {
     expect(win.minimize).toHaveBeenCalled();
   });
 
+});
+
+// setup-panel-reports-real-permissions 1.5/2.11. These channels hold no logic
+// of their own — they make the Electron call and marshal through
+// os-permissions.mjs, which is where the mapping is asserted.
+describe("ipc: OS permission reporting", () => {
+  it("permissions:query answers with the OS's own state, mapped, plus every settings location", async () => {
+    registerIpc(makeDeps());
+    const result = await electron.__test.handleCalls.get("permissions:query")();
+    expect(electron.systemPreferences.getMediaAccessStatus).toHaveBeenCalledWith("microphone");
+    expect(result.states).toEqual({ microphone: "granted", camera: "not-determined" });
+    expect(result.locations.microphone.writtenPath).toContain("Microphone");
+    // System audio has no readable state but does have a location — the
+    // self-test's failing verdicts route there.
+    expect(result.states["system-audio"]).toBeUndefined();
+    expect(result.locations["system-audio"]).not.toBeNull();
+  });
+
+  // The renderer's user agent reports a frozen macOS major, so the version the
+  // system-audio floor is checked against has to come from main.
+  it("permissions:query carries the OS version main reads, not one the renderer guesses", async () => {
+    registerIpc(makeDeps());
+    const result = await electron.__test.handleCalls.get("permissions:query")();
+    expect("osVersion" in result).toBe(true);
+  });
+
+  it("permissions:request prompts through askForMediaAccess and re-reads the OS state", async () => {
+    registerIpc(makeDeps());
+    electron.__test.mediaAccessStatus.camera = "granted";
+    const result = await electron.__test.handleCalls.get("permissions:request")(null, "camera");
+    expect(electron.systemPreferences.askForMediaAccess).toHaveBeenCalledWith("camera");
+    expect(result).toEqual({ state: "granted", prompted: true });
+    electron.__test.mediaAccessStatus.camera = "not-determined";
+  });
+
+  it("permissions:request raises no prompt for a permission the platform cannot be asked about", async () => {
+    registerIpc(makeDeps());
+    electron.systemPreferences.askForMediaAccess.mockClear();
+    const result = await electron.__test.handleCalls.get("permissions:request")(null, "system-audio");
+    expect(electron.systemPreferences.askForMediaAccess).not.toHaveBeenCalled();
+    expect(result.prompted).toBe(false);
+  });
+
+  it("permissions:open-settings opens the pane and carries the written path back", async () => {
+    registerIpc(makeDeps());
+    const result = await electron.__test.handleCalls.get("permissions:open-settings")(null, "system-audio");
+    expect(electron.shell.openExternal).toHaveBeenCalledWith(expect.stringContaining("Privacy_ScreenCapture"));
+    expect(result.opened).toBe(true);
+    expect(result.writtenPath).toContain("System Audio");
+  });
+
+  it("permissions:open-settings opens nothing for a permission it does not know", async () => {
+    registerIpc(makeDeps());
+    electron.shell.openExternal.mockClear();
+    const result = await electron.__test.handleCalls.get("permissions:open-settings")(null, "bluetooth");
+    expect(electron.shell.openExternal).not.toHaveBeenCalled();
+    expect(result).toEqual({ opened: false });
+  });
+
+  it("arms the self-test for the frame that asked, and disarms on request", () => {
+    const armSystemAudioSelfTest = vi.fn(() => ({ armed: true }));
+    const disarmSystemAudioSelfTest = vi.fn();
+    registerIpc(makeDeps({ armSystemAudioSelfTest, disarmSystemAudioSelfTest }));
+    const sender = { id: 3 };
+    expect(electron.__test.handleCalls.get("system-audio-self-test:arm")({ sender })).toEqual({ armed: true });
+    expect(armSystemAudioSelfTest).toHaveBeenCalledWith(sender);
+    electron.__test.onCalls.get("system-audio-self-test:disarm")();
+    expect(disarmSystemAudioSelfTest).toHaveBeenCalled();
+  });
 });
 
 describe("ipc: capability composition (design.md D10)", () => {

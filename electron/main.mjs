@@ -166,15 +166,14 @@ app.whenReady().then(() => {
   // registered after a window is created never fires for that window,
   // leaving the app's only window with no navigation containment and no
   // error, no failing test, no log line (split-main-process-modules D7).
-  setRendererSecurity(
-    installRendererSecurity({
-      repoRoot,
-      // System-audio capture is answered from main's own mode state, never
-      // from anything the renderer claims (renderer-content-security).
-      isListenOnlyEngaged,
-      isSystemAudioEnabled: systemAudioEnabled,
-    }),
-  );
+  const rendererSecurity = installRendererSecurity({
+    repoRoot,
+    // System-audio capture is answered from main's own mode state, never
+    // from anything the renderer claims (renderer-content-security).
+    isListenOnlyEngaged,
+    isSystemAudioEnabled: systemAudioEnabled,
+  });
+  setRendererSecurity(rendererSecurity);
 
   // The renderer↔main IPC channel surface (design.md D3): every
   // ipcMain.handle/on registration lives in ipc.mjs, and only there — this
@@ -217,6 +216,10 @@ app.whenReady().then(() => {
     checkClaudeHealth,
     getPipelineAvailable,
     setUiContextSnapshot,
+    // The self-test's arming lives in renderer-security.mjs, which owns the
+    // display-media decision that spends it — the renderer only asks.
+    armSystemAudioSelfTest: (contents) => rendererSecurity.armSystemAudioSelfTest(contents),
+    disarmSystemAudioSelfTest: () => rendererSecurity.disarmSystemAudioSelfTest(),
     capabilities,
   });
 

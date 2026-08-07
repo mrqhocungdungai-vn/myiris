@@ -7,18 +7,23 @@
 import electron from "electron";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
+import { createSystemAudioSelfTest } from "./system-audio-self-test.mjs";
 
-const { app, session, shell } = electron;
+const { app, session, shell, webContents } = electron;
 
 /**
  * @param {{
  *   repoRoot: string,
  *   isListenOnlyEngaged?: () => boolean,
  *   isSystemAudioEnabled?: () => boolean,
+ *   selfTest?: ReturnType<typeof createSystemAudioSelfTest>,
  * }} deps
  */
 export function installRendererSecurity({
   repoRoot,
+  // The self-test arming (setup-panel-reports-real-permissions D5). Injectable
+  // so a test can drive its clock; the default is the real one.
+  selfTest = createSystemAudioSelfTest(),
   // System-audio capture is scoped to the mode that justifies it
   // (listen-mode-hears-system-audio, renderer-content-security spec: "The mode
   // state is read from its owner"). Read through main's own getter, never from
@@ -89,7 +94,8 @@ export function installRendererSecurity({
   });
 
   // System-audio capture for listen-only mode (listen-mode-hears-system-audio
-  // D1). Audio only, and deliberately nothing else: no `desktopCapturer`
+  // D1) and, since setup-panel-reports-real-permissions, for the Permissions
+  // step's self-test. Audio only, and deliberately nothing else: no `desktopCapturer`
   // enumeration, no screen or window source, no system picker. Chromium's
   // "loopback" audio source is what a `{ video: false, audio: true }`
   // getDisplayMedia request resolves to, and it needs no permission of ours —
@@ -107,17 +113,77 @@ export function installRendererSecurity({
       // the same isAppOwnDocument the navigation containment above uses.
       const frameUrl = request?.frame?.url || "";
       if (!isAppOwnDocument(frameUrl)) return callback({});
-      // The escape hatch must leave no capture surface at all, and the mode is
-      // the only justification this capture has: outside it there is nothing
-      // to grant.
-      if (!isSystemAudioEnabled() || !isListenOnlyEngaged()) return callback({});
+      // The escape hatch is a precondition of EVERY route, self-test included
+      // (renderer-content-security: "The escape hatch outranks the self-test").
+      // A user who turned system audio off must never trigger a system
+      // recording indicator by any path.
+      if (!isSystemAudioEnabled()) return callback({});
+      if (isListenOnlyEngaged()) return callback({ audio: "loopback" });
+      // The second door: a user-initiated self-test the main process is
+      // running (setup-panel's system-audio entry). Admitted on the terms that
+      // made the original rule worth having, not as an exception to them.
+      //
+      // Video is refused OUTRIGHT rather than answered audio-only, so "never
+      // video" is an observable refusal instead of a coincidence of what was
+      // asked for.
+      if (request?.videoRequested) return callback({});
+      // "User-initiated" is established here, from the request the browser
+      // engine describes, rather than asserted by the renderer over IPC — the
+      // process making the claim must not be the one verifying it.
+      if (!request?.userGesture) return callback({});
+      // Only the frame that armed the test, not any frame that happens to ask
+      // while an arming is live. One window today makes this nil in practice;
+      // the value of a narrow boundary is that it stays narrow when someone
+      // later adds a second.
+      const askingId = webContentsIdForFrame(request.frame);
+      if (askingId === null) return callback({});
+      if (!selfTest.consume({ frameId: askingId })) return callback({});
       callback({ audio: "loopback" });
     },
     { useSystemPicker: false },
   );
 
+  /** The WebContents id behind a display-media request's frame, or null. */
+  function webContentsIdForFrame(frame) {
+    if (!frame) return null;
+    try {
+      const contents = webContents?.fromFrame?.(frame);
+      return contents?.id ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Arms one system-audio grant for `contents`, and drops it again the moment
+   * that window goes away — reload, close, or a render process that died.
+   *
+   * A renderer cannot keep an arming alive: it expires on main's own deadline
+   * whether or not anything asks, and re-arming does not push that deadline
+   * out (see system-audio-self-test.mjs).
+   */
+  function armSystemAudioSelfTest(contents) {
+    if (!contents) return { armed: false };
+    const result = selfTest.arm({ frameId: contents.id });
+    const drop = () => {
+      if (selfTest.armedFrameId() === contents.id) selfTest.disarm();
+    };
+    // `once` where the event can only happen to this arming, `on` where the
+    // window survives it — a reload leaves the same WebContents alive and able
+    // to arm again.
+    contents.once?.("destroyed", drop);
+    contents.on?.("did-start-navigation", drop);
+    contents.on?.("render-process-gone", drop);
+    return result;
+  }
+
   return {
     isAppOwnDocument,
+    // The self-test's arming surface, for ipc.mjs to marshal to. Main arms it,
+    // main disarms it, and main spends it — the renderer only asks.
+    armSystemAudioSelfTest,
+    disarmSystemAudioSelfTest: () => selfTest.disarm(),
+    isSystemAudioSelfTestArmed: () => selfTest.isArmed(),
     // Exposed because createWindow() (still in main.mjs, moving to window.mjs
     // in task 4.3) also needs APP_DEV_URL to decide what to load.
     appDevUrl: APP_DEV_URL,

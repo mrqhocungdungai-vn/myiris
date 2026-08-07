@@ -6,6 +6,31 @@ type SidecarMode = "none" | "camera" | "screen";
 // mode itself plus the system-audio configuration main resolved for it. One
 // payload for both the boot-time query and every later push, so a renderer
 // seeded on mount and one updated by a push are configured identically.
+// The permissions the Permissions step reports or routes for. System audio has
+// a settings location but no readable state — the platform interface reports
+// microphone, camera and screen only, and the screen state is not the one that
+// governs system-audio capture, so it is tested rather than read.
+type OsPermission = "microphone" | "camera" | "system-audio";
+
+// Four states, because the action that resolves each one differs. `restricted`
+// is refused by device policy: the user cannot grant it and an in-app prompt
+// returns immediately without asking.
+type OsPermissionState = "not-determined" | "granted" | "denied" | "restricted";
+
+type OsPermissionSettingsLocation = {
+  permission: OsPermission;
+  url: string;
+  writtenPath: string;
+};
+
+type OsPermissionsSnapshot = {
+  states: Partial<Record<OsPermission, OsPermissionState>>;
+  locations: Record<OsPermission, OsPermissionSettingsLocation | null>;
+  // The OS product version, read in main — system-audio capture has a floor on
+  // it, and the renderer's user agent reports a frozen major.
+  osVersion: string | null;
+};
+
 type ListenOnlyState = {
   engaged: boolean;
   systemAudio: boolean;
@@ -371,6 +396,20 @@ type IrisApi = {
   // A capture that could not be acquired at all is REPORTED to main, which
   // owns the mode and decides to disengage. Never a report of mode state.
   reportSystemAudioUnavailable: (reason: string) => void;
+  // The OS's own permission answer, read in main. Never
+  // navigator.permissions.query: the app grants its own document capture
+  // unconditionally, so the renderer's store reports the app's decision back
+  // as the user's (setup-panel: "The Permissions step reports the operating
+  // system's answer").
+  queryOsPermissions: () => Promise<OsPermissionsSnapshot>;
+  requestOsPermission: (
+    permission: OsPermission,
+  ) => Promise<{ state: OsPermissionState; prompted: boolean }>;
+  openPermissionSettings: (
+    permission: OsPermission,
+  ) => Promise<{ opened: boolean; writtenPath?: string }>;
+  armSystemAudioSelfTest: () => Promise<{ armed: boolean; expiresAt?: number }>;
+  disarmSystemAudioSelfTest: () => void;
   getConfig: () => Promise<IrisConfig>;
   saveConfig: (updates: Partial<Record<string, string>>) => Promise<IrisConfig>;
   savePoToken: (token: string, key?: ClaudeCredentialKey) => Promise<PoTokenResult>;

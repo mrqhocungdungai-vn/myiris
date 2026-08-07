@@ -87,11 +87,13 @@ describe("watchCaptureLiveness", () => {
   /** Drives the watch by hand — no timers, so the tick count is exact. */
   function run(analyser: AnalyserNode, ticks: number) {
     const onSilent = vi.fn();
+    const onLive = vi.fn();
     let tick: (() => void) | null = null;
     let cleared = false;
     watchCaptureLiveness({
       analyser,
       onSilent,
+      onLive,
       ticks,
       setInterval: ((fn: () => void) => {
         tick = fn;
@@ -102,18 +104,46 @@ describe("watchCaptureLiveness", () => {
       }) as typeof globalThis.clearInterval,
     });
     for (let i = 0; i < ticks; i++) tick?.();
-    return { onSilent, cleared: () => cleared };
+    return { onSilent, onLive, cleared: () => cleared };
   }
 
   it("reports a failure only after the whole window reads bit-exact zero", () => {
-    const { onSilent } = run(fakeAnalyser(0), 3);
+    const { onSilent, onLive } = run(fakeAnalyser(0), 3);
     expect(onSilent).toHaveBeenCalledTimes(1);
+    expect(onLive).not.toHaveBeenCalled();
   });
 
   it("stops itself on the first real signal, so a quiet start is not called broken", () => {
     const { onSilent, cleared } = run(fakeAnalyser(0.2), 3);
     expect(onSilent).not.toHaveBeenCalled();
     expect(cleared()).toBe(true);
+  });
+
+  // Without this the watch cancels itself on real signal and emits nothing, so
+  // "Iris heard the machine" is not observable at all — which is the whole
+  // question the Permissions step's self-test asks (D6).
+  it("emits once on the first real signal, so 'heard' is observable", () => {
+    const { onLive } = run(fakeAnalyser(0.2), 3);
+    expect(onLive).toHaveBeenCalledTimes(1);
+  });
+
+  // The mode passes no onLive and must behave exactly as before.
+  it("is optional — the mode's own live path passes none", () => {
+    const analyser = fakeAnalyser(0.2);
+    let tick: (() => void) | null = null;
+    expect(() => {
+      watchCaptureLiveness({
+        analyser,
+        onSilent: vi.fn(),
+        ticks: 3,
+        setInterval: ((fn: () => void) => {
+          tick = fn;
+          return 1 as unknown as ReturnType<typeof setInterval>;
+        }) as typeof globalThis.setInterval,
+        clearInterval: (() => {}) as typeof globalThis.clearInterval,
+      });
+      tick?.();
+    }).not.toThrow();
   });
 });
 

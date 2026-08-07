@@ -1,4 +1,5 @@
 import { Headphones, Mic, ShieldAlert } from "lucide-react";
+import { SYSTEM_AUDIO_CAPTURE_DISCLOSURE } from "../lib/system-audio";
 
 /**
  * The two things engaging listen-only mode has to say out loud
@@ -44,9 +45,9 @@ export default function ListenOnlyNotice({
       <div className="listen-notice-body">
         {kind === "consent" ? (
           <>
-            <strong>Iris is silent and listening.</strong> While this mode is on she hears the room AND the audio
-            your machine plays, and writes what she hears to <code>inbox/meetings/</code> in your notes vault — one
-            file per session. That can include other people in the room or on the call.
+            <strong>Iris is silent and listening.</strong> {SYSTEM_AUDIO_CAPTURE_DISCLOSURE} She writes what she
+            hears to <code>inbox/meetings/</code> in your notes vault — one file per session. That can include other
+            people in the room or on the call.
           </>
         ) : kind === "refused" ? (
           <>

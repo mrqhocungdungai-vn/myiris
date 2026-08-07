@@ -15,8 +15,15 @@
 // registered by iteration, never by name — so a capability-specific channel
 // is never hardcoded here.
 import electron from "electron";
+import {
+  READABLE_OS_PERMISSIONS,
+  isPromptablePermission,
+  settingsLocation,
+  settingsLocations,
+  toPermissionState,
+} from "./os-permissions.mjs";
 
-const { ipcMain } = electron;
+const { ipcMain, shell, systemPreferences } = electron;
 
 /**
  * @param {{
@@ -56,6 +63,8 @@ const { ipcMain } = electron;
  *   checkClaudeHealth: () => any,
  *   getPipelineAvailable: () => boolean,
  *   setUiContextSnapshot: (context: any) => void,
+ *   armSystemAudioSelfTest?: (contents: any) => any,
+ *   disarmSystemAudioSelfTest?: () => void,
  *   capabilities?: Array<{ ipcHandlers?: Array<{ channel: string, kind: "handle"|"on", fn: Function }> }>,
  * }} deps
  */
@@ -97,6 +106,8 @@ export function registerIpc(deps) {
     checkClaudeHealth,
     getPipelineAvailable,
     setUiContextSnapshot,
+    armSystemAudioSelfTest,
+    disarmSystemAudioSelfTest,
     capabilities = [],
   } = deps;
 
@@ -200,6 +211,60 @@ export function registerIpc(deps) {
     }
   });
   ipcMain.on("live:audio", (_event, chunk) => sendAudioChunk(chunk));
+
+  // What the OPERATING SYSTEM has granted (setup-panel: "The Permissions step
+  // reports the operating system's answer"). The renderer's own
+  // `navigator.permissions.query` answers with the app's unconditional internal
+  // grant, not the user's decision — measured: it reports `granted` for a camera
+  // the OS has never been asked about. These three channels are the thin
+  // Electron calls; every decision they carry lives in os-permissions.mjs.
+  ipcMain.handle("permissions:query", () => ({
+    states: Object.fromEntries(
+      READABLE_OS_PERMISSIONS.map((permission) => [
+        permission,
+        toPermissionState(systemPreferences?.getMediaAccessStatus?.(permission)),
+      ]),
+    ),
+    locations: settingsLocations(),
+    // The OS product version, which system-audio capture has a floor on (D8).
+    // Read here rather than in the renderer because the renderer's user agent
+    // reports a frozen major — it would answer the version question wrongly
+    // and confidently, which is the defect this whole change exists to fix.
+    osVersion: typeof process.getSystemVersion === "function" ? process.getSystemVersion() : null,
+  }));
+  // `askForMediaAccess` rather than `getUserMedia` (D3): it asks the OS and
+  // resolves to the answer, where getUserMedia conflates asking with opening a
+  // stream and says nothing about the OS's state. Answering with the re-read
+  // status rather than the boolean keeps one source of truth — the row still
+  // reports what the OS reports, never what the request returned.
+  ipcMain.handle("permissions:request", async (_event, permission) => {
+    const name = String(permission || "");
+    if (!isPromptablePermission(name)) return { state: "not-determined", prompted: false };
+    // Narrowed by isPromptablePermission above; the installed Electron types
+    // want a literal union that a runtime check cannot produce.
+    const promptable = /** @type {any} */ (name);
+    await systemPreferences?.askForMediaAccess?.(promptable);
+    return {
+      state: toPermissionState(systemPreferences?.getMediaAccessStatus?.(promptable)),
+      prompted: true,
+    };
+  });
+  // Opening settings is not evidence of anything: the row keeps reporting what
+  // the OS reports, and the written path travels with the link because an
+  // anchor that has rotted still opens System Settings successfully.
+  ipcMain.handle("permissions:open-settings", async (_event, permission) => {
+    const location = settingsLocation(String(permission || ""));
+    if (!location) return { opened: false };
+    await shell?.openExternal?.(location.url);
+    return { opened: true, writtenPath: location.writtenPath };
+  });
+  // The system-audio self-test's arming (setup-panel-reports-real-permissions
+  // D5). Main arms it for the frame that asked, main spends it, main expires
+  // it — the renderer only asks, and cannot keep it alive.
+  ipcMain.handle("system-audio-self-test:arm", (event) =>
+    armSystemAudioSelfTest ? armSystemAudioSelfTest(event.sender) : { armed: false },
+  );
+  ipcMain.on("system-audio-self-test:disarm", () => disarmSystemAudioSelfTest?.());
 
   // Capability composition (design.md D10): each registered capability's own
   // channels, registered by iteration — never by name, so a capability's

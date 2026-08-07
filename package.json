@@ -114,6 +114,12 @@
     "mac": {
       "category": "public.app-category.productivity",
       "icon": "build/icon.png",
+      "minimumSystemVersion": "14.2",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Iris listens to your microphone so you can talk to her, and for local \"Hey Iris\" wake-word detection.",
+        "NSCameraUsageDescription": "Iris reads your camera for hand-gesture control and the eye HUD. Nothing is recorded or sent anywhere.",
+        "NSAudioCaptureUsageDescription": "In listen-only mode Iris captures the audio your machine plays, so she can hear a meeting as well as the room."
+      },
       "target": [
         {
           "target": "dir"

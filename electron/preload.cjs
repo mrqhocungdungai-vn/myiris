@@ -85,6 +85,17 @@ contextBridge.exposeInMainWorld("iris", {
     ipcRenderer.on("listen-only:state", handler);
     return () => ipcRenderer.removeListener("listen-only:state", handler);
   },
+  // setup-panel-reports-real-permissions: the Permissions step reads the
+  // OPERATING SYSTEM's answer through main, never navigator.permissions.query
+  // — the app grants its own document capture unconditionally, so a
+  // renderer-side query reports the app's decision as the user's.
+  queryOsPermissions: () => ipcRenderer.invoke("permissions:query"),
+  requestOsPermission: (permission) => ipcRenderer.invoke("permissions:request", permission),
+  openPermissionSettings: (permission) => ipcRenderer.invoke("permissions:open-settings", permission),
+  // The system-audio self-test asks main to arm one grant; main owns the
+  // bound, spends the arming, and expires it whether or not this is called.
+  armSystemAudioSelfTest: () => ipcRenderer.invoke("system-audio-self-test:arm"),
+  disarmSystemAudioSelfTest: () => ipcRenderer.send("system-audio-self-test:disarm"),
   getConfig: () => ipcRenderer.invoke("config:get"),
   saveConfig: (updates) => ipcRenderer.invoke("config:save", updates),
   savePoToken: (token, key) => ipcRenderer.invoke("config:save-po-token", { token, key }),

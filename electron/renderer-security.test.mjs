@@ -25,6 +25,12 @@ vi.mock("electron", () => {
       shell: {
         openExternal: vi.fn(() => Promise.resolve()),
       },
+      // The display-media handler resolves the ASKING frame to a WebContents id
+      // so a grant can be restricted to the frame that armed the test. The fake
+      // carries the id on the frame itself.
+      webContents: {
+        fromFrame: vi.fn((frame) => (frame?.contentsId == null ? null : { id: frame.contentsId })),
+      },
       __test: { appListeners, contentsListeners, fakeContents },
     },
   };
@@ -220,5 +226,134 @@ describe("renderer-security: system-audio capture scoping", () => {
     const callback = vi.fn();
     handler({}, callback);
     expect(callback).toHaveBeenCalledWith({});
+  });
+});
+
+// setup-panel-reports-real-permissions 2.12. The self-test is a SECOND door
+// into the same capture, admitted on the terms that made the original rule
+// worth having — so each of those terms is asserted separately here.
+describe("renderer-security: the system-audio self-test arming", () => {
+  beforeEach(() => {
+    delete process.env.VITE_DEV_SERVER_URL;
+  });
+
+  const OWN_FRAME = { url: "http://127.0.0.1:5173/", contentsId: 1 };
+
+  function install({ engaged = false, systemAudio = true } = {}) {
+    const security = installRendererSecurity({
+      repoRoot: "/fake/repo",
+      isListenOnlyEngaged: () => engaged,
+      isSystemAudioEnabled: () => systemAudio,
+    });
+    const handler = electron.session.defaultSession.setDisplayMediaRequestHandler.mock.calls.at(-1)[0];
+    return { security, handler };
+  }
+
+  function fakeWindow(id = 1) {
+    return { id, on: vi.fn(), once: vi.fn() };
+  }
+
+  function selfTestRequest(overrides = {}) {
+    return { frame: OWN_FRAME, videoRequested: false, userGesture: true, ...overrides };
+  }
+
+  it("denies an out-of-mode request while nothing is armed", () => {
+    const { handler } = install();
+    const callback = vi.fn();
+    handler(selfTestRequest(), callback);
+    expect(callback).toHaveBeenCalledWith({});
+  });
+
+  it("grants once for an armed test and denies the second request", () => {
+    const { security, handler } = install();
+    security.armSystemAudioSelfTest(fakeWindow(1));
+
+    const first = vi.fn();
+    handler(selfTestRequest(), first);
+    expect(first).toHaveBeenCalledWith({ audio: "loopback" });
+
+    const second = vi.fn();
+    handler(selfTestRequest(), second);
+    expect(second).toHaveBeenCalledWith({});
+  });
+
+  // The configuration gate is a precondition of EVERY route, not an
+  // alternative to the mode: disabling system audio leaves no reachable
+  // capture surface whatsoever.
+  it("denies an armed test under the IRIS_SYSTEM_AUDIO escape hatch", () => {
+    const { security, handler } = install({ systemAudio: false });
+    security.armSystemAudioSelfTest(fakeWindow(1));
+    const callback = vi.fn();
+    handler(selfTestRequest(), callback);
+    expect(callback).toHaveBeenCalledWith({});
+  });
+
+  it("refuses a self-test request that asks for video rather than answering audio-only", () => {
+    const { security, handler } = install();
+    security.armSystemAudioSelfTest(fakeWindow(1));
+    const callback = vi.fn();
+    handler(selfTestRequest({ videoRequested: true }), callback);
+    expect(callback).toHaveBeenCalledWith({});
+    // And the arming survives, so a video request cannot burn the user's test.
+    expect(security.isSystemAudioSelfTestArmed()).toBe(true);
+  });
+
+  it("requires a user gesture, so 'user-initiated' is established in main", () => {
+    const { security, handler } = install();
+    security.armSystemAudioSelfTest(fakeWindow(1));
+    const callback = vi.fn();
+    handler(selfTestRequest({ userGesture: false }), callback);
+    expect(callback).toHaveBeenCalledWith({});
+  });
+
+  it("denies a request from a frame other than the one that armed the test", () => {
+    const { security, handler } = install();
+    security.armSystemAudioSelfTest(fakeWindow(1));
+    const callback = vi.fn();
+    handler(selfTestRequest({ frame: { url: "http://127.0.0.1:5173/", contentsId: 2 } }), callback);
+    expect(callback).toHaveBeenCalledWith({});
+    expect(security.isSystemAudioSelfTestArmed()).toBe(true);
+  });
+
+  it("drops the arming when the window that armed it goes away", () => {
+    const { security } = install();
+    const win = fakeWindow(1);
+    security.armSystemAudioSelfTest(win);
+    expect(security.isSystemAudioSelfTestArmed()).toBe(true);
+
+    const destroyed = win.once.mock.calls.find(([event]) => event === "destroyed")[1];
+    destroyed();
+    expect(security.isSystemAudioSelfTestArmed()).toBe(false);
+  });
+
+  it("drops the arming on a reload and on a lost render process", () => {
+    for (const event of ["did-start-navigation", "render-process-gone"]) {
+      const { security } = install();
+      const win = fakeWindow(1);
+      security.armSystemAudioSelfTest(win);
+      const drop = win.on.mock.calls.find(([name]) => name === event)[1];
+      drop();
+      expect(security.isSystemAudioSelfTestArmed()).toBe(false);
+    }
+  });
+
+  it("disarms on request, so a cancelled test leaves nothing armed", () => {
+    const { security, handler } = install();
+    security.armSystemAudioSelfTest(fakeWindow(1));
+    security.disarmSystemAudioSelfTest();
+    const callback = vi.fn();
+    handler(selfTestRequest(), callback);
+    expect(callback).toHaveBeenCalledWith({});
+  });
+
+  // The mode's own capture is not a self-test and must not spend the arming —
+  // it is granted on its own condition, before the self-test path is reached.
+  it("leaves the arming untouched while listen-only mode is engaged", () => {
+    const { security, handler } = install({ engaged: true });
+    security.armSystemAudioSelfTest(fakeWindow(1));
+    const callback = vi.fn();
+    handler({ frame: OWN_FRAME }, callback);
+    expect(callback).toHaveBeenCalledWith({ audio: "loopback" });
+    expect(security.isSystemAudioSelfTestArmed()).toBe(true);
   });
 });
