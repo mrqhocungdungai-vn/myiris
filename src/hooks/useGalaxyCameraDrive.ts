@@ -55,6 +55,8 @@ export type GalaxyCameraDriveParams = {
   anchor: GalaxyAnchorApi;
   /** The candidate/anchor marks (design.md D10) — null until the scene exists. */
   ringsRef: { current: AnchorRings | null };
+  /** The centre reticle, class-toggled directly rather than through React state — an engage/disengage must not cost a re-render mid-drive. */
+  reticleRef: { current: HTMLDivElement | null };
   debugEnabled: boolean;
   debugRef: { current: HTMLPreElement | null };
   /** Tuning constants, owned by the component alongside the galaxy's other ones. */
@@ -81,6 +83,7 @@ export function useGalaxyCameraDrive({
   repaintHighlight,
   anchor,
   ringsRef,
+  reticleRef,
   debugEnabled,
   debugRef,
   dwellThresholdPx,
@@ -238,20 +241,36 @@ export function useGalaxyCameraDrive({
       return { x: node.x, y: node.y ?? 0, z: node.z ?? 0 };
     }
 
-    // The candidate/anchor marks (design.md D10). The candidate is suppressed
-    // when it IS the anchor: the pair answers "what would change if I grabbed
-    // now", and two rings on one node answers nothing.
-    function applyRings() {
+    // The candidate/anchor marks (design.md D10). Two suppressions, each
+    // answering the same question — "does this mark tell the user something
+    // they can act on right now?":
+    //
+    // - the candidate is dropped when it IS the anchor, since two rings on one
+    //   node say nothing about what would change;
+    // - and dropped again while a drive is ENGAGED (tasks.md 6.5, resolved from
+    //   the manual pass), because the candidate cannot change while the drive
+    //   holds the camera, so a ring for it would mark a choice that is no
+    //   longer available. The heavier engaged ring takes its place, which is
+    //   what makes a grab visibly catch.
+    function applyRings(engaged: boolean) {
       const rings = ringsRef.current;
       if (!rings) return;
       const live = anchor.anchorRef.current;
       const anchoredId = live.kind === "node" ? live.id : null;
-      const candidateId = candidateIdRef.current === anchoredId ? null : candidateIdRef.current;
-      rings.apply(positionOf(candidateId), positionOf(anchoredId));
+      const candidateId = engaged || candidateIdRef.current === anchoredId ? null : candidateIdRef.current;
+      rings.apply(positionOf(candidateId), positionOf(anchoredId), engaged);
     }
 
     function clearRings() {
-      ringsRef.current?.apply(null, null);
+      ringsRef.current?.apply(null, null, false);
+      setReticleEngaged(false);
+    }
+
+    // Direct class write, never React state — the same reason the debug readout
+    // writes `textContent` (design.md D7/M-A1): a drive engaging must not turn
+    // this loop into a re-render.
+    function setReticleEngaged(engaged: boolean) {
+      reticleRef.current?.classList.toggle("engaged", engaged);
     }
 
     function loop() {
@@ -291,7 +310,6 @@ export function useGalaxyCameraDrive({
           );
           candidateIdRef.current = picked.kind === "node" ? picked.id : null;
         }
-        applyRings();
 
         const hand = handRef.current;
         const drive = driveFor(hand);
@@ -302,6 +320,8 @@ export function useGalaxyCameraDrive({
         // `HandPoint` is already in.
         const lowered = isHandLowered(hand.point, window.innerHeight);
         const activeCameraDrive = !lowered && (drive === "orbit" || drive === "zoom") ? drive : null;
+        applyRings(activeCameraDrive !== null);
+        setReticleEngaged(activeCameraDrive !== null);
 
         // Which hand's point targets a node. The inspect drive uses the point of
         // the hand actually making the pose, not the primary hand's: the

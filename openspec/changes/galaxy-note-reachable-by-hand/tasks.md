@@ -53,5 +53,5 @@
 - [x] 6.2 Document the new tuning constants in the style of the existing galaxy constants
 - [x] 6.3 Seed a 200–500 note test vault
 - [ ] 6.4 Manual pass on that vault: anchor prediction, orbit around a node, zoom into a dot, rail traversal, a held hand after a step, lowered-hand release, whether the anchor visibly drifts while the layout settles, that a mouse pan survives a full engage/release cycle, and that engaging a drive mid-flight does not jump — the last two cannot be unit-tested because both vitest projects are `environment: "node"`
-- [ ] 6.5 Resolve the design's open question (candidate ring during a drive) from the manual pass
+- [x] 6.5 Resolve the design's open question (candidate ring during a drive) from the manual pass
 - [x] 6.6 Run all five gates: `npm run build`, `npm test`, `npm run lint`, `npm run scan:secrets`, `npm run spec:check`

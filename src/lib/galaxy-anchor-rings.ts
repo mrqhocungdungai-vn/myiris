@@ -33,12 +33,21 @@ const CANDIDATE_COLOR = "rgba(214, 228, 255, 0.42)";
 const CANDIDATE_LINE_PX = 5;
 const ANCHOR_COLOR = "rgba(255, 255, 255, 0.92)";
 const ANCHOR_LINE_PX = 9;
+// The same ring again, drawn heavier, shown ONLY while a camera drive is
+// actually engaged (galaxy-note-reachable-by-hand tasks.md 6.5, from the manual
+// pass): closing a fist has to pass MediaPipe's three-consecutive-frame pose
+// gate before anything can happen, and with no mark for "the grab caught" that
+// unavoidable delay reads as the anchor being slow to move. A distinct engaged
+// state turns the wait into visible confirmation.
+const ENGAGED_COLOR = "rgba(255, 255, 255, 0.98)";
+const ENGAGED_LINE_PX = 14;
 
 // World-space diameters. A node's own sphere is ~4 units (three-forcegraph's
 // default `nodeRelSize`), so both rings stand clear of the dot they mark, and
 // the anchor's is the wider of the two.
 const CANDIDATE_WORLD_SIZE = 16;
 const ANCHOR_WORLD_SIZE = 24;
+const ENGAGED_WORLD_SIZE = 34;
 
 export type Vec3Like = { x: number; y: number; z: number };
 
@@ -82,9 +91,17 @@ function createRingSprite(color: string, lineWidthPx: number, worldSize: number)
 
 export type AnchorRings = {
   group: THREE.Group;
-  /** Positions and shows each ring, hiding either whose position is null. Mutates in place — allocates nothing. */
-  apply(candidatePos: Vec3Like | null, anchorPos: Vec3Like | null): void;
-  /** Disposes both textures/materials and removes `group` from its parent. */
+  /**
+   * Positions and shows each ring, hiding any whose position is null. Mutates
+   * in place — allocates nothing.
+   *
+   * `engaged` says a camera drive is live, which adds the heavier outer ring.
+   * The caller also stops passing a candidate then: the candidate cannot change
+   * while a drive holds the camera, so leaving it drawn would mark a choice the
+   * user can no longer make (6.5).
+   */
+  apply(candidatePos: Vec3Like | null, anchorPos: Vec3Like | null, engaged: boolean): void;
+  /** Disposes every texture/material and removes `group` from its parent. */
   dispose(): void;
 };
 
@@ -96,10 +113,12 @@ export function createRingPair(): AnchorRings {
   const group = new THREE.Group();
   const candidate = createRingSprite(CANDIDATE_COLOR, CANDIDATE_LINE_PX, CANDIDATE_WORLD_SIZE);
   const anchor = createRingSprite(ANCHOR_COLOR, ANCHOR_LINE_PX, ANCHOR_WORLD_SIZE);
+  const engagedRing = createRingSprite(ENGAGED_COLOR, ENGAGED_LINE_PX, ENGAGED_WORLD_SIZE);
   group.add(candidate);
   group.add(anchor);
+  group.add(engagedRing);
 
-  function apply(candidatePos: Vec3Like | null, anchorPos: Vec3Like | null) {
+  function apply(candidatePos: Vec3Like | null, anchorPos: Vec3Like | null, engaged: boolean) {
     if (candidatePos) {
       candidate.position.set(candidatePos.x, candidatePos.y, candidatePos.z);
       candidate.visible = true;
@@ -109,13 +128,16 @@ export function createRingPair(): AnchorRings {
     if (anchorPos) {
       anchor.position.set(anchorPos.x, anchorPos.y, anchorPos.z);
       anchor.visible = true;
+      engagedRing.position.set(anchorPos.x, anchorPos.y, anchorPos.z);
+      engagedRing.visible = engaged;
     } else {
       anchor.visible = false;
+      engagedRing.visible = false;
     }
   }
 
   function dispose() {
-    for (const sprite of [candidate, anchor]) {
+    for (const sprite of [candidate, anchor, engagedRing]) {
       const material = sprite.material as THREE.SpriteMaterial;
       material.map?.dispose();
       material.dispose();

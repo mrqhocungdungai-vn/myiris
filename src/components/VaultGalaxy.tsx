@@ -67,7 +67,12 @@ const ZOOM_MAX_RADIUS = 2500;
 // hold of it. Wider than DWELL_THRESHOLD_PX because the user aims this one with
 // the whole camera rather than with a fingertip, and the reticle marks exactly
 // where the query point is.
-const ANCHOR_THRESHOLD_PX = 90;
+// Widened from 90 after the manual pass: at 90 a grab over a sparse region
+// found nothing and silently kept the old anchor, which reads as the grab
+// having failed rather than as "there was nothing there". The reticle and the
+// candidate ring are what keep a wider radius predictable — the user can see
+// which node it has picked before committing.
+const ANCHOR_THRESHOLD_PX = 130;
 // A rail step's flight: long enough that the user sees where in the galaxy they
 // were taken (the spec requires the travel to be visible), short enough not to
 // feel like waiting.
@@ -386,6 +391,9 @@ function GalaxyCanvas({
   const ringsRef = useRef<AnchorRings | null>(null);
   // Detaches the `change` listener the pan detector rides on (design.md D1).
   const detachControlsRef = useRef<(() => void) | null>(null);
+  // The centre reticle's element, so the drive can mark it engaged without a
+  // re-render (tasks.md 6.5).
+  const reticleRef = useRef<HTMLDivElement | null>(null);
 
   // The orbit anchor and the centroid it falls back to
   // (galaxy-note-reachable-by-hand design.md D1/D4b). `centerRef` used to carry
@@ -749,6 +757,7 @@ function GalaxyCanvas({
     repaintHighlight,
     anchor,
     ringsRef,
+    reticleRef,
     debugEnabled,
     debugRef,
     dwellThresholdPx: DWELL_THRESHOLD_PX,
@@ -842,7 +851,7 @@ function GalaxyCanvas({
           galaxy's pointing target wherever the hand is over chrome, so a
           reticle carrying HUD_CHROME_CLASS at screen centre would kill node
           dwell and inspect on the most-used part of the view. */}
-      {handControl && running && !readerOpen ? <div className="hud-galaxy-reticle" /> : null}
+      {handControl && running && !readerOpen ? <div ref={reticleRef} className="hud-galaxy-reticle" /> : null}
       <GalaxyStepRail
         className={RAIL_ISLAND_CLASS}
         entries={entries}

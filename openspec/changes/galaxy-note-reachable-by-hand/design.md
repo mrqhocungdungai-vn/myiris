@@ -303,7 +303,28 @@ islands would leave it with no camera to drive.
 
 ## Open Questions
 
-- Whether the candidate ring should be suppressed while a drive is engaged (the
+- ~~Whether the candidate ring should be suppressed while a drive is engaged (the
   candidate cannot change during a drive, so the ring is redundant then, but removing
   it mid-grab may read as the grab having failed). Answerable from the manual pass;
-  changes no spec.
+  changes no spec.~~
+
+  **Resolved from the manual pass: suppress it, but only alongside a mark for the
+  engaged state itself.** The worry — that removing it mid-grab reads as the grab
+  having failed — was real, and it turned out to be the *dominant* problem rather
+  than a side effect: with nothing at all marking "the grab caught", the user
+  reported the anchor as slow to move. It is not slow. Closing a fist has to clear
+  `stabilizeGesture`'s three-consecutive-frame pose gate (`useHandControl.ts`, shared
+  by every surface and out of scope here) before anything can happen, and an
+  unattributed delay reads as the feature being sluggish.
+
+  So the candidate ring goes — it marks a choice the user can no longer make while a
+  drive holds the camera — and a heavier engaged ring plus an enlarged reticle take
+  its place. The engaged mark is what makes the recognizer's own latency legible as
+  waiting rather than as failure, which is the same argument the candidate ring was
+  added under: a mark exists to make the next moment predictable.
+
+  `ANCHOR_THRESHOLD_PX` also widened 90 → 130 in the same pass. At 90 a grab over a
+  sparse region found nothing, silently kept the old anchor (correct per spec — "a
+  grab over empty space keeps the current anchor") and was indistinguishable from a
+  grab that had not registered. The reticle and candidate ring are what let a wider
+  radius stay predictable.

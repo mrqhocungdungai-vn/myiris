@@ -743,6 +743,25 @@ html:not(.hud-mode) .setup-backdrop {
   pointer-events: none;
 }
 
+/* A camera drive is live (tasks.md 6.5, from the manual pass). Closing a fist
+   has to clear MediaPipe's three-consecutive-frame pose gate before anything
+   can move, and with nothing marking "the grab caught" that delay reads as the
+   anchor being slow rather than as the recognizer still deciding. The reticle
+   is the one mark the user is already looking at, so it is where the
+   confirmation goes. */
+.hud-galaxy-reticle.engaged {
+  width: 40px;
+  height: 40px;
+  margin: -20px 0 0 -20px;
+  border-width: 2px;
+  border-color: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 0 14px rgba(214, 228, 255, 0.45);
+  transition:
+    width 0.12s ease,
+    height 0.12s ease,
+    margin 0.12s ease;
+}
+
 .hud-galaxy-reticle::after {
   content: "";
   position: absolute;
