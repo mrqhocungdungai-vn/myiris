@@ -6,6 +6,7 @@ import electron from "electron";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { ignoreBrokenPipe } from "./stdio-resilience.mjs";
 import { PRODUCT_NAME } from "./app-identity.mjs";
 import { canvasStoreFile } from "./app-paths.mjs";
 import { closeAllPoSessions } from "./po-session.mjs";
@@ -17,6 +18,12 @@ import { registerIpc } from "./ipc.mjs";
 import { createWiring } from "./wiring.mjs";
 
 const { app, BrowserWindow, nativeImage, dialog, globalShortcut, shell } = electron;
+
+// Before anything logs. Under `npm run dev` stdout/stderr are pipes owned by the
+// dev runner, so closing the terminal or killing that runner makes the next
+// console.log throw EPIPE — which, unhandled, crashes the main process and shows
+// Electron's error dialog over a working app. See stdio-resilience.mjs.
+ignoreBrokenPipe([process.stdout, process.stderr]);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
