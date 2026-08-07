@@ -17,8 +17,28 @@
 export const RECENT_UTTERANCE_LIMIT = 40;
 export const RECENT_UTTERANCE_MAX_AGE_MS = 10 * 60 * 1000; // 10 minutes
 
-/** @param {{ getMainWindow: () => any, now?: () => number }} deps */
-export function createRendererBridge({ getMainWindow, now = Date.now }) {
+/**
+ * @param {{
+ *   getMainWindow: () => any,
+ *   now?: () => number,
+ *   isOverheard?: () => boolean,
+ * }} deps
+ */
+export function createRendererBridge({
+  getMainWindow,
+  now = Date.now,
+  // Whether what Iris is hearing right now is OVERHEARD rather than spoken to
+  // her — true exactly while listen-only mode is engaged, when system audio is
+  // mixed into the same stream. A line may then be the user, someone else in
+  // the room, a remote participant, or a video, and nothing can separate them:
+  // the two sources are summed in the renderer's worklet before anything
+  // leaves the machine.
+  //
+  // One predicate decides two things that must never disagree — what the
+  // screen calls the line, and whether it counts as the user's own words for
+  // the purpose of feeding a run.
+  isOverheard = () => false,
+}) {
   let userTranscriptBuffer = "";
   let modelTranscriptBuffer = "";
 
@@ -85,13 +105,32 @@ export function createRendererBridge({ getMainWindow, now = Date.now }) {
   function flushTranscripts() {
     if (userTranscriptBuffer.trim()) {
       const spoken = userTranscriptBuffer.trim();
-      emitEvent({ type: "transcript", speaker: "you", text: spoken });
+      const overheard = isOverheard();
+      // HEARD_SPEAKER in src/lib/transcript-speaker.ts is the renderer's
+      // copy of this literal — the same cross-boundary duplication the IPC
+      // channel names already carry between ipc.mjs and preload.cjs.
+      emitEvent({ type: "transcript", speaker: overheard ? "heard" : "you", text: spoken });
       // Retained here, at the flush, rather than per fragment: a flush is one
       // complete utterance, whereas appendUserTranscript receives arbitrary
       // partial chunks that would fragment the record.
-      const at = now();
-      recentUtterances.push({ text: spoken, at });
-      pruneUtterances(at);
+      //
+      // Overheard speech is deliberately NOT retained into this ring. Every
+      // consumer of it renders it as "what the user said recently" straight
+      // into a run's prompt, so keeping it here would carry a video's words
+      // into Claude labelled as the user's own instruction — the same false
+      // attribution as on screen, one layer deeper and past the point where
+      // the user could notice. The fence around it is real, but a fence is
+      // mitigation for content that IS the user's; it is not a licence to
+      // mislabel content that is not.
+      //
+      // Nothing is lost: while the mode is engaged, meeting retention owns
+      // what Iris hears and writes all of it to inbox/meetings/, which is the
+      // record a Claude verb is meant to read afterwards.
+      if (!overheard) {
+        const at = now();
+        recentUtterances.push({ text: spoken, at });
+        pruneUtterances(at);
+      }
     }
     if (modelTranscriptBuffer.trim()) {
       emitEvent({ type: "transcript", speaker: "gemini", text: modelTranscriptBuffer.trim() });

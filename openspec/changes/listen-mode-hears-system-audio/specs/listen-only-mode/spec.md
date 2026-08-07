@@ -220,6 +220,45 @@ The app SHALL report each refusal, and SHALL answer the refusal back to the sess
 - **WHEN** listen-only mode is not engaged
 - **THEN** tool calls are dispatched exactly as they were before this change
 
+### Requirement: What Iris overhears is not presented as the user's own words
+
+While listen-only mode is engaged, transcribed input SHALL NOT be attributed to the user. It SHALL be presented as something Iris heard, distinct on screen from both the user's own speech and from Iris's own lines, wherever a transcript is displayed.
+
+Before the mode existed this attribution was correct: Iris heard only the microphone, so everything she heard was the user speaking. Adding system audio makes it a false statement — a line may be the user, another person in the room, a remote participant on a call, or a video — and the two sources SHALL NOT be presented as separable, because they are not: they are summed into one stream before anything leaves the machine, which is what keeps the transport and the chunk format unchanged.
+
+The app SHALL NOT attempt to guess which source a line came from, or who spoke it. Presenting a guess as attribution would be worse than presenting none, because the user would have no way to tell a correct attribution from a wrong one.
+
+Any interface affordance that means "the user just spoke" SHALL NOT fire for overheard input.
+
+The same holds past the screen. Overheard speech SHALL NOT be retained into the recent-conversation memory that feeds a run's context, which every consumer presents to Claude as what the user said recently — carrying it there would repeat the false attribution one layer deeper, where the user cannot see it, and that memory outlives the mode. Fencing it as untrusted is not sufficient: a fence mitigates content that genuinely IS the user's, and is not a licence to mislabel content that is not. Nothing is lost by leaving it out, because the mode's own retention holds all of it.
+
+#### Scenario: Overheard speech is not shown as the user's
+
+- **WHEN** a line is transcribed while listen-only mode is engaged
+- **THEN** it is shown as something Iris heard, not as the user's own words
+- **AND** it is distinguishable from Iris's own lines too
+
+#### Scenario: The two displays agree
+
+- **WHEN** the same transcript is shown in the deck and in the HUD
+- **THEN** both attribute each line identically
+
+#### Scenario: Ordinary conversation is unchanged
+
+- **WHEN** listen-only mode is not engaged
+- **THEN** the user's speech is attributed to the user exactly as before
+
+#### Scenario: Overheard speech does not reach a run as the user's words
+
+- **WHEN** a run is started after listen-only mode has been engaged and then disengaged
+- **THEN** the recent-conversation context it receives contains none of what was overheard
+- **AND** what was overheard is still available in the mode's own retained record
+
+#### Scenario: No cue claims the user spoke
+
+- **WHEN** overheard input is transcribed while the mode is engaged
+- **THEN** no affordance that signifies the user's own speech is triggered by it
+
 ### Requirement: A capture that delivers no audio is detected and reported
 
 The app SHALL verify that the system-audio capture is actually delivering audio, and SHALL NOT treat a successfully-acquired stream as proof that it works. A capture that delivers only silence SHALL be treated as failed, on the same terms as one that ends.

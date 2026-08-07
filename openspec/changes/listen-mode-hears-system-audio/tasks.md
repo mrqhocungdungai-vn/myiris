@@ -38,6 +38,20 @@ run while Iris was deliberately silent.
 - [x] 3b.5 Add the requirement to the `listen-only-mode` delta spec — this is behaviour, not an implementation detail
 - [x] 3b.6 Test: a tool call while engaged executes nothing, is answered and reported, covers every tool name, and dispatches normally once the mode ends
 
+## 3c. Not attributing what she overhears to the user
+
+Also found by running it: the transcript labelled system audio as "You". Correct
+before this change — Iris only heard the microphone — and a false statement about
+the user's own words after it.
+
+- [x] 3c.1 Push the attribution from main with the mode state: `renderer-bridge.mjs` takes the speaker label as an injected thunk rather than hardcoding `"you"`
+- [x] 3c.2 Add a third displayed voice, `heard`, in ONE shared decision (`src/lib/transcript-speaker.ts`) so the deck and the HUD cannot disagree about whose words the user is reading
+- [x] 3c.3 Do NOT guess which source a line came from — the two are summed in the worklet and are unseparable, and a wrong guess is worse than no attribution
+- [x] 3c.4 Stop the speech-lock ripple firing for overheard input; it means "your speech just locked in"
+- [x] 3c.5 Keep overheard speech out of `recentUtterances` — every consumer renders that ring into a run prompt as "what the user said recently", and it outlives the mode by up to 10 minutes
+- [x] 3c.6 Add the requirement to the `listen-only-mode` delta spec
+- [x] 3c.7 Test: the overheard id can never match the self test, the label is read at flush time, the ring stays clean, buffers still clear, and ordinary conversation is unchanged
+
 ## 4. Renderer capture and mixing
 
 - [x] 4.1 In `src/hooks/useAudioPipeline.ts`, acquire the loopback stream with `getDisplayMedia({ video: false, audio: true })` and sum it into the existing worklet through a `GainNode` at the configured gain

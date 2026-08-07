@@ -2,6 +2,7 @@ import { type RefObject } from "react";
 import { MessageSquare } from "lucide-react";
 import type { TranscriptLine } from "../types";
 import ContextSupplementInput from "./ContextSupplementInput";
+import { transcriptVoice, transcriptVoiceLabel } from "../lib/transcript-speaker";
 
 export default function CommsPanel({
   transcript,
@@ -25,10 +26,10 @@ export default function CommsPanel({
           <p className="empty">No conversation yet. Wake Iris and start talking.</p>
         ) : (
           transcript.map((line) => {
-            const self = /you|user/i.test(line.speaker);
+            const voice = transcriptVoice(line.speaker);
             return (
-              <div className={`bubble ${self ? "self" : "iris"}`} key={line.id}>
-                <span className="who">{self ? "You" : "Iris"}</span>
+              <div className={`bubble ${voice}`} key={line.id}>
+                <span className="who">{transcriptVoiceLabel(voice)}</span>
                 {line.text}
               </div>
             );

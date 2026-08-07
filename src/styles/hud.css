@@ -509,6 +509,12 @@ html:not(.hud-mode) .setup-backdrop {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1), 0 1px 6px rgba(0, 0, 0, 0.14);
 }
 
+.hud-mode .bubble.heard {
+  background: rgba(38, 30, 18, 0.6);
+  border-color: rgba(var(--amber-rgb), 0.32);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1), 0 1px 6px rgba(0, 0, 0, 0.14);
+}
+
 .hud-mode .bubble .who {
   text-shadow: none;
 }

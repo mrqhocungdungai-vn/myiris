@@ -29,6 +29,7 @@ import CommsPanel from "./components/CommsPanel";
 import CameraDock from "./components/CameraDock";
 import CenterStage from "./components/CenterStage";
 import ListenOnlyNotice from "./components/ListenOnlyNotice";
+import { transcriptVoice } from "./lib/transcript-speaker";
 import WorkStream from "./components/WorkStream";
 import PipelineBar from "./components/PipelineBar";
 import PoQuestionBanner from "./components/PoQuestionBanner";
@@ -1165,7 +1166,10 @@ export default function App() {
       const text = readString(event.text);
       if (text.trim()) {
         // Your words just got locked in — the orb answers with a soft ripple.
-        if (/you|user/i.test(speaker)) setRippleKey((key) => key + 1);
+        // The ripple means "your speech just locked in", so it must not fire
+        // for a line Iris merely overheard — transcriptVoice keeps that
+        // decision in one place for the two surfaces and this.
+        if (transcriptVoice(speaker) === "self") setRippleKey((key) => key + 1);
         setTranscript((current) => [...current, { id: crypto.randomUUID(), speaker, text }].slice(-40));
       }
       return;

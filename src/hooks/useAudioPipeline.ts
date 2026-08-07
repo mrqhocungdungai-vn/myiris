@@ -184,6 +184,7 @@ export function useAudioPipeline({
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      console.error("[IRIS][audio] system-audio capture could not be acquired:", message);
       onLog?.("error", `System audio: could not start capturing this machine's audio (${message}).`);
       setSystemAudioState("off");
       onSystemAudioUnavailable?.(message);
@@ -240,6 +241,7 @@ export function useAudioPipeline({
     } catch (error) {
       if (requestedDeviceId === SYSTEM_DEFAULT_MIC) {
         const message = error instanceof Error ? error.message : String(error);
+        console.error("[IRIS][audio] microphone could not be opened:", message);
         onLog?.("error", `Mic capture failed: could not open the microphone (${message}).`);
         return null;
       }
@@ -294,12 +296,30 @@ export function useAudioPipeline({
       // instead. The system-audio track is mono with default processing but
       // stereo without it, so which one arrives depends on constraints a future
       // change could reasonably alter — this holds either way.
-      workletNode = new AudioWorkletNode(context, "mic-downsample", {
-        channelCount: 1,
-        channelCountMode: "explicit",
-      });
+      try {
+        workletNode = new AudioWorkletNode(context, "mic-downsample", {
+          channelCount: 1,
+          channelCountMode: "explicit",
+        });
+      } catch (optionsError) {
+        // Degrade, never die. If a runtime refuses these options, the cost of
+        // going without them is that a stereo source loses its right channel
+        // (mic-downsample.js reads inputs[0][0] only) — bad, but survivable.
+        // The cost of letting the construction throw is NO CAPTURE AT ALL:
+        // no microphone, no system audio, no transcript, no meeting record,
+        // and — until this was fixed — no indication of any of it.
+        const message = optionsError instanceof Error ? optionsError.message : String(optionsError);
+        console.error("[IRIS][audio] AudioWorkletNode rejected the channel options, retrying without:", message);
+        onLog?.("warn", `Mic capture: the runtime refused an explicit mono down-mix (${message}); a stereo source may lose a channel.`);
+        workletNode = new AudioWorkletNode(context, "mic-downsample");
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      // console.error as well as onLog: the renderer's log list is not
+      // rendered, so onLog alone reaches nobody — and a capture that failed
+      // silently looks exactly like a capture that is working but hearing
+      // nothing, which is the hardest state to diagnose from the outside.
+      console.error("[IRIS][audio] mic capture failed — no audio will reach Iris:", message);
       onLog?.("error", `Mic capture failed: could not load the AudioWorklet (${message}).`);
       inputAnalyserRef.current = null;
       stream.getTracks().forEach((track) => track.stop());

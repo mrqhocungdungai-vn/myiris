@@ -63,7 +63,11 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     liveSessionModule = mod;
   }
 
-  const rendererBridge = createRendererBridge({ getMainWindow: () => getMainWindow() });
+  const rendererBridge = createRendererBridge({
+    getMainWindow: () => getMainWindow(),
+    // Read at flush time, long after liveSessionModule is assigned below.
+    isOverheard: () => Boolean(liveSessionModule?.getListenOnlyEngaged()),
+  });
   const {
     emitToRenderer,
     emitEvent,

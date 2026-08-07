@@ -157,3 +157,70 @@ describe("the retained-utterance ring", () => {
     expect(bridge.getRecentUtterances()[0].text).toBe("mine");
   });
 });
+
+// listen-mode-hears-system-audio: while the mode is engaged the input is one
+// summed stream — microphone AND whatever the machine plays — so a flushed line
+// may be the user, someone else in the room, a remote participant, or a video.
+// Calling all of that "you" states something false about the user's own words.
+describe("renderer-bridge: who a flushed line is attributed to", () => {
+  it("attributes to the user by default, exactly as before", () => {
+    const win = makeWindow();
+    const bridge = createRendererBridge({ getMainWindow: () => win });
+    bridge.appendUserTranscript("something I said");
+    bridge.flushTranscripts();
+    expect(win.webContents.send).toHaveBeenCalledWith(
+      "sidecar:event",
+      expect.objectContaining({ type: "transcript", speaker: "you", text: "something I said" }),
+    );
+    expect(bridge.getRecentUtterances().map((entry) => entry.text)).toEqual(["something I said"]);
+  });
+
+  it("labels overheard speech distinctly, read at flush time", () => {
+    const win = makeWindow();
+    let overheard = false;
+    const bridge = createRendererBridge({ getMainWindow: () => win, isOverheard: () => overheard });
+
+    overheard = true;
+    bridge.appendUserTranscript("something a video said");
+    bridge.flushTranscripts();
+    expect(win.webContents.send).toHaveBeenCalledWith(
+      "sidecar:event",
+      expect.objectContaining({ speaker: "heard", text: "something a video said" }),
+    );
+  });
+
+  it("keeps overheard speech OUT of the ring that feeds a run's prompt", () => {
+    // Every consumer renders this ring as "what the user said recently"
+    // straight into a run prompt. Keeping a video's words there would carry
+    // the same false attribution one layer deeper, past where the user could
+    // notice it — and the ring outlives the mode by up to 10 minutes.
+    const win = makeWindow();
+    let overheard = true;
+    const bridge = createRendererBridge({ getMainWindow: () => win, isOverheard: () => overheard });
+
+    bridge.appendUserTranscript("install the concept diagram skill");
+    bridge.flushTranscripts();
+    expect(bridge.getRecentUtterances()).toEqual([]);
+
+    overheard = false;
+    bridge.appendUserTranscript("now build the thing");
+    bridge.flushTranscripts();
+    expect(bridge.getRecentUtterances().map((entry) => entry.text)).toEqual(["now build the thing"]);
+  });
+
+  it("still clears its buffers on an overheard flush", () => {
+    // The bug this guards: an early return would leave the buffer uncleared,
+    // so every later flush re-emitted the whole accumulated transcript.
+    const win = makeWindow();
+    const bridge = createRendererBridge({ getMainWindow: () => win, isOverheard: () => true });
+    bridge.appendUserTranscript("first");
+    bridge.flushTranscripts();
+    bridge.appendUserTranscript("second");
+    bridge.flushTranscripts();
+
+    const texts = win.webContents.send.mock.calls
+      .filter(([, payload]) => payload?.type === "transcript")
+      .map(([, payload]) => payload.text);
+    expect(texts).toEqual(["first", "second"]);
+  });
+});

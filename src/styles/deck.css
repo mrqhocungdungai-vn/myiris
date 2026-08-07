@@ -346,6 +346,21 @@
   color: var(--muted);
 }
 
+/* Overheard audio (listen-mode-hears-system-audio): the microphone AND the
+   machine's own output, summed into one stream that nothing can separate. It
+   sits on neither side — it is not the user's own words, and it is not Iris —
+   so it is centred and given its own muted accent rather than borrowing either
+   of theirs. */
+.bubble.heard {
+  align-self: stretch;
+  background: rgba(var(--amber-rgb), 0.05);
+  border: 1px solid rgba(var(--amber-rgb), 0.14);
+}
+
+.bubble.heard .who {
+  color: rgba(var(--amber-rgb), 0.85);
+}
+
 @keyframes bubble-in {
   from { opacity: 0; transform: translateY(6px); }
   to { opacity: 1; transform: translateY(0); }

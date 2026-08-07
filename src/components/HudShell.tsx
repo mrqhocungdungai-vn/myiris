@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import ReactorCore, { ORB_ACCENT, ORB_ENERGY } from "./ReactorCore";
 import { listenOnlyControlTitle, type SystemAudioState } from "../lib/system-audio";
+import { transcriptVoice, transcriptVoiceLabel } from "../lib/transcript-speaker";
 import WorkCard from "./WorkCard";
 import PoQuestionBanner from "./PoQuestionBanner";
 import ReviewBanner from "./ReviewBanner";
@@ -399,10 +400,10 @@ export default function HudShell({
               <>
                 <div className="hud-comms hud-hit" ref={commsScrollRef}>
                   {recentTranscript.map((line) => {
-                    const self = /you|user/i.test(line.speaker);
+                    const voice = transcriptVoice(line.speaker);
                     return (
-                      <div className={`bubble ${self ? "self" : "iris"}`} key={line.id}>
-                        <span className="who">{self ? "You" : "Iris"}</span>
+                      <div className={`bubble ${voice}`} key={line.id}>
+                        <span className="who">{transcriptVoiceLabel(voice)}</span>
                         {line.text}
                       </div>
                     );
