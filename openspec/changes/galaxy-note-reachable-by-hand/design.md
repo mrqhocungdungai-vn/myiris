@@ -469,6 +469,108 @@ it, and treat this as intended scope — the rail exists for exactly the
 the sole answer: the report was about zooming toward a REGION, not a note by
 name, which the rail cannot help with regardless of how well it works.
 
+### D19 — The zoom's noise problem was in the radius law, not only the pivot; the pivot's remaining bug was the retarget gate, not the feature
+
+*Added after D18 shipped and the report continued, more pointedly: "not
+effective — after all these improvement rounds, zooming in/out is now VERY
+HARD." Investigated with a multi-agent workflow (four independent lines of
+inquiry, a synthesis, and an adversarial stress-test of the synthesis) rather
+than a fifth solo guess, given three prior rounds had each failed.*
+
+**Root cause, independently confirmed by three of the four investigations:**
+`zoomRadius` (`galaxy-nav.ts`) is a memoryless function of the instantaneous
+two-palm distance — every frame it maps `curDist` straight to an absolute
+radius via `refRadius * refDist / curDist`, with no per-frame step limit.
+Compare `orbitStep`: it only nudges a *persisted* angle by a small fixed
+increment (`delta * 0.006`) each frame, so a single noisy frame barely moves
+it and that nudge isn't replayed. Zoom's law has no such accumulator, so
+whatever tracking noise survives the hand points' own light smoothing
+(`SMOOTHING_ALPHA = 0.5`, tuned for low lag, not noise rejection) reaches the
+radius with full gain, every frame — and worse, with reciprocal gain that
+grows unboundedly as `curDist` approaches the 80px floor. This defect
+**predates D17/D18 entirely** and plausibly accounts for the baseline "hard to
+use, not smooth anywhere" complaint by itself.
+
+D17/D18 didn't create that defect, but they made it bite far more often: each
+turned what used to be a single engage-time reference capture into a
+repeating mid-zoom event (`reseedAroundAnchor`, up to ~10/s while the sight
+moved), and every one of those events re-pins the reference from that exact
+frame's raw, unfiltered `curDist`. A code-tracing pass additionally confirmed
+a specific bug in D18's gate: `pickPivotAt` resolving to *any* node within the
+generous 130px `ANCHOR_THRESHOLD_PX` — even a brief graze, unrelated to
+deliberate movement — unconditionally cleared the point dead-band's memory,
+forcing the very next tick to commit regardless of how little the sight had
+actually moved. Three rounds of increasingly careful throttle/dead-band
+tuning were fixing the frequency and precision of an event whose *payload*
+(the radius law) was the real defect — which is why the trend was a
+regression rather than a plateau.
+
+**What was proposed vs. what shipped.** The investigation's synthesis, stress-
+tested by an adversarial pass, recommended reverting mid-zoom pivot
+retargeting entirely — pick the pivot once at engage (as D15 already
+specified) and require a release-and-regrab to aim somewhere new — paired
+with replacing `zoomRadius` outright with a new bounded-step integrator. The
+stress-test's own review flagged the reversion as the risky half: D14
+explicitly frames continuous mid-zoom retargeting as something "the user
+actually asked for," and the user's own three reports were all about wanting
+move-while-zoom to *work*, not about wanting it removed — silently deleting a
+feature the user is actively trying to use, across all three complaints, is
+not the same thing as fixing it, however cleanly it would sidestep the noise.
+
+So this decision keeps the feature and targets what the tracing actually
+found broken:
+
+- **The retarget gate now applies uniformly to nodes and points**, not only
+  points. `lastPointPivotSightRef` (D18) becomes `lastPivotSightRef`, and the
+  screen-space movement check that used to guard only the point branch now
+  guards `pivotPickRef` — what the live zoom actually reads — for either
+  kind, closing the node-graze hole by construction: proximity within a
+  search radius is no longer sufficient to retarget an already-live drive,
+  only genuine sight movement is. The candidate ring's own `candidateIdRef`
+  is deliberately left ungated, since it is pure visual feedback and reading
+  a stale value there would make the mark lie about what is actually near
+  the sight right now.
+- **The radius gets the same treatment the look-at point already has.**
+  Rather than the proposed new bounded-step integrator (which would have
+  replaced the correctly scale-invariant ratio law with a fixed-sensitivity
+  linear delta — right for damping noise, wrong for preserving "spread
+  doubles the distance, roughly halves the radius" across different absolute
+  hand-spread scales, since a fixed pixel-sensitivity produces a different
+  fractional effect near a small `refDist` than a large one), the DISPLAYED
+  radius eases toward whatever `zoomRadius` computes as the instantaneous
+  target, via a new `easeRadius` — the exact shape `easeAnchor` already uses
+  for the look-at point, just scalar. `zoomRadius` itself is untouched: it
+  remains the correctly-scaled target; only how fast the camera is allowed to
+  chase it changes. One noisy frame's target now moves the actual radius by a
+  fraction of the gap (`ZOOM_EASE_MS = 120`, the same "time to cover 95%"
+  convention as `ANCHOR_EASE_MS`), not by the whole noisy delta.
+
+**Why not the proposed integrator.** Read literally, a fixed-sensitivity
+linear step (`radius *= 1 - (curDist - prevDist) * sensitivity`) telescopes,
+for small `sensitivity`, to depending on total displacement since engage —
+mathematically similar in aggregate to the existing ratio law, but only
+because sensitivity would have to be tuned per absolute-distance scale to
+reproduce the same multiplicative feel `zoomRadius` already gets for free
+from being an actual ratio. Easing the ratio law's *output* keeps that
+scale-correctness intact and only adds the one new idea (a settling time),
+reusing code this repo already has, already reasoned through, and already
+tested (`easeAnchor`), rather than introducing a parallel implementation of
+the same "memory" concept with its own constant to mistune.
+
+**Named plainly, per the stress-test's explicit demand:** `ZOOM_EASE_MS`
+(120) and `PIVOT_RETARGET_DEAD_BAND_PX` (24, unchanged value, widened scope)
+are both unvalidated constants chosen by reasoning about orders of magnitude,
+not by measurement against real hand-tracking hardware. Revisit both from the
+next manual pass rather than treating this as solved the way D17/D18 were
+presented.
+
+*Alternative considered, and why it is recorded here rather than adopted:*
+removing mid-zoom retargeting outright, per the investigation's original
+synthesis. Rejected as this decision's primary fix, for the reason argued
+above — but if a manual pass finds the uniform retarget gate still
+insufficient, release-and-regrab is the fallback to reach for next, not a
+fourth round of narrower gating.
+
 ### D9 — The rail is chrome, and that is the whole of its reachability
 
 The rail island carries `HUD_CHROME_CLASS` and `hud-hit`. It then inherits both the

@@ -6,6 +6,7 @@ import type { HandState } from "./useHandControl";
 import {
   dwellStep,
   driveFor,
+  easeRadius,
   inspectingHand,
   isHandLowered,
   orbitStep,
@@ -65,7 +66,7 @@ export type GalaxyCameraDriveParams = {
   dwellThresholdPx: number;
   dwellHoldMs: number;
   anchorThresholdPx: number;
-  pointPivotDeadBandPx: number;
+  pivotRetargetDeadBandPx: number;
   candidateIntervalMs: number;
   orbitSensitivity: number;
   zoomMinRadius: number;
@@ -92,7 +93,7 @@ export function useGalaxyCameraDrive({
   dwellThresholdPx,
   dwellHoldMs,
   anchorThresholdPx,
-  pointPivotDeadBandPx,
+  pivotRetargetDeadBandPx,
   candidateIntervalMs,
   orbitSensitivity,
   zoomMinRadius,
@@ -125,11 +126,15 @@ export function useGalaxyCameraDrive({
   // the dolly's reference reset far more often than what was even visible on
   // screen). One evaluation, one cadence, read by both.
   const pivotPickRef = useRef<GalaxyAnchor | null>(null);
-  // The sight position the last COMMITTED point pivot was computed from — the
-  // dead-band a point pivot needs and a node one does not, since a node's
-  // incumbent id already makes "did this actually change" a discrete
-  // question (design.md D18).
-  const lastPointPivotSightRef = useRef<{ x: number; y: number } | null>(null);
+  // The sight position the last COMMITTED live-zoom retarget was computed
+  // from. Gates whether a throttled pick reaches `pivotPickRef` (the camera)
+  // at all — it does NOT gate the ring's own `candidateIdRef`, which stays
+  // immediate/honest feedback regardless (design.md D19). A node graze is
+  // not exempt: `nearestNodeAt`'s own dead-band only breaks a tie between
+  // near-equal candidates, it says nothing about whether the SIGHT has
+  // actually travelled far enough to justify retargeting an already-live
+  // zoom, and neither does a point's lack of an id — both need this gate.
+  const lastPivotSightRef = useRef<{ x: number; y: number } | null>(null);
 
   // Gesture drive (design.md D4b/D5): a thin driver over the pure policy in
   // src/lib/galaxy-nav.ts. Schedules NOTHING while gestures are off or the
@@ -223,6 +228,14 @@ export function useGalaxyCameraDrive({
       const refDist = ref?.dist ?? null;
       const ratio = curDist !== null && refDist !== null ? curDist / Math.max(80, refDist) : null;
       const radius = sphericalRef.current?.radius ?? null;
+      // The un-eased target `zoomRadius` would ask for right now, alongside
+      // the actual (eased) radius above — the gap between the two is exactly
+      // what `easeRadius` is closing, and a tuning pass needs to see it
+      // (design.md D19).
+      const target =
+        curDist !== null && ref
+          ? zoomRadius({ refRadius: ref.radius, refDist: ref.dist, curDist, min: zoomMinRadius, max: zoomMaxRadius })
+          : null;
       const live = anchor.anchorRef.current;
       const lines = [
         `hands: ${hand.hands.length}`,
@@ -231,6 +244,7 @@ export function useGalaxyCameraDrive({
         `refDist: ${refDist !== null ? refDist.toFixed(1) : "—"}`,
         `ratio: ${ratio !== null ? ratio.toFixed(3) : "—"}`,
         `radius: ${radius !== null ? radius.toFixed(1) : "—"}`,
+        `target: ${target !== null ? target.toFixed(1) : "—"}`,
         `extent: ${anchor.boundingRadiusRef.current.toFixed(1)}`,
         `anchor: ${live.kind === "node" ? `node ${live.id}` : live.kind}`,
         `candidate: ${candidateIdRef.current ?? "—"}`,
@@ -326,7 +340,9 @@ export function useGalaxyCameraDrive({
         // Re-select what a grab would take hold of, rate-limited (design.md
         // D10) — this is the same O(nodes) projection the titles pay for, and
         // a candidate that changed at frame rate would both cost more than it
-        // is worth and read as flicker.
+        // is worth and read as flicker. `candidateIdRef` (the ring) always
+        // takes this fresh, throttled pick — it is pure visual feedback and
+        // camera-inert, so there is no reason to gate it further.
         //
         // `pickPivotAt`, not `pickAnchorAt` (design.md D18): over empty space
         // the live zoom re-aim used to freeze at whatever the engage-time pivot
@@ -349,25 +365,23 @@ export function useGalaxyCameraDrive({
             anchor.displayedAnchorRef.current,
           );
           candidateIdRef.current = picked.kind === "node" ? picked.id : null;
-          if (picked.kind === "point") {
-            // A point has no id, so "did this change" is never a discrete
-            // question the way a node's incumbent id makes it — every tick
-            // would otherwise read as a change under ordinary hand jitter and
-            // reset the zoom's reference just as often as the per-frame version
-            // of this defect already fixed once (D17). Committed only once the
-            // sight has actually moved past the dead-band since the last commit.
-            const last = lastPointPivotSightRef.current;
-            const movedEnough = !last || Math.hypot(sight.x - last.x, sight.y - last.y) >= pointPivotDeadBandPx;
-            if (movedEnough) {
-              pivotPickRef.current = picked;
-              lastPointPivotSightRef.current = sight;
-            }
-          } else {
+          // `pivotPickRef` — what the LIVE ZOOM actually reads — commits only
+          // once the sight has moved past the dead-band since the last commit
+          // (design.md D19). Applies to a node result too, not only a point:
+          // `nearestNodeAt`'s incumbent dead-band answers "which of two nearby
+          // candidates" and a node has no analogue of "did the sight travel
+          // far enough to retarget a live drive" at all — so a sight merely
+          // grazing ANY node's 130px capture radius for one tick, without the
+          // hand meaningfully moving, used to commit unconditionally and
+          // reseed the zoom reference on the strength of that graze alone
+          // (the regression this fixes). A point pivot additionally has no id
+          // for "did this change" to even ask about — the gate is what makes
+          // that question answerable for either kind.
+          const last = lastPivotSightRef.current;
+          const movedEnough = !last || Math.hypot(sight.x - last.x, sight.y - last.y) >= pivotRetargetDeadBandPx;
+          if (movedEnough) {
             pivotPickRef.current = picked;
-            // Leaving a node clears the point dead-band's memory, so the first
-            // point pivot reached after it always commits rather than being
-            // measured against a sight position from before the node.
-            lastPointPivotSightRef.current = null;
+            lastPivotSightRef.current = sight;
           }
         }
 
@@ -535,13 +549,25 @@ export function useGalaxyCameraDrive({
             // origin and the look-at.
             if (pivotPickRef.current) reaimZoomFromSight(fg, pivotPickRef.current, curDist);
             const zoomOrigin = anchor.resolveCurrent();
-            const next = zoomRadius({
+            const target = zoomRadius({
               refRadius: zoomReferenceRef.current.radius,
               refDist: zoomReferenceRef.current.dist,
               curDist,
               min: zoomMinRadius,
               max: zoomMaxRadius,
             });
+            // `zoomRadius` is a memoryless ratio law: it maps THIS frame's raw
+            // two-palm distance straight to an absolute radius, so any
+            // tracking noise in that distance reaches the output with full
+            // gain, every single frame — unlike `orbitStep`, which only nudges
+            // an accumulated angle by a small bounded increment regardless of
+            // how noisy the instantaneous delta is. `easeRadius` gives the
+            // DISPLAYED radius the same kind of memory `easeAnchor` already
+            // gives the look-at point: it glides toward the target rather than
+            // snapping to it, so one noisy frame moves the camera only a
+            // little instead of replacing its distance outright (design.md
+            // D19).
+            const next = easeRadius(sphericalRef.current.radius, target, dt);
             sphericalRef.current.set(next, sphericalRef.current.phi, sphericalRef.current.theta);
             writeCameraFromSpherical(fg, zoomOrigin);
             releaseAnchorIfBackedOut(fg, next, curDist);
@@ -609,10 +635,15 @@ export function useGalaxyCameraDrive({
     // sight ray with the plane at the current working depth, and doing that
     // every FRAME while the camera eases its aim onto the previous pivot is
     // what D14 correctly ruled out — the ray and the pivot it produces would
-    // chase each other. Doing it on the ring's throttled cadence instead, with
-    // a screen-space dead-band on top (D18, since a point has no id to hold
-    // still the way a node's incumbent does), keeps the same protection without
-    // giving up empty-space targets entirely.
+    // chase each other. Doing it on the ring's throttled cadence instead keeps
+    // the same protection without giving up empty-space targets entirely.
+    //
+    // The movement gate on `pivotPickRef` (design.md D19) is what stops a
+    // brief graze near ANY node, or ordinary jitter over empty space, from
+    // committing a retarget on the strength of proximity alone — it applies
+    // uniformly to both kinds now, not just points, since a node's own
+    // dead-band never asked "has the sight travelled far enough to justify
+    // retargeting an already-LIVE drive" in the first place.
     function reaimZoomFromSight(fg: Fg, picked: GalaxyAnchor, curDist: number) {
       if (!anchor.setAnchor(picked, { ease: false })) return;
       reseedAroundAnchor(fg, curDist);

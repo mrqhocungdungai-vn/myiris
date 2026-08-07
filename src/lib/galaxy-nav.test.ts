@@ -9,6 +9,8 @@ import {
   orbitStep,
   handDistance,
   zoomRadius,
+  easeRadius,
+  ZOOM_EASE_MS,
   focusNeighborhood,
   isHandLowered,
   sightPoint,
@@ -291,6 +293,54 @@ describe("zoomRadius", () => {
     const next = zoomRadius({ refRadius: 100, refDist: 1, curDist: 1, min: 10, max: 100000 });
     expect(Number.isFinite(next)).toBe(true);
     expect(next).toBe(100);
+  });
+});
+
+describe("easeRadius", () => {
+  const TARGET = 50;
+
+  it("moves toward the target without arriving in one frame", () => {
+    const next = easeRadius(100, TARGET, 16);
+    expect(next).toBeLessThan(100);
+    expect(next).toBeGreaterThan(TARGET);
+  });
+
+  it("converges onto the target over roughly the ease duration", () => {
+    let displayed = 100;
+    for (let elapsed = 0; elapsed < ZOOM_EASE_MS; elapsed += 16) {
+      displayed = easeRadius(displayed, TARGET, 16);
+    }
+    expect(displayed).toBeLessThan(100 * 1.1);
+    expect(displayed).toBeGreaterThanOrEqual(TARGET);
+  });
+
+  it("snaps once it is close enough, so it actually settles", () => {
+    let displayed = 100;
+    for (let i = 0; i < 200; i++) displayed = easeRadius(displayed, TARGET, 16);
+    expect(displayed).toBe(TARGET);
+  });
+
+  it("no-ops at the target", () => {
+    expect(easeRadius(TARGET, TARGET, 16)).toBe(TARGET);
+  });
+
+  it("no-ops on a zero or negative frame delta", () => {
+    expect(easeRadius(100, TARGET, 0)).toBe(100);
+    expect(easeRadius(100, TARGET, -5)).toBe(100);
+  });
+
+  it("is frame-rate independent — one long frame matches two short ones", () => {
+    const oneLong = easeRadius(100, TARGET, 32);
+    const twoShort = easeRadius(easeRadius(100, TARGET, 16), TARGET, 16);
+    expect(oneLong).toBeCloseTo(twoShort, 10);
+  });
+
+  it("damps a single noisy target far more than it would move if applied directly", () => {
+    // The whole point: one frame's noisy target should nudge the displayed
+    // value only a little, not replace it outright.
+    const noisySpike = 100 + 40; // a single-frame outlier
+    const next = easeRadius(100, noisySpike, 16);
+    expect(next - 100).toBeLessThan((noisySpike - 100) * 0.5);
   });
 });
 

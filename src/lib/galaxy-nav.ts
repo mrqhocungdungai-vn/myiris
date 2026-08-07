@@ -355,3 +355,40 @@ export function zoomRadius({
   const flooredCur = Math.max(MIN_HAND_DISTANCE_PX, curDist);
   return Math.max(min, Math.min(max, (refRadius * flooredRef) / flooredCur));
 }
+
+// Roughly how long the camera's DISPLAYED radius takes to catch up to
+// whatever `zoomRadius` computes as this frame's target — expressed as time
+// to cover 95% of the gap, the same convention `ANCHOR_EASE_MS` uses in
+// galaxy-anchor.ts (design.md D19). Not measured against tracked hand data —
+// chosen shorter than `ANCHOR_EASE_MS` (180) because radius is the signal the
+// user is actively, continuously steering in real time, unlike the look-at
+// point, which is secondary feedback; revisit from the next manual pass.
+export const ZOOM_EASE_MS = 120;
+const ZOOM_EASE_TAU_MS = ZOOM_EASE_MS / Math.log(20);
+// Below this many world units apart, the ease snaps — matching
+// `easeAnchor`'s own reasoning: an exponential approach never actually
+// arrives, and a displayed radius forever a hair off the target would keep
+// writing the camera every frame with nothing visibly moving.
+const ZOOM_EASE_SNAP_EPSILON = 0.01;
+
+/**
+ * The eased DISPLAYED radius (design.md D19) — `easeAnchor`'s treatment of
+ * the look-at point, applied to the other half of the camera write.
+ *
+ * `zoomRadius` is a memoryless ratio law: every frame it maps the raw,
+ * instantaneous two-palm distance straight to an absolute radius, so any
+ * tracking noise in that distance reaches the output with full gain, frame
+ * after frame — structurally unlike `orbitStep`, which only nudges an
+ * accumulated angle by a small bounded increment regardless of how noisy the
+ * instantaneous delta is. Feeding `zoomRadius`'s result through this instead
+ * of applying it directly gives the radius the same kind of memory orbit's
+ * law already has for free: one noisy frame moves the camera only a little
+ * rather than replacing its distance outright.
+ */
+export function easeRadius(displayed: number, target: number, dtMs: number): number {
+  if (dtMs <= 0) return displayed;
+  const delta = target - displayed;
+  if (Math.abs(delta) <= ZOOM_EASE_SNAP_EPSILON) return target;
+  const alpha = 1 - Math.exp(-dtMs / ZOOM_EASE_TAU_MS);
+  return displayed + delta * alpha;
+}
