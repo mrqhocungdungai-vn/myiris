@@ -4,7 +4,17 @@
 
 The galaxy SHALL have a single **anchor** — the point the camera orbits around and
 dollies toward — and every camera drive, by hand or by mouse, SHALL use that one
-anchor. It SHALL be either the graph's centroid or one specific node.
+anchor. It SHALL be the graph's centroid, one specific node, or a specific point
+in space.
+
+**A camera drive SHALL turn around whatever the sight is on, always.** When a node
+is near the sight the anchor SHALL be that node, so dollying in arrives at a note.
+When no node is near enough it SHALL be the point under the sight itself, at the
+depth the camera is already working at — **not** the anchor left over from before.
+An anchor that survives a grab aimed somewhere else is a pivot the user is not
+pointing at and cannot see; most visibly it is the note they last opened, which
+then follows them around invisibly. The mark on screen and the point the camera
+turns around are the same thing, with no exception to remember.
 
 A freshly-opened galaxy SHALL be anchored on the centroid, so the view a galaxy
 opens with is unchanged by this requirement existing.
@@ -16,7 +26,10 @@ The anchor SHALL move to a node when:
   fist orbits the galaxy camera") — so the node they are pointing at becomes the
   thing they turn around;
 - a note is opened, whether by click or by dwell — so closing the reader leaves the
-  camera around that note's neighbourhood rather than the middle of the vault;
+  camera around that note's neighbourhood rather than the middle of the vault.
+  This SHALL NOT survive the next camera drive: the drive re-resolves from the
+  sight, so an opened note is where the camera is *left*, never a pivot that
+  outlives the user aiming somewhere else;
 - the user reaches a note through the step rail (see `second-brain-gesture-nav`);
 - the mouse wheel is used while the pointer rests on a node — scrolling zooms into
   the dot under the pointer.
@@ -76,7 +89,12 @@ open a note, and SHALL NOT change what the voice layer or a run reads.
 #### Scenario: A mouse-framed view survives a hand drive
 
 - **WHEN** the user frames a region of the galaxy with the mouse and then engages a hand camera drive
-- **THEN** the framing is kept — the drive does not reset the camera's aim to the graph's centroid, on engage or on release
+- **THEN** the camera stays exactly where the mouse left it and the drive does not reset its aim to the graph's centroid, on engage or on release. The pivot moves to whatever the user's sight is on, because that is what engaging a drive means — but nothing is discarded silently and nothing reverts to the middle of the vault.
+
+#### Scenario: The last-opened note does not become an invisible pivot
+
+- **WHEN** the user opens a note, closes the reader, and then engages a camera drive with the sight over empty space
+- **THEN** the camera turns around the point under the sight, not around the note they opened
 
 #### Scenario: Backing out returns to the whole vault
 

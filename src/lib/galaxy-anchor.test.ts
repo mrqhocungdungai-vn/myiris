@@ -5,7 +5,9 @@ import {
   anchorsEqual,
   easeAnchor,
   pickAnchorAt,
+  pickPivotAt,
   rectCentre,
+  sightPivotPoint,
   resolveAnchor,
   shouldReleaseAnchor,
   ANCHOR_EASE_MS,
@@ -141,6 +143,71 @@ describe("pickAnchorAt", () => {
       kind: "node",
       id: "side",
     });
+  });
+});
+
+describe("sightPivotPoint", () => {
+  it("returns the point under the sight at the working depth, not the depth point itself", () => {
+    const camera = makeCamera(); // at (0,0,10) looking down -Z
+    const offCentre = { x: RECT.width / 2 + 120, y: RECT.height / 2 };
+    const pivot = sightPivotPoint(camera, RECT, offCentre, { x: 0, y: 0, z: 0 });
+    // Same viewing depth (the z=0 plane), displaced to the right.
+    expect(pivot.z).toBeCloseTo(0, 6);
+    expect(pivot.x).toBeGreaterThan(0);
+    expect(pivot.y).toBeCloseTo(0, 6);
+  });
+
+  it("returns the depth point itself when the sight is dead centre", () => {
+    const camera = makeCamera();
+    const pivot = sightPivotPoint(camera, RECT, rectCentre(RECT), { x: 0, y: 0, z: 0 });
+    expect(pivot.x).toBeCloseTo(0, 6);
+    expect(pivot.y).toBeCloseTo(0, 6);
+    expect(pivot.z).toBeCloseTo(0, 6);
+  });
+
+  it("mirrors left and right about the centre", () => {
+    const camera = makeCamera();
+    const left = sightPivotPoint(camera, RECT, { x: RECT.width / 2 - 120, y: RECT.height / 2 }, { x: 0, y: 0, z: 0 });
+    const right = sightPivotPoint(camera, RECT, { x: RECT.width / 2 + 120, y: RECT.height / 2 }, { x: 0, y: 0, z: 0 });
+    expect(left.x).toBeCloseTo(-right.x, 6);
+  });
+
+  it("falls back to the depth point when it sits behind the camera", () => {
+    const camera = makeCamera();
+    const behind = { x: 0, y: 0, z: 40 };
+    expect(sightPivotPoint(camera, RECT, rectCentre(RECT), behind)).toEqual(behind);
+  });
+});
+
+describe("pickPivotAt", () => {
+  const HERE = { x: 0, y: 0, z: 0 };
+
+  it("snaps to a node under the sight, so dollying in arrives at that note", () => {
+    const camera = makeCamera();
+    const node: GalaxyNavNode = { id: "n", title: "N", x: 0, y: 0, z: 0 };
+    expect(pickPivotAt([node], camera, RECT, rectCentre(RECT), CENTROID_ANCHOR, 100, HERE)).toEqual({
+      kind: "node",
+      id: "n",
+    });
+  });
+
+  it("pivots on the point under the sight when no node is near — never on the anchor left over from before", () => {
+    // This is the difference from pickAnchorAt, and the whole of D15: keeping
+    // the old anchor is what let the last-opened note follow the user around as
+    // an invisible pivot they were not pointing at.
+    const camera = makeCamera();
+    const stale: GalaxyAnchor = { kind: "node", id: "last-opened" };
+    const offCentre = { x: RECT.width / 2 + 120, y: RECT.height / 2 };
+    const result = pickPivotAt([], camera, RECT, offCentre, stale, 100, HERE);
+    expect(result.kind).toBe("point");
+    expect(result.kind === "point" && result.position.x).toBeGreaterThan(0);
+  });
+
+  it("keeps returning the same anchor object while the sight stays on one node", () => {
+    const camera = makeCamera();
+    const node: GalaxyNavNode = { id: "n", title: "N", x: 0, y: 0, z: 0 };
+    const current: GalaxyAnchor = { kind: "node", id: "n" };
+    expect(pickPivotAt([node], camera, RECT, rectCentre(RECT), current, 100, HERE)).toBe(current);
   });
 });
 

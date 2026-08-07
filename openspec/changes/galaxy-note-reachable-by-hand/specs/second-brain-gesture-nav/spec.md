@@ -8,7 +8,7 @@ The galaxy drives SHALL be partitioned by hand pose so they never act at once on
 
 **A hand that drives nothing SHALL also show nothing.** The pointed-at highlight (see `second-brain-galaxy-view`, "The node being pointed at reveals its link cluster") SHALL be produced only by a pose that means to point at something — the inspect pose, or a charging `Pointing_Up` dwell — and SHALL NOT follow a hand that is merely present in frame. A highlight that tracks any hand in any pose lights a cluster the user did not ask about, then another as the hand drifts, which is noise rather than feedback: it reads as the view reacting to the user's hand rather than answering their question. A camera drive SHALL suppress it too, because while an orbit or a zoom is engaged the hand's position means "camera", not "target".
 
-The camera SHALL look at the galaxy's **anchor** (see `second-brain-galaxy-view`, "The camera turns and dollies around a movable anchor") — never at an assumed world origin, and no longer at the graph's centroid unconditionally. **Engaging a camera drive SHALL re-resolve the anchor to the node nearest the sight** (see `second-brain-galaxy-view`, "The camera is aimed by a sight that follows the hands"), within a bounded screen distance and excluding nodes behind the camera, so each grab takes hold of whatever the user has their hand over. The orbit resolves it at engage and holds it: the orbit's input is the hand's own travel, so a sight read from it during the drive would re-aim on every frame of the motion meant to be turning the camera. When no node is near enough, the current anchor SHALL be kept rather than reset — a grab over empty space SHALL NOT throw the view back to the middle of the vault. Because a re-resolved anchor never moves the camera (that rule belongs to the anchor itself), engaging remains snap-free.
+The camera SHALL look at the galaxy's **anchor** (see `second-brain-galaxy-view`, "The camera turns and dollies around a movable anchor") — never at an assumed world origin, and no longer at the graph's centroid unconditionally. **Engaging a camera drive SHALL re-resolve the anchor to the node nearest the sight** (see `second-brain-galaxy-view`, "The camera is aimed by a sight that follows the hands"), within a bounded screen distance and excluding nodes behind the camera, so each grab takes hold of whatever the user has their hand over. The orbit resolves it at engage and holds it: the orbit's input is the hand's own travel, so a sight read from it during the drive would re-aim on every frame of the motion meant to be turning the camera. When no node is near enough, the anchor SHALL become the point under the sight at the camera's current working depth — a grab over empty space SHALL turn around the mark, and SHALL NOT throw the view back to the middle of the vault nor leave it turning around whatever the anchor happened to be before. Because a re-resolved anchor never moves the camera (that rule belongs to the anchor itself), engaging remains snap-free.
 
 The orbit drive SHALL be **relative**: the first frame after it (re)engages SHALL seed its reference from the hand point and apply no motion, with subsequent frames applying only the delta from that reference, so engaging a fist never snaps the camera. Seeding SHALL re-derive from the **live** camera, so a gesture drive that begins after the user moved the camera with the mouse continues from where the mouse left it rather than jumping back to where gesture control last was — **including what the camera is aimed at**, not only where it sits. The camera drive SHALL be smooth and stable (built on the smoothed hand point, with small per-frame deltas). These bindings SHALL engage only while the galaxy is active and no reader is open, so they never collide with the reader's `Closed_Fist`-closes-reader binding or with the deck's fist-rotates-the-orb binding. **Mouse drag/scroll camera control SHALL remain working after every exit from a gesture drive** — not only when a gesture is released, but also when hand control is switched off mid-drive, a reader opens mid-drive, Iris goes to sleep mid-drive, or the hand simply leaves the frame; the gesture drive SHALL NOT be able to leave the built-in camera controls permanently disabled for the rest of the galaxy session, and SHALL NOT restore them by overwriting what the camera was aimed at.
 
@@ -22,10 +22,10 @@ The orbit drive SHALL be **relative**: the first frame after it (re)engages SHAL
 - **WHEN** a node is near the sight and the user closes a fist
 - **THEN** that node becomes the anchor and the orbit turns around it — not around the graph's centroid, and not around whatever happens to sit at the centre of the screen
 
-#### Scenario: A grab over empty space keeps the current anchor
+#### Scenario: A grab over empty space turns around the mark
 
 - **WHEN** the user closes a fist while no node is near the sight
-- **THEN** the anchor is left as it was and the orbit continues around it, rather than reverting to the graph's centroid
+- **THEN** the orbit turns around the point under the sight at the distance the camera is already working at — not the graph's centroid, and not whatever the anchor was before the grab
 
 #### Scenario: A pinch does nothing in the galaxy
 
@@ -155,6 +155,15 @@ to a chosen note also means holding a pose for far longer than an arm tolerates.
 rail replaces both problems with one repeated choice from a small set, each target
 large enough to be hit and each step short enough to be made with a rested arm.
 
+**A note SHALL be reachable by name, not only by walking the links.** The rail
+SHALL offer a way to find notes whose title matches what the user is looking for,
+and those matches SHALL be steppable on exactly the terms every other rail entry
+is. Stepping is only as good as the reachability of a starting point, and link
+topology cannot supply one: a user looking for a note is thinking about its
+subject, not about what it happens to link to. Matching SHALL ignore case and
+diacritics, since a vault's titles are prose and requiring the accents to be typed
+exactly would make the feature useless in any language that has them.
+
 The rail SHALL be reachable by hand **without any new gesture and without any
 galaxy-specific pointing rule**: it SHALL be ordinary HUD chrome and SHALL be
 activated by the universal point-and-hold click that already reaches every other
@@ -205,6 +214,16 @@ had walked to.
 
 - **WHEN** hand control is off and the user clicks a rail entry
 - **THEN** it activates identically — the hands-free path is additive, not a replacement
+
+#### Scenario: A note is found by its name
+
+- **WHEN** the user types part of a note's title
+- **THEN** the rail offers the notes whose titles match, and activating one steps the camera to it exactly as any other entry does
+
+#### Scenario: Accents need not be typed
+
+- **WHEN** the user types a note's title without its diacritics
+- **THEN** the note is still found
 
 #### Scenario: A fresh galaxy offers entry points
 

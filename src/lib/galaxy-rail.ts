@@ -34,6 +34,12 @@ export const RAIL_ISLAND_CLASS = `hud-galaxy-rail hud-hit ${HUD_CHROME_CLASS}`;
 // cut would break for a well-connected note. The island scrolls in both cases.
 export const RAIL_ENTRY_POINT_BUDGET = 12;
 
+// How many name matches the rail shows. Capped without apology, unlike the two
+// lists above: a search's job is to narrow, and a query broad enough to return
+// more than this has not narrowed anything — the answer is a better query, not a
+// longer list.
+export const RAIL_SEARCH_LIMIT = 20;
+
 export type RailNode = { id: string; title: string; tags: string[]; ghost?: boolean };
 
 export type RailEntry = {
@@ -218,4 +224,58 @@ export function railRoots({
     .slice(0, Math.max(0, budget - chosen.length));
 
   return [...chosen, ...fill];
+}
+
+/**
+ * Notes whose title matches `query` (galaxy-note-reachable-by-hand design.md
+ * D16).
+ *
+ * Stepping is only as good as the reachability of a starting point, and link
+ * topology alone cannot supply one: a user looking for a note is thinking about
+ * its SUBJECT, not about what it happens to link to. Matching on the name is what
+ * turns the rail from "walk the graph and hope" into "go there".
+ *
+ * Ranked exact, then prefix, then substring — a user who types a whole title
+ * means that note, and one who types a first word means the notes beginning with
+ * it. Within a rank the most connected come first, on the same reasoning the
+ * entry points use.
+ *
+ * Matching is case- and accent-insensitive: a vault's titles are prose, so
+ * requiring the diacritics to be typed exactly would make the feature useless in
+ * any language that has them.
+ */
+export function railSearch({
+  query,
+  nodes,
+  links,
+  limit = RAIL_SEARCH_LIMIT,
+}: {
+  query: string;
+  nodes: Iterable<RailNode>;
+  links: Iterable<GalaxyLinkRef>;
+  limit?: number;
+}): RailEntry[] {
+  const needle = foldForSearch(query);
+  if (needle.length === 0) return [];
+  const degrees = linkDegrees(Array.from(links));
+  const ranked: { rank: number; entry: RailEntry }[] = [];
+  for (const node of nodes) {
+    const title = foldForSearch(node.title);
+    const rank = title === needle ? 0 : title.startsWith(needle) ? 1 : title.includes(needle) ? 2 : -1;
+    if (rank < 0) continue;
+    ranked.push({ rank, entry: toEntry(node, degrees) });
+  }
+  ranked.sort((a, b) => (a.rank !== b.rank ? a.rank - b.rank : byConnectedness(a.entry, b.entry)));
+  return ranked.slice(0, limit).map((item) => item.entry);
+}
+
+// Lowercased with diacritics stripped. NFD splits a letter from its combining
+// marks, and the range below is exactly those marks — so "Ghi chú" is found by
+// typing "ghi chu", which is the whole point of folding at all.
+function foldForSearch(text: string): string {
+  return text
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
 }

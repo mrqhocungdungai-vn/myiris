@@ -74,3 +74,15 @@
 - [x] 8.5 Re-resolve the zoom's anchor from the sight for the whole drive, sharing one `reseedAroundAnchor` with the zoom-out release so a mid-drive change cannot move the camera
 - [x] 8.6 Unit-test 8.1-8.2: the midpoint holds still while palms spread symmetrically, the fallbacks chain, and a node under an off-centre sight wins over one at screen centre
 - [ ] 8.7 Manual pass on the sight specifically: whether aiming by hand actually lands, and whether the dolly stalls from the anchor flapping between neighbours mid-zoom
+
+## 9. The pivot is the mark, and notes are findable by name (D15/D16)
+
+- [x] 9.1 Add `sightPivotPoint(camera, rect, point, depthPoint)` — the sight ray crossed with the plane at the current working depth, with scratch vectors so the loop allocates nothing
+- [x] 9.2 Add `pickPivotAt(...)`: a node when one is near the sight, else the point under it — no "keep the current anchor" case, which is what let the last-opened note act as an invisible pivot
+- [x] 9.3 Engage both drives through `pickPivotAt`; keep the zoom's live re-aim on `pickAnchorAt` (nodes only), since a point pivot re-derived each frame would chase the aim ease that recentres it
+- [x] 9.4 Redraw the sight as a plus rather than a ring, keeping the engaged treatment
+- [x] 9.5 Add `railSearch({ query, nodes, links })` — title match, case- and diacritic-folded, ranked exact/prefix/substring then by connectedness
+- [x] 9.6 Put a search field in the rail island; matches replace the entry points while a query is up and are steppable on the same terms
+- [x] 9.7 Unit-test 9.1-9.2 and 9.5: the pivot lands off-centre under an off-centre sight and mirrors about the centre, a stale anchor is never kept, diacritics are ignored, and the ranking holds
+- [ ] 9.8 Manual pass: whether "turn around the mark" reads well when the sight is off to one side (the aim eases onto it, so the view swings by that offset), and whether the search makes the rail worth having
+- [ ] 9.9 Propose the voice half of the search as its own change — there is no second-brain tool on the Gemini surface today, so it needs a tool declaration, a main-process handler, and a route into this component

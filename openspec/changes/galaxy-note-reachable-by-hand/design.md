@@ -267,6 +267,70 @@ and is not settled here; it is recorded in the Open Questions below rather than
 acted on, because removing shipped, specified behaviour is not a call this
 decision gets to make on its own.
 
+### D15 — The pivot IS the mark, with no "keep what it was" case
+
+*Added after the second manual pass: "wherever the sight is, that is always shown
+and what it turns around — not the note that is open."*
+
+D2 and D14 both kept the current anchor when no node was near the sight. That
+looked like a safe fallback and is not: an anchor that survives a grab aimed
+somewhere else is a pivot the user is not pointing at and cannot see. Most
+visibly it is the note they last opened, which then follows them around
+invisibly, so the mark sits in one place and the view turns around another. Every
+grab over empty space made the two disagree.
+
+So the fallback is gone. `pickPivotAt` returns a node when one is near enough —
+snapping to a note is what makes "dolly all the way in and arrive" work — and
+otherwise the **point under the sight**, found by crossing the sight ray with the
+plane through the current pivot perpendicular to the view (`sightPivotPoint`).
+That gives a pivot right where the mark is, at the distance the camera was already
+working at. One sentence, no exception: you turn around the mark.
+
+Opening a note still anchors on it, which is what leaves the camera in that note's
+neighbourhood when the reader closes — and is the whole point of the voice-search
+route. It simply cannot outlive the next grab any more.
+
+**Where the point pivot is NOT re-derived, and why.** The zoom's live re-aim
+(D14) stays node-only. The camera eases its aim onto the pivot, which recentres
+it on screen; re-deriving a point pivot from the still-off-centre sight each frame
+would then walk it sideways, chasing its own feedback. A node has no such loop —
+it is a fixed thing in the world — so re-targeting between notes mid-zoom is
+stable. Over empty space the engage-time pivot stands for the drive.
+
+*Trade-off, for the manual pass:* because the aim eases onto the pivot, a grab
+with the sight off to one side swings the view by that offset. That is the literal
+reading of "turn around the mark", and the mark being visible is what should make
+it predictable rather than surprising — but it is a real change in feel and worth
+judging directly.
+
+**The mark is a plus, not a ring.** A ring says "somewhere in here", and its own
+centre is the one part of it not drawn. Two crossing hairlines name a point, which
+is what a pivot is.
+
+### D16 — Finding by name is typed here, and voice is a separate change
+
+Stepping is only as good as the reachability of a starting point, and the manual
+pass' conclusion was that link topology cannot supply one: a user looking for a
+note is thinking about its subject, not about what it links to. `railSearch`
+matches note titles — case- and diacritic-folded, since a vault's titles are prose
+and demanding exact accents would make it useless in Vietnamese — and its results
+are steppable on exactly the terms every other rail entry is. It needs no IPC: the
+renderer already holds the whole graph.
+
+**Voice input for the search is deliberately not built here.** There is no
+second-brain tool on the Gemini surface at all today, so it means a new tool
+declaration, a main-process handler, and a route from a voice answer into this
+component. That is the `verb-tool-surface` / `voice-decision-relay` territory
+`CLAUDE.md` routes through its own change, and folding it into a change already in
+apply is exactly what that rule exists to prevent. The typed search is the half
+that can be built without touching the voice surface, and it is what the mouse and
+keyboard path needs regardless.
+
+Consequence, stated rather than left to be discovered: **finding by name is not
+hands-free yet.** The universal dwell fires `.click()` on buttons and links, and
+clicking a text field does not type into it. The hand can step the *results*; it
+cannot produce the query.
+
 ### D8 — The flight is a real tween, and a user grab cancels it
 
 A rail step happens with no drive engaged, so the controls are enabled and

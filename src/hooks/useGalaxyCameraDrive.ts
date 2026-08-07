@@ -22,6 +22,7 @@ import {
   CENTROID_ANCHOR,
   easeAnchor,
   pickAnchorAt,
+  pickPivotAt,
   rectCentre,
   shouldReleaseAnchor,
   type GalaxyAnchor,
@@ -416,16 +417,22 @@ export function useGalaxyCameraDrive({
             // Each grab regrips on whatever the user is looking at. Nothing in
             // range keeps the current anchor — a grab over empty space must not
             // throw the view back to the middle of the vault.
+            // The pivot is whatever the SIGHT is on — a node if one is near
+            // enough, otherwise the point under the mark at the current working
+            // depth (design.md D15). There is no "keep whatever it was" case:
+            // that is what let the last-opened note follow the user around as an
+            // invisible pivot they were not pointing at.
             engageMovedAnchorRef.current =
               rect && sight
                 ? anchor.setAnchor(
-                  pickAnchorAt(
+                  pickPivotAt(
                     positionsRef.current.values(),
                     fg.camera(),
                     rect,
                     sight,
                     anchor.anchorRef.current,
                     anchorThresholdPx,
+                    anchor.displayedAnchorRef.current,
                   ),
                   // The drive's own per-frame write eases the aim; the mouse-path
                   // ease must not also run and fight it.
@@ -543,6 +550,14 @@ export function useGalaxyCameraDrive({
     // they spread. An orbit's input IS the hand's travel, so a sight read from
     // it would re-aim on every frame of the motion that is meant to be turning
     // the camera.
+    //
+    // NODES ONLY, deliberately (`pickAnchorAt`, not `pickPivotAt`): a point
+    // pivot is derived by crossing the sight ray with the plane at the current
+    // working depth, and the camera is meanwhile easing its aim ONTO that pivot
+    // — which recentres it on screen. Re-deriving from the off-centre sight each
+    // frame would then walk the pivot sideways, chasing itself. A node is a
+    // fixed thing in the world with no such feedback, so re-targeting between
+    // notes mid-zoom is stable. Over empty space the engage-time pivot stands.
     function reaimZoomFromSight(fg: Fg, rectNow: ScreenRect, sightNow: HandPoint, curDist: number) {
       const picked = pickAnchorAt(
         positionsRef.current.values(),

@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   railNeighbours,
   railRoots,
+  railSearch,
   connectedRegions,
   linkDegrees,
   RAIL_ISLAND_CLASS,
@@ -207,5 +208,58 @@ describe("railRoots — the entry points", () => {
 
   it("yields nothing for an empty graph", () => {
     expect(railRoots({ nodes: [], links: [] })).toEqual([]);
+  });
+});
+
+describe("railSearch — finding a note by name", () => {
+  const NAMED: RailNode[] = [
+    { id: "gh", title: "Ghi chú kiến trúc", tags: [] },
+    { id: "alpha", title: "Alpha", tags: [] },
+    { id: "alphabet", title: "Alphabet soup", tags: [] },
+    { id: "sub", title: "The alpha channel", tags: [] },
+  ];
+  const NAMED_LINKS = [{ source: "sub", target: "alpha" }];
+
+  it("returns nothing for an empty or whitespace query", () => {
+    expect(railSearch({ query: "", nodes: NAMED, links: NAMED_LINKS })).toEqual([]);
+    expect(railSearch({ query: "   ", nodes: NAMED, links: NAMED_LINKS })).toEqual([]);
+  });
+
+  it("ranks exact, then prefix, then substring", () => {
+    const ids = railSearch({ query: "alpha", nodes: NAMED, links: NAMED_LINKS }).map((e) => e.id);
+    expect(ids).toEqual(["alpha", "alphabet", "sub"]);
+  });
+
+  it("ignores case", () => {
+    expect(railSearch({ query: "ALPHABET", nodes: NAMED, links: NAMED_LINKS }).map((e) => e.id)).toEqual(["alphabet"]);
+  });
+
+  it("ignores diacritics, so a title in Vietnamese is findable without typing them", () => {
+    expect(railSearch({ query: "ghi chu", nodes: NAMED, links: NAMED_LINKS }).map((e) => e.id)).toEqual(["gh"]);
+    expect(railSearch({ query: "kien truc", nodes: NAMED, links: NAMED_LINKS }).map((e) => e.id)).toEqual(["gh"]);
+  });
+
+  it("orders equally-ranked matches by connectedness", () => {
+    const nodes: RailNode[] = [
+      { id: "quiet", title: "Note quiet", tags: [] },
+      { id: "busy", title: "Note busy", tags: [] },
+      { id: "x", title: "X", tags: [] },
+    ];
+    const links = [
+      { source: "busy", target: "x" },
+      { source: "busy", target: "quiet" },
+    ];
+    expect(railSearch({ query: "note", nodes, links }).map((e) => e.id)).toEqual(["busy", "quiet"]);
+  });
+
+  it("caps the result list", () => {
+    const nodes: RailNode[] = [];
+    for (let i = 0; i < 50; i++) nodes.push({ id: `n${i}`, title: `Note ${i}`, tags: [] });
+    expect(railSearch({ query: "note", nodes, links: [], limit: 5 })).toHaveLength(5);
+  });
+
+  it("marks a ghost match as not openable, like every other entry", () => {
+    const nodes: RailNode[] = [{ id: "g", title: "Ghost note", tags: [], ghost: true }];
+    expect(railSearch({ query: "ghost", nodes, links: [] })[0].openable).toBe(false);
   });
 });

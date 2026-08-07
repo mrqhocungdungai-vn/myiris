@@ -1,4 +1,4 @@
-import type * as THREE from "three";
+import * as THREE from "three";
 import { nearestNodeAt, type GalaxyNavNode, type ScreenRect } from "./galaxy-nav";
 
 // The galaxy's orbit anchor (galaxy-note-reachable-by-hand design.md D1-D5):
@@ -108,6 +108,83 @@ export function pickAnchorAt(
 /** The centre of `rect` in window pixels — the sight's fallback when no hand is in frame. */
 export function rectCentre(rect: ScreenRect): { x: number; y: number } {
   return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+}
+
+// Reused across frames, like `galaxy-nav.ts`'s own scratch — this runs inside
+// the gesture loop, which must not allocate per frame.
+const rayScratch = new THREE.Vector3();
+const dirScratch = new THREE.Vector3();
+const forwardScratch = new THREE.Vector3();
+const offsetScratch = new THREE.Vector3();
+
+/**
+ * The world point under the sight, at the same viewing depth as `depthPoint`
+ * (galaxy-note-reachable-by-hand design.md D15).
+ *
+ * This is what makes the sight a pivot even where there is no note: casting a ray
+ * through the sight pixel and crossing it with the plane through the current
+ * pivot, perpendicular to the view. Turn the camera with the sight over empty
+ * space and it turns around *that* spot, at the distance it was already working
+ * at — not around whatever the anchor happened to be left on.
+ *
+ * Falls back to `depthPoint` unchanged in the degenerate cases (a ray parallel to
+ * the view plane, or a pivot behind the camera), which cannot arise for a sight
+ * inside the viewport but must not produce NaN if they ever do.
+ */
+export function sightPivotPoint(
+  camera: THREE.Camera,
+  rect: ScreenRect,
+  point: { x: number; y: number },
+  depthPoint: Vec3,
+): Vec3 {
+  const fallback = { x: depthPoint.x, y: depthPoint.y, z: depthPoint.z };
+  const ndcX = ((point.x - rect.left) / rect.width) * 2 - 1;
+  const ndcY = -(((point.y - rect.top) / rect.height) * 2 - 1);
+  rayScratch.set(ndcX, ndcY, 0.5).unproject(camera);
+  dirScratch.copy(rayScratch).sub(camera.position);
+  if (dirScratch.lengthSq() === 0) return fallback;
+  dirScratch.normalize();
+  camera.getWorldDirection(forwardScratch);
+  const denominator = dirScratch.dot(forwardScratch);
+  if (Math.abs(denominator) < 1e-6) return fallback;
+  offsetScratch.set(depthPoint.x, depthPoint.y, depthPoint.z).sub(camera.position);
+  const distance = offsetScratch.dot(forwardScratch) / denominator;
+  if (!(distance > 0)) return fallback;
+  return {
+    x: camera.position.x + dirScratch.x * distance,
+    y: camera.position.y + dirScratch.y * distance,
+    z: camera.position.z + dirScratch.z * distance,
+  };
+}
+
+/**
+ * The pivot a camera drive engaging right now would turn around: **whatever the
+ * sight is on**, always (design.md D15).
+ *
+ * A node within `thresholdPx` wins, because snapping to a note is what makes
+ * "dolly all the way in and arrive at that note" work. With nothing near enough
+ * the pivot is the point under the sight at the current working depth — NOT the
+ * anchor left over from before.
+ *
+ * That last part is the whole difference from `pickAnchorAt`. Keeping the old
+ * anchor when the sight is over empty space means the camera turns around
+ * something the user is not pointing at and cannot see — most visibly the note
+ * they last opened, which then follows them around as an invisible pivot. The
+ * rule is one sentence with no exception: you turn around the mark.
+ */
+export function pickPivotAt(
+  nodes: Iterable<GalaxyNavNode>,
+  camera: THREE.Camera,
+  rect: ScreenRect,
+  point: { x: number; y: number },
+  current: GalaxyAnchor,
+  thresholdPx: number,
+  currentPosition: Vec3,
+): GalaxyAnchor {
+  const incumbentId = current.kind === "node" ? current.id : null;
+  const node = nearestNodeAt(nodes, camera, rect, point, thresholdPx, incumbentId);
+  if (node) return incumbentId === node.id ? current : { kind: "node", id: node.id };
+  return { kind: "point", position: sightPivotPoint(camera, rect, point, currentPosition) };
 }
 
 // How far out counts as "framing the whole graph" — a multiple of the graph's

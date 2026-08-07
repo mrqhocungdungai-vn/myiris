@@ -9,7 +9,7 @@ import { useGalaxyAnchor } from "../hooks/useGalaxyAnchor";
 import { selectLabels } from "../lib/galaxy-labels";
 import { createLabelPool, type LabelPool } from "../lib/galaxy-label-sprites";
 import { createRingPair, type AnchorRings } from "../lib/galaxy-anchor-rings";
-import { railNeighbours, railRoots, RAIL_ISLAND_CLASS } from "../lib/galaxy-rail";
+import { railNeighbours, railRoots, railSearch, RAIL_ISLAND_CLASS } from "../lib/galaxy-rail";
 import GalaxyStepRail from "./GalaxyStepRail";
 import type { GalaxyNode, GalaxyLink, TrackballControlsLike } from "../lib/galaxy-types";
 
@@ -412,6 +412,9 @@ function GalaxyCanvas({
   // Inert for a moment after a step, so a hand still held over the rail cannot
   // step again (design.md D11).
   const [railLocked, setRailLocked] = useState(false);
+  // The note-name search (design.md D16). Local to this component: the renderer
+  // already holds the whole graph, so matching titles needs no IPC at all.
+  const [railQuery, setRailQuery] = useState("");
   const railLockTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => {
     if (railLockTimerRef.current) clearTimeout(railLockTimerRef.current);
@@ -844,6 +847,10 @@ function GalaxyCanvas({
     () => (railCentreId === null ? [] : railNeighbours({ centreId: railCentreId, nodes: graph.nodes, links: graph.links })),
     [graph, railCentreId],
   );
+  const matches = useMemo(
+    () => railSearch({ query: railQuery, nodes: graph.nodes, links: graph.links }),
+    [graph, railQuery],
+  );
   const centreTitle = railCentreId === null ? null : graph.nodes.find((n) => n.id === railCentreId)?.title ?? railCentreId;
 
   return (
@@ -860,6 +867,9 @@ function GalaxyCanvas({
         className={RAIL_ISLAND_CLASS}
         roots={roots}
         neighbours={neighbours}
+        matches={matches}
+        query={railQuery}
+        onQueryChange={setRailQuery}
         centreTitle={centreTitle}
         locked={railLocked}
         onStep={stepToNote}

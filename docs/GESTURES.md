@@ -253,8 +253,15 @@ alike, orbits around and dollies toward (`src/lib/galaxy-anchor.ts`, owned by
 `useGalaxyAnchor`). It is the graph's centroid by default, a specific node once
 one is chosen, or an arbitrary point once the user pans there.
 
-It moves to a node when a camera drive **engages** and a node is near the **sight**
-(below); when a
+**A camera drive turns around whatever the sight is on, always.** A node when one
+is near it — snapping to a note is what makes "dolly all the way in and arrive"
+work — otherwise the point under the mark itself, at the depth the camera is
+already working at (`sightPivotPoint`). There is deliberately no "keep whatever it
+was" fallback: an anchor that survives a grab aimed somewhere else is a pivot the
+user is not pointing at and cannot see, and most visibly it is the note they last
+opened, following them around invisibly.
+
+The anchor also moves when a
 note is opened by click or dwell; when the mouse wheel is scrolled with the
 pointer over a node; and when the user steps to a note on the rail. Dollying far
 enough out — a multiple of the graph's own extent, *or* the dolly clamp,
@@ -282,8 +289,9 @@ the orbit **origin** stays the target anchor the spherical was seeded against.
 Sharing one value between the two roles would lurch the camera by exactly the
 anchor delta on every engage.
 
-**The camera is aimed by a sight that follows the hands.** The sight
-(`sightPoint`, `galaxy-nav.ts`) sits at the midpoint between two open palms, else
+**The camera is aimed by a sight that follows the hands.** The sight is drawn as a **plus** — a ring says "somewhere in here" and leaves its
+own centre undrawn, while two crossing hairlines name a point, which is what a
+pivot is. It (`sightPoint`, `galaxy-nav.ts`) sits at the midpoint between two open palms, else
 at the primary hand's own point, else at the centre of the view when no hand is in
 frame. It is *not* pinned to screen centre, and that is the whole point: a fixed
 sight can only be aimed by flying the camera until the target is in the middle,
@@ -348,6 +356,16 @@ stepping to it would land on an empty rail.
 They do not change as the user steps, which is what makes them a fixed frame of
 reference: the first step needs no aiming, and leaving a cloud — or returning to
 the start — never requires walking back hop by hop or closing the galaxy.
+
+**Notes are findable by name.** A search field at the top of the rail matches note
+titles — case- and diacritic-folded, so a Vietnamese title is found without typing
+its accents — and the matches step exactly like any other entry. Stepping is only
+as good as the reachability of a starting point, and link topology cannot supply
+one: someone looking for a note is thinking about its subject, not about what it
+links to. **This half is typed, not hands-free**: the universal dwell fires
+`.click()` on buttons, and clicking a text field does not type into it, so the hand
+can step the results but cannot produce the query. Voice input for it is a separate
+change, because there is no second-brain tool on the Gemini surface at all today.
 
 Its one-hop set comes from the same `focusNeighborhood` the declutter and the
 highlight use, so nothing in the galaxy can disagree about what one hop means —
