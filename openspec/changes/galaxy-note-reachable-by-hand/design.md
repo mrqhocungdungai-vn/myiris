@@ -67,6 +67,11 @@ feedback, the zoom-out release, and the tests all need to ask.
 
 ### D2 — Anchor picking reuses `nearestNodeAt`, queried at screen centre
 
+> **Superseded in part by D14.** The reuse of `nearestNodeAt` and the incumbent
+> dead-band below both stand and are load-bearing. The *query point* does not: the
+> manual pass showed that a sight fixed at screen centre cannot be aimed, so it is
+> now read off the hands. Read D14 for what replaced it and why.
+
 `nearestNodeAt` already does exactly the required work: projection, the
 front-of-camera NDC guard, a pixel threshold, and an incumbent dead-band. Picking
 the anchor is the same query with the screen-centre point substituted for the hand
@@ -214,6 +219,54 @@ so the "where can I go from here" and "where else is there" questions are answer
 at once. They do not change as the user steps, which is what makes them a fixed
 frame of reference rather than a second thing to keep track of.
 
+### D14 — The sight follows the hands, not the screen
+
+*Added after the manual pass, which rejected the premise the anchor was built on.*
+
+D2 resolved the anchor from the node nearest the CENTRE of the screen. That
+premise is wrong, and the report that killed it was exact: with a centre-pinned
+sight, "pulling the zoom open just zooms at random". It does, and not because the
+zoom is mistuned. A fixed sight can only be aimed by flying the camera until the
+target is in the middle — which is the hardest part of navigating the galaxy,
+demanded *before* the easy part is allowed to begin. The user has to solve the
+problem in order to be allowed to use the tool for solving it.
+
+Reading the sight off the hands inverts that: put your hands over the region, act,
+done — one motion, no camera work first. `sightPoint` (in `galaxy-nav.ts`, with the
+rest of the hand policy) returns the midpoint between two open palms, else the
+primary hand's own point, else the centre of the view when no hand is in frame.
+`pickAnchorAtCenter` accordingly generalises to `pickAnchorAt(..., point, ...)`,
+with `rectCentre` left as the named fallback rather than the rule.
+
+**The two drives resolve it on different schedules, and the asymmetry has a
+reason rather than being a compromise.**
+
+- The **orbit's input is the hand's travel**. A sight read from a moving hand
+  during an orbit would re-aim on every frame of the very motion that is meant to
+  be turning the camera. So the orbit resolves at engage and holds.
+- The **zoom's input is the distance between the hands**, and their midpoint is
+  invariant under spreading them. The sight is therefore free to go on aiming for
+  the whole drive — which is what the user actually asked for: moving both hands
+  onto a different region mid-zoom re-aims the dolly onto it.
+
+A mid-drive anchor change has to hold the camera still on exactly D3's terms, so
+`reseedAroundAnchor` re-derives the spherical from the live camera against the new
+anchor and re-seeds the zoom's reference from the same frame's hand distance —
+the hands have not moved, so the radius must not either. The zoom-out release
+(D5) was already doing this by hand; both now share the one function.
+
+*Risk, for the manual pass:* re-seeding the zoom reference discards the spread
+accumulated so far, so a sight flapping between two nodes would stall the dolly.
+`nearestNodeAt`'s incumbent dead-band is what should prevent it — the same
+mechanism, in the same place, that D2 relied on for the same reason.
+
+*What this does not fix.* The report also concluded that hand gestures are the
+wrong instrument for FINDING a note at all — that hands suit zoom, open, close and
+scroll, and finding wants something else. That judgement is about the step rail
+and is not settled here; it is recorded in the Open Questions below rather than
+acted on, because removing shipped, specified behaviour is not a call this
+decision gets to make on its own.
+
 ### D8 — The flight is a real tween, and a user grab cancels it
 
 A rail step happens with no drive engaged, so the controls are enabled and
@@ -338,6 +391,26 @@ islands would leave it with no camera to drive.
   rail's degree ordering only mean something at that size.
 
 ## Open Questions
+
+- **Whether the step rail should exist at all.** The manual pass reached a broader
+  conclusion than any single defect: that hand gestures are effective for zoom,
+  open, close and scroll, and ineffective for *finding* — and that the rail, which
+  exists to make finding hands-free, is still not effective after the coverage fix
+  (D7b). Three readings, and they lead to materially different work:
+
+  1. The rail's *instrument* is right but its *content* is wrong — it lists notes
+     by link topology, and a user looking for a note is thinking about its subject.
+     The deferred typed search box, or a voice-populated rail, replaces the content
+     without touching the instrument.
+  2. The rail is right but *premature* — it needs a vault with a real Map of
+     Content, which the test vault does not have and the working copy has even
+     less of. It cannot be judged before then.
+  3. Finding by hand is a dead end and the rail should go, leaving the hands to
+     zoom/open/close/scroll and finding to voice or the keyboard.
+
+  Not resolvable from the implementation. Deliberately left open rather than
+  guessed at: removing shipped, specified behaviour is the user's call, and each
+  reading points somewhere else.
 
 - ~~Whether the candidate ring should be suppressed while a drive is engaged (the
   candidate cannot change during a drive, so the ring is redundant then, but removing

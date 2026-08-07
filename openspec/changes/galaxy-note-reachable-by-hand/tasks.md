@@ -64,3 +64,13 @@
 - [x] 7.4 Unit-test 7.1-7.3: a region unreachable from the main body still gets an entry, the guarantee survives more regions than the budget, a one-note region with no links is excluded, a single-region vault still gets a spread of hubs, and the neighbour list is unchanged
 - [x] 7.5 Render the rail as two sections — entry points always, the centre note's neighbours below — with the centre note named so the user knows where they are
 - [x] 7.6 Confirm the step lock (D11) covers both sections, since either can be the element under a still-held hand
+
+## 8. The sight follows the hands (D14, from the manual pass)
+
+- [x] 8.1 Add `sightPoint(hand, fallback)` to `src/lib/galaxy-nav.ts` — two-palm midpoint, else the primary hand's point, else the view's centre
+- [x] 8.2 Generalise `pickAnchorAtCenter` to `pickAnchorAt(..., point, ...)`, with `rectCentre` left as the named fallback rather than the rule
+- [x] 8.3 Position the reticle from the sight every frame by direct `transform` write, never React state
+- [x] 8.4 Resolve the orbit's anchor from the sight at engage and hold it — its input is the hand's travel, so a live sight would re-aim on the motion meant to be turning the camera
+- [x] 8.5 Re-resolve the zoom's anchor from the sight for the whole drive, sharing one `reseedAroundAnchor` with the zoom-out release so a mid-drive change cannot move the camera
+- [x] 8.6 Unit-test 8.1-8.2: the midpoint holds still while palms spread symmetrically, the fallbacks chain, and a node under an off-centre sight wins over one at screen centre
+- [ ] 8.7 Manual pass on the sight specifically: whether aiming by hand actually lands, and whether the dolly stalls from the anchor flapping between neighbours mid-zoom

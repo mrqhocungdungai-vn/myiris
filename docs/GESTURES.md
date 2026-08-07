@@ -253,8 +253,8 @@ alike, orbits around and dollies toward (`src/lib/galaxy-anchor.ts`, owned by
 `useGalaxyAnchor`). It is the graph's centroid by default, a specific node once
 one is chosen, or an arbitrary point once the user pans there.
 
-It moves to a node when a camera drive **engages** and a node is near the centre
-of the screen (each grab regrips on whatever the user is looking at); when a
+It moves to a node when a camera drive **engages** and a node is near the **sight**
+(below); when a
 note is opened by click or dwell; when the mouse wheel is scrolled with the
 pointer over a node; and when the user steps to a note on the rail. Dollying far
 enough out — a multiple of the graph's own extent, *or* the dolly clamp,
@@ -282,19 +282,43 @@ the orbit **origin** stays the target anchor the spherical was seeded against.
 Sharing one value between the two roles would lurch the camera by exactly the
 anchor delta on every engage.
 
-**What a grab will take hold of is visible before the grab.** While hand control
-is on, a reticle marks the centre of the screen, a faint ring marks the node a
-grab would anchor to, and a stronger ring marks the live anchor
-(`galaxy-anchor-rings.ts`). Both rings are achromatic on purpose — every other
+**The camera is aimed by a sight that follows the hands.** The sight
+(`sightPoint`, `galaxy-nav.ts`) sits at the midpoint between two open palms, else
+at the primary hand's own point, else at the centre of the view when no hand is in
+frame. It is *not* pinned to screen centre, and that is the whole point: a fixed
+sight can only be aimed by flying the camera until the target is in the middle,
+which is the hardest part of navigating the galaxy demanded before the easy part is
+allowed to begin — so spreading two palms dollied toward whatever happened to be at
+the centre, which from the user's side is arbitrary. Put your hands over the region
+and act instead.
+
+The two drives read it on different schedules, and the asymmetry is the reason
+rather than a compromise. The **orbit's** input is the hand's travel, so a live
+sight would re-aim on every frame of the motion meant to be turning the camera — it
+resolves at engage and holds. The **zoom's** input is the distance between the
+hands, and their midpoint is unaffected by them parting, so the sight keeps aiming
+for the whole drive: moving both hands onto a different region mid-zoom re-aims the
+dolly onto it, re-seeding the spherical and the zoom reference so the view does not
+jump.
+
+**What a grab will take hold of is visible before the grab.** A faint ring marks the
+node a grab would anchor to, and a stronger ring marks the live anchor
+(`galaxy-anchor-rings.ts`). While a drive is engaged the candidate ring gives way to
+a heavier one plus an enlarged sight — the pose has to clear
+`stabilizeGesture`'s three-frame gate before anything can move, and without a mark
+saying "caught" that wait reads as the camera being slow rather than as the
+recognizer still deciding. Both rings are achromatic on purpose — every other
 node treatment is a hue (tag colours, the yellow pointed-at highlight, the green
 focus), so a neutral outline sits in a different visual channel rather than
 competing with "which tag is this" and "is this focused". The candidate is
 re-selected on the same rate limit the titles use, not every frame. The marks
 stop when hand control is off, when a reader holds the surface, and when Iris
 sleeps — they live inside the gesture loop, which is gated on exactly those
-terms. The reticle is a DOM element **outside** any chrome island: chrome nulls
-the galaxy's pointing target under the hand, so a chrome reticle at screen
-centre would kill node dwell on the most-used part of the view.
+terms. The sight is a DOM element **outside** any chrome island, positioned by a
+direct `transform` write from the gesture loop (it moves every frame; no re-render
+could carry that). Chrome nulls the galaxy's pointing target under the hand, so a
+sight carrying `HUD_CHROME_CLASS` would follow the finger around killing node dwell
+and inspect wherever it went.
 
 ### The step rail — reaching a note without aiming at one
 

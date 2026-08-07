@@ -71,35 +71,43 @@ export function anchorsEqual(a: GalaxyAnchor, b: GalaxyAnchor): boolean {
 }
 
 /**
- * The anchor a camera drive engaging right now would take hold of: the node
- * nearest the CENTRE of the screen (design.md D2).
+ * The anchor a camera drive would take hold of with its sight at `point`
+ * (design.md D2, generalised by D14).
  *
- * This is `nearestNodeAt` with the rect's centre substituted for the hand
- * point, and it reuses that function rather than raycasting deliberately — a
- * raycast answers "what does the centre ray hit", so a node beside the centre
- * would be ignored while one the ray happens to graze would win. The spec says
- * *near* the centre.
+ * `point` is the sight — where the user's hands are, in window pixels — not the
+ * centre of the screen. A centre-pinned sight can only be aimed by first flying
+ * the camera until the target is in the middle, which is the hardest part of the
+ * task demanded before the easy part is allowed to start.
  *
- * Passing `current` as the incumbent is not incidental: the dead-band head
- * start it earns is what stops the anchor flapping between two neighbours while
- * the user orbits through a dense region.
+ * This is `nearestNodeAt`, reused rather than a raycast deliberately: a raycast
+ * answers "what does the ray hit", so a node beside the sight would be ignored
+ * while one the ray happens to graze would win. The spec says *near* the sight.
  *
- * With nothing in range the CURRENT anchor is returned unchanged — a grab over
+ * Passing `current` as the incumbent is not incidental: the dead-band head start
+ * it earns is what stops the anchor flapping between two neighbours as the sight
+ * drifts across a dense region.
+ *
+ * With nothing in range the CURRENT anchor is returned unchanged — aiming at
  * empty space must not throw the view back to the middle of the vault.
  */
-export function pickAnchorAtCenter(
+export function pickAnchorAt(
   nodes: Iterable<GalaxyNavNode>,
   camera: THREE.Camera,
   rect: ScreenRect,
+  point: { x: number; y: number },
   current: GalaxyAnchor,
   thresholdPx: number,
 ): GalaxyAnchor {
-  const centre = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
   const incumbentId = current.kind === "node" ? current.id : null;
-  const node = nearestNodeAt(nodes, camera, rect, centre, thresholdPx, incumbentId);
+  const node = nearestNodeAt(nodes, camera, rect, point, thresholdPx, incumbentId);
   if (!node) return current;
   if (incumbentId === node.id) return current;
   return { kind: "node", id: node.id };
+}
+
+/** The centre of `rect` in window pixels — the sight's fallback when no hand is in frame. */
+export function rectCentre(rect: ScreenRect): { x: number; y: number } {
+  return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
 }
 
 // How far out counts as "framing the whole graph" — a multiple of the graph's

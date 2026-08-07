@@ -11,9 +11,10 @@ opens with is unchanged by this requirement existing.
 
 The anchor SHALL move to a node when:
 
-- a camera drive engages and a node is near the centre of the screen (see
-  `second-brain-gesture-nav`, "A closed fist orbits the galaxy camera") — the node
-  the user is looking at becomes the thing they turn around;
+- a camera drive engages and a node is near the **sight** — the mark showing where
+  the user's hands are aimed (see below, and `second-brain-gesture-nav`, "A closed
+  fist orbits the galaxy camera") — so the node they are pointing at becomes the
+  thing they turn around;
 - a note is opened, whether by click or by dwell — so closing the reader leaves the
   camera around that note's neighbourhood rather than the middle of the vault;
 - the user reaches a note through the step rail (see `second-brain-gesture-nav`);
@@ -87,12 +88,35 @@ open a note, and SHALL NOT change what the voice layer or a run reads.
 - **WHEN** the anchor moves to a node by any route
 - **THEN** the focus is unchanged, no note opens, and nothing the voice layer or a run reads has changed
 
+### Requirement: The camera is aimed by a sight that follows the hands
+
+While hand control is enabled and the galaxy is active, Iris SHALL show a **sight**
+— a mark of where the camera drives are aimed — and that sight SHALL follow the
+user's hands rather than being fixed to the centre of the screen.
+
+**A sight fixed at the centre of the screen cannot be aimed.** The only way to put
+something under it is to fly the camera until that thing is in the middle, which is
+the hardest part of navigating the galaxy demanded *before* the easy part is
+allowed to begin. Zooming then moves toward whatever happened to be at the centre,
+which from the user's side is arbitrary — the gesture has no relationship to the
+region they were looking at. Reading the sight off the hands inverts it: the user
+puts their hands over the region and acts, in one motion, with no camera work
+first.
+
+Where a drive's own input is the hands' **position**, the sight SHALL be resolved
+when the drive engages and then held — otherwise the motion that drives the camera
+would also keep re-aiming it. Where a drive's input is the **distance between the
+hands**, the sight SHALL keep aiming for the whole of the drive, since the hands'
+midpoint is unaffected by them parting: spreading the palms SHALL dolly toward
+whatever the sight is on at that moment, not toward wherever it happened to be when
+the pose was first recognized.
+
 ### Requirement: What a grab will take hold of is visible before the grab
 
-While hand control is enabled and the galaxy is active, Iris SHALL show where the
-centre of the screen is and which node a camera drive would anchor to if engaged
-now. While a node is anchored, that node SHALL be marked distinctly from the
-candidate.
+While hand control is enabled and the galaxy is active, Iris SHALL show which node
+a camera drive would anchor to if engaged now, and — while a drive is engaged —
+that a drive is engaged at all. While a node is anchored, that node SHALL be marked
+distinctly from the candidate.
 
 This is not decoration. An anchor that moves is *harder* to use than a fixed one
 unless the user can predict where it will land: without the marks, engaging a
@@ -115,15 +139,30 @@ The candidate and anchor marks SHALL be distinguishable from the pointed-at
 highlight and from the focus indicator, so a user can tell "this is what I would
 grab" from "this is what I asked about" and from "this is what I selected".
 
-#### Scenario: The centre of the screen is marked
+#### Scenario: The sight follows the hands
 
-- **WHEN** the galaxy is active with hand control on
-- **THEN** the centre of the screen is marked, so the user has something to aim the view with
+- **WHEN** the galaxy is active with hand control on and the user moves their hands across the view
+- **THEN** the sight moves with them, so the user aims by moving their hands rather than by first flying the camera
+
+#### Scenario: Spreading the palms goes where the sight is
+
+- **WHEN** the user holds both palms over a region away from the centre of the screen and spreads them
+- **THEN** the camera dollies toward that region, not toward whatever sits at the centre of the screen
+
+#### Scenario: The aim keeps up during a two-palm zoom
+
+- **WHEN** the user is dollying with two open palms and moves both hands together onto a different node
+- **THEN** the camera re-aims onto that node without the view jumping, and continues dollying toward it
 
 #### Scenario: The node a grab would take is marked
 
-- **WHEN** a node is near the centre of the screen and no camera drive is engaged
+- **WHEN** a node is near the sight and no camera drive is engaged
 - **THEN** that node is marked as the candidate, so the user knows what engaging a drive would anchor to
+
+#### Scenario: An engaged drive is visibly engaged
+
+- **WHEN** the user makes a camera-drive pose and the recognizer accepts it
+- **THEN** the marks change to say so, so the wait for the pose to be recognized reads as waiting rather than as the gesture having failed
 
 #### Scenario: The live anchor is marked distinctly
 
@@ -133,7 +172,7 @@ grab" from "this is what I asked about" and from "this is what I selected".
 #### Scenario: No marks without hand control
 
 - **WHEN** hand control is off and the galaxy is active
-- **THEN** neither the centre mark nor the candidate mark is drawn
+- **THEN** neither the sight nor the candidate mark is drawn
 
 #### Scenario: Marks stop while Iris sleeps
 
@@ -142,7 +181,7 @@ grab" from "this is what I asked about" and from "this is what I selected".
 
 #### Scenario: The candidate is not recomputed every frame
 
-- **WHEN** the camera moves continuously across a dense region
+- **WHEN** the sight moves continuously across a dense region
 - **THEN** the candidate is re-selected at a rate-limited interval rather than once per rendered frame
 
 #### Scenario: The marks are not confusable with the highlight or the focus

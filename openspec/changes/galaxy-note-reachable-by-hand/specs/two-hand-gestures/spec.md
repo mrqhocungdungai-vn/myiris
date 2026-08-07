@@ -6,7 +6,7 @@ Two simultaneously open palms SHALL scale whatever layer currently owns the gest
 
 Concretely: with a reader overlay open (the task run-reader or the vault note reader, which share one reader core) two open palms SHALL scale the reader; with the second-brain galaxy active and no reader open they SHALL dolly the galaxy camera; otherwise they SHALL scale nothing. Because a reader outranks the galaxy, opening a note moves the binding to the note and closing it moves the binding back to the galaxy, with no gesture changing meaning in the user's hands.
 
-In both cases the scale SHALL follow the **distance between the two hands** and SHALL be **relative**: the frame the pose engages SHALL seed a reference from the live state and apply no motion, and later frames SHALL apply only the ratio of the current distance to that reference — so engaging never snaps, and a drive that begins after the user has scaled something by mouse continues from where the mouse left it. Spreading the hands apart SHALL scale **up** — a larger reader, or a camera brought closer to the graph — so the same motion means the same thing whichever layer holds it. Camera dolly SHALL be measured toward the galaxy's current **anchor** (see `second-brain-galaxy-view`, "The camera turns and dollies around a movable anchor") rather than toward the graph's centre, so spreading the hands brings the camera to the note the user is looking at instead of into the middle of the graph — which is its densest and least informative region. Engaging the pose SHALL re-resolve that anchor on the same terms a fist orbit does (see `second-brain-gesture-nav`), so the two camera drives always turn and dolly around the same point. The dolly SHALL remain clamped so the camera neither passes through its anchor nor flies away from the graph.
+In both cases the scale SHALL follow the **distance between the two hands** and SHALL be **relative**: the frame the pose engages SHALL seed a reference from the live state and apply no motion, and later frames SHALL apply only the ratio of the current distance to that reference — so engaging never snaps, and a drive that begins after the user has scaled something by mouse continues from where the mouse left it. Spreading the hands apart SHALL scale **up** — a larger reader, or a camera brought closer to the graph — so the same motion means the same thing whichever layer holds it. Camera dolly SHALL be measured toward the galaxy's current **anchor** (see `second-brain-galaxy-view`, "The camera turns and dollies around a movable anchor") rather than toward the graph's centre, so spreading the hands brings the camera to the note the user is looking at instead of into the middle of the graph — which is its densest and least informative region. Engaging the pose SHALL re-resolve that anchor from the **sight** on the same terms a fist orbit does (see `second-brain-gesture-nav`), so the two camera drives always turn and dolly around the same point. Unlike the orbit, the zoom SHALL keep re-resolving it for as long as the pose is held: the zoom's input is the distance between the hands, so their midpoint — which is where the sight sits — is free to go on aiming while they part. Moving both hands onto a different region mid-zoom SHALL therefore re-aim the dolly onto it without the view jumping. The dolly SHALL remain clamped so the camera neither passes through its anchor nor flies away from the graph.
 
 Losing the pose — a hand leaving the frame, or either hand ceasing to read as an open palm — SHALL release the reference rather than freeze it. Re-engaging SHALL seed a new reference from the live state, so a momentary tracking dropout pauses the scaling instead of jumping it.
 
@@ -31,10 +31,15 @@ The per-frame gesture work for all of this SHALL only run while the hand-control
 - **WHEN** a node is the galaxy's anchor and the user spreads their palms to dolly all the way in
 - **THEN** the camera arrives at that note rather than at the centre of the graph
 
-#### Scenario: Engaging the zoom takes hold of what is at the centre of the screen
+#### Scenario: Engaging the zoom takes hold of what the hands are over
 
-- **WHEN** a node is near the centre of the screen and the user raises two open palms
-- **THEN** that node becomes the anchor the dolly moves toward, the same node a fist orbit would have taken hold of
+- **WHEN** a node is near the sight — the midpoint between the two palms — and the user raises two open palms
+- **THEN** that node becomes the anchor the dolly moves toward, the same node a fist orbit would have taken hold of from the same sight
+
+#### Scenario: The zoom keeps aiming while it is held
+
+- **WHEN** the user is already dollying with two open palms and moves both hands onto a different region of the graph
+- **THEN** the dolly re-aims onto whatever is under the sight there, continuing from the camera's current position rather than jumping
 
 #### Scenario: Spreading the hands always means bigger
 

@@ -266,6 +266,34 @@ export function isHandLowered(point: HandPoint | null, viewportHeight: number): 
   return point.y >= viewportHeight * LOWERED_HAND_FRACTION;
 }
 
+/**
+ * Where the camera's **sight** is on screen — the point a camera drive aims at,
+ * in window pixels (galaxy-note-reachable-by-hand design.md D14).
+ *
+ * The midpoint between two open palms when both are up, otherwise the primary
+ * hand's own point, otherwise `fallback` (the centre of the view) when there is
+ * no hand at all.
+ *
+ * It follows the HANDS, not the screen. A sight pinned to screen centre can only
+ * be aimed by first flying the camera until the thing you want is in the middle
+ * — which is the hardest part of the task, demanded before the easy part is
+ * allowed to start. Spreading two palms then dollies toward whatever happened
+ * to be at the centre, which is arbitrary. Reading the sight off the hands
+ * inverts that: put your hands over the region, spread them, and the camera goes
+ * there.
+ *
+ * The two-palm midpoint specifically, because the zoom's INPUT is the distance
+ * between the hands — so their midpoint is free to carry the aim without the two
+ * meanings interfering. Spreading symmetrically leaves the midpoint still.
+ */
+export function sightPoint(hand: Pick<HandState, "hands" | "point">, fallback: HandPoint): HandPoint {
+  const palms = hand.hands.filter((item) => item.openPalm);
+  if (palms.length >= 2) {
+    return { x: (palms[0].point.x + palms[1].point.x) / 2, y: (palms[0].point.y + palms[1].point.y) / 2 };
+  }
+  return hand.point ?? fallback;
+}
+
 export type Spherical = { radius: number; phi: number; theta: number };
 
 // Keeps the camera off the poles, where azimuth (theta) becomes degenerate.

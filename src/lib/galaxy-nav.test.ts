@@ -11,6 +11,7 @@ import {
   zoomRadius,
   focusNeighborhood,
   isHandLowered,
+  sightPoint,
   type DwellState,
   type GalaxyNavNode,
 } from "./galaxy-nav";
@@ -363,5 +364,45 @@ describe("isHandLowered", () => {
 
   it("is false rather than dividing by a zero viewport", () => {
     expect(isHandLowered({ x: 0, y: 0 }, 0)).toBe(false);
+  });
+});
+
+describe("sightPoint", () => {
+  const FALLBACK = { x: 400, y: 300 };
+  function palm(id: string, x: number, y: number): TrackedHand {
+    return {
+      id,
+      point: { x, y },
+      wristPoint: { x, y },
+      landmarks: [],
+      gesture: "Open_Palm",
+      gestureScore: 0.9,
+      pointing: false,
+      openPalm: true,
+      fist: false,
+      pinchDistance: 0,
+    } as TrackedHand;
+  }
+
+  it("aims at the midpoint between two open palms", () => {
+    const hand = { hands: [palm("a", 100, 200), palm("b", 300, 400)], point: { x: 999, y: 999 } };
+    expect(sightPoint(hand, FALLBACK)).toEqual({ x: 200, y: 300 });
+  });
+
+  it("holds the midpoint still while the palms spread symmetrically", () => {
+    // The zoom's INPUT is the distance between the hands, so its aim must not
+    // drift as they part — that is why the midpoint carries it.
+    const near = { hands: [palm("a", 180, 300), palm("b", 220, 300)], point: null };
+    const far = { hands: [palm("a", 60, 300), palm("b", 340, 300)], point: null };
+    expect(sightPoint(near, FALLBACK)).toEqual(sightPoint(far, FALLBACK));
+  });
+
+  it("falls back to the primary hand's point with only one hand up", () => {
+    const hand = { hands: [palm("a", 100, 200)], point: { x: 111, y: 222 } };
+    expect(sightPoint(hand, FALLBACK)).toEqual({ x: 111, y: 222 });
+  });
+
+  it("falls back to the view's centre with no hand at all", () => {
+    expect(sightPoint({ hands: [], point: null }, FALLBACK)).toEqual(FALLBACK);
   });
 });

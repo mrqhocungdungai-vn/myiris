@@ -4,7 +4,8 @@ import {
   CENTROID_ANCHOR,
   anchorsEqual,
   easeAnchor,
-  pickAnchorAtCenter,
+  pickAnchorAt,
+  rectCentre,
   resolveAnchor,
   shouldReleaseAnchor,
   ANCHOR_EASE_MS,
@@ -82,11 +83,11 @@ describe("anchorsEqual", () => {
   });
 });
 
-describe("pickAnchorAtCenter", () => {
+describe("pickAnchorAt", () => {
   it("takes the node nearest the centre of the screen", () => {
     const camera = makeCamera();
     const centre: GalaxyNavNode = { id: "centre", title: "Centre", x: 0, y: 0, z: 0 };
-    const result = pickAnchorAtCenter([centre], camera, RECT, CENTROID_ANCHOR, 100);
+    const result = pickAnchorAt([centre], camera, RECT, rectCentre(RECT), CENTROID_ANCHOR, 100);
     expect(result).toEqual({ kind: "node", id: "centre" });
   });
 
@@ -94,12 +95,12 @@ describe("pickAnchorAtCenter", () => {
     const camera = makeCamera();
     const far: GalaxyNavNode = { id: "far", title: "Far", x: 8, y: 0, z: 0 };
     const current: GalaxyAnchor = { kind: "node", id: "held" };
-    expect(pickAnchorAtCenter([far], camera, RECT, current, 5)).toBe(current);
+    expect(pickAnchorAt([far], camera, RECT, rectCentre(RECT), current, 5)).toBe(current);
   });
 
   it("keeps the current anchor over an empty graph", () => {
     const camera = makeCamera();
-    expect(pickAnchorAtCenter([], camera, RECT, CENTROID_ANCHOR, 100)).toBe(CENTROID_ANCHOR);
+    expect(pickAnchorAt([], camera, RECT, rectCentre(RECT), CENTROID_ANCHOR, 100)).toBe(CENTROID_ANCHOR);
   });
 
   it("gives the incumbent a dead-band head start, so the anchor does not flap between neighbours", () => {
@@ -109,21 +110,37 @@ describe("pickAnchorAtCenter", () => {
     const incumbent: GalaxyNavNode = { id: "incumbent", title: "Incumbent", x: 0.05, y: 0, z: 0 };
     const challenger: GalaxyNavNode = { id: "challenger", title: "Challenger", x: 0.02, y: 0, z: 0 };
     const current: GalaxyAnchor = { kind: "node", id: "incumbent" };
-    expect(pickAnchorAtCenter([incumbent, challenger], camera, RECT, current, 100)).toBe(current);
+    expect(pickAnchorAt([incumbent, challenger], camera, RECT, rectCentre(RECT), current, 100)).toBe(current);
   });
 
   it("returns the same anchor object when the pick has not changed, so the caller can tell nothing moved", () => {
     const camera = makeCamera();
     const centre: GalaxyNavNode = { id: "centre", title: "Centre", x: 0, y: 0, z: 0 };
     const current: GalaxyAnchor = { kind: "node", id: "centre" };
-    expect(pickAnchorAtCenter([centre], camera, RECT, current, 100)).toBe(current);
+    expect(pickAnchorAt([centre], camera, RECT, rectCentre(RECT), current, 100)).toBe(current);
   });
 
-  it("queries the centre of the rect, not the origin of the window", () => {
+  it("rectCentre queries the centre of the rect, not the origin of the window", () => {
     const camera = makeCamera();
     const node: GalaxyNavNode = { id: "n", title: "N", x: 0, y: 0, z: 0 };
     const offsetRect = { left: 200, top: 100, width: 800, height: 600 };
-    expect(pickAnchorAtCenter([node], camera, offsetRect, CENTROID_ANCHOR, 5)).toEqual({ kind: "node", id: "n" });
+    expect(pickAnchorAt([node], camera, offsetRect, rectCentre(offsetRect), CENTROID_ANCHOR, 5)).toEqual({
+      kind: "node",
+      id: "n",
+    });
+  });
+
+  it("takes the node under the SIGHT, not the one at screen centre", () => {
+    // The whole point of D14: aiming must not require flying the camera until
+    // the target is in the middle first.
+    const camera = makeCamera();
+    const atCentre: GalaxyNavNode = { id: "centre", title: "Centre", x: 0, y: 0, z: 0 };
+    const offToTheSide: GalaxyNavNode = { id: "side", title: "Side", x: 2, y: 0, z: 0 };
+    const sideSight = { x: RECT.width / 2 + 172, y: RECT.height / 2 };
+    expect(pickAnchorAt([atCentre, offToTheSide], camera, RECT, sideSight, CENTROID_ANCHOR, 60)).toEqual({
+      kind: "node",
+      id: "side",
+    });
   });
 });
 

@@ -733,11 +733,14 @@ html:not(.hud-mode) .setup-backdrop {
 .hud-galaxy-reticle {
   position: absolute;
   z-index: 1;
-  left: 50%;
-  top: 50%;
+  /* Positioned entirely by the gesture loop's `transform` — it follows the
+     HANDS, not the screen (design.md D14), so it moves every frame and neither
+     `left/top` nor a re-render could carry it. Anchored at the origin so the
+     written translate is a plain window coordinate. */
+  left: 0;
+  top: 0;
   width: 26px;
   height: 26px;
-  margin: -13px 0 0 -13px;
   border-radius: 50%;
   border: 1px solid rgba(214, 228, 255, 0.4);
   pointer-events: none;
@@ -752,14 +755,12 @@ html:not(.hud-mode) .setup-backdrop {
 .hud-galaxy-reticle.engaged {
   width: 40px;
   height: 40px;
-  margin: -20px 0 0 -20px;
   border-width: 2px;
   border-color: rgba(255, 255, 255, 0.9);
   box-shadow: 0 0 14px rgba(214, 228, 255, 0.45);
   transition:
     width 0.12s ease,
-    height 0.12s ease,
-    margin 0.12s ease;
+    height 0.12s ease;
 }
 
 .hud-galaxy-reticle::after {

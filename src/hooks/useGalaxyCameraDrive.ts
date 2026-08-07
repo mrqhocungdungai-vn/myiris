@@ -2,24 +2,27 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import type { ForceGraph3DInstance } from "3d-force-graph";
 import type { GalaxyNode, GalaxyLink, TrackballControlsLike } from "../lib/galaxy-types";
-import type { HandState } from "./useHandControl";
+import type { HandPoint, HandState } from "./useHandControl";
 import {
   dwellStep,
   driveFor,
   inspectingHand,
   isHandLowered,
   orbitStep,
+  sightPoint,
   zoomRadius,
   handDistance,
   nearestNodeAt,
   INITIAL_DWELL_STATE,
   type DwellState,
   type GalaxyDrive,
+  type ScreenRect,
 } from "../lib/galaxy-nav";
 import {
   CENTROID_ANCHOR,
   easeAnchor,
-  pickAnchorAtCenter,
+  pickAnchorAt,
+  rectCentre,
   shouldReleaseAnchor,
   type GalaxyAnchor,
 } from "../lib/galaxy-anchor";
@@ -55,7 +58,7 @@ export type GalaxyCameraDriveParams = {
   anchor: GalaxyAnchorApi;
   /** The candidate/anchor marks (design.md D10) — null until the scene exists. */
   ringsRef: { current: AnchorRings | null };
-  /** The centre reticle, class-toggled directly rather than through React state — an engage/disengage must not cost a re-render mid-drive. */
+  /** The sight, positioned and class-toggled directly rather than through React state — it moves every frame, which no re-render could afford. */
   reticleRef: { current: HTMLDivElement | null };
   debugEnabled: boolean;
   debugRef: { current: HTMLPreElement | null };
@@ -294,24 +297,36 @@ export function useGalaxyCameraDrive({
         }
 
         const rect = containerRef.current?.getBoundingClientRect() ?? null;
+        const hand = handRef.current;
+
+        // Where the camera is AIMED, in window pixels: the midpoint of two open
+        // palms, else the primary hand's point, else the centre of the view
+        // (design.md D14). It follows the hands rather than sitting at screen
+        // centre, because a centre-pinned sight can only be aimed by first
+        // flying the camera until the target is in the middle — the hardest part
+        // of the task, demanded before the easy part is allowed to start.
+        const sight = rect ? sightPoint(hand, rectCentre(rect)) : null;
+        if (sight && reticleRef.current) {
+          reticleRef.current.style.transform = `translate3d(${sight.x}px, ${sight.y}px, 0) translate(-50%, -50%)`;
+        }
 
         // Re-select what a grab would take hold of, rate-limited (design.md
         // D10) — this is the same O(nodes) projection the titles pay for, and
         // a candidate that changed at frame rate would both cost more than it
         // is worth and read as flicker.
-        if (rect && now - lastCandidateSelect >= candidateIntervalMs) {
+        if (rect && sight && now - lastCandidateSelect >= candidateIntervalMs) {
           lastCandidateSelect = now;
-          const picked = pickAnchorAtCenter(
+          const picked = pickAnchorAt(
             positionsRef.current.values(),
             fg.camera(),
             rect,
+            sight,
             anchor.anchorRef.current,
             anchorThresholdPx,
           );
           candidateIdRef.current = picked.kind === "node" ? picked.id : null;
         }
 
-        const hand = handRef.current;
         const drive = driveFor(hand);
         // A lowered hand drives nothing (design.md D6). Collapsing the drive to
         // null here routes it through the existing "drive went null" path, so
@@ -401,12 +416,14 @@ export function useGalaxyCameraDrive({
             // Each grab regrips on whatever the user is looking at. Nothing in
             // range keeps the current anchor — a grab over empty space must not
             // throw the view back to the middle of the vault.
-            engageMovedAnchorRef.current = rect
-              ? anchor.setAnchor(
-                  pickAnchorAtCenter(
+            engageMovedAnchorRef.current =
+              rect && sight
+                ? anchor.setAnchor(
+                  pickAnchorAt(
                     positionsRef.current.values(),
                     fg.camera(),
                     rect,
+                    sight,
                     anchor.anchorRef.current,
                     anchorThresholdPx,
                   ),
@@ -459,6 +476,15 @@ export function useGalaxyCameraDrive({
             // here `zoomReferenceRef.current` staying set means both palms are
             // still live, so `twoPalmDistance` cannot return null.
             const curDist = twoPalmDistance(hand)!;
+            // Re-aim FIRST, so this frame's radius is measured against the
+            // anchor the sight is on right now — and re-read the origin after
+            // it. `origin` above was resolved before the re-aim, and writing the
+            // camera with it while the spherical has been re-seeded against the
+            // new anchor would displace the camera by exactly the anchor delta:
+            // the same trap D3 records for sharing one value between the orbit
+            // origin and the look-at.
+            if (rect && sight) reaimZoomFromSight(fg, rect, sight, curDist);
+            const zoomOrigin = anchor.resolveCurrent();
             const next = zoomRadius({
               refRadius: zoomReferenceRef.current.radius,
               refDist: zoomReferenceRef.current.dist,
@@ -467,7 +493,7 @@ export function useGalaxyCameraDrive({
               max: zoomMaxRadius,
             });
             sphericalRef.current.set(next, sphericalRef.current.phi, sphericalRef.current.theta);
-            writeCameraFromSpherical(fg, origin);
+            writeCameraFromSpherical(fg, zoomOrigin);
             releaseAnchorIfBackedOut(fg, next, curDist);
           }
         }
@@ -491,27 +517,54 @@ export function useGalaxyCameraDrive({
       raf = requestAnimationFrame(loop);
     }
 
+    // Moving the anchor MID-DRIVE has to hold the camera still, exactly as
+    // engaging does — the spherical is measured against the old anchor, so
+    // leaving it would shift the camera by the anchor delta on the next frame.
+    // The zoom's reference moves with it, from the SAME frame's hand distance,
+    // so the multiplicative law is continuous across the change: the hands have
+    // not moved, so the radius must not either.
+    function reseedAroundAnchor(fg: Fg, curDist: number | null) {
+      engageMovedAnchorRef.current = true;
+      const origin = anchor.resolveCurrent();
+      sphericalRef.current = new THREE.Spherical().setFromVector3(
+        fg.camera().position.clone().sub(new THREE.Vector3(origin.x, origin.y, origin.z)),
+      );
+      if (curDist !== null) zoomReferenceRef.current = { dist: curDist, radius: sphericalRef.current.radius };
+    }
+
+    // The sight keeps aiming for the whole of a zoom (design.md D14). This is
+    // the substance of "wherever the sight is, spreading the hands goes there":
+    // resolving only at engage would mean the user had to have the region under
+    // their hands before the pose registered, which is the same
+    // aim-before-you-may-act demand a centre-pinned sight made.
+    //
+    // Safe to do continuously HERE and not on the orbit, because the zoom's
+    // input is the distance between the hands — their midpoint stays put while
+    // they spread. An orbit's input IS the hand's travel, so a sight read from
+    // it would re-aim on every frame of the motion that is meant to be turning
+    // the camera.
+    function reaimZoomFromSight(fg: Fg, rectNow: ScreenRect, sightNow: HandPoint, curDist: number) {
+      const picked = pickAnchorAt(
+        positionsRef.current.values(),
+        fg.camera(),
+        rectNow,
+        sightNow,
+        anchor.anchorRef.current,
+        anchorThresholdPx,
+      );
+      if (!anchor.setAnchor(picked, { ease: false })) return;
+      reseedAroundAnchor(fg, curDist);
+    }
+
     // Dollying far enough out frames the whole graph again, so the anchor goes
     // back to the centroid and closing the hands is the way back to the
     // overview (design.md D5).
-    //
-    // Re-seeding is not optional here: the orbit origin is about to move from
-    // the node to the centroid, and a spherical still measured against the node
-    // would shift the camera by exactly that delta on the next frame. The
-    // zoom's reference is re-seeded from the SAME frame's hand distance so the
-    // multiplicative law is continuous across the release — the hands have not
-    // moved, so the radius must not either.
     function releaseAnchorIfBackedOut(fg: Fg, radius: number, curDist: number) {
       if (anchor.anchorRef.current.kind === "centroid") return;
       if (!shouldReleaseAnchor(radius, anchor.boundingRadiusRef.current, zoomMaxRadius)) return;
       if (!anchor.setAnchor(CENTROID_ANCHOR, { ease: false })) return;
-      engageMovedAnchorRef.current = true;
-      const origin = anchor.resolveCurrent();
-      anchor.displayedAnchorRef.current = origin;
-      sphericalRef.current = new THREE.Spherical().setFromVector3(
-        fg.camera().position.clone().sub(new THREE.Vector3(origin.x, origin.y, origin.z)),
-      );
-      zoomReferenceRef.current = { dist: curDist, radius: sphericalRef.current.radius };
+      anchor.displayedAnchorRef.current = anchor.resolveCurrent();
+      reseedAroundAnchor(fg, curDist);
     }
 
     raf = requestAnimationFrame(loop);
