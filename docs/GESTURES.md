@@ -133,9 +133,10 @@ chrome above it:
 | --- | --- |
 | `Pointing_Up` | Node dwell — hold over a node 300 ms to **open** it (same dwell mechanic as the deck) |
 | `Victory` (two fingers) | **Inspect** — hold near a node to light up its link cluster while held. Selects nothing, opens nothing, leaves nothing behind |
-| `Closed_Fist` | Orbit the camera around the graph |
-| Two open palms | Zoom the camera — not a galaxy binding but the general two-hand rule applied to whichever layer owns the surface |
+| `Closed_Fist` | Orbit the camera around the **anchor** (below) |
+| Two open palms | Zoom the camera toward/away from the anchor — not a galaxy binding but the general two-hand rule applied to whichever layer owns the surface |
 | Anything else (a single open palm, unrecognized, resting) | Drives nothing |
+| A hand in the **bottom third of the frame**, whatever it is doing | Drives nothing, and releases a drive in progress |
 
 **A pinch has no meaning in the galaxy at all.** Whatever canned class the
 recognizer assigns a pinched hand is what drives it — a tight pinch reads as
@@ -233,6 +234,102 @@ fixed budget (`LABEL_BUDGET`), filled nearest-camera-first, so the cost is the
 same in a small vault and a large one. Titles respect the same one-hop
 declutter as the dimming above — a node the focus has dimmed carries no title
 either, so the two mechanisms never disagree about what is relevant.
+
+**A lowered hand releases the camera.** Mid-air control is tiring, so a user
+resting their arm is routine rather than an edge case — and the pose a hand
+falls into on the way down is not chosen deliberately. A hand below the bottom
+third of the frame (`isHandLowered`, `galaxy-nav.ts`) collapses the drive to
+null, which routes through the same "the drive went away" path every other exit
+uses: the reference is released rather than frozen, mouse control returns
+intact, and raising the hand re-seeds from the live camera so nothing jumps.
+This applies to the CAMERA drives only — the dwell, the inspect reveal and the
+step rail all require the hand to be held at a target, and a lowered hand
+simply is not at one.
+
+### The anchor — what the camera turns around
+
+The galaxy has one **anchor**: the point every camera path, hand and mouse
+alike, orbits around and dollies toward (`src/lib/galaxy-anchor.ts`, owned by
+`useGalaxyAnchor`). It is the graph's centroid by default, a specific node once
+one is chosen, or an arbitrary point once the user pans there.
+
+It moves to a node when a camera drive **engages** and a node is near the centre
+of the screen (each grab regrips on whatever the user is looking at); when a
+note is opened by click or dwell; when the mouse wheel is scrolled with the
+pointer over a node; and when the user steps to a note on the rail. Dollying far
+enough out — a multiple of the graph's own extent, *or* the dolly clamp,
+whichever comes first — releases it back to the centroid, so backing away is the
+way out of a note and no separate control is needed.
+
+Two rules make it usable rather than merely present:
+
+- **Re-anchoring never moves the camera.** On engage the spherical is re-derived
+  from `camera.position - anchor`; the position is not written at all, so this
+  is a property of the code's shape rather than a rule to remember.
+- **A camera the user positioned is never discarded.** A mouse pan *sets* the
+  anchor (`TrackballControls` pans by mutating `.target` in place, so the galaxy
+  listens for its `change` event to notice), and the release path re-syncs the
+  target only where doing so cannot overwrite a pan. Previously a fist thrown
+  after framing a region by mouse reset the aim to the centroid twice over — on
+  engage and again on release.
+
+Because the anchor is chosen from what is *near* the centre, it is routinely a
+little off-centre, so a change of **aim** is eased over ~180 ms rather than
+snapped. The ease is the galaxy's own (`easeAnchor`), not a library transition:
+the gesture loop writes the camera every frame with `transitionMs: 0`, which
+ends any tween in flight. Crucially the eased value feeds only the **look-at**;
+the orbit **origin** stays the target anchor the spherical was seeded against.
+Sharing one value between the two roles would lurch the camera by exactly the
+anchor delta on every engage.
+
+**What a grab will take hold of is visible before the grab.** While hand control
+is on, a reticle marks the centre of the screen, a faint ring marks the node a
+grab would anchor to, and a stronger ring marks the live anchor
+(`galaxy-anchor-rings.ts`). Both rings are achromatic on purpose — every other
+node treatment is a hue (tag colours, the yellow pointed-at highlight, the green
+focus), so a neutral outline sits in a different visual channel rather than
+competing with "which tag is this" and "is this focused". The candidate is
+re-selected on the same rate limit the titles use, not every frame. The marks
+stop when hand control is off, when a reader holds the surface, and when Iris
+sleeps — they live inside the gesture loop, which is gated on exactly those
+terms. The reticle is a DOM element **outside** any chrome island: chrome nulls
+the galaxy's pointing target under the hand, so a chrome reticle at screen
+centre would kill node dwell on the most-used part of the view.
+
+### The step rail — reaching a note without aiming at one
+
+A note's dot is a few pixels across in a self-occluding sphere and hand tracking
+jitters by an order of magnitude more, so **finding** a note is not something a
+camera drive can be tuned into doing. The rail
+(`GalaxyStepRail.tsx` + `src/lib/galaxy-rail.ts`) replaces the problem: a column
+of ~200x44 px buttons naming the current note's one-hop neighbours, each showing
+its title, tag colour and link count. Activating one flies the camera there over
+a short animation, anchors on it, and repopulates the rail with *that* note's
+neighbours — hand-over-hand traversal, one short beat per step instead of a
+sustained pose. With no note yet reached the rail offers the vault's most
+connected notes as entry points, so the first step needs no aiming at all.
+
+Its one-hop set comes from the same `focusNeighborhood` the declutter and the
+highlight use, so nothing in the galaxy can disagree about what one hop means —
+which is also why the neighbour list is not capped and the island scrolls
+instead.
+
+**The rail needs no new gesture and no galaxy-specific pointing rule.** It is
+ordinary HUD chrome (`RAIL_ISLAND_CLASS` carries `HUD_CHROME_CLASS`) made of
+plain `<button>`s, so the universal point-and-hold click in `App.tsx` already
+reaches it — that rule was not touched, which is exactly what the chrome rule
+asks of any island added later. Stepping **selects nothing**: the focus is
+unchanged, no note opens, and nothing the voice layer reads moves.
+
+**One deliberate act takes exactly one step.** The dwell keys its fire-once
+guarantee on element identity, and a step hands it a freshly-rendered rail — so
+a still-held hand would otherwise fly the camera through the graph for as long
+as it stayed up. The rail therefore renders its entries `disabled` for ~700 ms
+after a step: `.click()` on a disabled button is a no-op, the dwell's `fired`
+flag latches, and re-enabling keeps the same element so no new dwell starts.
+
+A ghost entry (an unresolved `[[wikilink]]` target) is steppable — flying to it
+is not opening it — and marked as not openable so the user is not misled.
 
 ### Eye HUD (decorative)
 

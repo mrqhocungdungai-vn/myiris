@@ -722,6 +722,144 @@ html:not(.hud-mode) .setup-backdrop {
   color: var(--muted);
 }
 
+/* The centre reticle (galaxy-note-reachable-by-hand design.md D10): what the
+   user aims the VIEW with, so they can predict which node a grab will take
+   hold of. Deliberately NOT `.hud-chrome` — `hudChromeAtPoint` nulls the
+   galaxy's pointing target wherever the hand is over chrome, so a chrome
+   reticle at screen centre would kill node dwell and inspect on the most-used
+   part of the view. `pointer-events: none` for the same reason
+   `.hud-galaxy-gesture-debug` has it: it must never steal the mouse drag the
+   camera controls need. */
+.hud-galaxy-reticle {
+  position: absolute;
+  z-index: 1;
+  left: 50%;
+  top: 50%;
+  width: 26px;
+  height: 26px;
+  margin: -13px 0 0 -13px;
+  border-radius: 50%;
+  border: 1px solid rgba(214, 228, 255, 0.4);
+  pointer-events: none;
+}
+
+.hud-galaxy-reticle::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 3px;
+  height: 3px;
+  margin: -1.5px 0 0 -1.5px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.85);
+}
+
+/* ===== Galaxy step rail (second-brain-gesture-nav) =====
+   Its stacking comes from `.hud-chrome` (composed into the class list by
+   `src/lib/galaxy-rail.ts`), NOT from a z-index restated here — that one class
+   is both why the rail paints above the galaxy and why the universal
+   point-and-hold dwell reaches it. Entries are sized for a hand, not a mouse:
+   webcam tracking jitters by ~10-20 px, which a 200x44 target absorbs and a
+   node's 4 px dot does not. */
+.hud-galaxy-rail {
+  position: absolute;
+  left: 22px;
+  top: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  /* Top-left, and capped short of half the viewport: `.hud-left` (the camera
+     and comms column) is bottom-anchored in the same gutter, so a taller or
+     centred rail would sit on top of it. */
+  max-height: 46vh;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(5, 6, 12, 0.72);
+  border: 1px solid rgba(159, 180, 255, 0.22);
+  backdrop-filter: blur(8px);
+}
+
+.hud-galaxy-rail-heading {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.hud-galaxy-rail-empty {
+  margin: 0;
+  width: 200px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.hud-galaxy-rail-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+}
+
+.hud-galaxy-rail-entry {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 200px;
+  min-height: 44px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(159, 180, 255, 0.2);
+  background: rgba(20, 26, 44, 0.75);
+  color: #dbe6f5;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.hud-galaxy-rail-entry:hover:not(:disabled) {
+  border-color: rgba(159, 180, 255, 0.55);
+  background: rgba(32, 42, 68, 0.85);
+}
+
+.hud-galaxy-rail-entry:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* An unresolved [[wikilink]] target: steppable, but there is no file to open,
+   and the entry has to say so rather than mislead. */
+.hud-galaxy-rail-entry.ghost .title {
+  font-style: italic;
+  color: rgba(200, 210, 230, 0.75);
+}
+
+.hud-galaxy-rail-entry .tag-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.hud-galaxy-rail-entry .title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hud-galaxy-rail-entry .links {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+
 /* two-palm-galaxy-zoom design.md D7: a tuning instrument gated behind a
    localStorage flag, not a shipped surface — no pointer-events, so it never
    steals the mouse drag/scroll the gesture drive must keep working. */

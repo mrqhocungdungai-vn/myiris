@@ -10,6 +10,7 @@ import {
   handDistance,
   zoomRadius,
   focusNeighborhood,
+  isHandLowered,
   type DwellState,
   type GalaxyNavNode,
 } from "./galaxy-nav";
@@ -334,5 +335,33 @@ describe("focusNeighborhood", () => {
   it("a focused id with no links resolves to just itself", () => {
     const result = focusNeighborhood(["lonely"], [{ source: "a", target: "b" }]);
     expect(result).toEqual(new Set(["lonely"]));
+  });
+});
+
+describe("isHandLowered", () => {
+  const HEIGHT = 900; // bottom third starts at y = 600
+
+  it("is false while the hand is held above the bottom third", () => {
+    expect(isHandLowered({ x: 400, y: 599 }, HEIGHT)).toBe(false);
+  });
+
+  it("is true from the top of the bottom third downward", () => {
+    expect(isHandLowered({ x: 400, y: 600 }, HEIGHT)).toBe(true);
+    expect(isHandLowered({ x: 400, y: HEIGHT }, HEIGHT)).toBe(true);
+    // Below the frame entirely still counts as lowered — a hand on its way out
+    // of shot is not driving anything deliberately.
+    expect(isHandLowered({ x: 400, y: HEIGHT + 200 }, HEIGHT)).toBe(true);
+  });
+
+  it("is false at the very top of the frame", () => {
+    expect(isHandLowered({ x: 400, y: 0 }, HEIGHT)).toBe(false);
+  });
+
+  it("is false with no hand point at all", () => {
+    expect(isHandLowered(null, HEIGHT)).toBe(false);
+  });
+
+  it("is false rather than dividing by a zero viewport", () => {
+    expect(isHandLowered({ x: 0, y: 0 }, 0)).toBe(false);
   });
 });

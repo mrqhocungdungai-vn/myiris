@@ -239,6 +239,33 @@ export function driveFor(hand: DriveHand): GalaxyDrive {
   return null;
 }
 
+// Where the bottom third of the frame starts (galaxy-note-reachable-by-hand
+// design.md D6).
+const LOWERED_HAND_FRACTION = 2 / 3;
+
+/**
+ * Whether a hand has dropped low enough that it must not drive the camera.
+ *
+ * Mid-air gesture control is physically tiring, so a user resting their arm is
+ * routine rather than an edge case — and the pose a hand falls into on the way
+ * down is not chosen deliberately. Without this, lowering a tired arm drags the
+ * camera across the graph, losing the view the user worked to reach and
+ * teaching them that putting their arm down is unsafe.
+ *
+ * `viewportHeight` is the WINDOW's height, not a container rect's:
+ * `HandPoint` is already in window pixels, so any other frame of reference
+ * would put the threshold in the wrong place the moment the galaxy is not
+ * full-bleed.
+ *
+ * A predicate rather than a drive state (design.md D6) — the caller collapses
+ * the drive to null with it, so every consequence already specified for a
+ * released drive follows with no new code.
+ */
+export function isHandLowered(point: HandPoint | null, viewportHeight: number): boolean {
+  if (!point || viewportHeight <= 0) return false;
+  return point.y >= viewportHeight * LOWERED_HAND_FRACTION;
+}
+
 export type Spherical = { radius: number; phi: number; theta: number };
 
 // Keeps the camera off the poles, where azimuth (theta) becomes degenerate.

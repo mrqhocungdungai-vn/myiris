@@ -1,24 +1,17 @@
-import { Component, useEffect, useRef, useState, type ReactNode } from "react";
+import { Component, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import * as THREE from "three";
 import type { ForceGraph3DInstance } from "3d-force-graph";
 import type { HandState } from "../hooks/useHandControl";
-import {
-  dwellStep,
-  driveFor,
-  inspectingHand,
-  orbitStep,
-  zoomRadius,
-  handDistance,
-  nearestNodeAt,
-  focusNeighborhood,
-  INITIAL_DWELL_STATE,
-  type DwellState,
-  type GalaxyDrive,
-  type GalaxyNavNode,
-} from "../lib/galaxy-nav";
-import { hudChromeAtPoint } from "../lib/hudChrome";
+import { focusNeighborhood, type GalaxyNavNode } from "../lib/galaxy-nav";
+import { colorForNode } from "../lib/galaxy-colors";
+import { useGalaxyCameraDrive } from "../hooks/useGalaxyCameraDrive";
+import { useGalaxyAnchor } from "../hooks/useGalaxyAnchor";
 import { selectLabels } from "../lib/galaxy-labels";
 import { createLabelPool, type LabelPool } from "../lib/galaxy-label-sprites";
+import { createRingPair, type AnchorRings } from "../lib/galaxy-anchor-rings";
+import { railEntries, RAIL_ISLAND_CLASS } from "../lib/galaxy-rail";
+import GalaxyStepRail from "./GalaxyStepRail";
+import type { GalaxyNode, GalaxyLink, TrackballControlsLike } from "../lib/galaxy-types";
 
 // second-brain-galaxy-view: 3d-force-graph is a vanilla (non-React) library
 // that attaches imperatively to a container element — it has no React
@@ -40,21 +33,11 @@ import { createLabelPool, type LabelPool } from "../lib/galaxy-label-sprites";
 // like a method that doesn't actually exist on the public instance.
 type ForceGraph3DFactory = () => (el: HTMLElement) => ForceGraph3DInstance<GalaxyNode, GalaxyLink>;
 
-// Exported so App.tsx can type the position-map ref it hoists above this
+// Re-exported so App.tsx can type the position-map ref it hoists above this
 // component (design.md M-3: the map must outlive VaultGalaxy's own mounts).
-// `fx`/`fy`/`fz` are `number | undefined` (never `null`) to match
-// three-forcegraph's own `NodeObject` type exactly — its JSDoc says either
-// `null` or deleting the property unfixes a node, but the type only
-// declares `number`, so this component always uses `undefined`.
-export type GalaxyNode = VaultGraphNode & {
-  x?: number;
-  y?: number;
-  z?: number;
-  fx?: number;
-  fy?: number;
-  fz?: number;
-};
-type GalaxyLink = { source: string; target: string };
+// Declared in `src/lib/galaxy-types.ts` so the camera hooks can name it
+// without importing the component that mounts them.
+export type { GalaxyNode } from "../lib/galaxy-types";
 
 // Escapes text before it reaches 3d-force-graph's built-in tooltip, which
 // assigns the `.nodeLabel()` accessor's return value to `innerHTML`
@@ -65,23 +48,38 @@ function escapeHtml(text: string): string {
   return text.replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch] as string);
 }
 
-const TAG_COLORS = ["#5ec8ff", "#ff8a5e", "#8affc1", "#c98aff", "#ffe45e", "#ff5ec8"];
-function colorForNode(node: GalaxyNode): string {
-  if (node.ghost) return "rgba(200, 210, 230, 0.35)";
-  const tag = node.tags[0];
-  if (!tag) return "#9fb4ff";
-  let hash = 0;
-  for (let i = 0; i < tag.length; i++) hash = (hash * 31 + tag.charCodeAt(i)) >>> 0;
-  return TAG_COLORS[hash % TAG_COLORS.length];
-}
-
 // second-brain-gesture-nav tuning constants (design.md R2/R3/5.1/6.x) — tuned
 // during the manual pass, not further pre-optimized.
 const DWELL_THRESHOLD_PX = 48;
 const DWELL_HOLD_MS = 300;
 const ORBIT_SENSITIVITY = 0.006; // radians per pixel, matching the orb loop's feel
-const ZOOM_MIN_RADIUS = 15;
+// 8, not the 15 this used to be: the floor is now a distance to a SINGLE
+// anchored node rather than to the middle of the whole ball, so it can sit just
+// clear of a node's own ~4-unit sphere and let "dolly all the way in" actually
+// arrive at the note (galaxy-note-reachable-by-hand design.md D4).
+const ZOOM_MIN_RADIUS = 8;
 const ZOOM_MAX_RADIUS = 2500;
+
+// galaxy-note-reachable-by-hand tuning constants, in the style of the galaxy's
+// existing ones — tuned during the manual pass, not further pre-optimized.
+//
+// How near the centre of the screen a node has to project before a grab takes
+// hold of it. Wider than DWELL_THRESHOLD_PX because the user aims this one with
+// the whole camera rather than with a fingertip, and the reticle marks exactly
+// where the query point is.
+const ANCHOR_THRESHOLD_PX = 90;
+// A rail step's flight: long enough that the user sees where in the galaxy they
+// were taken (the spec requires the travel to be visible), short enough not to
+// feel like waiting.
+const STEP_FLIGHT_MS = 600;
+// How far from the destination note the flight parks. A little above
+// ZOOM_MIN_RADIUS, so a step frames the note and its immediate neighbours
+// rather than pressing right up against it.
+const STEP_FLIGHT_DISTANCE = 60;
+// How long the rail stays inert after a step (design.md D11). Must exceed the
+// universal dwell's own 300 ms hold, or a still-held hand would charge a fresh
+// dwell on the repopulated rail and fire a second step.
+const STEP_LOCK_MS = 700;
 
 // add-galaxy-node-labels tuning constants (design.md D9, revised D11).
 // No distance cutoff: every eligible note's title is always a selection
@@ -241,21 +239,6 @@ function makeLinkColor(litIds: Set<string> | null, pointedAtId: string | null) {
   };
 }
 
-// 3d-force-graph types `controls()` as `object` (it's a TrackballControls
-// instance internally — design.md D3) — this is the minimal shape the
-// gesture loop actually touches, confirmed against three-render-objects'
-// source (tick() gates its `.update()` on `.enabled`; `cameraPosition`'s
-// `setLookAt` only writes `.target` while `.enabled` is true, replacing the
-// Vector3 outright rather than mutating it — R1/M5/L16).
-// `_lastAngle` is TrackballControls' own rotation-momentum scalar (private,
-// unexported): normally it decays toward 0 every `update()` call once a
-// mouse-drag rotate ends (`dynamicDampingFactor`), but `update()` itself is
-// gated on `.enabled` (three-render-objects' own render loop), so a
-// momentum left over from mouse rotation freezes UNDECAYED for as long as
-// the gesture loop holds `.enabled = false` — then applies in one sudden,
-// undamped jump the instant controls are re-enabled. Read at the same call
-// site as `target` for exactly that reason.
-type TrackballControlsLike = { enabled: boolean; target?: THREE.Vector3; _lastAngle?: number };
 
 // Deep-space backdrop mechanism (design.md D4, spike-resolved 3.2b): the
 // composer's UnrealBloomPass forces full-screen opacity, so the backdrop is
@@ -397,15 +380,35 @@ function GalaxyCanvas({
   // count (capped at LABEL_BUDGET_CEILING), so `selectLabels`'s `budget`
   // option can match whatever the pool was actually built with.
   const labelBudgetRef = useRef(0);
-  // Orbit center (design.md D3/6.1): recomputed from positionsRef at most
-  // once per dirty flag, never inside applyGraph's own position-free moment.
-  const centerRef = useRef(new THREE.Vector3());
-  const centerDirtyRef = useRef(true);
+  // The candidate/anchor marks (galaxy-note-reachable-by-hand design.md D10) —
+  // created once per mount alongside the graph instance, disposed in the same
+  // effect's cleanup, exactly like the label pool above.
+  const ringsRef = useRef<AnchorRings | null>(null);
+  // Detaches the `change` listener the pan detector rides on (design.md D1).
+  const detachControlsRef = useRef<(() => void) | null>(null);
 
-  // Gesture state — all pure-module state objects threaded through
-  // src/lib/galaxy-nav.ts, plus the imperative camera-drive bookkeeping the
-  // thin driver below owns.
-  const dwellStateRef = useRef<DwellState>(INITIAL_DWELL_STATE);
+  // The orbit anchor and the centroid it falls back to
+  // (galaxy-note-reachable-by-hand design.md D1/D4b). `centerRef` used to carry
+  // both jobs at once, which is why orbiting always circled the middle of the
+  // ball and why a fist thrown after a mouse pan threw the pan away.
+  const anchor = useGalaxyAnchor({ fgRef, positionsRef });
+
+  // The note the step rail is currently showing the neighbours of (design.md
+  // D7/D12). React state, not a ref: the rail is ordinary DOM and has to
+  // re-render when it moves. Held in this component, which unmounts on every
+  // galaxy-close route (HudShell renders it under `secondBrainActive`), so the
+  // spec's "the note it was centred on SHALL be cleared" needs no separate
+  // clearing path — the same structural reason the note reader and the focus
+  // are cleared on those terms (5.7).
+  const [railCentreId, setRailCentreId] = useState<string | null>(null);
+  // Inert for a moment after a step, so a hand still held over the rail cannot
+  // step again (design.md D11).
+  const [railLocked, setRailLocked] = useState(false);
+  const railLockTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (railLockTimerRef.current) clearTimeout(railLockTimerRef.current);
+  }, []);
+
   // The node the HAND is pointing at — written by the gesture loop while the
   // pose is `dwell` or `inspect`, and null otherwise. The inspect pose needs no
   // dwell machine of its own: a reveal commits to nothing, so there is nothing
@@ -421,10 +424,6 @@ function GalaxyCanvas({
   // re-digests every node's material, and sweeping a pointer across a dense
   // cluster fires `onNodeHover` once per node crossed.
   const hoverRepaintRafRef = useRef(0);
-  const sphericalRef = useRef<THREE.Spherical | null>(null);
-  const cameraEngagedRef = useRef<"orbit" | "zoom" | null>(null);
-  const prevOrbitPointRef = useRef<{ x: number; y: number } | null>(null);
-  const zoomReferenceRef = useRef<{ dist: number; radius: number } | null>(null);
 
   // Gesture debug readout (design.md D7) — read once at mount, matching the
   // renderer's other localStorage-backed preferences. Written by the
@@ -437,7 +436,7 @@ function GalaxyCanvas({
   function applyGraph(nextGraph: VaultGraph) {
     const fg = fgRef.current;
     if (!fg) return;
-    centerDirtyRef.current = true;
+    anchor.centroidDirtyRef.current = true;
     const { nodes, links, topologyChanged } = reconcile(nextGraph, positionsRef.current, topologyKeyRef);
     if (!topologyChanged) {
       // Metadata-only change (a tag/title edit) — pin current positions so
@@ -547,6 +546,10 @@ function GalaxyCanvas({
             onToggleNodeRef.current(node.id);
             return;
           }
+          // Opening a note anchors on it, so closing the reader leaves the
+          // camera around that note's neighbourhood rather than the middle of
+          // the vault (galaxy-note-reachable-by-hand 3.9).
+          anchor.setAnchor({ kind: "node", id: node.id });
           onOpenNoteRef.current(node.id, node.title);
         })
         // The mouse's half of the pointed-at highlight
@@ -565,7 +568,7 @@ function GalaxyCanvas({
       // settling long after applyGraph last ran (cooldownTicks(Infinity) on
       // fresh topology) must also invalidate the cached orbit center.
       fg.onEngineStop(() => {
-        centerDirtyRef.current = true;
+        anchor.centroidDirtyRef.current = true;
         if (!hasFramedOnceRef.current) {
           hasFramedOnceRef.current = true;
           fg.zoomToFit(800, 80);
@@ -588,6 +591,17 @@ function GalaxyCanvas({
       const labelPool = createLabelPool(labelBudget, LABEL_Y_OFFSET, LABEL_WORLD_HEIGHT);
       fg.scene().add(labelPool.group);
       labelPoolRef.current = labelPool;
+      const rings = createRingPair();
+      fg.scene().add(rings.group);
+      ringsRef.current = rings;
+      // A mouse PAN is invisible to everything else: `TrackballControls`
+      // implements it by mutating `.target` in place (`_panCamera`), dispatching
+      // only its generic `change`. Without this the release path would keep
+      // writing a stale anchor over whatever the user had framed
+      // (galaxy-note-reachable-by-hand design.md D1/D4b).
+      const controls = fg.controls() as unknown as TrackballControlsLike;
+      controls.addEventListener?.("change", anchor.recordPanIfMoved);
+      detachControlsRef.current = () => controls.removeEventListener?.("change", anchor.recordPanIfMoved);
       // applyGraph's own repaintHighlight() call paints the ring/dimming on
       // whatever is already focused (second-brain-focus "survives a
       // remount") — the focus-change effect below only fires on a LATER
@@ -605,9 +619,14 @@ function GalaxyCanvas({
       }
       const fg = fgRef.current;
       fgRef.current = null;
+      detachControlsRef.current?.();
+      detachControlsRef.current = null;
       const labelPool = labelPoolRef.current;
       labelPoolRef.current = null;
       if (labelPool) labelPool.dispose();
+      const rings = ringsRef.current;
+      ringsRef.current = null;
+      if (rings) rings.dispose();
       if (fg) {
         fg.pauseAnimation();
         fg._destructor();
@@ -640,18 +659,27 @@ function GalaxyCanvas({
   // it runs at most every SELECT_INTERVAL_MS; positions must be exact every
   // frame or a title visibly lags its node while the layout is still
   // settling, so `apply()` runs on every tick regardless.
+  //
+  // It also carries the mouse-path aim ease (galaxy-note-reachable-by-hand
+  // design.md D3/D4b): with no drive engaged there is no per-frame camera write
+  // at all, so the eased move of `controls.target` onto a newly-set anchor —
+  // opening a note, a wheel over a node — needs a frame tick of its own, and
+  // this is the loop that runs on exactly the terms the galaxy renders on.
   useEffect(() => {
     if (!running) return;
     let raf = 0;
     let lastSelect = 0;
+    let lastFrame = performance.now();
     let selection: GalaxyNavNode[] = [];
 
     function loop() {
       try {
         const fg = fgRef.current;
         const pool = labelPoolRef.current;
+        const now = performance.now();
+        anchor.stepControlsTargetEase(now - lastFrame);
+        lastFrame = now;
         if (fg && pool) {
-          const now = performance.now();
           if (now - lastSelect >= SELECT_INTERVAL_MS) {
             lastSelect = now;
             // The orbit TARGET, not the eye position (design.md D10): mouse
@@ -704,268 +732,124 @@ function GalaxyCanvas({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusIdsKey]);
 
-  // Gesture drive (design.md D4b/D5): a thin driver over the pure policy in
-  // src/lib/galaxy-nav.ts. Schedules NOTHING while gestures are off or the
-  // HUD is asleep (H-1/M-1) — `backgroundThrottling:false` means nothing
-  // else would throttle a spinning loop, and driving the camera while
-  // `pauseAnimation()` holds the render would let it silently drift and
-  // snap on wake.
+  // Gesture drive — the rAF loop lives in `useGalaxyCameraDrive`
+  // (galaxy-note-reachable-by-hand design.md D12), which owns the drive's own
+  // bookkeeping and reads this component's refs per frame.
+  useGalaxyCameraDrive({
+    handControl,
+    running,
+    containerRef,
+    fgRef,
+    positionsRef,
+    handRef,
+    readerOpenRef,
+    onOpenNoteRef,
+    onForceCloseRef,
+    handTargetRef,
+    repaintHighlight,
+    anchor,
+    ringsRef,
+    debugEnabled,
+    debugRef,
+    dwellThresholdPx: DWELL_THRESHOLD_PX,
+    dwellHoldMs: DWELL_HOLD_MS,
+    anchorThresholdPx: ANCHOR_THRESHOLD_PX,
+    candidateIntervalMs: SELECT_INTERVAL_MS,
+    orbitSensitivity: ORBIT_SENSITIVITY,
+    zoomMinRadius: ZOOM_MIN_RADIUS,
+    zoomMaxRadius: ZOOM_MAX_RADIUS,
+  });
+
+  // 3.10: scrolling with the pointer resting on a node zooms into THAT dot.
+  // Capture phase, so the anchor (and with it `controls.target`, which is what
+  // TrackballControls dollies toward) has already moved by the time the
+  // controls' own wheel handler runs on the same event.
   useEffect(() => {
-    if (!handControl || !running) return;
-    let raf = 0;
-    let lastFrameTime = performance.now();
-
-    function restoreControlsIfNeeded(fg: ForceGraph3DInstance<GalaxyNode, GalaxyLink> | null) {
-      if (!fg) return;
-      const controls = fg.controls() as unknown as TrackballControlsLike;
-      if (!controls || controls.enabled) return;
-      // Re-sync target before re-enabling (R1/M5): `setLookAt` only writes
-      // `.target` while `.enabled` is true and REPLACES the Vector3 outright
-      // on every enabled `cameraPosition()` call, so it must be re-read
-      // (never cached) and copied into, not assumed still valid, here.
-      controls.target?.copy(centerRef.current);
-      // Clear TrackballControls' own rotation momentum before handing
-      // control back (see TrackballControlsLike) — otherwise a mouse-drag
-      // rotate from earlier in the session, frozen mid-decay for however
-      // long the gesture drive held `.enabled = false`, applies as one
-      // sudden undamped jump the moment the mouse regains control: the exact
-      // "camera swings past the note I was looking at" symptom a fist
-      // release produced.
-      if (controls._lastAngle !== undefined) controls._lastAngle = 0;
-      controls.enabled = true;
+    const el = containerRef.current;
+    if (!el) return;
+    function onWheel() {
+      const hovered = mouseHoverRef.current;
+      if (!hovered) return;
+      anchor.setAnchor({ kind: "node", id: hovered });
     }
+    el.addEventListener("wheel", onWheel, { capture: true, passive: true });
+    return () => el.removeEventListener("wheel", onWheel, { capture: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-    function ensureCenterFresh() {
-      if (!centerDirtyRef.current) return;
-      let sx = 0;
-      let sy = 0;
-      let sz = 0;
-      let n = 0;
-      for (const node of positionsRef.current.values()) {
-        if (node.x === undefined) continue;
-        sx += node.x;
-        sy += node.y ?? 0;
-        sz += node.z ?? 0;
-        n++;
-      }
-      if (n > 0) centerRef.current.set(sx / n, sy / n, sz / n);
-      centerDirtyRef.current = false;
-    }
+  // A rail step (design.md D8). Lives here rather than in the rail component
+  // because it needs `fgRef`; the rail takes it as a prop.
+  function stepToNote(id: string) {
+    const fg = fgRef.current;
+    if (!fg) return;
+    const node = positionsRef.current.get(id);
+    if (!node || node.x === undefined) return;
+    const destination = new THREE.Vector3(node.x, node.y ?? 0, node.z ?? 0);
+    const controls = fg.controls() as unknown as TrackballControlsLike;
+    const aim = controls.target ?? anchor.centroidRef.current;
+    // Keep the camera's CURRENT viewing direction and change only distance, so
+    // a step reads as travelling to a note rather than as being spun to a new
+    // orientation as well. A degenerate direction (camera sitting exactly on
+    // its own target) falls back to the +Z axis rather than producing NaN.
+    const direction = fg.camera().position.clone().sub(aim);
+    if (direction.lengthSq() < 1e-6) direction.set(0, 0, 1);
+    const position = destination.clone().add(direction.normalize().multiplyScalar(STEP_FLIGHT_DISTANCE));
 
-    function writeCameraFromSpherical(fg: ForceGraph3DInstance<GalaxyNode, GalaxyLink>) {
-      const spherical = sphericalRef.current;
-      if (!spherical) return;
-      const offset = new THREE.Vector3().setFromSpherical(spherical);
-      const pos = centerRef.current.clone().add(offset);
-      const center = centerRef.current;
-      fg.cameraPosition({ x: pos.x, y: pos.y, z: pos.z }, { x: center.x, y: center.y, z: center.z }, 0);
-    }
+    // The one place a library transition is safe: no drive is engaged, so
+    // nothing is writing the camera per frame, and `cameraPosition` animates
+    // BOTH the eye and `controls.target` for us — which is why the anchor below
+    // is set with the mouse-path ease suppressed rather than in addition to it.
+    //
+    // If the user engages a camera drive mid-flight, the drive wins and the
+    // view does not jump. That is worth recording because it is not evident
+    // from this code (5.9): the drive's first frame calls
+    // `cameraPosition(..., 0)`, whose `povPosTween.end()` snaps the camera to
+    // the flight's DESTINATION — but `setCameraPos(finalPos)` overwrites it
+    // inside the same synchronous call, so no frame ever renders at the snapped
+    // position, and the spherical the drive seeds is taken from the camera
+    // after that overwrite.
+    fg.cameraPosition(
+      { x: position.x, y: position.y, z: position.z },
+      { x: destination.x, y: destination.y, z: destination.z },
+      STEP_FLIGHT_MS,
+    );
+    // The tween owns `controls.target` for the duration, so the pan detector
+    // must not read its interpolated value as a user pan.
+    anchor.suppressPanDetection(STEP_FLIGHT_MS);
+    anchor.setAnchor({ kind: "node", id }, { ease: false });
+    // Navigation only: no focus is toggled, no note is opened, and nothing the
+    // voice layer or a run reads is touched (5.8) — the rail navigates, it does
+    // not select.
+    setRailCentreId(id);
+    setRailLocked(true);
+    if (railLockTimerRef.current) clearTimeout(railLockTimerRef.current);
+    railLockTimerRef.current = setTimeout(() => setRailLocked(false), STEP_LOCK_MS);
+  }
 
-    // two-hand-gestures: the zoom reads the distance between the two open
-    // palms — null when fewer than two are present, which driveFor's own
-    // partition already guarantees never happens while "zoom" is live.
-    function twoPalmDistance(hand: HandState): number | null {
-      const palms = hand.hands.filter((item) => item.openPalm);
-      if (palms.length < 2) return null;
-      return handDistance(palms[0].point, palms[1].point);
-    }
-
-    // design.md D7: every defect this change fixed traced to a runtime
-    // number nobody could see — this makes them observable while tuning.
-    // Direct DOM write, not React state (design.md D7/M-A1): an enabled
-    // readout must not turn a 60fps loop into 60 re-renders.
-    function updateDebugReadout(hand: HandState, drive: GalaxyDrive, now: number) {
-      const el = debugRef.current;
-      if (!el) return;
-      const dt = now - lastFrameTime;
-      lastFrameTime = now;
-      const fps = dt > 0 ? 1000 / dt : 0;
-      const curDist = twoPalmDistance(hand);
-      const ref = zoomReferenceRef.current;
-      const refDist = ref?.dist ?? null;
-      const ratio = curDist !== null && refDist !== null ? curDist / Math.max(80, refDist) : null;
-      const radius = sphericalRef.current?.radius ?? null;
-      const lines = [
-        `hands: ${hand.hands.length}`,
-        ...hand.hands.map((item) => `  ${item.id}: ${item.gesture}`),
-        `curDist: ${curDist !== null ? curDist.toFixed(1) : "—"}`,
-        `refDist: ${refDist !== null ? refDist.toFixed(1) : "—"}`,
-        `ratio: ${ratio !== null ? ratio.toFixed(3) : "—"}`,
-        `radius: ${radius !== null ? radius.toFixed(1) : "—"}`,
-        `drive: ${drive ?? "none"}`,
-        `fps: ${fps.toFixed(0)}`,
-      ];
-      el.textContent = lines.join("\n");
-    }
-
-    // The hand's highlight must not outlive the hand driving it: a reader
-    // opening, hand control switching off, or Iris sleeping mid-point would
-    // otherwise leave a node lit with nothing pointing at it. A live mouse
-    // hover is untouched — repaintHighlight falls back to it.
-    function clearHandTarget() {
-      if (handTargetRef.current === null) return;
-      handTargetRef.current = null;
-      repaintHighlight();
-    }
-
-    function loop() {
-      try {
-        const fg = fgRef.current;
-        if (!fg || readerOpenRef.current) {
-          restoreControlsIfNeeded(fg);
-          cameraEngagedRef.current = null;
-          clearHandTarget();
-          raf = requestAnimationFrame(loop);
-          return;
-        }
-
-        const hand = handRef.current;
-        const drive = driveFor(hand);
-        const activeCameraDrive = drive === "orbit" || drive === "zoom" ? drive : null;
-
-        // Which hand's point targets a node. The inspect drive uses the point of
-        // the hand actually making the pose, not the primary hand's: the
-        // primary is chosen with a preference for POINTING hands, so a Victory
-        // hand can lose primacy while still being the hand the user is
-        // inspecting with (design.md D4).
-        const pointingAt =
-          drive === "inspect" ? inspectingHand(hand)?.point ?? null : drive === "dwell" ? hand.point : null;
-
-        // The galaxy owns the hand only where the galaxy is the top layer
-        // (hud-panels-stay-hand-reachable-under-galaxy design.md D3). The HUD
-        // chrome is painted above it and keeps its own dwell, so a finger aimed
-        // at a task card must not also charge a node dwell on whatever node
-        // projects behind that card, nor light its cluster.
-        //
-        // Only the POINTING drives yield. Orbit and zoom are read above and are
-        // untouched: they act on the whole view rather than on a thing under
-        // the finger, and a camera that stalled whenever the hand crossed a
-        // panel would read as a worse fault than the one this fixes.
-        const targetPoint =
-          pointingAt && hudChromeAtPoint(pointingAt.x, pointingAt.y) ? null : pointingAt;
-
-        // Only a pose that MEANS to point at something resolves a target
-        // (design.md D3): the charging dwell, or the inspect pose. An earlier
-        // pass resolved one under any non-camera pose, on the grounds that a
-        // highlight is feedback rather than an action — in use that lit one
-        // cluster after another as a hand drifted, which reads as the view
-        // twitching at the hand rather than answering a question.
-        //
-        // The incumbent handed to nearestNodeAt is the currently-PAINTED target:
-        // the dead-band exists to stop the highlight flickering between
-        // neighbours in a dense cluster, so the thing it protects should be the
-        // thing on screen.
-        const candidate =
-          targetPoint && containerRef.current
-            ? nearestNodeAt(
-                positionsRef.current.values(),
-                fg.camera(),
-                containerRef.current.getBoundingClientRect(),
-                targetPoint,
-                DWELL_THRESHOLD_PX,
-                handTargetRef.current,
-              )
-            : null;
-
-        // Only the opening dwell has a machine: it is the one pose that commits
-        // to something. Leaving the pose feeds it a null candidate, which
-        // dwellStep resets on, so a charge is abandoned rather than carried into
-        // a different pose.
-        const openCandidate = drive === "dwell" ? candidate : null;
-        const openResult = dwellStep(dwellStateRef.current, openCandidate, performance.now(), DWELL_HOLD_MS);
-        dwellStateRef.current = openResult.state;
-
-        const pointedAt = candidate?.id ?? null;
-        if (pointedAt !== handTargetRef.current) {
-          handTargetRef.current = pointedAt;
-          repaintHighlight();
-        }
-        if (openResult.fire && openCandidate) onOpenNoteRef.current(openCandidate.id, openCandidate.title);
-
-        // Camera drive: orbit and zoom share one spherical — re-derived from
-        // the LIVE camera on every engage (fist<->zoom switch or mouse-drag
-        // handoff, design.md M13), never carried over stale.
-        if (activeCameraDrive !== cameraEngagedRef.current) {
-          if (activeCameraDrive) {
-            ensureCenterFresh();
-            sphericalRef.current = new THREE.Spherical().setFromVector3(
-              fg.camera().position.clone().sub(centerRef.current),
-            );
-            const engageDist = activeCameraDrive === "zoom" ? twoPalmDistance(hand) : null;
-            zoomReferenceRef.current =
-              engageDist !== null ? { dist: engageDist, radius: sphericalRef.current.radius } : null;
-            // The wrist, not the fingertip (design note on
-            // TrackedHand.wristPoint): the fingertip moves a long way purely
-            // from curling/uncurling into a fist, which orbit's delta would
-            // otherwise read as hand movement — exactly at the Closed_Fist
-            // engage/release boundary, where that curl is happening.
-            prevOrbitPointRef.current = activeCameraDrive === "orbit" ? hand.wristPoint : null;
-          } else {
-            zoomReferenceRef.current = null;
-            prevOrbitPointRef.current = null;
-          }
-          cameraEngagedRef.current = activeCameraDrive;
-        } else if (
-          activeCameraDrive === "orbit" &&
-          sphericalRef.current &&
-          prevOrbitPointRef.current &&
-          hand.wristPoint
-        ) {
-          const delta = {
-            x: hand.wristPoint.x - prevOrbitPointRef.current.x,
-            y: hand.wristPoint.y - prevOrbitPointRef.current.y,
-          };
-          const next = orbitStep(sphericalRef.current, delta, ORBIT_SENSITIVITY);
-          sphericalRef.current.set(next.radius, next.phi, next.theta);
-          prevOrbitPointRef.current = hand.wristPoint;
-          writeCameraFromSpherical(fg);
-        } else if (activeCameraDrive === "zoom" && sphericalRef.current && zoomReferenceRef.current) {
-          // A dropout (one palm briefly not open_palm) has already released
-          // the reference above on the frame `activeCameraDrive` goes null —
-          // here `zoomReferenceRef.current` staying set means both palms are
-          // still live, so `twoPalmDistance` cannot return null.
-          const curDist = twoPalmDistance(hand)!;
-          const next = zoomRadius({
-            refRadius: zoomReferenceRef.current.radius,
-            refDist: zoomReferenceRef.current.dist,
-            curDist,
-            min: ZOOM_MIN_RADIUS,
-            max: ZOOM_MAX_RADIUS,
-          });
-          sphericalRef.current.set(next, sphericalRef.current.phi, sphericalRef.current.theta);
-          writeCameraFromSpherical(fg);
-        }
-
-        if (activeCameraDrive) {
-          const controls = fg.controls() as unknown as TrackballControlsLike;
-          if (controls.enabled) controls.enabled = false;
-        } else {
-          restoreControlsIfNeeded(fg);
-        }
-
-        if (debugEnabled) updateDebugReadout(hand, drive, performance.now());
-      } catch (err) {
-        // The error boundary does NOT catch rAF throws (design.md R6) — a
-        // per-frame throw must force-close instead of throwing into the void
-        // every frame with the click-through-disabled overlay left trapped.
-        console.error("[second-brain-gesture-nav] gesture loop crashed, force-closing:", err);
-        onForceCloseRef.current();
-        return;
-      }
-      raf = requestAnimationFrame(loop);
-    }
-
-    raf = requestAnimationFrame(loop);
-    return () => {
-      cancelAnimationFrame(raf);
-      restoreControlsIfNeeded(fgRef.current);
-      clearHandTarget();
-    };
-  }, [handControl, running]);
+  // Memoised per graph and per centre note (design.md D7): the derivation is
+  // O(nodes + links) and this component re-renders on every focus change.
+  const entries = useMemo(
+    () => railEntries({ centreId: railCentreId, nodes: graph.nodes, links: graph.links }),
+    [graph, railCentreId],
+  );
 
   return (
     <>
       <div ref={containerRef} className="hud-galaxy hud-hit" />
+      {/* The centre reticle (design.md D10). Deliberately NOT inside a chrome
+          island and `pointer-events: none`, following the
+          `.hud-galaxy-gesture-debug` precedent: `hudChromeAtPoint` nulls the
+          galaxy's pointing target wherever the hand is over chrome, so a
+          reticle carrying HUD_CHROME_CLASS at screen centre would kill node
+          dwell and inspect on the most-used part of the view. */}
+      {handControl && running && !readerOpen ? <div className="hud-galaxy-reticle" /> : null}
+      <GalaxyStepRail
+        className={RAIL_ISLAND_CLASS}
+        entries={entries}
+        centreId={railCentreId}
+        locked={railLocked}
+        onStep={stepToNote}
+      />
       {debugEnabled && <pre ref={debugRef} className="hud-galaxy-gesture-debug" />}
     </>
   );
