@@ -40,3 +40,17 @@ export function transcriptVoiceLabel(voice: TranscriptVoice): string {
   if (voice === "heard") return "Heard";
   return "Iris";
 }
+
+/**
+ * The tail of what Iris is hearing right now, for the caption under the orb.
+ *
+ * The tail rather than the head: this reads as live captioning, so the newest
+ * words are the ones that prove the capture is alive. Bounded because the
+ * caption is one line of chrome, not a transcript — the full text is in the
+ * mode's own record.
+ */
+export function liveHeardCaption(text: string, max = 150): string {
+  const trimmed = text.trim();
+  if (trimmed.length <= max) return trimmed;
+  return `…${trimmed.slice(-max)}`;
+}

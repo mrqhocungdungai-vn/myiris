@@ -28,7 +28,8 @@
 import { GoogleGenAI } from "@google/genai";
 import { poBillingStatus } from "./po-session.mjs";
 import { buildLiveConfig } from "./live-config.mjs";
-import { LISTEN_ONLY_ENGAGE_REQUEST, LISTEN_ONLY_DISENGAGE_REQUEST } from "./gemini-prompts.mjs";
+import { LISTEN_ONLY_ENGAGE_REQUEST, LISTEN_ONLY_DISENGAGE_REQUEST, meetingRecordNote } from "./gemini-prompts.mjs";
+import { formatDuration } from "./meeting-capture.mjs";
 
 /**
  * @param {{
@@ -130,20 +131,54 @@ export function createLiveSession({
   //
   // Skipped entirely under the escape hatch: that path must behave exactly as
   // it did before this change, in-band traffic included.
-  function requestModelSilence(engaged) {
+  function sendInBandNote(text, label) {
     if (!systemAudioEnabled()) return;
     if (!liveSession) return;
     try {
       liveSession.sendClientContent({
-        turns: [{ role: "user", parts: [{ text: engaged ? LISTEN_ONLY_ENGAGE_REQUEST : LISTEN_ONLY_DISENGAGE_REQUEST }] }],
+        turns: [{ role: "user", parts: [{ text }] }],
         turnComplete: false,
       });
     } catch (error) {
-      // A best-effort cost reduction, never the guarantee — a send that fails
-      // must not stop the mode from engaging, because discarding at the client
-      // is what actually keeps Iris silent.
-      console.warn("[IRIS][listen-only] could not send the in-band silence request:", error?.message || error);
+      // Best-effort, never a guarantee — a send that fails must not stop the
+      // mode from engaging, because discarding at the client is what actually
+      // keeps Iris silent, and the record exists on disk either way.
+      console.warn(`[IRIS][listen-only] could not send the in-band ${label}:`, error?.message || error);
     }
+  }
+
+  function requestModelSilence(engaged) {
+    sendInBandNote(engaged ? LISTEN_ONLY_ENGAGE_REQUEST : LISTEN_ONLY_DISENGAGE_REQUEST, "silence request");
+  }
+
+  /**
+   * Tells the voice layer WHICH record the engagement just produced, so a
+   * later "summarize that meeting" can name the right file instead of the
+   * whole folder. Sent after the write settles — the path does not exist
+   * before then — and skipped entirely when nothing was heard.
+   * @param {{ relativePath: string, startedAt: Date, endedAt: Date } | null} record
+   */
+  function announceMeetingRecord(record) {
+    // Traced either way: "no record" and "announcement broken" produce the
+    // same silence on screen, and telling them apart from the outside was
+    // impossible until this line existed.
+    console.log("[IRIS][listen-only] meeting record:", record?.relativePath ?? "(none — nothing was heard)");
+    if (!record?.relativePath) return;
+    if (!systemAudioEnabled()) return;
+    sendInBandNote(meetingRecordNote(record), "meeting-record note");
+    // And the same fact to the user, as the ONE entry the conversation panel
+    // gets for the whole engagement. The verbatim deliberately never goes
+    // there (renderer-bridge.mjs): the panel is a conversation, the record is
+    // a file, and this line is the seam between them — it is what the user
+    // points at when they ask Iris to summarise the meeting, and what she
+    // hands a verb.
+    emitEvent({
+      type: "transcript",
+      speaker: "heard",
+      text:
+        `Listened for ${formatDuration(record.endedAt.getTime() - record.startedAt.getTime())} ` +
+        `and saved everything to ${record.relativePath}`,
+    });
   }
 
   // Pushes state one way, main -> renderer, and never the reverse (design.md
@@ -437,6 +472,7 @@ export function createLiveSession({
     listenOnlyStatePayload,
     handleRendererGone,
     handleSystemAudioUnavailable,
+    announceMeetingRecord,
     toggleListenOnly,
     getUserStopped,
     setResumptionHandle,

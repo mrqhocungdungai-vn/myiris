@@ -649,7 +649,7 @@ This note is just a starting point — edit it, retag it, or delete it whenever 
    * fresh watermark (never back-filling the span) as it ends.
    */
   async function setMeetingCaptureEngaged(engaged) {
-    if (Boolean(engaged) === meetingCapture.isEngaged()) return;
+    if (Boolean(engaged) === meetingCapture.isEngaged()) return null;
     if (engaged) {
       // A first-ever engagement on a machine with no vault yet must still
       // land, exactly as a first-ever capture does.
@@ -657,16 +657,27 @@ This note is just a starting point — edit it, retag it, or delete it whenever 
       meetingCapture.engage();
       await syncAmbientCaptureState();
       startMeetingFlushTimer();
-    } else {
-      stopMeetingFlushTimer();
-      await meetingCapture.disengage({
-        dir: NOTES_MEETINGS_DIR,
-        onError: (error) => {
-          emitEvent({ type: "log", level: "warn", message: `Could not write the meeting record: ${error.message}` });
-        },
-      });
-      await syncAmbientCaptureState();
+      return null;
     }
+    stopMeetingFlushTimer();
+    const { record } = await meetingCapture.disengage({
+      dir: NOTES_MEETINGS_DIR,
+      onError: (error) => {
+        emitEvent({ type: "log", level: "warn", message: `Could not write the meeting record: ${error.message}` });
+      },
+    });
+    await syncAmbientCaptureState();
+    if (!record) return null;
+    // Vault-RELATIVE, the same shape an open note's identity already takes
+    // (resolveOpenNoteForRun). The vault root is named to a run through its
+    // own prompt clause, so a relative path is what a verb can act on — and
+    // handing an absolute filesystem path to the voice layer would put a path
+    // into a model's hands, which this capability avoids everywhere else.
+    return {
+      relativePath: path.relative(NOTES_VAULT_DIR, path.join(NOTES_MEETINGS_DIR, record.name)),
+      startedAt: record.startedAt,
+      endedAt: record.endedAt,
+    };
   }
 
   /** One raw `inputAudioTranscription` fragment, straight from the live session. */

@@ -81,14 +81,14 @@ Everything the mode owns SHALL be released when the session ends: the system-aud
 
 ### Requirement: The HUD reveals its transcript while the mode is engaged
 
-Because listen-only mode exists to let Iris take in a conversation the user is having with other people, the surface that displays what Iris is hearing SHALL be visible without further user action. In HUD mode the transcript panel is collapsed by default; engaging listen-only mode SHALL open it, and disengaging the mode SHALL restore whatever open/closed state the user had before the mode was engaged. The user SHALL remain able to collapse or open the panel by hand while the mode is engaged, and a manual change SHALL be respected rather than immediately re-forced.
+The conversation surface SHALL be visible without further user action for as long as the mode is engaged. It no longer carries what Iris is hearing — that goes to the mode's record instead, see "What Iris overhears does not enter the conversation" — but it is where the mode reports itself: the degraded state if the capture fails, a refused instruction if something overheard tries to make Iris act, and the record's location when the mode ends. Those are the things the user must not have to go looking for, and the last one is what they refer to afterwards. In HUD mode the transcript panel is collapsed by default; engaging listen-only mode SHALL open it, and disengaging the mode SHALL restore whatever open/closed state the user had before the mode was engaged. The user SHALL remain able to collapse or open the panel by hand while the mode is engaged, and a manual change SHALL be respected rather than immediately re-forced.
 
 The deck's transcript is always visible and SHALL require no change.
 
 #### Scenario: Engaging the mode opens the HUD transcript
 
 - **WHEN** the user engages listen-only mode in HUD mode while the transcript panel is collapsed
-- **THEN** the transcript panel opens, so what Iris is hearing is readable without further action
+- **THEN** the transcript panel opens, so what the mode reports about itself is readable without further action
 
 #### Scenario: Disengaging restores the prior panel state
 
@@ -220,39 +220,66 @@ The app SHALL report each refusal, and SHALL answer the refusal back to the sess
 - **WHEN** listen-only mode is not engaged
 - **THEN** tool calls are dispatched exactly as they were before this change
 
-### Requirement: What Iris overhears is not presented as the user's own words
+### Requirement: What Iris overhears does not enter the conversation
 
-While listen-only mode is engaged, transcribed input SHALL NOT be attributed to the user. It SHALL be presented as something Iris heard, distinct on screen from both the user's own speech and from Iris's own lines, wherever a transcript is displayed.
+While listen-only mode is engaged, transcribed input SHALL NOT be shown in the conversation surface at all — neither as the user's words nor under any other attribution.
 
-Before the mode existed this attribution was correct: Iris heard only the microphone, so everything she heard was the user speaking. Adding system audio makes it a false statement — a line may be the user, another person in the room, a remote participant on a call, or a video — and the two sources SHALL NOT be presented as separable, because they are not: they are summed into one stream before anything leaves the machine, which is what keeps the transport and the chunk format unchanged.
+Before the mode existed, showing it there was right: Iris heard only the microphone, so everything she heard was the user talking to her. Both halves of that stopped being true. A line may now be the user, another person in the room, a remote participant, or a video, and the sources SHALL NOT be presented as separable because they are not — they are summed into one stream before anything leaves the machine. And a meeting's verbatim is not a conversation between the user and Iris, which is what that surface is for; the conversation is held to a recent window, so a long engagement would evict the real exchange to display a transcript that already exists, in full and unbounded, in the mode's own record.
 
-The app SHALL NOT attempt to guess which source a line came from, or who spoke it. Presenting a guess as attribution would be worse than presenting none, because the user would have no way to tell a correct attribution from a wrong one.
+Instead, when the mode ends the app SHALL add ONE entry to that surface, naming the record it produced and how long it ran. That entry is the seam between the conversation and the file: it is what the user refers to when asking Iris about the meeting, and what she can hand to a verb.
 
-Any interface affordance that means "the user just spoke" SHALL NOT fire for overheard input.
+While the mode is engaged the app SHALL ALSO show, near the orb, a live readout of what Iris is hearing at that moment. It SHALL update as she hears, SHALL replace itself rather than accumulate, and SHALL NOT be retained anywhere. When the mode is engaged and nothing has been heard, that SHALL be stated rather than left blank.
+
+This is not a smaller version of the transcript; it answers a different question. Retaining silently is the failure mode to avoid: a capture that has died looks exactly like one that is working until the mode ends, and without this the user discovers it only by asking for a summary of a record that turned out to be empty. That is far too late, and it is the state this feature was actually found in during testing. A live readout makes hearing — and not hearing — a fact on screen at the moment it is true.
+
+Provenance SHALL be decided when the text ARRIVES, not when it is displayed or retained. The two are different moments — an utterance is closed only after transcription falls quiet, so the end of every engagement is processed after the mode has already been left — and deciding at the later one publishes a video's words as the user's. An utterance spanning the transition SHALL be treated as overheard.
 
 The same holds past the screen. Overheard speech SHALL NOT be retained into the recent-conversation memory that feeds a run's context, which every consumer presents to Claude as what the user said recently — carrying it there would repeat the false attribution one layer deeper, where the user cannot see it, and that memory outlives the mode. Fencing it as untrusted is not sufficient: a fence mitigates content that genuinely IS the user's, and is not a licence to mislabel content that is not. Nothing is lost by leaving it out, because the mode's own retention holds all of it.
 
-#### Scenario: Overheard speech is not shown as the user's
+Any interface affordance that means "the user just spoke" SHALL NOT fire for overheard input.
 
-- **WHEN** a line is transcribed while listen-only mode is engaged
-- **THEN** it is shown as something Iris heard, not as the user's own words
-- **AND** it is distinguishable from Iris's own lines too
+#### Scenario: A meeting does not flood the conversation
 
-#### Scenario: The two displays agree
+- **WHEN** Iris hears a long stretch of speech while the mode is engaged
+- **THEN** none of it appears in the conversation surface
+- **AND** the exchange the user actually had with Iris is still there afterwards
 
-- **WHEN** the same transcript is shown in the deck and in the HUD
-- **THEN** both attribute each line identically
+#### Scenario: The user can see that Iris is hearing
 
-#### Scenario: Ordinary conversation is unchanged
+- **WHEN** listen-only mode is engaged and Iris is hearing audio
+- **THEN** what she is hearing is shown live near the orb, updating as she hears it
+- **AND** it is not added to the conversation and is not retained
 
-- **WHEN** listen-only mode is not engaged
-- **THEN** the user's speech is attributed to the user exactly as before
+#### Scenario: A capture that hears nothing says so
+
+- **WHEN** the mode is engaged and nothing has been heard
+- **THEN** the interface says so, rather than being indistinguishable from hearing normally
+
+#### Scenario: The live readout does not outlive the mode
+
+- **WHEN** the user disengages the mode
+- **THEN** the live readout is cleared rather than left showing the last thing heard
+
+#### Scenario: The engagement leaves one entry behind
+
+- **WHEN** the user disengages the mode after Iris heard something
+- **THEN** the conversation surface gains a single entry naming that engagement's record and how long it ran
+
+#### Scenario: The tail of an engagement is not attributed to the user
+
+- **WHEN** speech heard just before disengaging is processed just after
+- **THEN** it is still treated as overheard
 
 #### Scenario: Overheard speech does not reach a run as the user's words
 
 - **WHEN** a run is started after listen-only mode has been engaged and then disengaged
 - **THEN** the recent-conversation context it receives contains none of what was overheard
 - **AND** what was overheard is still available in the mode's own retained record
+
+#### Scenario: Ordinary conversation is unchanged
+
+- **WHEN** listen-only mode is not engaged
+- **THEN** the user's speech appears and is attributed to the user exactly as before
 
 #### Scenario: No cue claims the user spoke
 
@@ -343,6 +370,37 @@ Retention SHALL be flushed progressively rather than only at the end, SHALL writ
 
 - **WHEN** several flushes occur over one engagement of the mode
 - **THEN** each utterance appears in the retained record exactly once
+
+### Requirement: Iris is told where the record was written
+
+When the mode is disengaged, the app SHALL tell the voice layer, in-band on the existing session, where that engagement's record was written and what span it covers. The location SHALL be given relative to the vault, on the same terms every other note identity is, and SHALL be sent by the call that adds conversation content without requesting a reply — the same one that carries the silence request — so it never provokes a turn.
+
+This exists because the voice layer is what chooses a verb and fills its parameters. Asking about a meeting a moment after it ends is answered from the conversation itself and needs nothing; asking about a long one is not, because context-window compression will have evicted the beginning. At that point the record has to be read, and the only thing standing between "there is a record" and "read THIS record" is knowing which of them was the one just heard.
+
+The app SHALL NOT depend on this holding indefinitely. It lives in the conversation and can be evicted like anything else; it is what makes the ordinary case work directly, not a guarantee. Nothing SHALL be lost when it is gone — the records remain readable, identifiable by their own timestamps.
+
+Nothing SHALL be sent when the system-audio half is disabled, and nothing SHALL be sent for an engagement that produced no record.
+
+#### Scenario: Disengaging tells Iris where the record is
+
+- **WHEN** the user disengages listen-only mode after Iris heard something
+- **THEN** the voice layer is told, in the conversation, where that engagement's record was written and what span it covers
+- **AND** no reply is produced in response
+
+#### Scenario: The user can ask about a meeting too long to remember
+
+- **WHEN** the user asks about a meeting whose beginning has been evicted from the conversation
+- **THEN** the request can be handed to a verb naming that engagement's own record, rather than the whole area
+
+#### Scenario: An engagement that heard nothing announces nothing
+
+- **WHEN** the mode is disengaged having heard nothing at all
+- **THEN** no record location is announced, because none was written
+
+#### Scenario: The escape hatch stays silent
+
+- **WHEN** the system-audio half is disabled and the user disengages the mode
+- **THEN** nothing is sent, exactly as before this feature existed
 
 ### Requirement: The user is advised to wear headphones
 

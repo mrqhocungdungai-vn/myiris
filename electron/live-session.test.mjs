@@ -418,6 +418,61 @@ describe("live-session: the in-band silence request (listen-mode-hears-system-au
     expect(onListenOnlyChange).toHaveBeenLastCalledWith(false);
   });
 
+  it("tells the voice layer where the record went, without asking for a reply", async () => {
+    const { live, session } = await engagedSession();
+    session.sendClientContent.mockClear();
+
+    live.announceMeetingRecord({
+      relativePath: "inbox/meetings/meeting-2026-08-07T10-03-00.md",
+      startedAt: new Date(Date.UTC(2026, 7, 7, 3, 3, 0)),
+      endedAt: new Date(Date.UTC(2026, 7, 7, 3, 23, 0)),
+    });
+
+    const sent = session.sendClientContent.mock.calls[0][0];
+    expect(sent.turnComplete).toBe(false);
+    expect(sent.turns[0].parts[0].text).toContain("inbox/meetings/meeting-2026-08-07T10-03-00.md");
+  });
+
+  it("gives the conversation panel ONE entry for the engagement, naming the record", async () => {
+    // The verbatim never reaches the panel (renderer-bridge.mjs). This line is
+    // the seam between a conversation and a file: it is what the user points
+    // at when they ask Iris to summarise the meeting.
+    const emitEvent = vi.fn();
+    const { live } = await engagedSession({ emitEvent });
+    emitEvent.mockClear();
+
+    live.announceMeetingRecord({
+      relativePath: "inbox/meetings/meeting-2026-08-07T10-03-00.md",
+      startedAt: new Date(Date.UTC(2026, 7, 7, 3, 3, 0)),
+      endedAt: new Date(Date.UTC(2026, 7, 7, 3, 23, 0)),
+    });
+
+    expect(emitEvent).toHaveBeenCalledWith({
+      type: "transcript",
+      speaker: "heard",
+      text: "Listened for 20m 00s and saved everything to inbox/meetings/meeting-2026-08-07T10-03-00.md",
+    });
+  });
+
+  it("announces nothing for an engagement that produced no record", async () => {
+    const { live, session } = await engagedSession();
+    session.sendClientContent.mockClear();
+    live.announceMeetingRecord(null);
+    live.announceMeetingRecord(/** @type {any} */ ({ relativePath: "" }));
+    expect(session.sendClientContent).not.toHaveBeenCalled();
+  });
+
+  it("announces nothing under the escape hatch", async () => {
+    const { live, session } = await engagedSession({ systemAudioEnabled: () => false });
+    session.sendClientContent.mockClear();
+    live.announceMeetingRecord({
+      relativePath: "inbox/meetings/x.md",
+      startedAt: new Date(),
+      endedAt: new Date(),
+    });
+    expect(session.sendClientContent).not.toHaveBeenCalled();
+  });
+
   it("disengages when the capture could not be acquired at all, and only then", async () => {
     const { live } = await engagedSession();
 

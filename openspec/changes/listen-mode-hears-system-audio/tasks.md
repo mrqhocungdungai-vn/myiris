@@ -52,6 +52,31 @@ the user's own words after it.
 - [x] 3c.6 Add the requirement to the `listen-only-mode` delta spec
 - [x] 3c.7 Test: the overheard id can never match the self test, the label is read at flush time, the ring stays clean, buffers still clear, and ordinary conversation is unchanged
 
+## 3d. Telling Iris where the record went
+
+Asked for after running it: "sau khi tắt tính năng listening tôi muốn hỏi đoạn
+nghe vừa rồi nói về những gì". Answering that a moment later already works from
+the conversation itself (§8.3). Answering it about a LONG meeting does not —
+context-window compression evicts the beginning — and at that point the record
+must be read, which means knowing which record.
+
+D11 claimed the record was "reachable by a verb without new plumbing". Reachable,
+yes; identifiable as the one just heard, no. This closes that gap only — a
+dedicated synthesis verb stays out of scope, exactly as D11 says.
+
+- [x] 3d.1 `meeting-capture.mjs`: `disengage()` reports the finished record — its file and its span — instead of only a write result
+- [x] 3d.2 `second-brain.mjs`: return it as a VAULT-RELATIVE path, the shape an open note's identity already takes; an absolute filesystem path is not something to hand a model
+- [x] 3d.3 `gemini-prompts.mjs`: the note's text, carrying the untrusted warning WITH the path rather than separately from it
+- [x] 3d.4 `live-session.mjs`: send it through the same non-generating call the silence request uses, so it never provokes a turn
+- [x] 3d.5 Wire it AFTER the write settles — the path does not exist before then — and never let retention hold up the mode changing
+- [x] 3d.6 Send nothing for an engagement that heard nothing, and nothing under the escape hatch
+- [x] 3d.7 Keep the meeting's VERBATIM out of the conversation panel entirely — it is a conversation surface, held at 40 lines, so a long engagement would evict the real exchange to show a transcript the record already holds in full
+- [x] 3d.8 Emit ONE panel entry when the mode ends, naming the record and its span — the seam between a conversation and a file, and what the user points at afterwards
+- [x] 3d.9 Decide provenance when the text ARRIVES, not when it is flushed: an utterance closes 1.5s after its last fragment, so every engagement's tail was being published as the user's own words
+- [x] 3d.10 Show a LIVE readout of what Iris is hearing in the caption under the orb — ephemeral, replaces itself, never retained; and say so explicitly when nothing has been heard, since a dead capture otherwise looks identical to a working one until the mode ends
+- [x] 3d.11 Add the requirement to the `listen-only-mode` delta spec, and amend the HUD-reveal requirement whose stated reason no longer holds
+- [x] 3d.12 Test: the path and span are named, the untrusted warning travels with them, no reply is asked for, and both silent cases stay silent
+
 ## 4. Renderer capture and mixing
 
 - [x] 4.1 In `src/hooks/useAudioPipeline.ts`, acquire the loopback stream with `getDisplayMedia({ video: false, audio: true })` and sum it into the existing worklet through a `GainNode` at the configured gain
@@ -91,6 +116,26 @@ the user's own words after it.
 - [x] 7.4 Replace the silent-reply orb state with the listening-mode state, held for the duration of the mode rather than a turn
 - [x] 7.5 Update the tray label in `electron/window.mjs` and the control tooltips
 - [x] 7.6 Verify the existing HUD transcript open/restore behaviour still holds — now showing input transcription rather than Iris's replies
+
+## Deferred — §8 and §9 (2026-08-07)
+
+Deliberately postponed by the user, not forgotten and not done. Everything below
+needs a real machine, real audio, and real time; none of it is reachable from a
+test.
+
+What HAS been confirmed by hand so far: system audio reaches Iris and the
+meeting record fills; the transcript displays overheard speech as `Heard`;
+disengaging and asking about the video answers from that context (§8.3); a muted
+mic still hears the machine (§9.2); a mid-engagement mic swap survives (§9.3);
+the tray toggle engages the mode.
+
+What has NOT: the go/no-go itself (§8.1), every measured number (§8.2, §8.4–8.6),
+the global hotkey, the packaged build, and the degraded-path indication.
+
+**The change is therefore NOT archivable yet** — §8.1 is marked go/no-go and
+§8.7 requires the numbers in this directory first. Archiving before then would
+sync a living spec whose central claim nobody has verified over a full-length
+engagement.
 
 ## 8. Measurement (required before archive)
 

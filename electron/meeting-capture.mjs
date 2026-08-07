@@ -214,19 +214,30 @@ export function createMeetingCapture({ io, now = () => new Date() } = {}) {
    * utterance) and stops. The mode is what governs retention, so this is the
    * only thing that ends it — never a capture failure, and never a transport
    * event.
+   * Reports the finished record — its file name and its span — so the caller
+   * can tell the voice layer which record this engagement produced. `record`
+   * is null when nothing was heard and no file was written, which is the same
+   * condition that suppresses the footer below.
+   *
    * @param {{ dir: string, onError?: (error: Error) => void }} input
+   * @returns {Promise<{ ok: boolean, skipped?: boolean, error?: string,
+   *   record?: { name: string, startedAt: Date, endedAt: Date } | null }>}
    */
   async function disengage({ dir, onError }) {
-    if (!engaged) return { ok: true, skipped: true };
+    if (!engaged) return { ok: true, skipped: true, record: null };
     const result = await flush({ dir, onError, final: true });
     // Close the span, but only on a record that exists: an engagement that
     // heard nothing wrote no file, and a file holding nothing but an "Ended"
     // line would be noise in the curation backlog.
+    const endedAt = now();
+    /** @type {{ name: string, startedAt: Date, endedAt: Date } | null} */
+    let record = null;
     if (headerWritten && startedAt) {
+      record = { name: /** @type {string} */ (file), startedAt, endedAt };
       await appendSpoolRecordTo({
         dir,
         name: /** @type {string} */ (file),
-        content: renderMeetingFooter(startedAt, now()),
+        content: renderMeetingFooter(startedAt, endedAt),
         io,
       });
     }
@@ -236,7 +247,7 @@ export function createMeetingCapture({ io, now = () => new Date() } = {}) {
     open = "";
     queue = [];
     headerWritten = false;
-    return result;
+    return { ...result, record };
   }
 
   return { isEngaged, currentFile, engage, appendFragment, closeUtterance, flush, disengage };

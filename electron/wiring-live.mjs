@@ -36,7 +36,7 @@ import { systemAudioEnabled, systemAudioGain } from "./user-config.mjs";
  *     stopVaultGraphWatch: () => void,
  *     probeSecondBrainAvailability: () => boolean,
  *     setAmbientCaptureAwake: (awake: boolean) => Promise<void>,
- *     setMeetingCaptureEngaged: (engaged: boolean) => Promise<void>,
+ *     setMeetingCaptureEngaged: (engaged: boolean) => Promise<any>,
  *     appendMeetingFragment: (text: string) => void,
  *     closeMeetingUtterance: () => void,
  *   },
@@ -127,7 +127,22 @@ export function createLiveWiring({
     // different consent.
     onListenOnlyChange: (engaged) => {
       if (!systemAudioEnabled()) return;
-      secondBrainCapability.setMeetingCaptureEngaged(engaged);
+      // Awaited before announcing: the record's path does not exist until the
+      // final flush and the closing span have settled, so telling the voice
+      // layer where it is has to follow the write rather than race it.
+      // Fire-and-forget from the toggle's point of view — a retention write is
+      // never allowed to hold up the mode changing.
+      secondBrainCapability
+        .setMeetingCaptureEngaged(engaged)
+        .then((record) => liveSessionModule.announceMeetingRecord(record))
+        // Logged, never swallowed. A bare `.catch(() => {})` here would hide
+        // the whole announcement — the user would disengage, see nothing, and
+        // have no way to tell a broken announcement from an engagement that
+        // heard nothing. That failure shape has already cost this change four
+        // separate rounds of diagnosis.
+        .catch((error) => {
+          console.error("[IRIS][listen-only] meeting record announcement failed:", error?.stack || error);
+        });
     },
   });
   const {

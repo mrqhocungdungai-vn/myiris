@@ -29,7 +29,7 @@ import CommsPanel from "./components/CommsPanel";
 import CameraDock from "./components/CameraDock";
 import CenterStage from "./components/CenterStage";
 import ListenOnlyNotice from "./components/ListenOnlyNotice";
-import { transcriptVoice } from "./lib/transcript-speaker";
+import { transcriptVoice, liveHeardCaption } from "./lib/transcript-speaker";
 import WorkStream from "./components/WorkStream";
 import PipelineBar from "./components/PipelineBar";
 import PoQuestionBanner from "./components/PoQuestionBanner";
@@ -259,6 +259,10 @@ export default function App() {
   // The first-run consent notice for meeting retention, and the (non-blocking)
   // headphone advisory. Both are shown on the engaging edge only.
   const [listenOnlyNotice, setListenOnlyNotice] = useState<"consent" | "headphones" | "refused" | null>(null);
+  // A live readout of what Iris is hearing, for the caption under the orb.
+  // Ephemeral by design: it replaces itself and is never added to the
+  // conversation, which is where a meeting's verbatim does not belong.
+  const [heardLive, setHeardLive] = useState("");
   const [refusedTool, setRefusedTool] = useState<string>("");
   // Records the HUD Comms panel's open/closed state from just before the
   // mode engaged, so disengaging restores it rather than forcing it shut
@@ -696,6 +700,7 @@ export default function App() {
     return window.iris.onListenOnlyState((state) => {
       const { engaged } = state;
       setListenOnlyEngaged(engaged);
+      setHeardLive("");
       audio.applyListenOnlyState(state);
       // The consent point and the headphone advice both belong to the engaging
       // edge, and only when there is actually a capture to consent to — under
@@ -1158,6 +1163,11 @@ export default function App() {
     if (event.type === "listen_only_refused") {
       setRefusedTool(readString(event.tool, "a task"));
       setListenOnlyNotice("refused");
+      return;
+    }
+
+    if (event.type === "heard_live") {
+      setHeardLive(readString(event.text));
       return;
     }
 
@@ -1735,6 +1745,15 @@ export default function App() {
       wakeHotkey: fullConfig?.wakeHotkey ?? "",
     });
     if (wake) return wake;
+    // While the mode is engaged the caption becomes a live readout of what
+    // Iris is hearing — ahead of every per-turn state below, because those
+    // describe a conversation that is not happening. Without it, "hearing
+    // perfectly" and "capture is dead" look identical until the mode ends.
+    if (listenOnlyEngaged) {
+      return heardLive
+        ? { text: liveHeardCaption(heardLive), dim: false }
+        : { text: "Listening — nothing heard yet…", dim: true };
+    }
     if (audioState === "speaking") return { text: "Speaking…", dim: false };
     if (audioState === "listening") return { text: "Listening…", dim: false };
     if (working) return { text: "Working on it…", dim: false };
@@ -1747,6 +1766,8 @@ export default function App() {
     audioState,
     working,
     transcript,
+    listenOnlyEngaged,
+    heardLive,
     geminiStatus,
     wakeWordEnabled,
     wakeFailed,

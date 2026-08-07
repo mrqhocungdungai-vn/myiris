@@ -438,6 +438,27 @@ describe("second-brain capability: meeting retention", () => {
     expect(contents).toContain("kind: meeting");
   });
 
+  it("reports the finished record's vault-relative path and span on disengage", async () => {
+    const cap = make();
+    await cap.setMeetingCaptureEngaged(true);
+    cap.appendMeetingFragment("the deploy goes out Friday");
+    cap.closeMeetingUtterance();
+    const record = await cap.setMeetingCaptureEngaged(false);
+
+    // Vault-RELATIVE, the shape an open note's identity already takes — an
+    // absolute filesystem path is not something to hand a model.
+    expect(record.relativePath).toMatch(/^inbox\/meetings\/meeting-.+\.md$/);
+    expect(record.relativePath).not.toContain(cap.notesVaultDir);
+    expect(record.startedAt).toBeInstanceOf(Date);
+    expect(record.endedAt).toBeInstanceOf(Date);
+  });
+
+  it("reports nothing for an engagement that heard nothing", async () => {
+    const cap = make();
+    await cap.setMeetingCaptureEngaged(true);
+    await expect(cap.setMeetingCaptureEngaged(false)).resolves.toBeNull();
+  });
+
   it("counts meeting records in the inbox backlog, so they are offered for curation", async () => {
     const cap = make();
     await cap.setMeetingCaptureEngaged(true);
@@ -467,7 +488,9 @@ describe("second-brain capability: meeting retention", () => {
     fs.mkdirSync(path.dirname(cap.notesMeetingsDir), { recursive: true });
     fs.writeFileSync(cap.notesMeetingsDir, "not a directory", "utf8");
 
-    await expect(cap.setMeetingCaptureEngaged(false)).resolves.toBeUndefined();
+    // No record to announce: a write that failed produced no file, so there is
+    // no path to hand the voice layer.
+    await expect(cap.setMeetingCaptureEngaged(false)).resolves.toBeNull();
     expect(emitEvent).toHaveBeenCalledWith(
       expect.objectContaining({ type: "log", level: "warn", message: expect.stringContaining("meeting record") }),
     );

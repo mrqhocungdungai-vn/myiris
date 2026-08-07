@@ -41,6 +41,9 @@ export function createRendererBridge({
 }) {
   let userTranscriptBuffer = "";
   let modelTranscriptBuffer = "";
+  // Whether what is currently accumulating was OVERHEARD — see
+  // appendUserTranscript. Cleared with the buffer it describes.
+  let userTranscriptOverheard = false;
 
   // The user's own words, kept past the display flush that used to discard them.
   //
@@ -105,28 +108,39 @@ export function createRendererBridge({
   function flushTranscripts() {
     if (userTranscriptBuffer.trim()) {
       const spoken = userTranscriptBuffer.trim();
-      const overheard = isOverheard();
-      // HEARD_SPEAKER in src/lib/transcript-speaker.ts is the renderer's
-      // copy of this literal — the same cross-boundary duplication the IPC
-      // channel names already carry between ipc.mjs and preload.cjs.
-      emitEvent({ type: "transcript", speaker: overheard ? "heard" : "you", text: spoken });
-      // Retained here, at the flush, rather than per fragment: a flush is one
-      // complete utterance, whereas appendUserTranscript receives arbitrary
-      // partial chunks that would fragment the record.
+      // Read from the BUFFER, not from the mode's current state. The two are
+      // not the same moment: an utterance closes 1.5s after the last fragment,
+      // so the tail of every engagement flushes AFTER the user has already
+      // disengaged — and reading the live flag there labelled a video's words
+      // as the user's own. Provenance belongs to the content, not to the
+      // instant it happens to be written out.
+      const overheard = userTranscriptOverheard;
+
+      // Overheard speech does not reach the conversation panel AT ALL, neither
+      // as the user's words nor as anything else. That panel is a conversation
+      // between the user and Iris; a meeting's verbatim is not that, and it is
+      // held at 40 lines (App.tsx), so twenty minutes of narration would evict
+      // the whole real conversation to show a transcript that already exists,
+      // in full and unbounded, in the mode's own record.
       //
-      // Overheard speech is deliberately NOT retained into this ring. Every
-      // consumer of it renders it as "what the user said recently" straight
-      // into a run's prompt, so keeping it here would carry a video's words
-      // into Claude labelled as the user's own instruction — the same false
-      // attribution as on screen, one layer deeper and past the point where
-      // the user could notice. The fence around it is real, but a fence is
-      // mitigation for content that IS the user's; it is not a licence to
-      // mislabel content that is not.
+      // What the panel gets instead is ONE entry when the mode ends, naming
+      // that record and its span (announceMeetingRecord in live-session.mjs) —
+      // a path Iris can hand to a verb, rather than a transcript she would have
+      // to read back.
       //
-      // Nothing is lost: while the mode is engaged, meeting retention owns
-      // what Iris hears and writes all of it to inbox/meetings/, which is the
-      // record a Claude verb is meant to read afterwards.
+      // It is also kept out of the recent-utterance ring below. Every consumer
+      // of that ring renders it into a run's prompt as "what the user said
+      // recently", so keeping it would carry a video's words to Claude labelled
+      // as the user's own instruction — the same false attribution, one layer
+      // deeper and past where the user could notice, and the ring outlives the
+      // mode by up to ten minutes. Fencing it as untrusted is real mitigation
+      // for content that IS the user's; it is not a licence to mislabel content
+      // that is not.
       if (!overheard) {
+        emitEvent({ type: "transcript", speaker: "you", text: spoken });
+        // Retained at the flush rather than per fragment: a flush is one
+        // complete utterance, whereas appendUserTranscript receives arbitrary
+        // partial chunks that would fragment the record.
         const at = now();
         recentUtterances.push({ text: spoken, at });
         pruneUtterances(at);
@@ -136,11 +150,33 @@ export function createRendererBridge({
       emitEvent({ type: "transcript", speaker: "gemini", text: modelTranscriptBuffer.trim() });
     }
     userTranscriptBuffer = "";
+    userTranscriptOverheard = false;
     modelTranscriptBuffer = "";
   }
 
   function appendUserTranscript(text) {
+    // Sticky for the life of the buffer, and set the moment the text ARRIVES:
+    // this is the only point at which the mode's state and the content's
+    // origin are the same fact. Once true it stays true, so an utterance that
+    // straddles the disengage is treated as overheard — the safe direction,
+    // since the cost of withholding one line of the user's own speech is
+    // nothing, and the cost of publishing a video's words as theirs is the bug
+    // this exists to prevent.
+    if (isOverheard()) userTranscriptOverheard = true;
     userTranscriptBuffer += text;
+    // A LIVE readout of what Iris is hearing right now, for the caption under
+    // the orb — deliberately not the conversation, and deliberately not
+    // history: it is emitted per fragment, replaces itself, and is never
+    // retained anywhere.
+    //
+    // It exists because without it "hearing perfectly" and "capture is dead"
+    // look identical until the mode ends, and the user finds out only by
+    // asking Claude to read a record that turned out to be empty. That is the
+    // wrong moment to learn it. Silence here is now a visible fact rather than
+    // an absence.
+    if (userTranscriptOverheard) {
+      emitEvent({ type: "heard_live", text: userTranscriptBuffer.trim() });
+    }
   }
 
   function appendModelTranscript(text) {

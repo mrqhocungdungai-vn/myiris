@@ -175,18 +175,71 @@ describe("renderer-bridge: who a flushed line is attributed to", () => {
     expect(bridge.getRecentUtterances().map((entry) => entry.text)).toEqual(["something I said"]);
   });
 
-  it("labels overheard speech distinctly, read at flush time", () => {
+  it("keeps overheard speech out of the conversation panel entirely", () => {
+    // Not as the user's words, and not as anything else. The panel is a
+    // conversation between the user and Iris, and it holds 40 lines — twenty
+    // minutes of narration would evict the whole real conversation to show a
+    // transcript that already exists, in full, in the mode's own record. The
+    // panel gets ONE entry for the engagement instead (announceMeetingRecord).
     const win = makeWindow();
-    let overheard = false;
-    const bridge = createRendererBridge({ getMainWindow: () => win, isOverheard: () => overheard });
-
-    overheard = true;
+    const bridge = createRendererBridge({ getMainWindow: () => win, isOverheard: () => true });
     bridge.appendUserTranscript("something a video said");
     bridge.flushTranscripts();
-    expect(win.webContents.send).toHaveBeenCalledWith(
-      "sidecar:event",
-      expect.objectContaining({ speaker: "heard", text: "something a video said" }),
-    );
+
+    const transcripts = win.webContents.send.mock.calls.filter(([, payload]) => payload?.type === "transcript");
+    expect(transcripts).toEqual([]);
+  });
+
+  it("decides provenance when the text ARRIVES, not when it is flushed", () => {
+    // The regression this guards: an utterance closes 1.5s after its last
+    // fragment, so the tail of every engagement flushes AFTER the user has
+    // disengaged. Reading the live flag there published a video's words as the
+    // user's own.
+    const win = makeWindow();
+    let overheard = true;
+    const bridge = createRendererBridge({ getMainWindow: () => win, isOverheard: () => overheard });
+
+    bridge.appendUserTranscript("the last thing the video said");
+    overheard = false; // the user disengaged before the idle timer fired
+    bridge.flushTranscripts();
+
+    expect(win.webContents.send.mock.calls.filter(([, p]) => p?.type === "transcript")).toEqual([]);
+    expect(bridge.getRecentUtterances()).toEqual([]);
+  });
+
+  it("treats an utterance straddling the disengage as overheard", () => {
+    // Withholding one line of the user's own speech costs nothing; publishing
+    // a video's words as theirs is the bug. Once overheard, stays overheard.
+    const win = makeWindow();
+    let overheard = true;
+    const bridge = createRendererBridge({ getMainWindow: () => win, isOverheard: () => overheard });
+
+    bridge.appendUserTranscript("video words ");
+    overheard = false;
+    bridge.appendUserTranscript("and then mine");
+    bridge.flushTranscripts();
+
+    expect(win.webContents.send.mock.calls.filter(([, p]) => p?.type === "transcript")).toEqual([]);
+  });
+
+  it("emits a live readout while overheard, so silence is a visible fact", () => {
+    const win = makeWindow();
+    const bridge = createRendererBridge({ getMainWindow: () => win, isOverheard: () => true });
+    bridge.appendUserTranscript("the deploy ");
+    bridge.appendUserTranscript("goes out Friday");
+
+    const live = win.webContents.send.mock.calls
+      .filter(([, payload]) => payload?.type === "heard_live")
+      .map(([, payload]) => payload.text);
+    // Replaces itself per fragment — a running readout, never history.
+    expect(live).toEqual(["the deploy", "the deploy goes out Friday"]);
+  });
+
+  it("emits no live readout for the user's own speech", () => {
+    const win = makeWindow();
+    const bridge = createRendererBridge({ getMainWindow: () => win, isOverheard: () => false });
+    bridge.appendUserTranscript("something I said");
+    expect(win.webContents.send.mock.calls.filter(([, p]) => p?.type === "heard_live")).toEqual([]);
   });
 
   it("keeps overheard speech OUT of the ring that feeds a run's prompt", () => {
@@ -209,18 +262,22 @@ describe("renderer-bridge: who a flushed line is attributed to", () => {
   });
 
   it("still clears its buffers on an overheard flush", () => {
-    // The bug this guards: an early return would leave the buffer uncleared,
-    // so every later flush re-emitted the whole accumulated transcript.
+    // The bug this guards: skipping the flush with an early return left the
+    // buffer uncleared, so the next real utterance carried the whole meeting
+    // with it.
     const win = makeWindow();
-    const bridge = createRendererBridge({ getMainWindow: () => win, isOverheard: () => true });
-    bridge.appendUserTranscript("first");
+    let overheard = true;
+    const bridge = createRendererBridge({ getMainWindow: () => win, isOverheard: () => overheard });
+    bridge.appendUserTranscript("a meeting nobody addressed to Iris");
     bridge.flushTranscripts();
-    bridge.appendUserTranscript("second");
+
+    overheard = false;
+    bridge.appendUserTranscript("now build the thing");
     bridge.flushTranscripts();
 
     const texts = win.webContents.send.mock.calls
       .filter(([, payload]) => payload?.type === "transcript")
       .map(([, payload]) => payload.text);
-    expect(texts).toEqual(["first", "second"]);
+    expect(texts).toEqual(["now build the thing"]);
   });
 });
