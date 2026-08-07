@@ -129,10 +129,24 @@ on, and that neighbourhood SHALL be the same one the focus declutter and the
 pointed-at highlight already use, so nothing in the galaxy can disagree about what
 one hop means.
 
-When the rail is not centred on any note — a freshly-opened galaxy — it SHALL offer
-entry points drawn from the graph itself, ordered so the most connected notes come
-first. A user who has just opened the galaxy SHALL therefore be able to start
-moving without first having to aim at anything.
+**Stepping one hop at a time cannot reach a note the links do not lead to.** A
+vault is routinely more than one cloud of linked notes — a set of notes written
+about a separate subject need not link to anything in the main body at all — and a
+rail that only ever walked one hop could never leave the cloud it started in.
+Reaching those notes is not an edge case: they are precisely the ones a user cannot
+find by looking, because they sit somewhere else in the view entirely.
+
+The rail SHALL therefore **always** offer a set of **entry points** alongside the
+current note's neighbours, whether or not it is centred on a note, and those entry
+points SHALL **cover every disconnected region of the graph** — no region SHALL be
+without one. Within that guarantee they SHALL be ordered so the most connected
+notes come first, and no region's coverage SHALL be dropped in order to keep the
+list short.
+
+A user who has just opened the galaxy SHALL therefore be able to start moving
+without aiming at anything, and a user who has walked several hops into one cloud
+SHALL be able to leave it — for another cloud, or back to where they began —
+without closing the galaxy and reopening it.
 
 **The rail exists because aiming at a node is not something a hand can do
 reliably.** A note's dot is a few pixels across in a view that occludes itself, and
@@ -197,6 +211,21 @@ had walked to.
 - **WHEN** the user opens the galaxy and has not yet stepped anywhere
 - **THEN** the rail offers entry points ordered with the most connected notes first, so a first step can be taken without aiming at any node
 
+#### Scenario: A cloud of notes linked to nothing else is still reachable
+
+- **WHEN** the vault contains a set of notes that link to each other but to nothing in the main body of the graph
+- **THEN** the rail offers an entry point in that set too, so it can be reached without piloting the camera to it
+
+#### Scenario: The entry points stay available after stepping
+
+- **WHEN** the user has stepped several hops into one cloud
+- **THEN** the entry points are still offered alongside that note's neighbours, so leaving for another cloud — or returning to the start — needs neither a hop-by-hop walk back nor closing the galaxy
+
+#### Scenario: Coverage is not traded away for a short list
+
+- **WHEN** the vault has more disconnected regions than the rail would otherwise list entry points for
+- **THEN** every region still has one, and the rail accommodates them rather than dropping a region silently
+
 #### Scenario: Repeated steps traverse the graph
 
 - **WHEN** the user activates an entry, then an entry on the resulting rail, then another
@@ -205,7 +234,7 @@ had walked to.
 #### Scenario: The rail's neighbourhood matches the rest of the galaxy
 
 - **WHEN** the rail is centred on a note that is also focused
-- **THEN** the notes the rail lists are exactly the notes the focus declutter keeps bright for that note — the two cannot disagree about one hop
+- **THEN** the notes the rail lists **as that note's neighbours** are exactly the notes the focus declutter keeps bright for that note — the two cannot disagree about one hop. The entry points are a separate offering and are not part of that claim.
 
 #### Scenario: Stepping changes no selection
 

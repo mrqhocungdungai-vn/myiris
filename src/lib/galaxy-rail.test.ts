@@ -1,5 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { railEntries, linkDegrees, RAIL_ISLAND_CLASS, RAIL_ENTRY_POINT_LIMIT, type RailNode } from "./galaxy-rail";
+import {
+  railNeighbours,
+  railRoots,
+  connectedRegions,
+  linkDegrees,
+  RAIL_ISLAND_CLASS,
+  RAIL_ENTRY_POINT_BUDGET,
+  type RailNode,
+} from "./galaxy-rail";
 import { HUD_CHROME_CLASS } from "./hudChrome";
 import { colorForNode } from "./galaxy-colors";
 import { focusNeighborhood } from "./galaxy-nav";
@@ -43,27 +51,27 @@ describe("linkDegrees", () => {
   });
 });
 
-describe("railEntries — centred on a note", () => {
+describe("railNeighbours", () => {
   it("lists the centre note's one-hop neighbours and excludes the centre itself", () => {
-    const entries = railEntries({ centreId: "hub", nodes: NODES, links: LINKS });
+    const entries = railNeighbours({ centreId: "hub", nodes: NODES, links: LINKS });
     expect(entries.map((e) => e.id).sort()).toEqual(["a", "b", "ghost"]);
   });
 
   it("lists exactly what focusNeighborhood keeps bright, so the rail cannot disagree about one hop", () => {
-    const entries = railEntries({ centreId: "hub", nodes: NODES, links: LINKS });
+    const entries = railNeighbours({ centreId: "hub", nodes: NODES, links: LINKS });
     const bright = focusNeighborhood(["hub"], LINKS);
     bright.delete("hub");
     expect(new Set(entries.map((e) => e.id))).toEqual(bright);
   });
 
   it("orders neighbours most connected first", () => {
-    const entries = railEntries({ centreId: "hub", nodes: NODES, links: LINKS });
+    const entries = railNeighbours({ centreId: "hub", nodes: NODES, links: LINKS });
     expect(entries.map((e) => e.id)).toEqual(["a", "b", "ghost"]);
     expect(entries.map((e) => e.linkCount)).toEqual([2, 1, 1]);
   });
 
   it("includes a ghost neighbour but flags it not openable", () => {
-    const entries = railEntries({ centreId: "hub", nodes: NODES, links: LINKS });
+    const entries = railNeighbours({ centreId: "hub", nodes: NODES, links: LINKS });
     const ghost = entries.find((e) => e.id === "ghost");
     expect(ghost).toBeDefined();
     expect(ghost!.openable).toBe(false);
@@ -71,53 +79,133 @@ describe("railEntries — centred on a note", () => {
   });
 
   it("does NOT reach a second hop", () => {
-    const entries = railEntries({ centreId: "hub", nodes: NODES, links: LINKS });
+    const entries = railNeighbours({ centreId: "hub", nodes: NODES, links: LINKS });
     expect(entries.map((e) => e.id)).not.toContain("far");
   });
 
   it("shows each note in the colour its dot has in the graph", () => {
-    const entries = railEntries({ centreId: "hub", nodes: NODES, links: LINKS });
+    const entries = railNeighbours({ centreId: "hub", nodes: NODES, links: LINKS });
     expect(entries.find((e) => e.id === "a")!.tagColor).toBe(colorForNode({ tags: ["idea"] }));
     expect(entries.find((e) => e.id === "ghost")!.tagColor).toBe(colorForNode({ tags: [], ghost: true }));
   });
 
   it("is empty for a note with no neighbours", () => {
-    expect(railEntries({ centreId: "far", nodes: NODES, links: [] })).toEqual([]);
+    expect(railNeighbours({ centreId: "far", nodes: NODES, links: [] })).toEqual([]);
   });
 
   it("is NOT capped, so a well-connected note's rail still matches the declutter exactly", () => {
     const many: RailNode[] = [{ id: "hub", title: "Hub", tags: [] }];
     const manyLinks = [];
-    for (let i = 0; i < RAIL_ENTRY_POINT_LIMIT * 3; i++) {
+    for (let i = 0; i < RAIL_ENTRY_POINT_BUDGET * 3; i++) {
       many.push({ id: `n${i}`, title: `N${i}`, tags: [] });
       manyLinks.push({ source: "hub", target: `n${i}` });
     }
-    expect(railEntries({ centreId: "hub", nodes: many, links: manyLinks })).toHaveLength(
-      RAIL_ENTRY_POINT_LIMIT * 3,
+    expect(railNeighbours({ centreId: "hub", nodes: many, links: manyLinks })).toHaveLength(
+      RAIL_ENTRY_POINT_BUDGET * 3,
     );
   });
 });
 
-describe("railEntries — entry points, with no centre note", () => {
-  it("offers the most connected notes first, so a first step needs no aiming", () => {
-    const entries = railEntries({ centreId: null, nodes: NODES, links: LINKS });
-    expect(entries.map((e) => e.id)).toEqual(["hub", "a", "b", "far", "ghost"]);
+describe("connectedRegions", () => {
+  it("groups notes reachable from one another in either direction", () => {
+    const regions = connectedRegions(NODES, LINKS).map((r) => r.slice().sort());
+    expect(regions).toHaveLength(1);
+    expect(regions[0]).toEqual(["a", "b", "far", "ghost", "hub"]);
   });
 
-  it("caps the entry points at the limit", () => {
-    const entries = railEntries({ centreId: null, nodes: NODES, links: LINKS, entryPointLimit: 2 });
-    expect(entries.map((e) => e.id)).toEqual(["hub", "a"]);
+  it("separates a cloud that links to nothing in the main body", () => {
+    const nodes: RailNode[] = [...NODES, { id: "x", title: "X", tags: [] }, { id: "y", title: "Y", tags: [] }];
+    const links = [...LINKS, { source: "x", target: "y" }];
+    const regions = connectedRegions(nodes, links).map((r) => r.slice().sort());
+    expect(regions).toHaveLength(2);
+    expect(regions).toContainEqual(["x", "y"]);
   });
 
-  it("yields an empty rail for an empty graph", () => {
-    expect(railEntries({ centreId: null, nodes: [], links: [] })).toEqual([]);
+  it("treats an unlinked note as its own region", () => {
+    const regions = connectedRegions([{ id: "lonely", title: "Lonely", tags: [] }], []);
+    expect(regions).toEqual([["lonely"]]);
   });
 
-  it("orders deterministically between equally-connected notes", () => {
+  it("ignores a link whose endpoint is not a node", () => {
+    const regions = connectedRegions([{ id: "a", title: "A", tags: [] }], [{ source: "a", target: "missing" }]);
+    expect(regions).toEqual([["a"]]);
+  });
+
+  it("handles a long chain without recursing", () => {
+    const nodes: RailNode[] = [];
+    const links = [];
+    for (let i = 0; i < 20000; i++) {
+      nodes.push({ id: `n${i}`, title: `N${i}`, tags: [] });
+      if (i > 0) links.push({ source: `n${i - 1}`, target: `n${i}` });
+    }
+    expect(connectedRegions(nodes, links)).toHaveLength(1);
+  });
+});
+
+describe("railRoots — the entry points", () => {
+  it("offers the most connected notes first in a single-region vault", () => {
+    const entries = railRoots({ nodes: NODES, links: LINKS });
+    expect(entries[0].id).toBe("hub");
+  });
+
+  it("still offers a spread of hubs when the whole vault is one region", () => {
+    // The coverage guarantee alone would give exactly one entry here; the fill
+    // pass is what keeps a single-cloud vault usable (design.md D7b).
+    expect(railRoots({ nodes: NODES, links: LINKS }).length).toBeGreaterThan(1);
+  });
+
+  it("gives an entry point to a cloud that links to nothing in the main body", () => {
+    const nodes: RailNode[] = [...NODES, { id: "x", title: "X", tags: [] }, { id: "y", title: "Y", tags: [] }];
+    const links = [...LINKS, { source: "x", target: "y" }];
+    const ids = railRoots({ nodes, links }).map((e) => e.id);
+    expect(ids.some((id) => id === "x" || id === "y")).toBe(true);
+  });
+
+  it("keeps every region's entry point even when regions outnumber the budget", () => {
+    // The budget bounds the FILL, never the guarantee — dropping a region to
+    // keep the list short is the exact defect entry points exist to remove.
+    const nodes: RailNode[] = [];
+    const links = [];
+    const regionCount = 5;
+    for (let r = 0; r < regionCount; r++) {
+      nodes.push({ id: `r${r}a`, title: `R${r}A`, tags: [] });
+      nodes.push({ id: `r${r}b`, title: `R${r}B`, tags: [] });
+      links.push({ source: `r${r}a`, target: `r${r}b` });
+    }
+    const entries = railRoots({ nodes, links, budget: 2 });
+    expect(entries.length).toBe(regionCount);
+    for (let r = 0; r < regionCount; r++) {
+      expect(entries.some((e) => e.id === `r${r}a` || e.id === `r${r}b`)).toBe(true);
+    }
+  });
+
+  it("leads with the largest regions", () => {
     const nodes: RailNode[] = [
-      { id: "z", title: "Zulu", tags: [] },
-      { id: "m", title: "Mike", tags: [] },
+      { id: "big1", title: "Big1", tags: [] },
+      { id: "big2", title: "Big2", tags: [] },
+      { id: "big3", title: "Big3", tags: [] },
+      { id: "small1", title: "Small1", tags: [] },
+      { id: "small2", title: "Small2", tags: [] },
     ];
-    expect(railEntries({ centreId: null, nodes, links: [] }).map((e) => e.id)).toEqual(["m", "z"]);
+    const links = [
+      { source: "big1", target: "big2" },
+      { source: "big2", target: "big3" },
+      { source: "small1", target: "small2" },
+    ];
+    expect(railRoots({ nodes, links, budget: 2 })[0].id).toBe("big2");
+  });
+
+  it("excludes a lone unlinked note — stepping to it would land on an empty rail", () => {
+    const nodes: RailNode[] = [...NODES, { id: "lonely", title: "Lonely", tags: [] }];
+    expect(railRoots({ nodes, links: LINKS }).map((e) => e.id)).not.toContain("lonely");
+  });
+
+  it("never lists the same note twice across the guarantee and the fill", () => {
+    const entries = railRoots({ nodes: NODES, links: LINKS });
+    expect(new Set(entries.map((e) => e.id)).size).toBe(entries.length);
+  });
+
+  it("yields nothing for an empty graph", () => {
+    expect(railRoots({ nodes: [], links: [] })).toEqual([]);
   });
 });

@@ -51,7 +51,16 @@
 
 - [x] 6.1 Update `docs/GESTURES.md` with the anchor model, the lowered-hand release and the rail; keep `CLAUDE.md` a router
 - [x] 6.2 Document the new tuning constants in the style of the existing galaxy constants
-- [x] 6.3 Seed a 200–500 note test vault
-- [ ] 6.4 Manual pass on that vault: anchor prediction, orbit around a node, zoom into a dot, rail traversal, a held hand after a step, lowered-hand release, whether the anchor visibly drifts while the layout settles, that a mouse pan survives a full engage/release cycle, and that engaging a drive mid-flight does not jump — the last two cannot be unit-tested because both vitest projects are `environment: "node"`
+- [x] 6.3 Seed a 200–500 note test vault — `scripts/seed-galaxy-test-vault.mjs`, revised after 7.x to write several MUTUALLY UNLINKED clouds, since entry-point coverage per region is unobservable in a vault that happens to be one connected graph
+- [ ] 6.4 Manual pass on that vault: entry points reaching every cloud, anchor prediction, orbit around a node, zoom into a dot, rail traversal, a held hand after a step, lowered-hand release, whether the anchor visibly drifts while the layout settles, that a mouse pan survives a full engage/release cycle, and that engaging a drive mid-flight does not jump — the last two cannot be unit-tested because both vitest projects are `environment: "node"`
 - [x] 6.5 Resolve the design's open question (candidate ring during a drive) from the manual pass
 - [x] 6.6 Run all five gates: `npm run build`, `npm test`, `npm run lint`, `npm run scan:secrets`, `npm run spec:check`
+
+## 7. Entry points cover every region (D7b, from the manual pass)
+
+- [x] 7.1 Add `connectedRegions(nodes, links)` to `src/lib/galaxy-rail.ts` — undirected components over the same link list everything else reads
+- [x] 7.2 Add `railRoots({ nodes, links, budget })`: one entry per region (its most connected note) as a guarantee, then fill the remaining budget by degree overall, with regions of a single unlinked note contributing nothing
+- [x] 7.3 Rename `railEntries` to `railNeighbours` and drop its no-centre branch — the two questions now have two functions, and one name answering both is what let the coverage hole hide
+- [x] 7.4 Unit-test 7.1-7.3: a region unreachable from the main body still gets an entry, the guarantee survives more regions than the budget, a one-note region with no links is excluded, a single-region vault still gets a spread of hubs, and the neighbour list is unchanged
+- [x] 7.5 Render the rail as two sections — entry points always, the centre note's neighbours below — with the centre note named so the user knows where they are
+- [x] 7.6 Confirm the step lock (D11) covers both sections, since either can be the element under a still-held hand

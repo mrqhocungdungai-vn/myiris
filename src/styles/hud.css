@@ -808,6 +808,15 @@ html:not(.hud-mode) .setup-backdrop {
   color: var(--muted);
 }
 
+/* The note the rail is centred on. Cased and coloured unlike the heading around
+   it, because it is the one word in the island that says where the user
+   currently IS rather than where they could go. */
+.hud-galaxy-rail-heading .centre {
+  text-transform: none;
+  letter-spacing: 0;
+  color: #dbe6f5;
+}
+
 .hud-galaxy-rail-empty {
   margin: 0;
   width: 200px;
@@ -815,6 +824,9 @@ html:not(.hud-mode) .setup-backdrop {
   color: var(--muted);
 }
 
+/* Each section scrolls on its own, so a well-connected note's long neighbour
+   list cannot push the entry points out of reach — which would undo the whole
+   point of keeping them permanently offered. */
 .hud-galaxy-rail-list {
   margin: 0;
   padding: 0;
@@ -822,6 +834,7 @@ html:not(.hud-mode) .setup-backdrop {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  max-height: 19vh;
   overflow-y: auto;
 }
 

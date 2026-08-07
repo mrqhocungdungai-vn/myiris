@@ -178,6 +178,42 @@ Degree needs only the links already on the wire; recency would need a modificati
 time added to `VaultGraphNode`, which is a main-process and wire-shape change and is
 excluded in the proposal for that reason.
 
+### D7b — Entry points are per connected region, and coverage outranks the budget
+
+*Added after the manual pass, which found the hole: with the rail showing only the
+current note's neighbours once it had a centre, a cloud of notes that links to
+nothing in the main body was unreachable by stepping at all, and there was no route
+back to the entry points short of closing the galaxy.*
+
+Ordering the whole vault by degree and taking the top N does not fix it: the top N
+by degree can all sit inside the largest cloud, which is exactly the cloud the user
+is already in. What the rail needs is **coverage** — a foothold in every region —
+and coverage is a different question from connectedness.
+
+So entry points are computed in two passes over the graph's connected components:
+
+1. **Guarantee** — every component contributes its most connected note. This is
+   what makes "no region SHALL be without one" true by construction rather than by
+   the ordering happening to work out.
+2. **Fill** — whatever budget remains goes to the next most connected notes
+   overall, so a vault that is one big cloud still offers a useful spread of hubs
+   rather than a single entry.
+
+The budget is therefore a floor on the *fill*, never a cap on the *guarantee*: a
+vault with more regions than the budget yields more entries than the budget, and the
+island scrolls. A cap that dropped a region would silently reintroduce the very
+defect this decision exists to remove — and the spec says so, so it cannot be
+tuned away later by someone reading only the constant.
+
+A component of one note with no links contributes nothing: it has no neighbours to
+step to, so an entry for it would lead to a rail with nothing on it. Reaching such a
+note is what the deferred search box is for.
+
+The entry points are shown **alongside** the neighbours rather than instead of them,
+so the "where can I go from here" and "where else is there" questions are answered
+at once. They do not change as the user steps, which is what makes them a fixed
+frame of reference rather than a second thing to keep track of.
+
 ### D8 — The flight is a real tween, and a user grab cancels it
 
 A rail step happens with no drive engaged, so the controls are enabled and

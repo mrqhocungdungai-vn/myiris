@@ -306,8 +306,24 @@ of ~200x44 px buttons naming the current note's one-hop neighbours, each showing
 its title, tag colour and link count. Activating one flies the camera there over
 a short animation, anchors on it, and repopulates the rail with *that* note's
 neighbours — hand-over-hand traversal, one short beat per step instead of a
-sustained pose. With no note yet reached the rail offers the vault's most
-connected notes as entry points, so the first step needs no aiming at all.
+sustained pose.
+
+Above the neighbours sits a second, **permanent** list: the **entry points**.
+Stepping one hop at a time cannot reach a note the links do not lead to, and a
+vault is routinely more than one cloud — notes written about a separate subject
+need not link to the main body at all — so a rail that only walked one hop could
+never leave the cloud it started in. Entry points are computed to guarantee
+**coverage**: every connected region contributes its most connected note first,
+and only then is the remaining budget filled by degree overall. Ordering the whole
+vault by degree and taking the top N does not do this — the top N can all sit
+inside the cloud the user is already in. The budget therefore bounds the fill and
+never the guarantee: more regions than budget yields more entries than budget, and
+the island scrolls. A region of one unlinked note contributes nothing, since
+stepping to it would land on an empty rail.
+
+They do not change as the user steps, which is what makes them a fixed frame of
+reference: the first step needs no aiming, and leaving a cloud — or returning to
+the start — never requires walking back hop by hop or closing the galaxy.
 
 Its one-hop set comes from the same `focusNeighborhood` the declutter and the
 highlight use, so nothing in the galaxy can disagree about what one hop means —

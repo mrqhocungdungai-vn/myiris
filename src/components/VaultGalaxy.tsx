@@ -9,7 +9,7 @@ import { useGalaxyAnchor } from "../hooks/useGalaxyAnchor";
 import { selectLabels } from "../lib/galaxy-labels";
 import { createLabelPool, type LabelPool } from "../lib/galaxy-label-sprites";
 import { createRingPair, type AnchorRings } from "../lib/galaxy-anchor-rings";
-import { railEntries, RAIL_ISLAND_CLASS } from "../lib/galaxy-rail";
+import { railNeighbours, railRoots, RAIL_ISLAND_CLASS } from "../lib/galaxy-rail";
 import GalaxyStepRail from "./GalaxyStepRail";
 import type { GalaxyNode, GalaxyLink, TrackballControlsLike } from "../lib/galaxy-types";
 
@@ -835,12 +835,16 @@ function GalaxyCanvas({
     railLockTimerRef.current = setTimeout(() => setRailLocked(false), STEP_LOCK_MS);
   }
 
-  // Memoised per graph and per centre note (design.md D7): the derivation is
-  // O(nodes + links) and this component re-renders on every focus change.
-  const entries = useMemo(
-    () => railEntries({ centreId: railCentreId, nodes: graph.nodes, links: graph.links }),
+  // Memoised (design.md D7): both derivations are O(nodes + links) and this
+  // component re-renders on every focus change. The entry points depend on the
+  // graph ALONE — they are deliberately the one part of the rail that stepping
+  // does not change, so they are not recomputed when the centre moves.
+  const roots = useMemo(() => railRoots({ nodes: graph.nodes, links: graph.links }), [graph]);
+  const neighbours = useMemo(
+    () => (railCentreId === null ? [] : railNeighbours({ centreId: railCentreId, nodes: graph.nodes, links: graph.links })),
     [graph, railCentreId],
   );
+  const centreTitle = railCentreId === null ? null : graph.nodes.find((n) => n.id === railCentreId)?.title ?? railCentreId;
 
   return (
     <>
@@ -854,8 +858,9 @@ function GalaxyCanvas({
       {handControl && running && !readerOpen ? <div ref={reticleRef} className="hud-galaxy-reticle" /> : null}
       <GalaxyStepRail
         className={RAIL_ISLAND_CLASS}
-        entries={entries}
-        centreId={railCentreId}
+        roots={roots}
+        neighbours={neighbours}
+        centreTitle={centreTitle}
         locked={railLocked}
         onStep={stepToNote}
       />
