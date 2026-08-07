@@ -571,6 +571,108 @@ above — but if a manual pass finds the uniform retarget gate still
 insufficient, release-and-regrab is the fallback to reach for next, not a
 fourth round of narrower gating.
 
+### D20 — The fist orbit is deleted, and the zoom targets a NOTE, never a point
+
+*Added after the user reframed the problem — the decisive message of the whole
+thread: "it's a SPHERE, so you'd need fist-and-rotate, but that makes it
+complicated. Remove fist-rotate. Make two-hand zoom as easy as possible for
+REACHING A NOTE. The goal is to zoom to the right note so you can dwell to open
+it — zooming chaotically is meaningless."*
+
+Four rounds (D17, D18, D19, and the tuning inside them) treated this as a
+signal-quality problem. It was a **purpose** problem. The zoom could dolly
+toward any point in space, and D15 had made that explicit and deliberate —
+"you turn around the mark", even over emptiness. But nobody ever wants to be
+closer to the emptiness between notes. The only reason to fly this camera is to
+reach a note and dwell on it, and a drive that can end up anywhere is a drive
+that is usually somewhere useless. That is what "zooming chaotically is
+meaningless" names, and no amount of damping fixes it, because the noise was
+never the reason the destination was wrong.
+
+**So the target is always a note** (`pickZoomTarget`, replacing `pickPivotAt`).
+Spreading the palms always travels toward one, and arriving frames it at the
+centre of the view — which is exactly where the pointing dwell then opens it.
+The point-pivot machinery goes with it: `sightPivotPoint`, `pickPivotAt` and
+`pickAnchorAt` are deleted, not merely bypassed. The `point` variant stays in
+the `GalaxyAnchor` union because a mouse pan still produces one (D1), but
+nothing derives one from the sight any more. With it goes the entire class of
+instability D14/D17/D18 kept fighting: a point pivot re-derived from a moving
+ray while the camera eases onto it chases its own feedback, and a note simply
+cannot — it is a fixed thing in the world.
+
+**Depth breaks ties only between notes that OVERLAP on screen.** `nearestNodeAt`
+ranks purely by screen distance, which is right for the dwell but wrong here: in
+a sphere it happily marks a note on the far side that projects beside the sight
+— one the user cannot see, because a nearer note is drawn over it. The naive
+fix, "front-most within the capture radius wins", is worse in the other
+direction: at overview distance every note is within the radius, so it resolves
+to an arbitrary dot on the near face rather than the one aimed at. Depth is
+invisible to the user *except* through occlusion, so it may only decide between
+things that visually cover each other (`OCCLUSION_PX`). Beyond that, aim wins.
+
+**And the incumbent needs hysteresis in BOTH dimensions.** The screen-distance
+bias alone is worthless once two notes overlap, because the tie is then settled
+on depth — the one comparison the user cannot see, and so the one that most
+needs damping. `ZOOM_INCUMBENT_DEPTH_FACTOR` supplies it. A unit test caught
+this: the bias was applied only to the pixel distance and the target still
+flipped to a challenger a fraction of a unit nearer.
+
+**The fist is deleted rather than rebound.** Nothing takes its place — that is
+the point. The proposal's own law is "the hand chooses coarsely; the system does
+the fine work", and one drive that goes *to* a note honours it where two drives
+that between them go anywhere did not.
+
+*What this costs, stated plainly:* there is no longer a hands-only way to swing
+the camera around the graph at will. Reaching the far side now happens by
+travelling — flying to a note both moves the camera and turns its aim onto that
+note, so hops accumulate into real angular change, and the camera can pass
+inside the cloud where the far hemisphere is simply in front of it. Mouse drag
+still orbits freely whenever no drive is engaged, and the rail plus its search
+reach anything by name. Whether that is enough in practice is the first thing
+the manual pass must answer; if it is not, the smallest addition is to make
+arrival approach along the vector from the centroid through the target, which
+guarantees the target lands unoccluded — NOT a new rotate gesture.
+
+### D21 — Retargeting must not rewrite the gesture's own mapping, and arrival must frame the note
+
+*Two defects found in the same pass as D20, both of which would have survived it.*
+
+**The reseed was rewriting the spread.** Every retarget calls
+`reseedAroundAnchor`, which re-pinned the zoom reference's `dist` to whatever
+the hands were at that instant. That holds the camera still — the property it
+was written for — but it silently rewrites the gesture's own mapping mid-stroke:
+the spread already spent stops counting, so the distance still to travel
+collapses and the hands must be re-spread from scratch to go any further. **This
+is "I keep spreading and nothing happens"** — and D17/D18 made it worse by
+retargeting more often, which is why each round of "fixing" the zoom degraded
+it. The fix keeps `dist` FIXED and solves for the `radius` that reproduces the
+current distance under it, so hand-spread → travel stays constant for the whole
+drive while the camera still holds still across the change.
+
+**Arrival had nothing to arrive at.** `ZOOM_MIN_RADIUS` was 8 — about two node
+radii off the dot's surface, where the note fills the viewport as a wall of
+colour with its own label clipped and no neighbours in frame. Dwell accuracy
+does not improve there either: the dwell threshold measures from the node's
+projected centre, so an enormous dot buys nothing, while what actually helps —
+no competing node within that threshold — is unaffected. 40 sits just inside
+`STEP_FLIGHT_DISTANCE` (60, what a rail step already parks at, for the same
+framing reason): the note is unmistakably the subject, its neighbours are still
+context.
+
+**One interaction the always-a-note rule breaks, and its guard.** Pinching the
+hands shut backs out to the overview and hands the anchor back to the centroid
+(D5) — but with the target now always a note, the very next throttled pick would
+re-anchor on one and cancel it. Retargeting is therefore suspended once the
+camera is past the release threshold, or "close your hands to see everything
+again" would silently stop working.
+
+*Unvalidated constants, named as such rather than presented as solved:*
+`ZOOM_MIN_RADIUS` (40), `OCCLUSION_PX` (28), `ZOOM_INCUMBENT_BIAS_PX` (30) and
+`ZOOM_INCUMBENT_DEPTH_FACTOR` (0.8) were all reasoned about rather than measured
+against real hand tracking. `PIVOT_RETARGET_DEAD_BAND_PX` (24) is now *more*
+load-bearing than in D19, since a depth-aware picker can flip on an occluder
+drifting between camera and target with no hand movement at all.
+
 ### D9 — The rail is chrome, and that is the whole of its reachability
 
 The rail island carries `HUD_CHROME_CLASS` and `hud-hit`. It then inherits both the

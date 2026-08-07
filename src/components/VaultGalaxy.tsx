@@ -52,12 +52,17 @@ function escapeHtml(text: string): string {
 // during the manual pass, not further pre-optimized.
 const DWELL_THRESHOLD_PX = 48;
 const DWELL_HOLD_MS = 300;
-const ORBIT_SENSITIVITY = 0.006; // radians per pixel, matching the orb loop's feel
-// 8, not the 15 this used to be: the floor is now a distance to a SINGLE
-// anchored node rather than to the middle of the whole ball, so it can sit just
-// clear of a node's own ~4-unit sphere and let "dolly all the way in" actually
-// arrive at the note (galaxy-note-reachable-by-hand design.md D4).
-const ZOOM_MIN_RADIUS = 8;
+// How close the dolly may get to the note it is flying to. 40, not the 8 this
+// briefly was (design.md D21): at radius 8 the camera sits about two node-radii
+// off the dot's surface, so the note fills the viewport as a wall of colour
+// with its own label clipped and no neighbours in frame — arriving, but with
+// nothing to arrive AT. Dwell accuracy does not improve past this point either,
+// since DWELL_THRESHOLD_PX measures from the node's projected centre, so an
+// enormous dot buys nothing; what helps is having no competing node within that
+// threshold. 40 sits just inside STEP_FLIGHT_DISTANCE (60, what a rail step
+// already parks at, for the same framing reason) — the note is unmistakably
+// the subject, its one-hop neighbours are still visible as context.
+const ZOOM_MIN_RADIUS = 40;
 const ZOOM_MAX_RADIUS = 2500;
 
 // galaxy-note-reachable-by-hand tuning constants, in the style of the galaxy's
@@ -781,7 +786,6 @@ function GalaxyCanvas({
     anchorThresholdPx: ANCHOR_THRESHOLD_PX,
     pivotRetargetDeadBandPx: PIVOT_RETARGET_DEAD_BAND_PX,
     candidateIntervalMs: SELECT_INTERVAL_MS,
-    orbitSensitivity: ORBIT_SENSITIVITY,
     zoomMinRadius: ZOOM_MIN_RADIUS,
     zoomMaxRadius: ZOOM_MAX_RADIUS,
   });

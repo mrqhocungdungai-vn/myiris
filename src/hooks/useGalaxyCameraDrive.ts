@@ -9,11 +9,11 @@ import {
   easeRadius,
   inspectingHand,
   isHandLowered,
-  orbitStep,
   sightPoint,
   zoomRadius,
   handDistance,
   nearestNodeAt,
+  MIN_ZOOM_HAND_DISTANCE_PX,
   INITIAL_DWELL_STATE,
   type DwellState,
   type GalaxyDrive,
@@ -21,7 +21,7 @@ import {
 import {
   CENTROID_ANCHOR,
   easeAnchor,
-  pickPivotAt,
+  pickZoomTarget,
   rectCentre,
   shouldReleaseAnchor,
   type GalaxyAnchor,
@@ -68,7 +68,6 @@ export type GalaxyCameraDriveParams = {
   anchorThresholdPx: number;
   pivotRetargetDeadBandPx: number;
   candidateIntervalMs: number;
-  orbitSensitivity: number;
   zoomMinRadius: number;
   zoomMaxRadius: number;
 };
@@ -95,7 +94,6 @@ export function useGalaxyCameraDrive({
   anchorThresholdPx,
   pivotRetargetDeadBandPx,
   candidateIntervalMs,
-  orbitSensitivity,
   zoomMinRadius,
   zoomMaxRadius,
 }: GalaxyCameraDriveParams) {
@@ -106,8 +104,7 @@ export function useGalaxyCameraDrive({
   // lifetime they had as component refs.
   const dwellStateRef = useRef<DwellState>(INITIAL_DWELL_STATE);
   const sphericalRef = useRef<THREE.Spherical | null>(null);
-  const cameraEngagedRef = useRef<"orbit" | "zoom" | null>(null);
-  const prevOrbitPointRef = useRef<{ x: number; y: number } | null>(null);
+  const cameraEngagedRef = useRef<"zoom" | null>(null);
   const zoomReferenceRef = useRef<{ dist: number; radius: number } | null>(null);
   // Whether THIS engagement moved the anchor. The release path copies the
   // anchor into `controls.target` only when it did — otherwise a grab over
@@ -344,25 +341,20 @@ export function useGalaxyCameraDrive({
         // takes this fresh, throttled pick — it is pure visual feedback and
         // camera-inert, so there is no reason to gate it further.
         //
-        // `pickPivotAt`, not `pickAnchorAt` (design.md D18): over empty space
-        // the live zoom re-aim used to freeze at whatever the engage-time pivot
-        // was for the WHOLE drive (D15's "over empty space the engage-time
-        // pivot stands" — true and intended for the one-time engage pick), so
-        // moving the sight during an already-live zoom never followed to a new
-        // empty-space target, only to a node. `pickPivotAt`'s point fallback
-        // fixes that. The throttled cadence, not every frame, is what keeps a
-        // live point re-derivation from chasing its own feedback — the exact
-        // concern D14 raised against doing this per frame in the first place.
+        // `pickZoomTarget` — ALWAYS a note, never a point in space (design.md
+        // D20). The point pivot this used to derive from the sight ray is gone
+        // with it, and so is the whole self-chasing feedback loop D14/D18 kept
+        // fighting: a note is a fixed thing in the world, so re-targeting
+        // between notes is stable in a way a re-derived point never was.
         if (rect && sight && now - lastCandidateSelect >= candidateIntervalMs) {
           lastCandidateSelect = now;
-          const picked = pickPivotAt(
+          const picked = pickZoomTarget(
             positionsRef.current.values(),
             fg.camera(),
             rect,
             sight,
             anchor.anchorRef.current,
             anchorThresholdPx,
-            anchor.displayedAnchorRef.current,
           );
           candidateIdRef.current = picked.kind === "node" ? picked.id : null;
           // `pivotPickRef` — what the LIVE ZOOM actually reads — commits only
@@ -392,7 +384,7 @@ export function useGalaxyCameraDrive({
         // all follow with no new code. Window pixels, because that is the space
         // `HandPoint` is already in.
         const lowered = isHandLowered(hand.point, window.innerHeight);
-        const activeCameraDrive = !lowered && (drive === "orbit" || drive === "zoom") ? drive : null;
+        const activeCameraDrive = !lowered && drive === "zoom" ? drive : null;
         applyRings(activeCameraDrive !== null);
         setReticleEngaged(activeCameraDrive !== null);
 
@@ -471,25 +463,22 @@ export function useGalaxyCameraDrive({
             // Where the aim starts from, captured BEFORE the anchor moves, so
             // the displayed anchor has somewhere to ease from.
             anchor.displayedAnchorRef.current = anchor.resolveCurrent();
-            // Each grab regrips on whatever the user is looking at. Nothing in
-            // range keeps the current anchor — a grab over empty space must not
-            // throw the view back to the middle of the vault.
-            // The pivot is whatever the SIGHT is on — a node if one is near
-            // enough, otherwise the point under the mark at the current working
-            // depth (design.md D15). There is no "keep whatever it was" case:
-            // that is what let the last-opened note follow the user around as an
-            // invisible pivot they were not pointing at.
+            // Each grab regrips on the NOTE nearest the sight (design.md
+            // D20) — the target is always a note, because "get me to that
+            // note" is the only thing this drive exists to do. Nothing in
+            // range keeps the current anchor, so a grab over empty space
+            // neither throws the view back to the middle of the vault nor
+            // sends it chasing some distant note the user never aimed at.
             engageMovedAnchorRef.current =
               rect && sight
                 ? anchor.setAnchor(
-                  pickPivotAt(
+                  pickZoomTarget(
                     positionsRef.current.values(),
                     fg.camera(),
                     rect,
                     sight,
                     anchor.anchorRef.current,
                     anchorThresholdPx,
-                    anchor.displayedAnchorRef.current,
                   ),
                   // The drive's own per-frame write eases the aim; the mouse-path
                   // ease must not also run and fight it.
@@ -507,34 +496,18 @@ export function useGalaxyCameraDrive({
                 .position.clone()
                 .sub(new THREE.Vector3(engageOrigin.x, engageOrigin.y, engageOrigin.z)),
             );
-            const engageDist = activeCameraDrive === "zoom" ? twoPalmDistance(hand) : null;
+            const engageDist = twoPalmDistance(hand);
             zoomReferenceRef.current =
               engageDist !== null ? { dist: engageDist, radius: sphericalRef.current.radius } : null;
-            // The wrist, not the fingertip (design note on
-            // TrackedHand.wristPoint): the fingertip moves a long way purely
-            // from curling/uncurling into a fist, which orbit's delta would
-            // otherwise read as hand movement — exactly at the Closed_Fist
-            // engage/release boundary, where that curl is happening.
-            prevOrbitPointRef.current = activeCameraDrive === "orbit" ? hand.wristPoint : null;
           } else {
             zoomReferenceRef.current = null;
-            prevOrbitPointRef.current = null;
           }
           cameraEngagedRef.current = activeCameraDrive;
         } else if (activeCameraDrive) {
           const origin = anchor.resolveCurrent();
           anchor.displayedAnchorRef.current = easeAnchor(anchor.displayedAnchorRef.current, origin, dt);
 
-          if (activeCameraDrive === "orbit" && sphericalRef.current && prevOrbitPointRef.current && hand.wristPoint) {
-            const delta = {
-              x: hand.wristPoint.x - prevOrbitPointRef.current.x,
-              y: hand.wristPoint.y - prevOrbitPointRef.current.y,
-            };
-            const next = orbitStep(sphericalRef.current, delta, orbitSensitivity);
-            sphericalRef.current.set(next.radius, next.phi, next.theta);
-            prevOrbitPointRef.current = hand.wristPoint;
-            writeCameraFromSpherical(fg, origin);
-          } else if (activeCameraDrive === "zoom" && sphericalRef.current && zoomReferenceRef.current) {
+          if (sphericalRef.current && zoomReferenceRef.current) {
             // A dropout (one palm briefly not open_palm) has already released
             // the reference above on the frame `activeCameraDrive` goes null —
             // here `zoomReferenceRef.current` staying set means both palms are
@@ -547,7 +520,19 @@ export function useGalaxyCameraDrive({
             // new anchor would displace the camera by exactly the anchor delta:
             // the same trap D3 records for sharing one value between the orbit
             // origin and the look-at.
-            if (pivotPickRef.current) reaimZoomFromSight(fg, pivotPickRef.current, curDist);
+            // Backed out to the overview? Then stop retargeting for the rest
+            // of the drive (design.md D21). `releaseAnchorIfBackedOut` hands
+            // the anchor back to the centroid so pinching the hands shut is
+            // the way out to the whole graph — but with the target now ALWAYS
+            // a note, the very next throttled pick would immediately re-anchor
+            // on one and cancel that. The release has to win, or "close your
+            // hands to see everything again" silently stops working.
+            const backedOut = shouldReleaseAnchor(
+              sphericalRef.current.radius,
+              anchor.boundingRadiusRef.current,
+              zoomMaxRadius,
+            );
+            if (!backedOut && pivotPickRef.current) reaimZoomFromSight(fg, pivotPickRef.current, curDist);
             const zoomOrigin = anchor.resolveCurrent();
             const target = zoomRadius({
               refRadius: zoomReferenceRef.current.radius,
@@ -559,9 +544,11 @@ export function useGalaxyCameraDrive({
             // `zoomRadius` is a memoryless ratio law: it maps THIS frame's raw
             // two-palm distance straight to an absolute radius, so any
             // tracking noise in that distance reaches the output with full
-            // gain, every single frame — unlike `orbitStep`, which only nudges
-            // an accumulated angle by a small bounded increment regardless of
-            // how noisy the instantaneous delta is. `easeRadius` gives the
+            // gain, every single frame — unlike the fist orbit that used to
+            // live here, which only nudged an accumulated angle by a small
+            // bounded increment regardless of how noisy the instantaneous
+            // delta was (that drive is gone as of D20, but the asymmetry is
+            // why this one needed damping). `easeRadius` gives the
             // DISPLAYED radius the same kind of memory `easeAnchor` already
             // gives the look-at point: it glides toward the target rather than
             // snapping to it, so one noisy frame moves the camera only a
@@ -605,7 +592,26 @@ export function useGalaxyCameraDrive({
       sphericalRef.current = new THREE.Spherical().setFromVector3(
         fg.camera().position.clone().sub(new THREE.Vector3(origin.x, origin.y, origin.z)),
       );
-      if (curDist !== null) zoomReferenceRef.current = { dist: curDist, radius: sphericalRef.current.radius };
+      if (curDist === null) return;
+      const previous = zoomReferenceRef.current;
+      const radiusNow = sphericalRef.current.radius;
+      if (!previous) {
+        zoomReferenceRef.current = { dist: curDist, radius: radiusNow };
+        return;
+      }
+      // Keep `dist` FIXED and rescale `radius` instead (design.md D21). Both
+      // forms hold the camera still across the reseed, but re-pinning `dist`
+      // to whatever the hands happen to be at right now silently rewrites the
+      // gesture's own mapping mid-stroke: the spread already spent stops
+      // counting, so the remaining travel collapses and the hands have to be
+      // re-spread from scratch to go any further. That is the "I keep
+      // spreading and nothing happens" report, and it got worse the more
+      // often retargeting reseeded. Solving for the radius that reproduces
+      // `radiusNow` under the UNCHANGED `dist` keeps hand-spread -> distance
+      // fixed for the whole drive.
+      const flooredPrev = Math.max(MIN_ZOOM_HAND_DISTANCE_PX, previous.dist);
+      const flooredCur = Math.max(MIN_ZOOM_HAND_DISTANCE_PX, curDist);
+      zoomReferenceRef.current = { dist: previous.dist, radius: (radiusNow * flooredCur) / flooredPrev };
     }
 
     // The sight keeps aiming for the whole of a zoom (design.md D14). This is

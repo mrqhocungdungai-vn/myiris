@@ -1,46 +1,77 @@
-## MODIFIED Requirements
+## REMOVED Requirements
 
 ### Requirement: A closed fist orbits the galaxy camera
 
-When hand control is enabled and the galaxy is active with no reader open, a primary hand showing `Closed_Fist` SHALL orbit the galaxy camera around the graph by the hand's movement delta. Zooming the camera is not a galaxy-specific binding: it is the two-open-palms rule that scales whatever layer owns the gesture surface (see `two-hand-gestures`), and it applies here because the galaxy is such a layer.
+**Reason**: the fist orbit is removed outright (design.md D20). The galaxy is a sphere, and an orbit only pays once it is flown accurately — four rounds of tuning it never made the one thing the user actually needs, arriving at a particular note in order to open it, any easier. Its replacement is not another camera gesture but a narrower one: the surviving two-palm drive always travels toward a *note*, which is what the requirement below states.
+**Migration**: none in storage or configuration. A `Closed_Fist` over the galaxy now drives nothing; mouse drag continues to orbit the camera freely, and the gesture indicator reports idle for a fist rather than naming a binding that no longer exists.
 
-The galaxy drives SHALL be partitioned by hand pose so they never act at once on the same hand: `Pointing_Up` targets a node dwell (no camera motion), `Victory` **inspects** a node (no camera motion, and nothing selected or opened — see "A held two-finger pose reveals a node's link cluster"), `Closed_Fist` orbits, two open palms zoom, and **any other pose — a single open palm, an unrecognized gesture, or a hand merely resting in frame — SHALL drive nothing**. In particular a pinch SHALL have no meaning in the galaxy: the thumb-index distance SHALL NOT move the camera, select anything, or disturb a charging dwell, however tightly the fingers are closed.
+## ADDED Requirements
 
-**A hand that drives nothing SHALL also show nothing.** The pointed-at highlight (see `second-brain-galaxy-view`, "The node being pointed at reveals its link cluster") SHALL be produced only by a pose that means to point at something — the inspect pose, or a charging `Pointing_Up` dwell — and SHALL NOT follow a hand that is merely present in frame. A highlight that tracks any hand in any pose lights a cluster the user did not ask about, then another as the hand drifts, which is noise rather than feedback: it reads as the view reacting to the user's hand rather than answering their question. A camera drive SHALL suppress it too, because while an orbit or a zoom is engaged the hand's position means "camera", not "target".
+### Requirement: Two open palms fly the galaxy camera to a note
 
-The camera SHALL look at the galaxy's **anchor** (see `second-brain-galaxy-view`, "The camera turns and dollies around a movable anchor") — never at an assumed world origin, and no longer at the graph's centroid unconditionally. **Engaging a camera drive SHALL re-resolve the anchor to the node nearest the sight** (see `second-brain-galaxy-view`, "The camera is aimed by a sight that follows the hands"), within a bounded screen distance and excluding nodes behind the camera, so each grab takes hold of whatever the user has their hand over. The orbit resolves it at engage and holds it: the orbit's input is the hand's own travel, so a sight read from it during the drive would re-aim on every frame of the motion meant to be turning the camera. When no node is near enough, the anchor SHALL become the point under the sight at the camera's current working depth — a grab over empty space SHALL turn around the mark, and SHALL NOT throw the view back to the middle of the vault nor leave it turning around whatever the anchor happened to be before. Because a re-resolved anchor never moves the camera (that rule belongs to the anchor itself), engaging remains snap-free.
+When hand control is enabled and the galaxy is active with no reader open, two open palms SHALL be the galaxy's **only** camera drive, and spreading or closing them SHALL move the camera toward or away from **a note** — never toward an arbitrary point in space. Zooming is not a galaxy-specific binding: it is the two-open-palms rule that scales whatever layer owns the gesture surface (see `two-hand-gestures`), and it applies here because the galaxy is such a layer.
 
-The orbit drive SHALL be **relative**: the first frame after it (re)engages SHALL seed its reference from the hand point and apply no motion, with subsequent frames applying only the delta from that reference, so engaging a fist never snaps the camera. Seeding SHALL re-derive from the **live** camera, so a gesture drive that begins after the user moved the camera with the mouse continues from where the mouse left it rather than jumping back to where gesture control last was — **including what the camera is aimed at**, not only where it sits. The camera drive SHALL be smooth and stable (built on the smoothed hand point, with small per-frame deltas). These bindings SHALL engage only while the galaxy is active and no reader is open, so they never collide with the reader's `Closed_Fist`-closes-reader binding or with the deck's fist-rotates-the-orb binding. **Mouse drag/scroll camera control SHALL remain working after every exit from a gesture drive** — not only when a gesture is released, but also when hand control is switched off mid-drive, a reader opens mid-drive, Iris goes to sleep mid-drive, or the hand simply leaves the frame; the gesture drive SHALL NOT be able to leave the built-in camera controls permanently disabled for the rest of the galaxy session, and SHALL NOT restore them by overwriting what the camera was aimed at.
+`Closed_Fist` SHALL drive nothing in the galaxy. It previously orbited the camera, and its removal is deliberate rather than an omission: the galaxy is a sphere, so an orbit only pays once it has been flown accurately, and the single thing the user needs — arriving at a particular note in order to open it — is better served by one drive that goes *to* a note than by two that between them go anywhere. Reaching the far side of the graph SHALL remain possible without it, because flying to a note both moves the camera and turns its aim onto that note, and because mouse drag SHALL continue to orbit freely whenever no hand drive is engaged.
 
-#### Scenario: Fist orbits the camera
+The galaxy drives SHALL be partitioned by hand pose so they never act at once on the same hand: `Pointing_Up` targets a node dwell (no camera motion), `Victory` **inspects** a node (no camera motion, and nothing selected or opened — see "A held two-finger pose reveals a node's link cluster"), two open palms fly the camera, and **any other pose — a fist, a single open palm, an unrecognized gesture, or a hand merely resting in frame — SHALL drive nothing**. In particular a pinch SHALL have no meaning in the galaxy: the thumb-index distance SHALL NOT move the camera, select anything, or disturb a charging dwell, however tightly the fingers are closed.
 
-- **WHEN** hand control is on, the galaxy is active, no reader is open, and the primary hand shows `Closed_Fist` while moving
-- **THEN** the galaxy camera orbits around the current anchor following the hand's movement delta
+**A hand that drives nothing SHALL also show nothing.** The pointed-at highlight (see `second-brain-galaxy-view`, "The node being pointed at reveals its link cluster") SHALL be produced only by a pose that means to point at something — the inspect pose, or a charging `Pointing_Up` dwell — and SHALL NOT follow a hand that is merely present in frame. A highlight that tracks any hand in any pose lights a cluster the user did not ask about, then another as the hand drifts, which is noise rather than feedback: it reads as the view reacting to the user's hand rather than answering their question. A camera drive SHALL suppress it too, because while the camera is being flown the hand's position means "camera", not "target".
 
-#### Scenario: Each grab takes hold of what the hand is over
+The camera SHALL look at the galaxy's **anchor** (see `second-brain-galaxy-view`, "The camera turns and dollies around a movable anchor") — never at an assumed world origin, and no longer at the graph's centroid unconditionally. **The anchor a camera drive takes SHALL always be a note**, resolved as the note nearest the sight (see `second-brain-galaxy-view`, "The camera is aimed by a sight that follows the hands") within a bounded screen distance and excluding nodes behind the camera. Where two candidate notes overlap on screen, the one **nearer the camera** SHALL win, because that is the one drawn over the other and therefore the only one the user can see to aim at; depth SHALL NOT otherwise outrank aim, since a note's distance is invisible to the user except through that overlap. When no note is near enough the current anchor SHALL be kept, so aiming at empty space neither throws the view back to the middle of the vault nor sends it to some distant note the user never aimed at.
 
-- **WHEN** a node is near the sight and the user closes a fist
-- **THEN** that node becomes the anchor and the orbit turns around it — not around the graph's centroid, and not around whatever happens to sit at the centre of the screen
+The drive SHALL keep re-resolving its target for as long as the pose is held, so moving both hands onto a different note mid-flight re-aims onto it — the drive's input is the *distance* between the hands, which leaves their midpoint free to go on aiming. A change of target SHALL NOT move the camera, and SHALL NOT alter how far the hands must spread to cover the remaining distance: the reference the spread is measured against SHALL be preserved across a re-target rather than re-read from the hands' current separation, or the spread already spent would stop counting and the travel remaining would collapse mid-gesture.
 
-#### Scenario: A grab over empty space turns around the mark
+Seeding SHALL re-derive from the **live** camera, so a gesture drive that begins after the user moved the camera with the mouse continues from where the mouse left it rather than jumping back to where gesture control last was — **including what the camera is aimed at**, not only where it sits. The camera drive SHALL be smooth and stable: the displayed distance SHALL be eased toward what the hands ask for rather than tracking it frame for frame, since the hand-tracked separation carries noise that would otherwise reach the camera at full gain. These bindings SHALL engage only while the galaxy is active and no reader is open, so they never collide with the reader's `Closed_Fist`-closes-reader binding or with the deck's fist-rotates-the-orb binding. **Mouse drag/scroll camera control SHALL remain working after every exit from a gesture drive** — not only when a gesture is released, but also when hand control is switched off mid-drive, a reader opens mid-drive, Iris goes to sleep mid-drive, or the hand simply leaves the frame; the gesture drive SHALL NOT be able to leave the built-in camera controls permanently disabled for the rest of the galaxy session, and SHALL NOT restore them by overwriting what the camera was aimed at.
 
-- **WHEN** the user closes a fist while no node is near the sight
-- **THEN** the orbit turns around the point under the sight at the distance the camera is already working at — not the graph's centroid, and not whatever the anchor was before the grab
+#### Scenario: Spreading two palms flies the camera to a note
+
+- **WHEN** hand control is on, the galaxy is active, no reader is open, and the user spreads two open palms with the sight over a note
+- **THEN** the camera travels toward that note and its aim settles onto it, so the note ends up framed at the centre of the view where it can be dwelled on
+
+#### Scenario: A fist drives nothing in the galaxy
+
+- **WHEN** the galaxy is active, no reader is open, and the user makes a `Closed_Fist` and moves it
+- **THEN** the camera does not move at all, and mouse drag still orbits the camera freely
+
+#### Scenario: The drive takes hold of the note the hand is over
+
+- **WHEN** a note is near the sight and the user brings up two open palms
+- **THEN** that note becomes the anchor and the camera flies toward it — not toward the graph's centroid, and not toward whatever happens to sit at the centre of the screen
+
+#### Scenario: The nearer of two overlapping notes wins
+
+- **WHEN** two notes project close enough together to overlap on screen and the sight is over both
+- **THEN** the nearer one — the one drawn over the other, and so the only one the user can see — becomes the target
+
+#### Scenario: A note beside the sight does not lose to a nearer one elsewhere
+
+- **WHEN** one note sits under the sight and another, nearer the camera, sits well away from it on screen
+- **THEN** the note under the sight wins, because depth only settles which of two overlapping notes was meant
+
+#### Scenario: Aiming at empty space keeps the current target
+
+- **WHEN** the user brings up two open palms while no note is near the sight
+- **THEN** the current anchor is kept — the mark does not run away to a distant note, and the view is not thrown back to the middle of the vault
+
+#### Scenario: Re-aiming mid-flight does not disturb the travel already spent
+
+- **WHEN** the user moves both hands onto a different note part-way through a spread
+- **THEN** the camera re-aims onto the new note without jumping, and continuing to spread keeps covering distance at the same rate — the spread already made is not discarded
 
 #### Scenario: A pinch does nothing in the galaxy
 
 - **WHEN** the galaxy is active and the user closes their thumb and index finger together, tightly or loosely, anywhere over the graph
 - **THEN** the camera does not move, nothing is selected, and any charging node dwell is unaffected
 
-#### Scenario: A tight pinch read as a fist orbits, and only orbits
+#### Scenario: A tight pinch read as a fist still does nothing
 
 - **WHEN** the user's pinched hand is classified as `Closed_Fist` by the recognizer
-- **THEN** it orbits the camera like any other fist — there is no second drive for it to fight with, so the camera does not flip between behaviors
+- **THEN** it drives nothing, exactly as any other fist does — there is no drive for it to fight with, so the camera does not flip between behaviors
 
 #### Scenario: A resting hand does not move the camera
 
 - **WHEN** the galaxy is active with hand control on and the user's hand is simply present in frame in some other pose (a single open palm, or an unrecognized gesture)
-- **THEN** the camera does not orbit or dolly
+- **THEN** the camera does not move
 
 #### Scenario: A resting hand highlights nothing
 
@@ -49,13 +80,13 @@ The orbit drive SHALL be **relative**: the first frame after it (re)engages SHAL
 
 #### Scenario: A camera drive suppresses the highlight
 
-- **WHEN** the user engages an orbit or a zoom
+- **WHEN** the user engages the two-palm camera drive
 - **THEN** no pointed-at highlight follows the hand for the duration of that drive
 
-#### Scenario: Gesture orbit resumes from where the mouse left the camera
+#### Scenario: The camera drive resumes from where the mouse left it
 
-- **WHEN** the user moves the camera with a mouse drag and then engages a fist to orbit
-- **THEN** the orbit continues from the camera's current position and its current aim — it does not snap back to where the previous gesture drive ended, and it does not re-aim at the graph's centroid
+- **WHEN** the user moves the camera with a mouse drag and then brings up two open palms
+- **THEN** the drive continues from the camera's current position and its current aim — it does not snap back to where the previous gesture drive ended, and it does not re-aim at the graph's centroid
 
 #### Scenario: Mouse camera control still works
 
@@ -72,12 +103,10 @@ The orbit drive SHALL be **relative**: the first frame after it (re)engages SHAL
 - **WHEN** a gesture camera drive ends and mouse control resumes
 - **THEN** what the camera is aimed at is left as the drive left it, rather than being reset to the graph's centroid
 
-## ADDED Requirements
-
 ### Requirement: A lowered hand releases every camera drive
 
 A hand that has dropped to the lower part of the camera frame SHALL NOT drive the
-galaxy camera: an orbit or a zoom in progress SHALL be released, and a new one
+galaxy camera: a camera drive in progress SHALL be released, and a new one
 SHALL NOT engage, until the hand is raised again.
 
 Mid-air gesture control is physically tiring, so a user resting their arm is a
@@ -95,10 +124,10 @@ This SHALL apply to the camera drives only. It SHALL NOT suppress the dwell, the
 inspect reveal, or the step rail — those are deliberate acts that already require
 the hand to be held at a target, and a lowered hand simply will not be at one.
 
-#### Scenario: Lowering the hand stops an orbit
+#### Scenario: Lowering the hands stops the camera drive
 
-- **WHEN** the user is orbiting the camera with a fist and lowers their hand toward the bottom of the frame
-- **THEN** the orbit is released and the camera stops moving, leaving the view where it was
+- **WHEN** the user is flying the camera with two open palms and lowers their hands toward the bottom of the frame
+- **THEN** the drive is released and the camera stops moving, leaving the view where it was
 
 #### Scenario: A drive does not engage from a lowered hand
 
@@ -173,7 +202,7 @@ done.
 
 The flight SHALL be animated rather than instantaneous, so the user sees where in
 the galaxy they have been taken and can build a sense of the vault's shape; and it
-SHALL leave the destination as the camera's anchor, so an orbit made straight
+SHALL leave the destination as the camera's anchor, so a camera drive made straight
 afterwards turns around the note just reached.
 
 **One deliberate act SHALL take exactly one step.** A hand still held over the rail

@@ -4,10 +4,8 @@ import {
   CENTROID_ANCHOR,
   anchorsEqual,
   easeAnchor,
-  pickAnchorAt,
-  pickPivotAt,
+  pickZoomTarget,
   rectCentre,
-  sightPivotPoint,
   resolveAnchor,
   shouldReleaseAnchor,
   ANCHOR_EASE_MS,
@@ -85,129 +83,93 @@ describe("anchorsEqual", () => {
   });
 });
 
-describe("pickAnchorAt", () => {
-  it("takes the node nearest the centre of the screen", () => {
+describe("pickZoomTarget", () => {
+  it("takes the node under the sight", () => {
     const camera = makeCamera();
     const centre: GalaxyNavNode = { id: "centre", title: "Centre", x: 0, y: 0, z: 0 };
-    const result = pickAnchorAt([centre], camera, RECT, rectCentre(RECT), CENTROID_ANCHOR, 100);
-    expect(result).toEqual({ kind: "node", id: "centre" });
-  });
-
-  it("keeps the current anchor when nothing is in range — a grab over empty space", () => {
-    const camera = makeCamera();
-    const far: GalaxyNavNode = { id: "far", title: "Far", x: 8, y: 0, z: 0 };
-    const current: GalaxyAnchor = { kind: "node", id: "held" };
-    expect(pickAnchorAt([far], camera, RECT, rectCentre(RECT), current, 5)).toBe(current);
-  });
-
-  it("keeps the current anchor over an empty graph", () => {
-    const camera = makeCamera();
-    expect(pickAnchorAt([], camera, RECT, rectCentre(RECT), CENTROID_ANCHOR, 100)).toBe(CENTROID_ANCHOR);
-  });
-
-  it("gives the incumbent a dead-band head start, so the anchor does not flap between neighbours", () => {
-    const camera = makeCamera();
-    // Both project within the threshold; `challenger` is marginally nearer the
-    // centre, but not by more than nearestNodeAt's dead band.
-    const incumbent: GalaxyNavNode = { id: "incumbent", title: "Incumbent", x: 0.05, y: 0, z: 0 };
-    const challenger: GalaxyNavNode = { id: "challenger", title: "Challenger", x: 0.02, y: 0, z: 0 };
-    const current: GalaxyAnchor = { kind: "node", id: "incumbent" };
-    expect(pickAnchorAt([incumbent, challenger], camera, RECT, rectCentre(RECT), current, 100)).toBe(current);
-  });
-
-  it("returns the same anchor object when the pick has not changed, so the caller can tell nothing moved", () => {
-    const camera = makeCamera();
-    const centre: GalaxyNavNode = { id: "centre", title: "Centre", x: 0, y: 0, z: 0 };
-    const current: GalaxyAnchor = { kind: "node", id: "centre" };
-    expect(pickAnchorAt([centre], camera, RECT, rectCentre(RECT), current, 100)).toBe(current);
-  });
-
-  it("rectCentre queries the centre of the rect, not the origin of the window", () => {
-    const camera = makeCamera();
-    const node: GalaxyNavNode = { id: "n", title: "N", x: 0, y: 0, z: 0 };
-    const offsetRect = { left: 200, top: 100, width: 800, height: 600 };
-    expect(pickAnchorAt([node], camera, offsetRect, rectCentre(offsetRect), CENTROID_ANCHOR, 5)).toEqual({
+    expect(pickZoomTarget([centre], camera, RECT, rectCentre(RECT), CENTROID_ANCHOR, 100)).toEqual({
       kind: "node",
-      id: "n",
+      id: "centre",
     });
   });
 
   it("takes the node under the SIGHT, not the one at screen centre", () => {
-    // The whole point of D14: aiming must not require flying the camera until
-    // the target is in the middle first.
+    // D14's point, unchanged by D20: aiming must not require flying the camera
+    // until the target is in the middle first.
     const camera = makeCamera();
     const atCentre: GalaxyNavNode = { id: "centre", title: "Centre", x: 0, y: 0, z: 0 };
     const offToTheSide: GalaxyNavNode = { id: "side", title: "Side", x: 2, y: 0, z: 0 };
     const sideSight = { x: RECT.width / 2 + 172, y: RECT.height / 2 };
-    expect(pickAnchorAt([atCentre, offToTheSide], camera, RECT, sideSight, CENTROID_ANCHOR, 60)).toEqual({
+    expect(pickZoomTarget([atCentre, offToTheSide], camera, RECT, sideSight, CENTROID_ANCHOR, 60)).toEqual({
       kind: "node",
       id: "side",
     });
   });
-});
 
-describe("sightPivotPoint", () => {
-  it("returns the point under the sight at the working depth, not the depth point itself", () => {
-    const camera = makeCamera(); // at (0,0,10) looking down -Z
-    const offCentre = { x: RECT.width / 2 + 120, y: RECT.height / 2 };
-    const pivot = sightPivotPoint(camera, RECT, offCentre, { x: 0, y: 0, z: 0 });
-    // Same viewing depth (the z=0 plane), displaced to the right.
-    expect(pivot.z).toBeCloseTo(0, 6);
-    expect(pivot.x).toBeGreaterThan(0);
-    expect(pivot.y).toBeCloseTo(0, 6);
-  });
-
-  it("returns the depth point itself when the sight is dead centre", () => {
+  // D20's core rule. The camera is at z=10 looking down -Z, so a SMALLER z is
+  // further away: `far` sits behind `near` and is drawn under it.
+  it("prefers the nearer of two nodes that overlap on screen — the one actually drawn on top", () => {
     const camera = makeCamera();
-    const pivot = sightPivotPoint(camera, RECT, rectCentre(RECT), { x: 0, y: 0, z: 0 });
-    expect(pivot.x).toBeCloseTo(0, 6);
-    expect(pivot.y).toBeCloseTo(0, 6);
-    expect(pivot.z).toBeCloseTo(0, 6);
-  });
-
-  it("mirrors left and right about the centre", () => {
-    const camera = makeCamera();
-    const left = sightPivotPoint(camera, RECT, { x: RECT.width / 2 - 120, y: RECT.height / 2 }, { x: 0, y: 0, z: 0 });
-    const right = sightPivotPoint(camera, RECT, { x: RECT.width / 2 + 120, y: RECT.height / 2 }, { x: 0, y: 0, z: 0 });
-    expect(left.x).toBeCloseTo(-right.x, 6);
-  });
-
-  it("falls back to the depth point when it sits behind the camera", () => {
-    const camera = makeCamera();
-    const behind = { x: 0, y: 0, z: 40 };
-    expect(sightPivotPoint(camera, RECT, rectCentre(RECT), behind)).toEqual(behind);
-  });
-});
-
-describe("pickPivotAt", () => {
-  const HERE = { x: 0, y: 0, z: 0 };
-
-  it("snaps to a node under the sight, so dollying in arrives at that note", () => {
-    const camera = makeCamera();
-    const node: GalaxyNavNode = { id: "n", title: "N", x: 0, y: 0, z: 0 };
-    expect(pickPivotAt([node], camera, RECT, rectCentre(RECT), CENTROID_ANCHOR, 100, HERE)).toEqual({
+    const near: GalaxyNavNode = { id: "near", title: "Near", x: 0, y: 0, z: 0 };
+    const far: GalaxyNavNode = { id: "far", title: "Far", x: 0, y: 0, z: -40 };
+    expect(pickZoomTarget([far, near], camera, RECT, rectCentre(RECT), CENTROID_ANCHOR, 200)).toEqual({
       kind: "node",
-      id: "n",
+      id: "near",
     });
   });
 
-  it("pivots on the point under the sight when no node is near — never on the anchor left over from before", () => {
-    // This is the difference from pickAnchorAt, and the whole of D15: keeping
-    // the old anchor is what let the last-opened note follow the user around as
-    // an invisible pivot they were not pointing at.
+  // The other half of the same rule, and why "front-most wins" outright is
+  // wrong: depth may only decide between nodes that visually cover each other.
+  it("does NOT let a nearer node beside the sight beat the one under it", () => {
+    const camera = makeCamera();
+    const underSight: GalaxyNavNode = { id: "under", title: "Under", x: 0, y: 0, z: -40 };
+    // Nearer the camera, but far enough across the screen to be a separate dot.
+    const besideButNearer: GalaxyNavNode = { id: "beside", title: "Beside", x: 1.6, y: 0, z: 0 };
+    expect(pickZoomTarget([besideButNearer, underSight], camera, RECT, rectCentre(RECT), CENTROID_ANCHOR, 300)).toEqual({
+      kind: "node",
+      id: "under",
+    });
+  });
+
+  it("keeps the current anchor when nothing is in range, so the mark never runs away", () => {
+    const camera = makeCamera();
+    const far: GalaxyNavNode = { id: "far", title: "Far", x: 8, y: 0, z: 0 };
+    const current: GalaxyAnchor = { kind: "node", id: "held" };
+    expect(pickZoomTarget([far], camera, RECT, rectCentre(RECT), current, 5)).toBe(current);
+  });
+
+  it("keeps the current anchor over an empty graph", () => {
+    const camera = makeCamera();
+    expect(pickZoomTarget([], camera, RECT, rectCentre(RECT), CENTROID_ANCHOR, 100)).toBe(CENTROID_ANCHOR);
+  });
+
+  it("never returns a point pivot — the zoom always travels to a note (D20)", () => {
     const camera = makeCamera();
     const stale: GalaxyAnchor = { kind: "node", id: "last-opened" };
     const offCentre = { x: RECT.width / 2 + 120, y: RECT.height / 2 };
-    const result = pickPivotAt([], camera, RECT, offCentre, stale, 100, HERE);
-    expect(result.kind).toBe("point");
-    expect(result.kind === "point" && result.position.x).toBeGreaterThan(0);
+    expect(pickZoomTarget([], camera, RECT, offCentre, stale, 100).kind).not.toBe("point");
   });
 
-  it("keeps returning the same anchor object while the sight stays on one node", () => {
+  it("gives the incumbent a head start, so the target does not flap between neighbours", () => {
     const camera = makeCamera();
-    const node: GalaxyNavNode = { id: "n", title: "N", x: 0, y: 0, z: 0 };
-    const current: GalaxyAnchor = { kind: "node", id: "n" };
-    expect(pickPivotAt([node], camera, RECT, rectCentre(RECT), current, 100, HERE)).toBe(current);
+    const incumbent: GalaxyNavNode = { id: "incumbent", title: "Incumbent", x: 0.2, y: 0, z: 0 };
+    const challenger: GalaxyNavNode = { id: "challenger", title: "Challenger", x: 0.02, y: 0, z: 0 };
+    const current: GalaxyAnchor = { kind: "node", id: "incumbent" };
+    expect(pickZoomTarget([incumbent, challenger], camera, RECT, rectCentre(RECT), current, 200)).toBe(current);
+  });
+
+  it("returns the same anchor object when the pick has not changed", () => {
+    const camera = makeCamera();
+    const centre: GalaxyNavNode = { id: "centre", title: "Centre", x: 0, y: 0, z: 0 };
+    const current: GalaxyAnchor = { kind: "node", id: "centre" };
+    expect(pickZoomTarget([centre], camera, RECT, rectCentre(RECT), current, 100)).toBe(current);
+  });
+
+  it("skips ghosts and excludes nodes behind the camera", () => {
+    const camera = makeCamera();
+    const ghost: GalaxyNavNode = { id: "ghost", title: "Ghost", x: 0, y: 0, z: 0, ghost: true };
+    const behind: GalaxyNavNode = { id: "behind", title: "Behind", x: 0, y: 0, z: 20 };
+    expect(pickZoomTarget([ghost, behind], camera, RECT, rectCentre(RECT), CENTROID_ANCHOR, 500)).toBe(CENTROID_ANCHOR);
   });
 });
 

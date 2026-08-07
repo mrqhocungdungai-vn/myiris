@@ -6,7 +6,6 @@ import {
   INITIAL_DWELL_STATE,
   driveFor,
   inspectingHand,
-  orbitStep,
   handDistance,
   zoomRadius,
   easeRadius,
@@ -180,8 +179,11 @@ describe("driveFor", () => {
     expect(driveFor(makeHand({ pointing: true, hands: [makeTrackedHand({ pointing: true })] }))).toBe("dwell");
   });
 
-  it("returns orbit for Closed_Fist", () => {
-    expect(driveFor(makeHand({ fist: true, hands: [makeTrackedHand({ fist: true })] }))).toBe("orbit");
+  // D20 removed the fist orbit: a fist drives nothing in the galaxy now. This
+  // asserts the ABSENCE deliberately — the removal is the feature, so a fist
+  // silently regaining a camera binding must fail here.
+  it("returns null for Closed_Fist — the orbit was removed (D20)", () => {
+    expect(driveFor(makeHand({ fist: true, hands: [makeTrackedHand({ fist: true })] }))).toBeNull();
   });
 
   it("returns null for a single open palm, an unrecognized gesture, and a resting hand", () => {
@@ -191,12 +193,12 @@ describe("driveFor", () => {
 
   // The pinch has no meaning in the galaxy at all (proposal.md "What
   // Changes"): whatever canned class the recognizer assigns a pinched hand
-  // is what drives it — a tight pinch reads as Closed_Fist and orbits like
-  // any other fist; anything else it might read as drives nothing. Never a
-  // zoom, at any thumb-index distance.
+  // is what drives it — and since D20 removed the orbit, a tight pinch reads
+  // as Closed_Fist and therefore drives NOTHING, exactly like anything else it
+  // might read as. Never a zoom, at any thumb-index distance.
   it("a pinch drives whatever its canned class says, never a zoom", () => {
     const pinchedFist = makeTrackedHand({ fist: true, pinchDistance: 0.02 });
-    expect(driveFor(makeHand({ fist: true, hands: [pinchedFist] }))).toBe("orbit");
+    expect(driveFor(makeHand({ fist: true, hands: [pinchedFist] }))).toBeNull();
 
     const pinchedRest = makeTrackedHand({ pinchDistance: 0.02 });
     expect(driveFor(makeHand({ hands: [pinchedRest] }))).toBeNull();
@@ -240,18 +242,6 @@ describe("driveFor", () => {
     const hands = [makeTrackedHand({ id: "left", pointing: true, point: { x: 0, y: 0 } }), victory];
     expect(inspectingHand(makeHand({ pointing: true, hands }))?.point).toEqual({ x: 42, y: 7 });
     expect(inspectingHand(makeHand())).toBeNull();
-  });
-});
-
-describe("orbitStep", () => {
-  it("applies a relative delta and clamps the polar angle away from the poles", () => {
-    const start = { radius: 100, phi: Math.PI / 2, theta: 0 };
-    const next = orbitStep(start, { x: 10, y: 0 }, 0.01);
-    expect(next.theta).toBeCloseTo(start.theta - 0.1, 5);
-    expect(next.radius).toBe(100);
-
-    const nearPole = orbitStep({ radius: 100, phi: 0.01, theta: 0 }, { x: 0, y: 100 }, 1);
-    expect(nearPole.phi).toBeGreaterThan(0);
   });
 });
 

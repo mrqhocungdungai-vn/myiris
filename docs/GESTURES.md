@@ -117,8 +117,8 @@ the mouse can click at this moment, the hand can dwell at this moment.
 
 One asymmetry inside the shared mode: the galaxy's **pointing** drives (node
 dwell, inspect) yield over chrome, so a finger aimed at a task card never also
-charges a dwell on a node behind it. Its **camera** drives (fist orbit, two-palm
-zoom) do not yield — they act on the whole view, and stalling an orbit because
+charges a dwell on a node behind it. Its **camera** drive (two-palm
+fly-to-note) does not yield — it acts on the whole view, and stalling it because
 the hand crossed a panel would feel broken. Authoritative: the
 `two-hand-gestures` and `second-brain-gesture-nav` specs.
 
@@ -133,14 +133,14 @@ chrome above it:
 | --- | --- |
 | `Pointing_Up` | Node dwell — hold over a node 300 ms to **open** it (same dwell mechanic as the deck) |
 | `Victory` (two fingers) | **Inspect** — hold near a node to light up its link cluster while held. Selects nothing, opens nothing, leaves nothing behind |
-| `Closed_Fist` | Orbit the camera around the **anchor** (below) |
-| Two open palms | Zoom the camera toward/away from the anchor — not a galaxy binding but the general two-hand rule applied to whichever layer owns the surface |
+| `Closed_Fist` | **Nothing** — the orbit was removed (D20). Mouse drag still orbits freely |
+| Two open palms | Fly the camera toward/away from the **target note** (below) — not a galaxy binding but the general two-hand rule applied to whichever layer owns the surface |
 | Anything else (a single open palm, unrecognized, resting) | Drives nothing |
 | A hand in the **bottom third of the frame**, whatever it is doing | Drives nothing, and releases a drive in progress |
 
 **A pinch has no meaning in the galaxy at all.** Whatever canned class the
 recognizer assigns a pinched hand is what drives it — a tight pinch reads as
-`Closed_Fist` and orbits like any other fist, and the thumb-index distance is
+`Closed_Fist`, which drives nothing, and the thumb-index distance is
 never read. An earlier design split the pinch into a quick tap that selected
 and a held pinch that zoomed; `two-palm-galaxy-zoom` replaced both with the
 two-open-palms rule above and removed the pinch entirely, which also removed
@@ -182,7 +182,7 @@ nothing also shows nothing**: an earlier pass let the highlight follow a hand
 in any pose, reasoning that a highlight is feedback rather than a drive, and in
 use that lit one cluster after another as a hand drifted — the view twitching at
 the hand instead of answering a question. A camera drive suppresses it too,
-since while orbiting or zooming the hand's position means "camera", not
+since while flying the camera the hand's position means "camera", not
 "target".
 
 **Why the lit links are bright enough to see:** `linkOpacity` is a graph-wide
@@ -249,13 +249,18 @@ simply is not at one.
 ### The anchor — what the camera turns around
 
 The galaxy has one **anchor**: the point every camera path, hand and mouse
-alike, orbits around and dollies toward (`src/lib/galaxy-anchor.ts`, owned by
+alike, turns around and dollies toward (`src/lib/galaxy-anchor.ts`, owned by
 `useGalaxyAnchor`). It is the graph's centroid by default, a specific node once
 one is chosen, or an arbitrary point once the user pans there.
 
-**A camera drive turns around whatever the sight is on, always.** A node when one
-is near it — snapping to a note is what makes "dolly all the way in and arrive"
-work — otherwise the point under the mark itself, at the depth the camera is
+**The hand drive's target is ALWAYS a note** (`pickZoomTarget`, D20) — never a
+point in space. Nobody wants to be closer to the emptiness between notes; the
+only reason to fly this camera is to reach a note and dwell it open, so the
+sight always marks one and spreading always travels toward one. Where two notes
+overlap on screen the **nearer** wins, since that is the one drawn on top and so
+the only one the user can see to aim at — but depth never outranks aim otherwise,
+because a note's distance is invisible except through that overlap. The mouse
+path can still leave the anchor at an arbitrary point, at the depth the camera is
 already working at (`sightPivotPoint`). There is deliberately no "keep whatever it
 was" fallback: an anchor that survives a grab aimed somewhere else is a pivot the
 user is not pointing at and cannot see, and most visibly it is the note they last
@@ -285,7 +290,7 @@ little off-centre, so a change of **aim** is eased over ~180 ms rather than
 snapped. The ease is the galaxy's own (`easeAnchor`), not a library transition:
 the gesture loop writes the camera every frame with `transitionMs: 0`, which
 ends any tween in flight. Crucially the eased value feeds only the **look-at**;
-the orbit **origin** stays the target anchor the spherical was seeded against.
+the travel **origin** stays the target anchor the spherical was seeded against.
 Sharing one value between the two roles would lurch the camera by exactly the
 anchor delta on every engage.
 
@@ -300,14 +305,13 @@ allowed to begin — so spreading two palms dollied toward whatever happened to 
 the centre, which from the user's side is arbitrary. Put your hands over the region
 and act instead.
 
-The two drives read it on different schedules, and the asymmetry is the reason
-rather than a compromise. The **orbit's** input is the hand's travel, so a live
-sight would re-aim on every frame of the motion meant to be turning the camera — it
-resolves at engage and holds. The **zoom's** input is the distance between the
-hands, and their midpoint is unaffected by them parting, so the sight keeps aiming
-for the whole drive: moving both hands onto a different region mid-zoom re-aims the
-dolly onto it, re-seeding the spherical and the zoom reference so the view does not
-jump.
+The one remaining drive's input is the distance between the hands, and their
+midpoint is unaffected by them parting, so the sight keeps aiming for the whole
+drive: moving both hands onto a different note mid-flight re-aims onto it. A
+re-aim re-seeds the spherical so the view does not jump — and deliberately does
+**not** re-read the hands' separation as the new reference, which would silently
+discard the spread already made and stall the remaining travel (D21). It keeps
+the reference distance and rescales instead.
 
 **What a grab will take hold of is visible before the grab.** A faint ring marks the
 node a grab would anchor to, and a stronger ring marks the live anchor

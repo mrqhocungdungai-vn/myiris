@@ -1581,9 +1581,12 @@ export default function App() {
       // pinchDistance from republishing, so that field never forced this
       // memo to recompute — the label would show whatever it was when some
       // OTHER field last changed. openPalm is compared per hand, so it does.
-      if (hand.hands.filter((item) => item.openPalm).length >= 2) return { label: "Two palms · zoom", tone: "open" };
+      if (hand.hands.filter((item) => item.openPalm).length >= 2) return { label: "Two palms · fly to note", tone: "open" };
       if (hand.pointing) return { label: "Pointing_Up · target a node", tone: "move" };
-      if (hand.fist) return { label: "Closed_Fist · orbit", tone: "fist" };
+      // A fist drives nothing in the galaxy since D20 removed the orbit, and
+      // the indicator has to say so — its whole contract is naming the binding
+      // that is actually live, so a stale "orbit" here would be the one label
+      // that lies.
       return { label: `${hand.gesture} · idle`, tone: "idle" };
     }
 

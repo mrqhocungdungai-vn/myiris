@@ -2,7 +2,7 @@
 
 ### Requirement: The camera turns and dollies around a movable anchor
 
-The galaxy SHALL have a single **anchor** — the point the camera orbits around and
+The galaxy SHALL have a single **anchor** — the point the camera turns around and
 dollies toward — and every camera drive, by hand or by mouse, SHALL use that one
 anchor. It SHALL be the graph's centroid, one specific node, or a specific point
 in space.
@@ -23,7 +23,7 @@ The anchor SHALL move to a node when:
 
 - a camera drive engages and a node is near the **sight** — the mark showing where
   the user's hands are aimed (see below, and `second-brain-gesture-nav`, "A closed
-  fist orbits the galaxy camera") — so the node they are pointing at becomes the
+  two open palms fly the galaxy camera to a note") — so the node they are pointing at becomes the
   thing they turn around;
 - a note is opened, whether by click or by dwell — so closing the reader leaves the
   camera around that note's neighbourhood rather than the middle of the vault.
@@ -69,7 +69,7 @@ open a note, and SHALL NOT change what the voice layer or a run reads.
 #### Scenario: Opening a note anchors the camera on it
 
 - **WHEN** the user opens a note and then closes the reader
-- **THEN** the camera turns around that note's position, so its neighbourhood is what the next orbit explores
+- **THEN** the camera turns around that note's position, so its neighbourhood is what the next camera drive explores
 
 #### Scenario: Scrolling over a node zooms into it
 
@@ -99,7 +99,7 @@ open a note, and SHALL NOT change what the voice layer or a run reads.
 #### Scenario: Backing out returns to the whole vault
 
 - **WHEN** a node is anchored and the user dollies the camera out far enough to frame the whole graph
-- **THEN** the anchor returns to the centroid, so further orbiting turns around the vault as a whole
+- **THEN** the anchor returns to the centroid, so the view frames the vault as a whole again and further retargeting is suspended until the camera comes back in
 
 #### Scenario: The anchor selects nothing
 
@@ -121,13 +121,27 @@ region they were looking at. Reading the sight off the hands inverts it: the use
 puts their hands over the region and acts, in one motion, with no camera work
 first.
 
-Where a drive's own input is the hands' **position**, the sight SHALL be resolved
-when the drive engages and then held — otherwise the motion that drives the camera
-would also keep re-aiming it. Where a drive's input is the **distance between the
-hands**, the sight SHALL keep aiming for the whole of the drive, since the hands'
-midpoint is unaffected by them parting: spreading the palms SHALL dolly toward
-whatever the sight is on at that moment, not toward wherever it happened to be when
-the pose was first recognized.
+The galaxy's one camera drive takes its input from the **distance between the
+hands**, so the sight SHALL keep aiming for the whole of the drive: the hands'
+midpoint is unaffected by them parting, which leaves it free to go on aiming while
+they spread. Spreading the palms SHALL therefore travel toward whatever the sight
+is on at that moment, not toward wherever it happened to be when the pose was
+first recognized.
+
+#### Scenario: The sight follows the hands rather than the centre of the screen
+
+- **WHEN** hand control is on, the galaxy is active, and the user moves their hands across the frame
+- **THEN** the sight moves with them, and a camera drive engaged there aims at what the sight is over — not at whatever sits at the centre of the screen
+
+#### Scenario: The sight keeps aiming while the hands spread
+
+- **WHEN** the user moves both hands onto a different note part-way through a spread
+- **THEN** the drive re-aims onto what the sight is over at that moment, rather than staying on whatever it was over when the pose was first recognized
+
+#### Scenario: A sight with no hand in frame falls back to the centre of the view
+
+- **WHEN** hand control is on and the galaxy is active but no hand is in frame
+- **THEN** the sight rests at the centre of the view, so there is always a defined aim point
 
 ### Requirement: What a grab will take hold of is visible before the grab
 

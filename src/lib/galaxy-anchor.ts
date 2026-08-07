@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { nearestNodeAt, type GalaxyNavNode, type ScreenRect } from "./galaxy-nav";
+import { type GalaxyNavNode, type ScreenRect } from "./galaxy-nav";
 
 // The galaxy's orbit anchor (galaxy-note-reachable-by-hand design.md D1-D5):
 // the single point every camera path — hand and mouse alike — turns and dollies
@@ -70,27 +70,50 @@ export function anchorsEqual(a: GalaxyAnchor, b: GalaxyAnchor): boolean {
   return true;
 }
 
+// How close two nodes have to project before they count as OVERLAPPING on
+// screen, which is the only situation where depth is allowed to decide between
+// them (design.md D20). Sized to a node's own dot plus a little margin.
+const OCCLUSION_PX = 28;
+// The head start the current target gets in `pickZoomTarget`. Wider than
+// `nearestNodeAt`'s own DEAD_BAND_PX (14) on purpose: this picker can flip on
+// DEPTH, which the user cannot see directly, so it needs more hysteresis than
+// one that only ever flips on the screen distance they can.
+const ZOOM_INCUMBENT_BIAS_PX = 30;
+// The same head start, for the DEPTH comparison. Applied as a factor on the
+// squared camera distance (0.8 here is roughly "11% nearer in a straight
+// line"), because a screen-pixel bias buys the incumbent nothing once two
+// nodes overlap and the tie is settled on depth instead — which is exactly
+// the comparison the user cannot see, and so the one that most needs
+// hysteresis.
+const ZOOM_INCUMBENT_DEPTH_FACTOR = 0.8;
+
+const pickScratch = new THREE.Vector3();
+
 /**
- * The anchor a camera drive would take hold of with its sight at `point`
- * (design.md D2, generalised by D14).
+ * The note a two-palm zoom would fly to (galaxy-note-reachable-by-hand
+ * design.md D20) — **always a note, never a point in space**.
  *
- * `point` is the sight — where the user's hands are, in window pixels — not the
- * centre of the screen. A centre-pinned sight can only be aimed by first flying
- * the camera until the target is in the middle, which is the hardest part of the
- * task demanded before the easy part is allowed to start.
+ * This is the whole substance of what the zoom is for. Dollying toward an
+ * arbitrary point between notes is what made the zoom feel aimless: the user's
+ * goal is never "get closer to that emptiness", it is "get to that note so I
+ * can dwell on it". So the sight always marks a note, and spreading the palms
+ * always travels toward one.
  *
- * This is `nearestNodeAt`, reused rather than a raycast deliberately: a raycast
- * answers "what does the ray hit", so a node beside the sight would be ignored
- * while one the ray happens to graze would win. The spec says *near* the sight.
+ * **Depth breaks ties only between nodes that OVERLAP on screen.** Ranking
+ * purely by screen distance (what `nearestNodeAt` does, correctly, for the
+ * dwell) picks a node on the far side of the ball that happens to project
+ * beside the sight — a note the user cannot even see, because a nearer one is
+ * drawn over it. But ranking by depth outright is worse in the opposite
+ * direction: at overview distance every node is within the threshold, so
+ * "front-most" resolves to an arbitrary dot on the near face rather than the
+ * one aimed at. Depth is invisible to the user *except* through occlusion, so
+ * it may only decide between things that visually cover each other.
  *
- * Passing `current` as the incumbent is not incidental: the dead-band head start
- * it earns is what stops the anchor flapping between two neighbours as the sight
- * drifts across a dense region.
- *
- * With nothing in range the CURRENT anchor is returned unchanged — aiming at
- * empty space must not throw the view back to the middle of the vault.
+ * With nothing in range the CURRENT anchor is kept — aiming at empty space
+ * must not make the mark run away to some distant note the user never aimed at,
+ * and keeping it is also what lets them pinch back out without re-aiming.
  */
-export function pickAnchorAt(
+export function pickZoomTarget(
   nodes: Iterable<GalaxyNavNode>,
   camera: THREE.Camera,
   rect: ScreenRect,
@@ -99,92 +122,52 @@ export function pickAnchorAt(
   thresholdPx: number,
 ): GalaxyAnchor {
   const incumbentId = current.kind === "node" ? current.id : null;
-  const node = nearestNodeAt(nodes, camera, rect, point, thresholdPx, incumbentId);
-  if (!node) return current;
-  if (incumbentId === node.id) return current;
-  return { kind: "node", id: node.id };
+  let bestId: string | null = null;
+  let bestD = Infinity;
+  let bestZ = Infinity;
+
+  for (const node of nodes) {
+    if (node.ghost || node.x === undefined) continue;
+    pickScratch.set(node.x, node.y ?? 0, node.z ?? 0);
+    const isIncumbent = node.id === incumbentId;
+    const rawDepth = pickScratch.distanceToSquared(camera.position);
+    const depth = isIncumbent ? rawDepth * ZOOM_INCUMBENT_DEPTH_FACTOR : rawDepth;
+    pickScratch.project(camera);
+    // Same front-of-camera guard, and same accept-range form, as
+    // `nearestNodeAt` — a node exactly at the camera projects to NaN, and every
+    // NaN comparison is false, so only the accept form excludes it.
+    if (!(pickScratch.z >= -1 && pickScratch.z <= 1)) continue;
+    const x = rect.left + ((pickScratch.x + 1) * rect.width) / 2;
+    const y = rect.top + ((1 - pickScratch.y) * rect.height) / 2;
+    const raw = Math.hypot(x - point.x, y - point.y);
+    const d = isIncumbent ? Math.max(0, raw - ZOOM_INCUMBENT_BIAS_PX) : raw;
+    if (d > thresholdPx) continue;
+
+    if (bestId === null) {
+      bestId = node.id;
+      bestD = d;
+      bestZ = depth;
+      continue;
+    }
+    const nearSight = d <= OCCLUSION_PX;
+    const bestNearSight = bestD <= OCCLUSION_PX;
+    // Anything under the sight beats anything merely beside it; between two
+    // both under it, the nearer one wins because it is the one drawn on top.
+    const wins = nearSight !== bestNearSight ? nearSight : nearSight ? depth < bestZ : d < bestD;
+    if (wins) {
+      bestId = node.id;
+      bestD = d;
+      bestZ = depth;
+    }
+  }
+
+  if (bestId === null) return current;
+  return bestId === incumbentId ? current : { kind: "node", id: bestId };
 }
 
 /** The centre of `rect` in window pixels — the sight's fallback when no hand is in frame. */
 export function rectCentre(rect: ScreenRect): { x: number; y: number } {
   return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-}
-
-// Reused across frames, like `galaxy-nav.ts`'s own scratch — this runs inside
-// the gesture loop, which must not allocate per frame.
-const rayScratch = new THREE.Vector3();
-const dirScratch = new THREE.Vector3();
-const forwardScratch = new THREE.Vector3();
-const offsetScratch = new THREE.Vector3();
-
-/**
- * The world point under the sight, at the same viewing depth as `depthPoint`
- * (galaxy-note-reachable-by-hand design.md D15).
- *
- * This is what makes the sight a pivot even where there is no note: casting a ray
- * through the sight pixel and crossing it with the plane through the current
- * pivot, perpendicular to the view. Turn the camera with the sight over empty
- * space and it turns around *that* spot, at the distance it was already working
- * at — not around whatever the anchor happened to be left on.
- *
- * Falls back to `depthPoint` unchanged in the degenerate cases (a ray parallel to
- * the view plane, or a pivot behind the camera), which cannot arise for a sight
- * inside the viewport but must not produce NaN if they ever do.
- */
-export function sightPivotPoint(
-  camera: THREE.Camera,
-  rect: ScreenRect,
-  point: { x: number; y: number },
-  depthPoint: Vec3,
-): Vec3 {
-  const fallback = { x: depthPoint.x, y: depthPoint.y, z: depthPoint.z };
-  const ndcX = ((point.x - rect.left) / rect.width) * 2 - 1;
-  const ndcY = -(((point.y - rect.top) / rect.height) * 2 - 1);
-  rayScratch.set(ndcX, ndcY, 0.5).unproject(camera);
-  dirScratch.copy(rayScratch).sub(camera.position);
-  if (dirScratch.lengthSq() === 0) return fallback;
-  dirScratch.normalize();
-  camera.getWorldDirection(forwardScratch);
-  const denominator = dirScratch.dot(forwardScratch);
-  if (Math.abs(denominator) < 1e-6) return fallback;
-  offsetScratch.set(depthPoint.x, depthPoint.y, depthPoint.z).sub(camera.position);
-  const distance = offsetScratch.dot(forwardScratch) / denominator;
-  if (!(distance > 0)) return fallback;
-  return {
-    x: camera.position.x + dirScratch.x * distance,
-    y: camera.position.y + dirScratch.y * distance,
-    z: camera.position.z + dirScratch.z * distance,
-  };
-}
-
-/**
- * The pivot a camera drive engaging right now would turn around: **whatever the
- * sight is on**, always (design.md D15).
- *
- * A node within `thresholdPx` wins, because snapping to a note is what makes
- * "dolly all the way in and arrive at that note" work. With nothing near enough
- * the pivot is the point under the sight at the current working depth — NOT the
- * anchor left over from before.
- *
- * That last part is the whole difference from `pickAnchorAt`. Keeping the old
- * anchor when the sight is over empty space means the camera turns around
- * something the user is not pointing at and cannot see — most visibly the note
- * they last opened, which then follows them around as an invisible pivot. The
- * rule is one sentence with no exception: you turn around the mark.
- */
-export function pickPivotAt(
-  nodes: Iterable<GalaxyNavNode>,
-  camera: THREE.Camera,
-  rect: ScreenRect,
-  point: { x: number; y: number },
-  current: GalaxyAnchor,
-  thresholdPx: number,
-  currentPosition: Vec3,
-): GalaxyAnchor {
-  const incumbentId = current.kind === "node" ? current.id : null;
-  const node = nearestNodeAt(nodes, camera, rect, point, thresholdPx, incumbentId);
-  if (node) return incumbentId === node.id ? current : { kind: "node", id: node.id };
-  return { kind: "point", position: sightPivotPoint(camera, rect, point, currentPosition) };
 }
 
 // How far out counts as "framing the whole graph" — a multiple of the graph's

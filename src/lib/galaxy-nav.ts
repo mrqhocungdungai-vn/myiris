@@ -180,7 +180,7 @@ export function dwellStep(
   return { state: next, target: state.target, fire: false };
 }
 
-export type GalaxyDrive = "dwell" | "inspect" | "orbit" | "zoom" | null;
+export type GalaxyDrive = "dwell" | "inspect" | "zoom" | null;
 
 type DriveHand = Pick<HandState, "pointing" | "fist" | "hands">;
 
@@ -207,13 +207,20 @@ export function inspectingHand(hand: Pick<HandState, "hands">): TrackedHand | nu
 
 /**
  * Partitions the frame's hand pose into exactly one galaxy drive, with no
- * overlap (design.md D5): two open palms (the general two-hand-gestures
- * rule, "scale the layer that owns the gesture surface") -> zoom, `Victory`
- * -> inspect (reveal a node's link cluster while held; commits to nothing),
- * `Pointing_Up` -> dwell targeting only, `Closed_Fist` -> orbit, and anything
- * else — a single open palm, an unrecognized pose, or a hand merely resting in
- * frame — -> null. A pinch has no meaning here: a tight pinch reads as
- * `Closed_Fist` and orbits like any other fist.
+ * overlap (design.md D5, revised D20): two open palms (the general
+ * two-hand-gestures rule, "scale the layer that owns the gesture surface")
+ * -> zoom, `Victory` -> inspect (reveal a node's link cluster while held;
+ * commits to nothing), `Pointing_Up` -> dwell targeting only, and anything
+ * else — a fist, a single open palm, an unrecognized pose, or a hand merely
+ * resting in frame — -> null.
+ *
+ * `Closed_Fist` drives NOTHING here (D20). It used to orbit the camera, and
+ * removing it is the point rather than an omission: the galaxy is a sphere,
+ * so an orbit is the gesture that has to be flown well before it pays, and
+ * four rounds of tuning it never made reaching a particular note easier. One
+ * camera gesture that goes TO a note beats two that together go anywhere.
+ * A pinch still has no meaning: a tight pinch reads as `Closed_Fist`, which
+ * now drives nothing, so there is nothing for it to fight with either.
  *
  * Zoom is tested first and so wins over a `Victory` hand: it is the two-hand
  * rule, which must outrank whatever either hand looks like individually.
@@ -235,7 +242,6 @@ export function driveFor(hand: DriveHand): GalaxyDrive {
   if (hand.hands.filter((h) => h.openPalm).length >= 2) return "zoom";
   if (inspectingHand(hand)) return "inspect";
   if (hand.pointing) return "dwell";
-  if (hand.fist) return "orbit";
   return null;
 }
 
@@ -294,22 +300,10 @@ export function sightPoint(hand: Pick<HandState, "hands" | "point">, fallback: H
   return hand.point ?? fallback;
 }
 
-export type Spherical = { radius: number; phi: number; theta: number };
-
-// Keeps the camera off the poles, where azimuth (theta) becomes degenerate.
-const POLAR_EPSILON = 0.001;
-
-/**
- * Relative orbit step (design.md D3/D4): the caller seeds `spherical` fresh
- * on every drive (re)engage (from the live camera, per M13) and applies only
- * the delta from that reference each frame, so engaging a fist never snaps
- * the camera.
- */
-export function orbitStep(spherical: Spherical, delta: { x: number; y: number }, sensitivity: number): Spherical {
-  const theta = spherical.theta - delta.x * sensitivity;
-  const phi = Math.max(POLAR_EPSILON, Math.min(Math.PI - POLAR_EPSILON, spherical.phi - delta.y * sensitivity));
-  return { radius: spherical.radius, phi, theta };
-}
+// `orbitStep` and its `Spherical` type lived here until D20 removed the fist
+// orbit. Nothing replaced them: the zoom's spherical is seeded from the live
+// camera against the target note and only its RADIUS is driven, so no
+// angle-stepping policy is needed any more.
 
 /**
  * The distance between two tracked hands' points, in the same window-pixel
@@ -323,7 +317,7 @@ export function handDistance(a: HandPoint, b: HandPoint): number {
 
 // ReaderCore's own 80px floor (design.md D3) — engaging with the hands
 // nearly touching cannot produce a runaway ratio.
-const MIN_HAND_DISTANCE_PX = 80;
+export const MIN_ZOOM_HAND_DISTANCE_PX = 80;
 
 /**
  * Multiplicative zoom law (design.md D3), replacing the additive
@@ -333,7 +327,7 @@ const MIN_HAND_DISTANCE_PX = 80;
  * Closing them grows it. `k = 1.0`, so this is a single multiply-divide
  * with no exponent and no extra tuning constant.
  *
- * Both `refDist` and `curDist` are floored at `MIN_HAND_DISTANCE_PX` before
+ * Both `refDist` and `curDist` are floored at `MIN_ZOOM_HAND_DISTANCE_PX` before
  * dividing — the output clamp would eventually catch a division by ~0
  * regardless, but flooring the input keeps the function total rather than
  * relying on that clamp to absorb it.
@@ -351,8 +345,8 @@ export function zoomRadius({
   min: number;
   max: number;
 }): number {
-  const flooredRef = Math.max(MIN_HAND_DISTANCE_PX, refDist);
-  const flooredCur = Math.max(MIN_HAND_DISTANCE_PX, curDist);
+  const flooredRef = Math.max(MIN_ZOOM_HAND_DISTANCE_PX, refDist);
+  const flooredCur = Math.max(MIN_ZOOM_HAND_DISTANCE_PX, curDist);
   return Math.max(min, Math.min(max, (refRadius * flooredRef) / flooredCur));
 }
 

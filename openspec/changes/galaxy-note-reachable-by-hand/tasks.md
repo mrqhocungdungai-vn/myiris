@@ -89,3 +89,15 @@
 - [x] 9.7 Unit-test 9.1-9.2 and 9.5: the pivot lands off-centre under an off-centre sight and mirrors about the centre, a stale anchor is never kept, diacritics are ignored, and the ranking holds
 - [ ] 9.8 Manual pass: whether "turn around the mark" reads well when the sight is off to one side (the aim eases onto it, so the view swings by that offset), and whether the search makes the rail worth having
 - [x] 9.9 Propose the voice half of the search as its own change — there is no second-brain tool on the Gemini surface today, so it needs a tool declaration, a main-process handler, and a route into this component
+
+## 10. The zoom goes to a note, and the fist orbit is gone (D20/D21, from the fourth manual pass)
+
+- [x] 10.1 Delete the fist orbit: `driveFor`'s fist branch, `orbitStep`/`Spherical`/`ORBIT_SENSITIVITY`, the orbit branch and `prevOrbitPointRef` in the drive loop, the `orbitSensitivity` prop, and the `Closed_Fist · orbit` label in `App.tsx`'s gesture indicator — which had to change or it would be the one label that lies
+- [x] 10.2 Add `pickZoomTarget` — always a note, with depth breaking ties ONLY between nodes that overlap on screen (`OCCLUSION_PX`), and the current target keeping its head start in BOTH the screen-distance and depth comparisons
+- [x] 10.3 Delete `pickPivotAt`, `pickAnchorAt` and `sightPivotPoint` outright rather than leaving them exported and unused; keep the `point` anchor variant, which a mouse pan still produces
+- [x] 10.4 Fix the reseed that rewrote the gesture mapping mid-stroke (D21): keep the zoom reference's `dist` fixed and rescale its `radius`, so the spread already made keeps counting — this is the "spreading stops doing anything" report
+- [x] 10.5 Raise `ZOOM_MIN_RADIUS` 8 → 40 so arriving frames the note and its neighbours instead of filling the view with one dot
+- [x] 10.6 Suspend retargeting once the camera is past the zoom-out release threshold, or always-a-note would immediately cancel the return to the overview
+- [x] 10.7 Unit-test `pickZoomTarget`: the nearer of two overlapping notes wins, a nearer note BESIDE the sight does not beat the one under it, nothing-in-range keeps the current target, a point pivot is never returned, ghosts and behind-camera nodes are excluded, and the incumbent survives a marginally-closer challenger
+- [x] 10.8 Update the delta specs — the fist-orbit requirement is REMOVED (not renamed) and "Two open palms fly the galaxy camera to a note" ADDED in its place; fix the pre-existing validation failure (the sight requirement had no scenarios) that would have blocked archiving
+- [ ] 10.9 Manual pass on the new model: whether aiming at a note and spreading actually arrives at it, whether the far side of the sphere is still reachable by hand alone now that the orbit is gone, and whether spreading covers distance steadily instead of stalling
