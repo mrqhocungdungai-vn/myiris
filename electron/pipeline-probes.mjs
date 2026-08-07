@@ -6,8 +6,8 @@
 // is injected rather than imported directly.
 import fs from "node:fs";
 import path from "node:path";
-import os from "node:os";
 import { execFile as nodeExecFile } from "node:child_process";
+import { defaultWorkspace } from "./app-paths.mjs";
 import { poBillingStatus } from "./po-session.mjs";
 import { resolveBundledClaude, resolveBundledOpenspec } from "./bundled-binaries.mjs";
 
@@ -152,7 +152,9 @@ export function createPipelineProbes({
   }
 
   function claudeWorkdir() {
-    const dir = process.env.IRIS_CLAUDE_CWD || path.join(os.homedir(), ".iris", "workspace");
+    // IRIS_CLAUDE_CWD keeps precedence over the default — the override is the
+    // whole point of the variable.
+    const dir = process.env.IRIS_CLAUDE_CWD || defaultWorkspace();
     fs.mkdirSync(dir, { recursive: true });
     return dir;
   }

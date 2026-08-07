@@ -57,7 +57,7 @@ khi có một credential Claude — không có công tắc riêng để bật/t�
      của bạn. Để tạo token, chạy lệnh mà panel hiển thị trong Terminal; lệnh đó
      trỏ thẳng vào binary *của chính Iris*, nên bạn vẫn không phải cài gì:
      ```bash
-     "/Applications/Iris.app/Contents/Resources/app.asar.unpacked/node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude" setup-token
+     "/Applications/MyIris.app/Contents/Resources/app.asar.unpacked/node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude" setup-token
      ```
      (Panel in ra đường dẫn chính xác cho bản build của bạn — kiến trúc máy và vị
      trí cài đặt sẽ khác nhau.) Dán kết quả vào ô Subscription token. Có hiệu lực
@@ -73,7 +73,7 @@ Chỉ có vậy. Không còn bước thứ hai: các skill mà agent dùng (`gri
 máy bạn và cũng không thể cài dở dang. Settings hiển thị chúng thành một dòng
 **Bundled** duy nhất.
 
-Iris cũng lưu trạng thái Claude riêng ở `~/.iris/claude-home` thay vì `~/.claude`,
+Iris cũng lưu trạng thái Claude riêng ở `~/.myiris/claude-home` thay vì `~/.claude`,
 nên các lần chạy của nó không trộn vào lịch sử, cấu hình hay memory Claude Code
 của bạn. Đổi lại, Iris **không dùng được** phiên đăng nhập Claude Code trên
 terminal của bạn — nó cần credential riêng, chính là thứ bạn vừa điền ở trên.
@@ -113,11 +113,11 @@ chép ra, chứ không có lệnh chạy thẳng:
 ```bash
 # Persona: chép vào project bạn muốn dùng (chú ý tiền tố iris- mà vị trí
 # project-local yêu cầu)
-cp /Applications/Iris.app/Contents/Resources/personas/stateful.md .claude/agents/iris-stateful.md
-cp /Applications/Iris.app/Contents/Resources/personas/stateless.md .claude/agents/iris-stateless.md
+cp /Applications/MyIris.app/Contents/Resources/personas/stateful.md .claude/agents/iris-stateful.md
+cp /Applications/MyIris.app/Contents/Resources/personas/stateless.md .claude/agents/iris-stateless.md
 
 # Skill và lệnh /opsx: trỏ Claude Code vào thư mục plugin của Iris
-claude --plugin-dir /Applications/Iris.app/Contents/Resources/iris-plugin
+claude --plugin-dir /Applications/MyIris.app/Contents/Resources/iris-plugin
 ```
 
 Bên trong app, các skill này có tên đầy đủ là `iris:grilling`, `iris:tdd`, … và

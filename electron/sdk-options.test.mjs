@@ -189,7 +189,7 @@ describe("the options `execute` hands to query()", () => {
     const options = await optionsFor("execute");
     expect(options.settingSources).not.toContain("user");
     expect(options.env.GEMINI_API_KEY).toBeUndefined();
-    expect(options.env.CLAUDE_CONFIG_DIR).toContain(path.join(".iris", "claude-home"));
+    expect(options.env.CLAUDE_CONFIG_DIR).toContain(path.join(".myiris", "claude-home"));
     expect(options.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe("1");
   });
 

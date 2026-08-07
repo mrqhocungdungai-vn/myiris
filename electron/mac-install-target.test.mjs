@@ -4,6 +4,8 @@ import {
   DEFAULT_SHUTDOWN_DEADLINE_MS,
   INSTALLED_APP_PATH,
   INSTALLED_EXECUTABLE,
+  LEGACY_INSTALLED_APP_PATH,
+  PRODUCT_NAME,
   QUIT_GRACE_MS,
   classifyProbeResult,
   classifyQuitResult,
@@ -27,19 +29,23 @@ import { shutdownDeadlineMs } from "./user-config.mjs";
 
 describe("resolveSourceBundle", () => {
   const exists = (present) => (p) => present.includes(p);
+  // Built from PRODUCT_NAME rather than spelled out: the paths under test are
+  // derived from it, so a hard-coded bundle name here tests the literal in this
+  // file instead of the resolution logic, and turns red on a rename for no reason.
+  const bundle = (subdir) => `/r/${subdir}/${PRODUCT_NAME}.app`;
 
   it("picks the bundle matching the host architecture, not the first one present", () => {
     // Both builds on disk: the x64 machine must get release/mac, never
     // release/mac-arm64, which a first-match scan would hand it.
-    const present = ["/r/mac/Iris.app", "/r/mac-arm64/Iris.app"];
+    const present = [bundle("mac"), bundle("mac-arm64")];
     expect(resolveSourceBundle({ releaseRoot: "/r", arch: "x64", exists: exists(present) })).toEqual({
       ok: true,
-      path: "/r/mac/Iris.app",
+      path: bundle("mac"),
       subdir: "mac",
     });
     expect(resolveSourceBundle({ releaseRoot: "/r", arch: "arm64", exists: exists(present) })).toEqual({
       ok: true,
-      path: "/r/mac-arm64/Iris.app",
+      path: bundle("mac-arm64"),
       subdir: "mac-arm64",
     });
   });
@@ -48,10 +54,10 @@ describe("resolveSourceBundle", () => {
     const result = resolveSourceBundle({
       releaseRoot: "/r",
       arch: "x64",
-      exists: exists(["/r/mac-arm64/Iris.app"]),
+      exists: exists([bundle("mac-arm64")]),
     });
     if (!("reason" in result)) throw new Error("expected a refusal, got a resolved bundle");
-    expect(result.reason).toContain("/r/mac/Iris.app");
+    expect(result.reason).toContain(bundle("mac"));
   });
 
   it("refuses an architecture it has no mapping for", () => {
@@ -95,7 +101,7 @@ describe("decideInstallAction — the guard in front of the destructive step", (
     expect(decideInstallAction({ path: INSTALLED_APP_PATH, exists: false })).toEqual({ action: "install" });
   });
 
-  it("replaces Iris's own bundle", () => {
+  it("replaces the app's own bundle", () => {
     expect(
       decideInstallAction({ path: INSTALLED_APP_PATH, exists: true, isDirectory: true, bundleId: BUNDLE_ID }),
     ).toEqual({ action: "replace" });
@@ -146,7 +152,44 @@ describe("decideInstallAction — the guard in front of the destructive step", (
     // A dev run launches from node_modules/.bin/electron, so an unscoped probe
     // would match it and the installer would quit the developer's session.
     expect(INSTALLED_EXECUTABLE.startsWith(INSTALLED_APP_PATH)).toBe(true);
-    expect(INSTALLED_EXECUTABLE).toBe("/Applications/Iris.app/Contents/MacOS/Iris");
+    // Deliberately a literal, not built from PRODUCT_NAME. This assertion's whole
+    // job is to pin the concrete path `pgrep` is scoped to and `rm -rf` is aimed
+    // at; derived from the same constant the code uses, it would pass no matter
+    // what that constant said, which is the one thing it must not do.
+    expect(INSTALLED_EXECUTABLE).toBe("/Applications/MyIris.app/Contents/MacOS/MyIris");
+  });
+
+  // The branch this whole capability exists for. While the fork and upstream
+  // declared the same identifier, this case was unreachable: the guard read
+  // upstream's Iris.app as "our own bundle, safe to replace" and the installer
+  // deleted it without a warning. Now that BUNDLE_ID differs, it is a live branch,
+  // and this is the test that proves it refuses.
+  it("refuses an upstream bundle sitting at the install path", () => {
+    const result = decideInstallAction({
+      path: INSTALLED_APP_PATH,
+      exists: true,
+      isDirectory: true,
+      bundleId: "app.iris.voice",
+    });
+    if (result.action !== "refuse") throw new Error(`expected a refusal, got ${result.action}`);
+    expect(result.reason).toContain("app.iris.voice");
+    expect(result.reason).toContain(BUNDLE_ID);
+  });
+
+  it("does not carry upstream's identifier itself", () => {
+    // The precondition the refusal above depends on. If these ever converge again,
+    // that test starts asserting that the app refuses its OWN bundle, and passes
+    // while meaning the opposite of what it says.
+    expect(BUNDLE_ID).not.toBe("app.iris.voice");
+    expect(INSTALLED_APP_PATH).not.toBe("/Applications/Iris.app");
+  });
+
+  it("keeps the pre-rename install path distinct from the current one", () => {
+    // The installer reports this path so the user knows why a second app is sitting
+    // in /Applications. If it ever equalled INSTALLED_APP_PATH, that note would fire
+    // on every successful install and tell the user to delete what was just built.
+    expect(LEGACY_INSTALLED_APP_PATH).toBe("/Applications/Iris.app");
+    expect(LEGACY_INSTALLED_APP_PATH).not.toBe(INSTALLED_APP_PATH);
   });
 });
 
@@ -224,10 +267,14 @@ describe("classifyQuitResult", () => {
     const result = classifyQuitResult({
       wasRunning: true,
       status: 1,
-      stderr: "execution error: Not authorized to send Apple events to Iris. (-1743)",
+      stderr: `execution error: Not authorized to send Apple events to ${PRODUCT_NAME}. (-1743)`,
     });
     expect(result.outcome).toBe("refused");
     expect(result.reason).toContain("Automation");
+    // The message has to name the app the user must grant Automation access TO,
+    // because they are looking for one specific row in System Settings and a stale
+    // name points them at a different application's row.
+    expect(result.reason).toContain(PRODUCT_NAME);
   });
 
   it("reports any other refusal with its detail rather than swallowing it", () => {

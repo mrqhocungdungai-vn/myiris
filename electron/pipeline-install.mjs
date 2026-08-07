@@ -130,6 +130,21 @@ export function createPipelineInstall({
   // by the project path and are indistinguishable from the user's own sessions
   // for the same project — deleting those would destroy their history, so they
   // are deliberately left alone even though Iris wrote some of them.
+  //
+  // THE ".iris" BELOW IS HISTORICAL AND MUST NOT FOLLOW THE STATE-ROOT RENAME.
+  //
+  // It reads like a sixth consumer of the app's state root and it is not: nothing
+  // under ~/.iris is read here. The path is assembled only to reproduce the SLUG
+  // Claude Code derived from the working directory those older runs used, and that
+  // slug names a directory already sitting on disk in the user's own ~/.claude.
+  // Files cannot rename themselves, so the value is frozen.
+  //
+  // Repointing this at app-paths.mjs's defaultWorkspace() would typecheck, pass
+  // every test that does not pin the slug, and break the feature silently:
+  // legacyClaudeArtifacts() would look for a directory no build ever wrote, find
+  // nothing, and the SetupPanel's "remove legacy artifacts" row would just stop
+  // appearing — leaving the leftovers in the user's directory unnoticed. There is
+  // no error to notice. See the app-identity capability and its design D2.
   function legacyTranscriptDir() {
     const workspace = path.join(os.homedir(), ".iris", "workspace");
     const key = workspace.replace(/[/.]/g, "-");

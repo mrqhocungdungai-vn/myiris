@@ -10,6 +10,10 @@ import path from "node:path";
 // same accelerators to the renderer, and one definition is what keeps the
 // displayed key and the registered key the same key.
 import { hudHotkey, listenHotkey, wakeHotkey, sleepHotkey } from "./hotkeys.mjs";
+// The APP's name, for the three places this module hands a name to macOS. Not for
+// the tray's wake/sleep/quit labels below, which address the persona — she keeps
+// her name when the application is renamed (see the app-identity capability).
+import { PRODUCT_NAME } from "./app-identity.mjs";
 
 const { app, BrowserWindow, Menu, Tray, screen } = electron;
 
@@ -239,7 +243,10 @@ export function createWindowModule({
           },
         },
         { type: "separator" },
-        { label: "Quit Iris", role: "quit" },
+        // "Quit <app>" names the application, not the persona — and an explicit
+        // label overrides what `role: "quit"` would render, which the app menu
+        // below relies on. Derived so the tray cannot disagree with it.
+        { label: `Quit ${PRODUCT_NAME}`, role: "quit" },
       ]),
     );
   }
@@ -248,7 +255,7 @@ export function createWindowModule({
     const trayIconPath = path.join(repoRoot, "build", "trayTemplate.png");
     if (!fs.existsSync(trayIconPath)) return;
     tray = new Tray(trayIconPath);
-    tray.setToolTip("Iris");
+    tray.setToolTip(PRODUCT_NAME);
     updateTrayMenu();
   }
 
@@ -286,13 +293,17 @@ export function createWindowModule({
   function installAppMenu() {
     if (process.platform !== "darwin") return;
     app.setAboutPanelOptions({
-      applicationName: "Iris",
+      applicationName: PRODUCT_NAME,
       applicationVersion: app.getVersion(),
       ...(appIcon ? { iconPath } : {}),
     });
     const menu = Menu.buildFromTemplate([
       {
-        label: "Iris",
+        // The application menu's own title — the leftmost item in the menu bar,
+        // and the most visible name the app has. A bundle called MyIris.app whose
+        // menu bar reads "Iris" would put back, exactly where the user looks, the
+        // ambiguity the identity split exists to remove.
+        label: PRODUCT_NAME,
         submenu: [
           { role: "about" },
           { type: "separator" },

@@ -57,7 +57,7 @@ Claude credential is configured — there's no separate flag to flip.
      plan. To mint one, run the command the panel shows you in Terminal; it points
      at Iris's *own* bundled binary, so you still install nothing:
      ```bash
-     "/Applications/Iris.app/Contents/Resources/app.asar.unpacked/node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude" setup-token
+     "/Applications/MyIris.app/Contents/Resources/app.asar.unpacked/node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude" setup-token
      ```
      (The panel prints the exact path for your build — architecture and install
      location differ.) Paste the result into the Subscription token field. It
@@ -73,7 +73,7 @@ skills) and the `/opsx` commands ship **inside the app** and are loaded per run,
 so nothing is copied onto your machine and nothing can be left half-installed.
 Settings shows them as a single **Bundled** row.
 
-Iris also keeps its own Claude state in `~/.iris/claude-home` rather than
+Iris also keeps its own Claude state in `~/.myiris/claude-home` rather than
 `~/.claude`, so its runs never mix into your own Claude Code history, settings,
 or memory. The flip side is that Iris cannot use your terminal Claude Code
 login — it needs its own credential, which is what you set above.
@@ -155,11 +155,11 @@ therefore a copy job, not a command you can just run:
 ```bash
 # Personas: copy into the project you want to use them in (note the iris- prefix
 # the project-local location expects)
-cp /Applications/Iris.app/Contents/Resources/personas/stateful.md .claude/agents/iris-stateful.md
-cp /Applications/Iris.app/Contents/Resources/personas/stateless.md .claude/agents/iris-stateless.md
+cp /Applications/MyIris.app/Contents/Resources/personas/stateful.md .claude/agents/iris-stateful.md
+cp /Applications/MyIris.app/Contents/Resources/personas/stateless.md .claude/agents/iris-stateless.md
 
 # Skills and /opsx commands: point Claude Code at Iris's plugin directory
-claude --plugin-dir /Applications/Iris.app/Contents/Resources/iris-plugin
+claude --plugin-dir /Applications/MyIris.app/Contents/Resources/iris-plugin
 ```
 
 Inside the app the same skills are namespaced `iris:grilling`, `iris:tdd`, … and

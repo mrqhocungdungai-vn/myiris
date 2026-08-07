@@ -107,7 +107,7 @@ describe("computeClaudeWorkerEnv: keeping out of the user's ~/.claude", () => {
     const first = irisClaudeHome(() => "/home/x");
     const second = irisClaudeHome(() => "/home/x");
 
-    expect(first).toBe(path.join("/home/x", ".iris", "claude-home"));
+    expect(first).toBe(path.join("/home/x", ".myiris", "claude-home"));
     expect(second).toBe(first);
     expect(first).not.toContain(`${path.sep}.claude`);
   });

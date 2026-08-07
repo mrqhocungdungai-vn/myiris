@@ -15,7 +15,7 @@
 // inlined. Measured: with the variable unset, `listSessions()` returned 32 of the
 // *user's own* Claude Code sessions out of `~/.claude` — the exact boundary Iris
 // must never cross, and it would find none of Iris's own sessions either, since
-// those live under `~/.iris/claude-home` (see worker-env.mjs). Every call here
+// those live under `~/.myiris/claude-home` (see app-paths.mjs). Every call here
 // therefore runs with the variable pinned and restored.
 //
 // The env is restored in a `finally`, and the pin is the same value

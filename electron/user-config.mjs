@@ -5,15 +5,15 @@
 // injected rather than imported.
 import fs from "node:fs";
 import path from "node:path";
-import os from "node:os";
 import { GoogleGenAI } from "@google/genai";
+import { userConfigFile } from "./app-paths.mjs";
 import { closeAllPoSessions } from "./po-session.mjs";
 import { RUN_STATUS } from "./run-queue.mjs";
 import { writeFileAtomicSync } from "./atomic-file.mjs";
 import { wakeHotkey, sleepHotkey } from "./hotkeys.mjs";
 
 // Look for .env in several places so both the dev repo run and a packaged
-// Iris.app can find credentials. First match for a given key wins.
+// MyIris.app can find credentials. First match for a given key wins.
 export function parseEnvFile(envPath) {
   if (!envPath || !fs.existsSync(envPath)) return;
   const contents = fs.readFileSync(envPath, "utf8");
@@ -36,7 +36,7 @@ export function parseEnvFile(envPath) {
 export function loadEnvFile({ repoRoot }) {
   const candidates = [
     path.join(repoRoot, ".env"),
-    path.join(os.homedir(), ".iris", ".env"),
+    userConfigFile(),
     process.resourcesPath ? path.join(process.resourcesPath, ".env") : null,
   ];
   for (const candidate of candidates) parseEnvFile(candidate);
@@ -196,10 +196,11 @@ export function createUserConfig({
     return promptReviewMode;
   }
 
-  // Repo .env in dev, ~/.iris/.env in a packaged build — the same location
-  // loadEnvFile() already reads from, so a save takes effect without restart.
+  // Repo .env in dev, the state root's .env in a packaged build — the same
+  // location loadEnvFile() already reads from, so a save takes effect without
+  // restart.
   function userConfigPath() {
-    return getIsPackaged() ? path.join(os.homedir(), ".iris", ".env") : path.join(repoRoot, ".env");
+    return getIsPackaged() ? userConfigFile() : path.join(repoRoot, ".env");
   }
 
   // Full settings snapshot for the SetupPanel. Values come from process.env

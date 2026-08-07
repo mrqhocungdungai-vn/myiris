@@ -139,7 +139,7 @@ This takes **two** mechanisms, not one:
 
 1. `settingSources` excludes the `user` scope (`["project"]` on both run
    shapes), and
-2. `CLAUDE_CONFIG_DIR` is pinned to `~/.iris/claude-home`.
+2. `CLAUDE_CONFIG_DIR` is pinned to `~/.myiris/claude-home`.
 
 The second is not redundant. Session transcripts, the always-read
 `.claude.json`, and auto-memory are read and written **regardless of**
@@ -222,7 +222,7 @@ here so a reporter does not spend time on them.
   macOS; this variable bypasses that admission check and puts the app in
   deliberately untested territory. Behaviour there is not supported.
 - **A local user who already has the machine.** Anyone with your account can read
-  `~/.iris/.env` and run the agent themselves without going through Iris.
+  `~/.myiris/.env` and run the agent themselves without going through Iris.
 
 ## What *would* be a vulnerability
 
