@@ -257,7 +257,8 @@ export default function App() {
   const [listenOnlyEngaged, setListenOnlyEngaged] = useState(false);
   // The first-run consent notice for meeting retention, and the (non-blocking)
   // headphone advisory. Both are shown on the engaging edge only.
-  const [listenOnlyNotice, setListenOnlyNotice] = useState<"consent" | "headphones" | null>(null);
+  const [listenOnlyNotice, setListenOnlyNotice] = useState<"consent" | "headphones" | "refused" | null>(null);
+  const [refusedTool, setRefusedTool] = useState<string>("");
   // Records the HUD Comms panel's open/closed state from just before the
   // mode engaged, so disengaging restores it rather than forcing it shut
   // (design.md D7). Only the push handler below writes to it, on the
@@ -1145,6 +1146,17 @@ export default function App() {
 
     if (event.type === "audio_state") {
       setAudioState(readString(event.state, "idle"));
+      return;
+    }
+
+    // listen-mode-hears-system-audio: something Iris overheard tried to make
+    // her act, and main refused it before dispatch. Surfaced as a notice rather
+    // than a log line because the log list is discarded (see setLogs above) —
+    // and an invisible refusal is indistinguishable from Iris quietly doing the
+    // work anyway.
+    if (event.type === "listen_only_refused") {
+      setRefusedTool(readString(event.tool, "a task"));
+      setListenOnlyNotice("refused");
       return;
     }
 
@@ -2044,7 +2056,11 @@ export default function App() {
         <HandReticles hand={hand} handRef={liveHandRef} dwelling={dwellActive && !dwellFired} />
       ) : null}
 
-      <ListenOnlyNotice kind={listenOnlyNotice} onDismiss={() => setListenOnlyNotice(null)} />
+      <ListenOnlyNotice
+        kind={listenOnlyNotice}
+        tool={refusedTool}
+        onDismiss={() => setListenOnlyNotice(null)}
+      />
     </>
   );
 }

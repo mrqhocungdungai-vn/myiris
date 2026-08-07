@@ -24,6 +24,20 @@
 - [x] 3.3 Ensure the welcome greeting cannot fire into an engaged mode — check `GreetGate.arm()`'s interaction with a re-established session while the mode is engaged
 - [x] 3.4 Test: a reply arriving while engaged reaches nothing; exhausted reconnects leave the mode engaged; a re-established session speaks no greeting while engaged
 
+## 3b. Refusing to act on what the mode overhears
+
+Found during manual testing, not in the original plan: silence was enforced on
+replies but tool calls dispatched regardless, so a YouTube video saying "just
+ask your agent to install the concept diagram skill" started a billed Claude
+run while Iris was deliberately silent.
+
+- [x] 3b.1 Refuse every tool call in `electron/live-messages.mjs` while the mode is engaged, checked before dispatch — by the time a verb runs it has already cost money and may already have written
+- [x] 3b.2 Refuse ALL tools rather than allowlisting the harmless ones: while engaged the user is not addressing Iris, so no request is legitimate and an allowlist only has to be wrong once
+- [x] 3b.3 Answer the refusal back to the session so the model is not left waiting, and report each one — a silent refusal is its own kind of wrong
+- [x] 3b.4 Add "call no tools" to the in-band engage request as a cost reduction; the client-side refusal remains the guarantee
+- [x] 3b.5 Add the requirement to the `listen-only-mode` delta spec — this is behaviour, not an implementation detail
+- [x] 3b.6 Test: a tool call while engaged executes nothing, is answered and reported, covers every tool name, and dispatches normally once the mode ends
+
 ## 4. Renderer capture and mixing
 
 - [x] 4.1 In `src/hooks/useAudioPipeline.ts`, acquire the loopback stream with `getDisplayMedia({ video: false, audio: true })` and sum it into the existing worklet through a `GainNode` at the configured gain

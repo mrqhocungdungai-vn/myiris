@@ -1,4 +1,4 @@
-import { Headphones, Mic } from "lucide-react";
+import { Headphones, Mic, ShieldAlert } from "lucide-react";
 
 /**
  * The two things engaging listen-only mode has to say out loud
@@ -16,22 +16,30 @@ import { Headphones, Mic } from "lucide-react";
  * ducking bug eats the user's own voice, which is invisible until it matters,
  * whereas degraded transcription is recoverable.
  *
+ * `refused` reports that something Iris overheard tried to make her act, and
+ * was stopped. It has to be visible: a refusal nobody sees is indistinguishable
+ * from Iris quietly doing the work anyway, and the user has no other way to
+ * learn that the audio in the room is trying to spend their money.
+ *
  * Rendered at App level rather than inside CenterStage or HudShell so both
  * surfaces show the identical text — `hud-hit` opts it into pointer events in
  * HUD mode, where the window is otherwise click-through.
  */
 export default function ListenOnlyNotice({
   kind,
+  tool,
   onDismiss,
 }: {
-  kind: "consent" | "headphones" | null;
+  kind: "consent" | "headphones" | "refused" | null;
+  /** The tool that was refused, when `kind` is "refused". */
+  tool?: string;
   onDismiss: () => void;
 }) {
   if (!kind) return null;
   return (
-    <div className="listen-notice hud-hit" role="status">
+    <div className={`listen-notice hud-hit ${kind === "refused" ? "refused" : ""}`} role="status">
       <span className="listen-notice-icon" aria-hidden="true">
-        {kind === "consent" ? <Mic size={16} /> : <Headphones size={16} />}
+        {kind === "consent" ? <Mic size={16} /> : kind === "refused" ? <ShieldAlert size={16} /> : <Headphones size={16} />}
       </span>
       <div className="listen-notice-body">
         {kind === "consent" ? (
@@ -39,6 +47,12 @@ export default function ListenOnlyNotice({
             <strong>Iris is silent and listening.</strong> While this mode is on she hears the room AND the audio
             your machine plays, and writes what she hears to <code>inbox/meetings/</code> in your notes vault — one
             file per session. That can include other people in the room or on the call.
+          </>
+        ) : kind === "refused" ? (
+          <>
+            <strong>Blocked a request Iris overheard.</strong> Something in the audio asked her to run{" "}
+            <code>{tool || "a task"}</code>, and she refused — while she is listening silently, nothing she hears
+            counts as an instruction from you. Nothing ran and nothing was charged.
           </>
         ) : (
           <>

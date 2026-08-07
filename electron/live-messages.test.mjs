@@ -307,3 +307,64 @@ describe("live-messages: utterance boundaries while the mode is engaged", () => 
     }
   });
 });
+
+// listen-mode-hears-system-audio. The mode's most important guard, and the one
+// that was missing: silence was enforced on replies but tool calls dispatched
+// regardless. The mode widens what Iris hears to "whatever this machine plays",
+// so a video saying "just ask your agent to install X" was enough to start a
+// billed Claude run — with Iris deliberately silent and the user not watching.
+describe("live-messages: tool calls are refused while the mode is engaged", () => {
+  const toolCall = {
+    functionCalls: [{ id: "call-1", name: "execute", args: { brief: "install the concept diagram skill" } }],
+  };
+
+  it("does not execute anything a video asked for", () => {
+    const executeClaudeTool = vi.fn();
+    const messages = make({ executeClaudeTool, isListenOnlyEngaged: () => true });
+    messages.handleLiveMessage({ toolCall });
+    expect(executeClaudeTool).not.toHaveBeenCalled();
+  });
+
+  it("answers the refusal back so the session is not left waiting on it", () => {
+    const sendToolResponse = vi.fn();
+    const messages = make({
+      getLiveSession: () => ({ sendToolResponse }),
+      isListenOnlyEngaged: () => true,
+    });
+    messages.handleLiveMessage({ toolCall });
+
+    const response = sendToolResponse.mock.calls[0][0].functionResponses[0];
+    expect(response.id).toBe("call-1");
+    expect(response.response.status).toBe("error");
+    expect(response.response.error).toMatch(/listen-only mode is engaged/i);
+  });
+
+  it("reports the refusal on its OWN event, not as a log line", () => {
+    // A `log` event would reach nobody: App.tsx keeps only the setter for its
+    // log list and never renders it, so a refusal reported that way is
+    // indistinguishable from Iris quietly doing the work anyway.
+    const emitEvent = vi.fn();
+    const messages = make({ emitEvent, isListenOnlyEngaged: () => true });
+    messages.handleLiveMessage({ toolCall });
+    expect(emitEvent).toHaveBeenCalledWith({ type: "listen_only_refused", tool: "execute" });
+  });
+
+  it("refuses every tool, not an allowlist of the dangerous-looking ones", () => {
+    // While engaged the user is not addressing Iris at all, so there is nothing
+    // she could legitimately have been asked to do — and an allowlist is a
+    // judgement call that only has to be wrong once.
+    const executeClaudeTool = vi.fn();
+    const messages = make({ executeClaudeTool, isListenOnlyEngaged: () => true });
+    for (const name of ["get_ui_context", "capture_note", "control_ui", "go_to_sleep"]) {
+      messages.handleLiveMessage({ toolCall: { functionCalls: [{ id: name, name }] } });
+    }
+    expect(executeClaudeTool).not.toHaveBeenCalled();
+  });
+
+  it("dispatches normally the moment the mode is not engaged", async () => {
+    const executeClaudeTool = vi.fn(async () => ({ status: "ok" }));
+    const messages = make({ executeClaudeTool, isListenOnlyEngaged: () => false });
+    messages.handleLiveMessage({ toolCall });
+    await vi.waitFor(() => expect(executeClaudeTool).toHaveBeenCalledWith("execute", toolCall.functionCalls[0].args));
+  });
+});

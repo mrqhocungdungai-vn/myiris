@@ -186,6 +186,40 @@ What Iris hears while the mode is engaged SHALL remain part of the conversation,
 - **WHEN** the user disengages listen-only mode and asks about what was said while it was engaged
 - **THEN** Iris answers from that conversation context
 
+### Requirement: Iris acts on nothing she hears while the mode is engaged
+
+While listen-only mode is engaged, the app SHALL refuse every tool call the model produces. No verb SHALL be dispatched, no note SHALL be written, no interface SHALL be controlled, and no run SHALL be started or queued, whatever the model asks for.
+
+This is not a refinement of the silence requirement, it is a separate and stronger one. Silence governs what the user perceives; this governs what the machine DOES. A mode that only silenced replies while still executing tool calls would be the most dangerous configuration the app has: the user has deliberately stopped listening, is not watching the screen, and Iris is acting on audio nobody addressed to her.
+
+The mode is what makes this necessary. It widens what Iris hears from the user's own room to whatever the machine plays — a video, a call, an advertisement, a recording of someone else's meeting. Such audio routinely contains sentences shaped exactly like instructions, including instructions addressed to an assistant, and none of them are the user asking for anything. Acting on one spends the user's money on work they did not request, and can write to their repository.
+
+The refusal SHALL be total rather than selective. While the mode is engaged the user is not addressing Iris at all — the mode's contract is that she takes things in now and answers afterwards — so there is no request she could legitimately be carrying out, and no set of tools that is safe to leave reachable.
+
+The app SHALL report each refusal, and SHALL answer the refusal back to the session so the model is not left waiting on a response that never arrives. As with enforced silence, the refusal SHALL be what guarantees this: the model MAY additionally be asked in-band to call nothing, but that request is a cost reduction and the guarantee SHALL NOT depend on it.
+
+#### Scenario: Audio that sounds like an instruction is not obeyed
+
+- **WHEN** something Iris hears while the mode is engaged — a video, a call, a recording — leads the model to call a tool
+- **THEN** the call is refused and nothing runs
+- **AND** no money is spent and nothing is written
+
+#### Scenario: The refusal covers every tool
+
+- **WHEN** the model calls any tool at all while the mode is engaged
+- **THEN** it is refused, whether or not that tool starts a run, writes, or only reads
+
+#### Scenario: A refusal is visible and does not stall the session
+
+- **WHEN** a tool call is refused
+- **THEN** the refusal is reported to the user
+- **AND** the model receives a response, so the session continues normally
+
+#### Scenario: Tools work normally outside the mode
+
+- **WHEN** listen-only mode is not engaged
+- **THEN** tool calls are dispatched exactly as they were before this change
+
 ### Requirement: A capture that delivers no audio is detected and reported
 
 The app SHALL verify that the system-audio capture is actually delivering audio, and SHALL NOT treat a successfully-acquired stream as proof that it works. A capture that delivers only silence SHALL be treated as failed, on the same terms as one that ends.

@@ -72,6 +72,40 @@ export function renderMeetingBlock(utterances) {
   return `${utterances.map((entry) => `> ${entry.text}`).join("\n")}\n`;
 }
 
+/** A span as "1h 04m 12s" / "18m 42s" / "47s" — read by a person, not parsed. */
+export function formatDuration(ms) {
+  const total = Math.max(0, Math.round(ms / 1000));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+  const pad = (value) => String(value).padStart(2, "0");
+  if (hours) return `${hours}h ${pad(minutes)}m ${pad(seconds)}s`;
+  if (minutes) return `${minutes}m ${pad(seconds)}s`;
+  return `${seconds}s`;
+}
+
+/**
+ * The closing line, appended when the engagement ends. Together with the
+ * header's `started` it gives the record its span, which is what makes it
+ * readable later — and what makes "did this actually cover the whole meeting?"
+ * answerable at a glance instead of by comparing the last line against memory.
+ *
+ * Deliberately NOT a `## ` heading: `inboxBacklog` counts records by that
+ * marker, and a meeting is one record, not two.
+ *
+ * A record with no closing line means the app stopped before the mode did —
+ * that is honest signal, not a defect, and it is why the end is appended
+ * rather than patched into the frontmatter (which append-only writing cannot
+ * reach anyway).
+ *
+ * @param {Date} startedAt
+ * @param {Date} endedAt
+ */
+export function renderMeetingFooter(startedAt, endedAt) {
+  const span = formatDuration(endedAt.getTime() - startedAt.getTime());
+  return `\n_Ended · ${localIsoString(endedAt)} · ${span}_\n`;
+}
+
 /**
  * @param {{ io?: typeof import("node:fs"), now?: () => Date }} [deps]
  */
@@ -84,6 +118,8 @@ export function createMeetingCapture({ io, now = () => new Date() } = {}) {
   /** Closed utterances written by no flush yet. The write-at-most-once unit. */
   let queue = [];
   let headerWritten = false;
+  /** @type {Date | null} When the mode was engaged — the record's span starts here. */
+  let startedAt = null;
   /** The previous engagement's file name — see the collision guard in engage(). */
   let lastFile = null;
   let sameSecondCount = 0;
@@ -107,6 +143,7 @@ export function createMeetingCapture({ io, now = () => new Date() } = {}) {
     sameSecondCount = base === lastFile ? sameSecondCount + 1 : 0;
     file = sameSecondCount ? base.replace(/\.md$/, `-${sameSecondCount + 1}.md`) : base;
     lastFile = base;
+    startedAt = at;
     open = "";
     queue = [];
     headerWritten = false;
@@ -156,7 +193,10 @@ export function createMeetingCapture({ io, now = () => new Date() } = {}) {
     // closes while it is in flight must stay queued rather than being counted
     // as written by a flush that never saw it.
     const pending = queue.slice();
-    const content = `${headerWritten ? "" : renderMeetingHeader(new Date(pending[0].at))}${renderMeetingBlock(pending)}`;
+    // The engagement's own start, not the first utterance's: a meeting where
+    // nobody speaks for the first two minutes still started when the user
+    // engaged the mode, and the closing span below is measured from it.
+    const content = `${headerWritten ? "" : renderMeetingHeader(startedAt ?? new Date(pending[0].at))}${renderMeetingBlock(pending)}`;
     const result = await appendSpoolRecordTo({ dir, name: /** @type {string} */ (file), content, io });
     if (result.ok) {
       headerWritten = true;
@@ -179,8 +219,20 @@ export function createMeetingCapture({ io, now = () => new Date() } = {}) {
   async function disengage({ dir, onError }) {
     if (!engaged) return { ok: true, skipped: true };
     const result = await flush({ dir, onError, final: true });
+    // Close the span, but only on a record that exists: an engagement that
+    // heard nothing wrote no file, and a file holding nothing but an "Ended"
+    // line would be noise in the curation backlog.
+    if (headerWritten && startedAt) {
+      await appendSpoolRecordTo({
+        dir,
+        name: /** @type {string} */ (file),
+        content: renderMeetingFooter(startedAt, now()),
+        io,
+      });
+    }
     engaged = false;
     file = null;
+    startedAt = null;
     open = "";
     queue = [];
     headerWritten = false;

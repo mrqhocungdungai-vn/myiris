@@ -1,5 +1,11 @@
 import { describe, it, expect, vi } from "vitest";
-import { createMeetingCapture, renderMeetingHeader, renderMeetingBlock } from "./meeting-capture.mjs";
+import {
+  createMeetingCapture,
+  renderMeetingHeader,
+  renderMeetingBlock,
+  renderMeetingFooter,
+  formatDuration,
+} from "./meeting-capture.mjs";
 
 // A fake `fs` with the async surface vault-write's appendSpoolRecordTo uses, so
 // every case here runs with no real disk and no real clock.
@@ -42,6 +48,65 @@ describe("meeting-capture: rendering", () => {
   it("quotes each utterance and renders nothing for an empty flush", () => {
     expect(renderMeetingBlock([])).toBe("");
     expect(renderMeetingBlock([{ text: "hello", at: 0 }, { text: "there", at: 1 }])).toBe("> hello\n> there\n");
+  });
+});
+
+describe("meeting-capture: the record's span", () => {
+  it("formats a duration for a person to read", () => {
+    expect(formatDuration(47_000)).toBe("47s");
+    expect(formatDuration(18 * 60_000 + 42_000)).toBe("18m 42s");
+    expect(formatDuration(3_600_000 + 4 * 60_000 + 12_000)).toBe("1h 04m 12s");
+    expect(formatDuration(-5)).toBe("0s");
+  });
+
+  it("closes the record with an end time and how long it ran", () => {
+    const footer = renderMeetingFooter(new Date(2026, 7, 6, 9, 0, 0), new Date(2026, 7, 6, 9, 18, 42));
+    expect(footer).toMatch(/_Ended · 2026-08-06T09:18:42[+-]\d{2}:\d{2} · 18m 42s_/);
+    // Never a `## ` heading: inboxBacklog counts records by that marker, and a
+    // meeting is one record, not two.
+    expect(footer).not.toMatch(/^## /m);
+  });
+
+  it("writes the span on disengage, so coverage is answerable at a glance", async () => {
+    const io = fakeIo();
+    const { capture, tick } = make(io);
+    capture.engage();
+    capture.appendFragment("twenty minutes of video");
+    capture.closeUtterance();
+    tick(20 * 60_000);
+    await capture.disengage({ dir: DIR });
+
+    const written = [...io.files.values()][0];
+    // Both ends present: the header's start and the footer's end, so "did this
+    // actually cover the whole meeting?" needs no comparison against memory.
+    expect(written).toMatch(/started: 2026-08-06T09:00:00/);
+    expect(written).toMatch(/_Ended · 2026-08-06T09:20:00[+-]\d{2}:\d{2} · 20m 00s_/);
+  });
+
+  it("measures the span from the ENGAGE moment, not from the first thing heard", async () => {
+    const io = fakeIo();
+    const { capture, tick } = make(io);
+    capture.engage();
+    // Two minutes of nobody saying anything still belongs to the meeting.
+    tick(2 * 60_000);
+    capture.appendFragment("finally, someone speaks");
+    capture.closeUtterance();
+    tick(60_000);
+    await capture.disengage({ dir: DIR });
+
+    const written = [...io.files.values()][0];
+    expect(written).toMatch(/started: 2026-08-06T09:00:00/);
+    expect(written).toMatch(/· 3m 00s_/);
+  });
+
+  it("leaves no closing line on a record that heard nothing at all", async () => {
+    const io = fakeIo();
+    const { capture } = make(io);
+    capture.engage();
+    await capture.disengage({ dir: DIR });
+    // No file rather than a file holding only an "Ended" line, which would be
+    // noise in the curation backlog.
+    expect(io.files.size).toBe(0);
   });
 });
 

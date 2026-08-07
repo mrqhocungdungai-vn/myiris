@@ -618,10 +618,9 @@ This note is just a starting point — edit it, retag it, or delete it whenever 
 
   // ===== Meeting retention (listen-mode-hears-system-audio D7) =====
 
-  async function flushMeetingCapture({ final = false } = {}) {
+  async function flushMeetingCapture() {
     return meetingCapture.flush({
       dir: NOTES_MEETINGS_DIR,
-      final,
       onError: (error) => {
         emitEvent({ type: "log", level: "warn", message: `Could not write the meeting record: ${error.message}` });
       },
@@ -1150,8 +1149,11 @@ This note is just a starting point — edit it, retag it, or delete it whenever 
     await flushAmbientCapture();
     // Same discipline for the meeting record: a clean shutdown with the mode
     // still engaged must not lose the span since the last periodic flush.
+    // Goes through the full disengage rather than a bare flush, so quitting
+    // mid-meeting still closes the record's span — a quit IS the end of the
+    // engagement, and a record left open would read as a crash.
     stopMeetingFlushTimer();
-    await flushMeetingCapture({ final: true });
+    await setMeetingCaptureEngaged(false);
   }
 
   return {
