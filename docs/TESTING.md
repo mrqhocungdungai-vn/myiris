@@ -75,8 +75,26 @@ check reads**, not what it costs:
 | Event | Runs | Measured |
 | --- | --- | --- |
 | `PostToolUse` (`Edit`/`Write`) | secret scan of the written file | 168ms |
-| `Stop` (end of turn) | lint, the spec-drift check if spec files changed, then the typecheck projects whose files changed | 92ms when nothing relevant changed, up to 5.4s |
-| `PreToolUse` (`Bash`) | secret scan of staged content, when the command is a `git commit` | 70ms |
+| `Stop` (end of turn) | lint, the spec-drift check if spec files changed, the vendored-config check if `.claude/` or the plugin tree changed, the typecheck projects whose files changed, then the behavioral suite | 90ms when nothing relevant changed, up to **15.4s** |
+| `PreToolUse` (`Bash`) | the destructive-command guard on every command, then the secret scan of staged content when the command is a `git commit` | guard <1ms, scan 70ms |
+
+Per-gate cost on the current tree, re-measured when the suite was bound
+(claude-config-earns-its-place): lint 0.39s, spec-drift 0.13s, `tsc` renderer 3.55s,
+`tsc` electron 2.89s, suite 7.4–8.3s. End to end through the `Stop` hook:
+
+| Turn touched | Cost |
+| --- | --- |
+| docs or specs only | 0.09s — the ledger exits before any gate runs |
+| one typecheck project | 11.5–12.1s |
+| both projects | **15.4s** |
+
+Two things about those numbers, recorded because the alternative is for them to rot
+again. The suite roughly **doubles** the worst case, which is a deliberate accepted
+cost — see below for why it is not scoped down. And the figure previously documented
+here, "up to 5.4s", **was already stale before the suite was added**: both typecheck
+projects had grown, and the real pre-suite worst case was ~7.8s. Nothing catches a
+stale measurement in prose, which is why each one here now names the change that
+took it.
 
 A **per-file** check reads only the file just written, so it is never wrong about
 work in progress. A **whole-tree** check reads relationships between files, so it
@@ -92,10 +110,113 @@ scoped off the per-session ledger, and runs only when the turn touched
 `openspec/specs/` or `scripts/check-spec-drift.mjs` itself — editing an allowance
 is the other way to change what the gate reports.
 
+The behavioral suite lands at `Stop` for the same reason lint and typecheck do — a
+test asserts a relationship between a module and its collaborators, so mid-sequence
+it is wrong about the intent in exactly the way lint is. Until it was bound it was
+the largest check in the repo and the only one that ran when someone remembered it.
+
+**The whole suite runs; it is not narrowed to the tests related to the changed
+files.** `vitest related` is ~0.4s against the suite's ~8s and was measured and
+rejected: it selects tests by static import graph, and
+`electron-graph.supply.test.mjs` discovers its subjects with `readdirSync` at run
+time, so it declares no dependency on any module it checks. Measured,
+`vitest related electron/verbs.mjs` selects 15 test files and **zero** from the
+`graph` project — meaning the cheap option structurally skips the one test that
+exists to catch a newly added module importing a name its sibling does not export.
+That is the case with the most to say and the subset has nothing to say about it.
+Scoping stays off the ledger and decides *whether* the suite runs, never which parts.
+
 Note that `.claude/settings.json` binds three **hook scripts**, not individual
 gates; which gates run inside each is decided in `scripts/hooks/*.mjs`, and the
 gates themselves are defined once in `scripts/gates.mjs` so the hand-run check and
 the automatic one cannot drift apart.
+
+## The destructive-command guard
+
+`PreToolUse` also carries something that is **not** a quality gate: a guard that
+refuses an irreversible shell command before it runs — a recursive delete, a force
+push, a discard of the working tree, and reading `.env` into the transcript.
+
+It exists because the editing loop for this repo runs with prompting disabled, and
+in that configuration a pre-execution check is the layer that still applies. This is
+the same reasoning [CLAUDE.md](../CLAUDE.md) already records for the app's own
+headless worker — *"`bypassPermissions` is the intentional default for the headless
+worker. The `PreToolUse` denylist is a guard against accidents, not a sandbox"* —
+applied at last to the loop that writes the worker.
+
+Read the wording literally. **It is a guard against accident, not containment and
+not a sandbox:**
+
+- It sees only commands issued through Claude Code. One typed in a terminal does
+  not reach it, exactly as the commit gate does not.
+- A subprocess that deletes files by other means — a node or python script — is
+  outside what it can inspect.
+- It is paired with `permissions.deny` rules in `.claude/settings.json`, which are
+  evaluated *earlier* and additionally cover the file-reading commands Claude Code
+  recognises inside Bash. Neither layer alone covers what both do.
+
+**`IRIS_SKIP_HOOKS=1` does not disable it.** That hatch exists to skip a slow or
+temporarily broken quality check; there is no version of "skip it just this once"
+that helps with destroying uncommitted work. So the guard is evaluated above the
+bypass, the variable means "no scan ran" rather than "no hook ran", and the bypass
+announcement says so.
+
+The declared set deliberately omits `rm -rf /` and `rm -rf ~`: Claude Code already
+prompts for those as a built-in circuit breaker even in bypass mode, and a denylist
+that spends lines on already-covered cases trains the reader to skim it. The
+predicate is pure and lives in `scripts/gates.mjs`, with its refusals *and its
+near-misses* enumerated in `scripts/gates.forbidden.test.mjs` — a guard that fires
+on `git checkout main` is a guard that gets deleted.
+
+## Two Claude Code surfaces — do not mix them up
+
+This repo holds **two** Claude Code configurations with confusingly similar
+contents. Everything on this page is about the first:
+
+| | Configured by | Governs |
+| --- | --- | --- |
+| **The editing loop** | `.claude/` at the repo root | The Claude Code a developer runs to *write* this app. The five gates, the hooks, the guard, the three subagents, the twelve skills |
+| **The one Iris ships** | `resources/iris-plugin/` (bundled via `extraResources`) + `~/.myiris/claude-home` | The Agent SDK worker the app dispatches verbs to. See `verb-tool-surface` and [PIPELINE_INTERNALS.md](PIPELINE_INTERNALS.md) |
+
+**The shipped worker reads nothing from `.claude/`.** Its skills come from the
+bundled plugin, and `settingSources` excludes the user scope while
+`CLAUDE_CONFIG_DIR` is pinned away from `~/.claude`.
+
+Two traps follow, and both have bitten:
+
+- **"Unused" means unused *by the editing loop*.** The bundle deliberately ships
+  skills the developer never invokes — the note-keeping ones especially. Pruning
+  `.claude/` on that basis is correct; applying the same reasoning to
+  `resources/iris-plugin/` would delete capability the app dispatches verbs to.
+- **`settingSources` includes `project`**, so a dispatched run picks up the project
+  settings of *whatever repository it is working in*. Point the app at **this** repo
+  and that run inherits this page's hooks and permission rules — the full suite on
+  every worker turn, and the destructive-command guard. That is a property of the
+  working directory while dogfooding, not a configuration path from `.claude/` into
+  the shipped app, and it should not be relied on as either.
+
+## The vendored-configuration check
+
+`scripts/check-plugin-sync.mjs` is attached to `npm run build` alongside
+`check-three-dedupe.mjs` and `check-types-node.mjs`. Like those two it is **not** a
+sixth gate; there are still five. It answers two questions:
+
+- **Duplication.** Files present in both `.claude/` and `resources/iris-plugin/`
+  must be identical unless an allowance names the pair and states why it differs.
+  Twelve pairs are declared today: the six `openspec-*` skills and six `opsx/*`
+  commands, generated by different OpenSpec CLI versions (1.7.0 in `.claude/`, 1.6.0
+  in the shipped plugin). Reconciling them changes what the packaged app loads, so
+  it is deliberately a separate change. The check never writes to either tree.
+- **Provenance.** Every file recorded in `skills-lock.json` must still hash to its
+  recorded `installedHash`.
+
+That second one exists because of what implementing it found. `skills-lock.json` v1
+recorded a field called `computedHash` that matched **none** of the files it
+appeared to describe — it was the hash of the *upstream source* at install time, not
+of the installed copy, and nothing had noticed because nothing read it. v2 splits
+the two: `upstreamHash` (provenance, not locally verifiable) and `installedHash`
+(integrity, what the check verifies). The lock's own `_readme` carries the full
+distinction, since JSON cannot hold comments.
 
 Two behaviors worth knowing before they surprise you:
 

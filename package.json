@@ -25,8 +25,9 @@
   "scripts": {
     "postinstall": "node scripts/vendor-runtime-assets.mjs",
     "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on tcp:5173 && node scripts/run-electron.mjs\"",
-    "build": "node scripts/vendor-runtime-assets.mjs && tsc --noEmit && tsc -p tsconfig.electron.json && vite build && node scripts/check-three-dedupe.mjs && node scripts/check-types-node.mjs",
+    "build": "node scripts/vendor-runtime-assets.mjs && tsc --noEmit && tsc -p tsconfig.electron.json && vite build && node scripts/check-three-dedupe.mjs && node scripts/check-types-node.mjs && node scripts/plugin-sync.mjs",
     "test": "vitest run",
+    "test:gate": "node scripts/test-gate.mjs",
     "lint": "node scripts/lint.mjs",
     "scan:secrets": "node scripts/scan-secrets.mjs --staged",
     "spec:check": "node scripts/spec-check.mjs",

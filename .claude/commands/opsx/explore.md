@@ -2,6 +2,7 @@
 name: "OPSX: Explore"
 description: "Enter explore mode - think through ideas, investigate problems, clarify requirements"
 allowed-tools: Bash(openspec:*)
+argument-hint: "[topic or question] (optional — omit to be asked what to explore)"
 category: "Workflow"
 tags: ["workflow", "explore", "experimental", "thinking"]
 ---

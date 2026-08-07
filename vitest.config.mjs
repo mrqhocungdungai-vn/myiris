@@ -10,7 +10,14 @@ export default defineConfig({
         test: {
           name: "unit",
           environment: "node",
-          include: ["electron/**/*.test.mjs", "src/**/*.test.ts"],
+          // `scripts/**` joined `electron/**` and `src/**` in
+          // claude-config-earns-its-place (D5): the gate logic that decides
+          // whether a workflow step proceeds was the one first-party directory
+          // lint covered and no test could reach. Unlike `electron/**` — which
+          // package.json's `build.files` ships and must exclude test files by an
+          // explicit `!electron/**/*.test.mjs` rule — `scripts/` is never listed
+          // there at all, so nothing added here can reach a packaged app.
+          include: ["electron/**/*.test.mjs", "src/**/*.test.ts", "scripts/**/*.test.mjs"],
           // @excalidraw/excalidraw's own build ships an extensionless deep
           // import (roughjs/bin/rough) that Node's native ESM resolver
           // rejects; inlining it here routes the import through Vite's

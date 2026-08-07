@@ -22,6 +22,14 @@
 // lint had. It is scoped the same way lint and typecheck are, off the ledger:
 // a turn that touched no spec file does not pay for it.
 //
+// The behavioral suite joins them here (claude-config-earns-its-place) for the
+// third instance of the same reason: a test asserts a relationship between a
+// module and its collaborators, so mid-sequence it is wrong about the intent in
+// exactly the way lint is. Until it was bound it was the largest check in the repo
+// and the only one that ran when someone remembered it — which this capability's
+// own purpose calls protecting nothing. Unlike typecheck it is NOT sub-scoped by
+// project; `runTests()` records the measurement that decided that.
+//
 // A turn that wrote no files finds an empty ledger and costs nothing, which is
 // the common case for a question-answering turn.
 //
@@ -30,7 +38,8 @@ import { readFileSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { LINTABLE_EXTENSIONS, REPO_ROOT, isBypassed, runLint, runSpecDrift } from "../gates.mjs";
+import { LINTABLE_EXTENSIONS, REPO_ROOT, isBypassed, runLint, runSpecDrift, runTests } from "../gates.mjs";
+import { checkPluginSync } from "../check-plugin-sync.mjs";
 import { block, ledgerPath, readHookInput } from "./lib.mjs";
 
 const TAG = "[gate:turn]";
@@ -70,7 +79,11 @@ const neededProjects = PROJECTS.filter(({ prefix }) =>
   changed.some((file) => file === prefix || file.startsWith(`${prefix}/`)),
 );
 
-const lintNeeded = changed.some((file) => LINTABLE_EXTENSIONS.has(path.extname(file)));
+// Lint and the behavioral suite read the same set of files — every first-party
+// source extension — so one predicate answers both rather than two near-identical
+// extension sets drifting apart. Named for the shared fact, not for either
+// caller.
+const codeChanged = changed.some((file) => LINTABLE_EXTENSIONS.has(path.extname(file)));
 
 // The living spec, plus the checker itself: editing an allowance or a term is
 // the one other way to change what the gate reports, and skipping it there
@@ -80,16 +93,28 @@ const specNeeded = changed.some((file) =>
   SPEC_TRIGGERS.some((prefix) => file === prefix || file.startsWith(`${prefix}/`)),
 );
 
+// The vendored-config check reads two trees plus the lock, so the same scoping
+// logic applies — and, like the spec gate, editing the check's own allowance list
+// is the other way to change what it reports.
+const PLUGIN_TRIGGERS = [".claude", "resources/iris-plugin", "skills-lock.json", "scripts/check-plugin-sync.mjs"];
+const pluginNeeded = changed.some((file) =>
+  PLUGIN_TRIGGERS.some((prefix) => file === prefix || file.startsWith(`${prefix}/`)),
+);
+
 // Files outside both projects, outside lint's reach, and outside the spec tree
 // (other docs, configuration) leave nothing for this gate to do.
-if (neededProjects.length === 0 && !lintNeeded && !specNeeded) {
+if (neededProjects.length === 0 && !codeChanged && !specNeeded && !pluginNeeded) {
   rmSync(ledger, { force: true });
   process.exit(0);
 }
 
+// Ordered cheapest first, so the fastest correctable failure is reported first:
+// lint (223ms) → spec drift → typecheck (2.6s + 3.4s) → the suite (~7.6s).
+// Failures accumulate rather than short-circuit, which is the existing shape and
+// worth keeping — an agent handed every failure at once fixes them in one pass.
 const failures = [];
 
-if (lintNeeded) {
+if (codeChanged) {
   const lint = runLint();
   if (!lint.ok) failures.push(`${TAG} Lint failed:`, lint.output);
 }
@@ -97,6 +122,13 @@ if (lintNeeded) {
 if (specNeeded) {
   const spec = runSpecDrift();
   if (!spec.ok) failures.push(`${TAG} Spec-drift check failed:`, spec.output);
+}
+
+// Pure hashing, so it is the cheapest thing here. Build-attached as well, like
+// its two siblings — it is not a sixth gate.
+if (pluginNeeded) {
+  const plugin = checkPluginSync();
+  if (!plugin.ok) failures.push(`${TAG} Vendored-config check failed:`, plugin.output);
 }
 
 if (neededProjects.length > 0) {
@@ -120,6 +152,15 @@ if (neededProjects.length > 0) {
     const output = `${result.stdout ?? ""}${result.stderr ?? ""}`.trim();
     if (result.status !== 0) failures.push(`${TAG} Typecheck failed (${project.name}):`, output);
   }
+}
+
+// Last, because it is the most expensive. A turn that wrote no code file has
+// already exited above, so this is never paid for a documentation-only turn.
+// Why the whole suite rather than a dependency-selected subset is recorded on
+// `runTests()` itself, with the measurement that decided it.
+if (codeChanged) {
+  const tests = runTests();
+  if (!tests.ok) failures.push(`${TAG} Tests failed:`, tests.output);
 }
 
 if (failures.length > 0) {

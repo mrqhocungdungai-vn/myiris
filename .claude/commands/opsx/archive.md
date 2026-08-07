@@ -2,6 +2,7 @@
 name: "OPSX: Archive"
 description: "Archive a completed change in the experimental workflow"
 allowed-tools: Bash(openspec:*)
+argument-hint: "[change-name] (optional — inferred from context, or you will be asked)"
 category: "Workflow"
 tags: ["workflow", "archive", "experimental"]
 ---

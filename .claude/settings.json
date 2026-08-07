@@ -1,4 +1,18 @@
 {
+  "permissions": {
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env_test*)",
+      "Bash(rm -r:*)",
+      "Bash(rm -rf:*)",
+      "Bash(rm -fr:*)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git checkout .)",
+      "Bash(git restore .)"
+    ]
+  },
   "hooks": {
     "PostToolUse": [
       {

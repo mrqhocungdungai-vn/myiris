@@ -1,9 +1,16 @@
-// The definitions of the lint, secret-scanning, and spec-drift gates.
+// The definitions of the lint, secret-scanning, spec-drift, and behavioral
+// gates, plus the destructive-command guard.
 //
 // This module is the single place each gate is defined. Callers import it —
 // `npm run lint`, `npm run scan:secrets`, `npm run spec:check`, and the Claude
 // Code hooks — so the hand-run check and the automatic one cannot drift into
 // checking different things under different flags.
+//
+// The guard (`checkForbiddenCommand`) is the one export here that is NOT a
+// quality gate, and it is deliberately kept in this file anyway: it is the same
+// kind of thing — one definition, imported by its binding — and splitting it out
+// would make the hook import from two places for no gain. What differs is that
+// `isBypassed()` must never be consulted for it; see the guard's own comment.
 //
 // Exported as functions rather than run as scripts because the hooks would
 // otherwise spawn a `node` process per gate. Measured: node startup is 92ms,
@@ -41,6 +48,135 @@ function failClosed(tag, what, fix) {
       `${tag} One-off bypass: IRIS_SKIP_HOOKS=1`,
     ].join("\n"),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Destructive-command guard (claude-config-earns-its-place D1/D2)
+//
+// A guard against accident, NOT a sandbox and NOT containment. It observes
+// commands issued through Claude Code; a command typed directly in a terminal
+// does not reach it, and a subprocess that deletes files by other means (a node
+// or python script) is outside what it can see. That boundary is the same one
+// `pre-bash.mjs` already records for the commit gate, and it is stated here so
+// nobody reads this list as a security control.
+//
+// Why a hook and not permission rules alone: the editing loop for this repo runs
+// with prompting disabled. Deny rules ARE still evaluated in that mode — bypass
+// skips prompts, and a deny rule is not a prompt — and they are evaluated before
+// this hook. But a rule pattern cannot express "a destructive verb anywhere
+// inside a compound command line", which is what this does. A PreToolUse hook
+// exiting 2 stops the call before permission rules are read, so this is the
+// outermost layer.
+//
+// The set is chosen against what is ALREADY covered, so it does not spend its
+// credibility on redundancy. Claude Code already prompts for `rm -rf /` and
+// `rm -rf ~` as a built-in circuit breaker even in bypass mode; those are
+// deliberately absent below. What is uncovered is the ordinary accident: a
+// recursive delete aimed at a project path, a force push to the wrong branch, a
+// discard of uncommitted work, and a credential read into the transcript.
+// ---------------------------------------------------------------------------
+
+/**
+ * Split a command line into segments, one per invocation.
+ *
+ * Shared with `pre-bash.mjs`'s commit detection rather than duplicated, so
+ * "what counts as one command" has a single definition. Each segment is a token
+ * array with any leading `VAR=value` assignments dropped, so
+ * `GIT_AUTHOR=x git commit` and `cd x && rm -rf y` both resolve to the command
+ * actually being run.
+ */
+export function commandSegments(line) {
+  return line
+    .split(/\|\||&&|[;\n|]/)
+    .map((segment) => segment.trim().split(/\s+/).filter(Boolean))
+    .map((tokens) => {
+      let i = 0;
+      while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) i++;
+      return tokens.slice(i);
+    })
+    .filter((tokens) => tokens.length > 0);
+}
+
+/** Strip surrounding quotes from one token, so `"./.env"` and `./.env` compare alike. */
+function unquote(token) {
+  return token.replace(/^['"]|['"]$/g, "");
+}
+
+/** The command name, with any directory prefix removed: `/bin/rm` and `rm` both read as `rm`. */
+function commandName(tokens) {
+  return unquote(tokens[0] ?? "").split("/").pop();
+}
+
+/** True when a token is a short-option cluster containing `r` or `R` (`-r`, `-rf`, `-fr`). */
+function isRecursiveFlag(token) {
+  if (token === "--recursive") return true;
+  if (!/^-[^-]/.test(token)) return false;
+  return /[rR]/.test(token.slice(1));
+}
+
+/**
+ * True when a token names this repo's real credential file.
+ *
+ * Matches the basename exactly (`.env`) or the gitignored test variants
+ * (`.env_test`, `.env_test.local`) — NOT `.env.example`, which is tracked and
+ * holds no secret, and NOT `.envrc` or `.environment`, which merely start with
+ * the same letters. The check is command-agnostic on purpose: enumerating
+ * readers (`cat`, `head`, `bat`, …) misses whichever reader is used next, which
+ * is the flaw in the obvious version of this rule.
+ *
+ * Known false positive, accepted: `cp .env.example .env` names `.env` as a
+ * write target and is refused. It is a one-time setup step and the refusal says
+ * to run it directly.
+ */
+function namesCredentialFile(token) {
+  const basename = unquote(token).split("/").pop();
+  return basename === ".env" || basename.startsWith(".env_test");
+}
+
+/**
+ * Decide whether a command line performs a declared irreversible operation.
+ *
+ * Pure: no I/O, no subprocess, and deliberately no `isBypassed()` call. Returns
+ * the matched operation's description, or `null` when nothing matched. Kept pure
+ * so `scripts/gates.forbidden.test.mjs` can enumerate the cases that must be
+ * refused AND the near-misses that must not be — the ones the author did not
+ * think of are the whole reason this is tested rather than read.
+ */
+export function checkForbiddenCommand(command) {
+  if (typeof command !== "string" || !command.trim()) return null;
+
+  for (const tokens of commandSegments(command)) {
+    const name = commandName(tokens);
+    const args = tokens.slice(1).map(unquote);
+
+    if (name === "rm" && args.some(isRecursiveFlag)) {
+      return "a recursive delete (`rm -r`)";
+    }
+
+    if (name === "git") {
+      const subcommand = args.find((token) => !token.startsWith("-"));
+      const flags = args.filter((token) => token.startsWith("-"));
+
+      if (
+        subcommand === "push" &&
+        flags.some((flag) => flag === "-f" || flag === "--force" || flag.startsWith("--force-with-lease"))
+      ) {
+        return "a force push (`git push --force`)";
+      }
+      if (subcommand === "reset" && flags.includes("--hard")) {
+        return "a hard reset (`git reset --hard`)";
+      }
+      if ((subcommand === "checkout" || subcommand === "restore") && args.includes(".")) {
+        return `a discard of the whole working tree (\`git ${subcommand} .\`)`;
+      }
+    }
+
+    if (tokens.some(namesCredentialFile)) {
+      return "reading the credential file into the transcript (`.env`)";
+    }
+  }
+
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -124,6 +260,66 @@ export function runSpecDrift() {
     // Fails closed: the check breaking is not the check passing.
     return { ok: false, output: `${SPEC_TAG} the spec-drift check itself failed: ${error.message}` };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Behavioral suite
+// ---------------------------------------------------------------------------
+
+const TEST_TAG = "[test]";
+
+/**
+ * Run the behavioral suite.
+ *
+ * **The whole suite runs, not a subset selected from the changed files.** This is
+ * load-bearing and is the single most likely thing here for a future reader to
+ * "optimise" back, so the measurement that decided it is recorded rather than
+ * summarised. Measured on this tree (claude-config-earns-its-place D3):
+ *
+ *   whole suite                                88 files   1378 tests   ~7.4s
+ *   vitest related electron/run-dispatch.mjs    2 files     36 tests   ~0.4s
+ *   vitest related electron/verbs.mjs          15 files   ZERO from `graph`
+ *
+ * `related` selects by static import graph. `electron-graph.supply.test.mjs`
+ * discovers its subjects with `readdirSync(electronDir, { recursive: true })` and
+ * therefore declares no dependency on any module it checks — by design, because
+ * that is how it covers modules nobody remembered to add. So `related` can never
+ * select it, and the case where that matters is exactly the case it exists for: a
+ * new main-process module importing a name its sibling does not export. `related`
+ * would run the tests that import the new module (there are none yet) and skip
+ * the one test that would have caught it.
+ *
+ * Seven seconds against a structurally missing gate is not a close trade. Scoping
+ * stays where the spec puts it — off the per-session ledger, deciding WHETHER the
+ * suite runs, never which parts of it do.
+ *
+ * `npm test` is unchanged by this existing: same runner, same config, same
+ * verdict. Binding a gate is not extending it.
+ */
+export function runTests() {
+  if (isBypassed()) return { ok: true, output: `${TEST_TAG} BYPASSED — IRIS_SKIP_HOOKS=1 is set.` };
+
+  let vitestBin;
+  try {
+    // Resolved through the installed package's own declared `bin` rather than a
+    // hardcoded `node_modules/.bin` path, so neither hoisting nor a renamed
+    // entry point can break it — the same reasoning runLint() uses for oxlint.
+    const packagePath = require.resolve("vitest/package.json");
+    const declared = require(packagePath).bin;
+    const relative = typeof declared === "string" ? declared : declared?.vitest;
+    if (!relative) throw new Error("vitest declares no bin entry");
+    vitestBin = path.join(path.dirname(packagePath), relative);
+  } catch {
+    return failClosed(TEST_TAG, "vitest", "npm ci");
+  }
+
+  const result = spawnSync(process.execPath, [vitestBin, "run"], {
+    encoding: "utf8",
+    cwd: REPO_ROOT,
+  });
+
+  if (result.error) return { ok: false, output: `${TEST_TAG} vitest could not be run: ${result.error.message}` };
+  return { ok: result.status === 0, output: combined(result) };
 }
 
 // ---------------------------------------------------------------------------

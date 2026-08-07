@@ -14,3 +14,4 @@ scripts/.wake-e2e-cache/
 roadmap.md
 .env_test*
 .ui-shots/
+.claude/settings.local.json

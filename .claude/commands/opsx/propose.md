@@ -2,6 +2,7 @@
 name: "OPSX: Propose"
 description: "Propose a new change - create it and generate all artifacts in one step"
 allowed-tools: Bash(openspec:*)
+argument-hint: "[what you want to build] (optional — omit to be asked)"
 category: "Workflow"
 tags: ["workflow", "artifacts", "experimental"]
 ---

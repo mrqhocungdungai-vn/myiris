@@ -41,7 +41,8 @@ cannot). See the `verb-tool-surface` and `voice-decision-relay` specs.
 | **Listen-only mode — Iris's meeting mode** (complete silence, system-audio capture mixed with the mic, `inbox/meetings/` retention, main-process ownership) | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#listen-only-mode--iriss-meeting-mode) + `openspec/specs/listen-only-mode/spec.md` |
 | **App identity** — why this fork installs as `MyIris` / `app.myiris.voice` / `~/.myiris` and must never share an identifier with upstream `ASHR12/iris`; there is no migration from `~/.iris`, and the one `.iris` literal left in the code is frozen history | `openspec/specs/app-identity/spec.md` + `electron/app-identity.mjs` (the single declaration) |
 | Env vars, packaging, setup from source | [README.md](README.md) + `.env.example` |
-| How the Claude Agent SDK itself works — hooks, subagents, MCP, permissions, sessions, plugins, skills, structured outputs, hosting, cost tracking, TS/Python reference | NotebookLM notebook **`claude-agent-sdk`**, id `b7301ab8-69c2-4cdf-bd28-19931d678aed` — ask it via the `notebooklm` MCP (`notebook_ask`). A **reference library of the upstream SDK docs**, consulted while developing; it holds nothing about Iris and never describes Iris's behavior. |
+| How the Claude Agent SDK itself works — hooks, subagents, MCP, permissions, sessions, plugins, skills, structured outputs, hosting, cost tracking, TS/Python reference | NotebookLM notebook **`claude-agent-sdk`**, id `b7301ab8-69c2-4cdf-bd28-19931d678aed` — ask it via the `notebooklm` MCP (`notebook_ask`). A **reference library of the upstream SDK docs**, consulted while developing; it holds nothing about Iris and never describes Iris's behavior. **Maintainer-local, not a repo prerequisite** — this repo ships no `.mcp.json`, so a fork will not have this server and should read the upstream SDK docs directly instead. |
+| **What Claude Code itself is handed when working on this repo** — what a subagent must declare, why installed config must be config in use, how vendored config is provenance-locked and checked, the destructive-command guard | `openspec/specs/claude-code-config/spec.md` |
 
 ## Commands
 
@@ -50,6 +51,7 @@ npm ci                 # install deps
 npm run dev            # Vite + Electron with hot reload (dev)
 npm run build          # tsc --noEmit (src) + tsc -p tsconfig.electron.json (electron) + vite build
 npm test               # vitest run (behavioral gate)
+npm run test:gate      # same suite via the gate definition the Stop hook calls
 npm run lint           # oxlint, zero-warning (whole-tree)
 npm run scan:secrets   # gitleaks over the staged changes
 npm run spec:check     # drift check over openspec/specs/ (the living spec)
@@ -74,7 +76,10 @@ foreign-arch Claude binary `npm ci` never installed.
 gates** — run all of them to verify a change; the last three are deliberately kept
 out of `build` so a typecheck stays runnable on its own. They are also bound to
 editing events by `.claude/settings.json`, and **fail closed** if `gitleaks` is
-missing (`brew install gitleaks`; `IRIS_SKIP_HOOKS=1` is the one-off bypass).
+missing (`brew install gitleaks`; `IRIS_SKIP_HOOKS=1` is the one-off bypass — with one
+deliberate exception: it does **not** disable the destructive-command guard on
+`PreToolUse`, which is a guard against accident and not a quality check. `/gates` runs
+all five and reports which are red).
 `spec:check` is the only one that checks something other than code: the living
 spec, which is otherwise the source of truth with nothing checking it.
 Details: [docs/TESTING.md](docs/TESTING.md) and the `workflow-quality-gates` spec.
