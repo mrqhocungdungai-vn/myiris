@@ -85,4 +85,4 @@
 - [x] 9.6 Put a search field in the rail island; matches replace the entry points while a query is up and are steppable on the same terms
 - [x] 9.7 Unit-test 9.1-9.2 and 9.5: the pivot lands off-centre under an off-centre sight and mirrors about the centre, a stale anchor is never kept, diacritics are ignored, and the ranking holds
 - [ ] 9.8 Manual pass: whether "turn around the mark" reads well when the sight is off to one side (the aim eases onto it, so the view swings by that offset), and whether the search makes the rail worth having
-- [ ] 9.9 Propose the voice half of the search as its own change — there is no second-brain tool on the Gemini surface today, so it needs a tool declaration, a main-process handler, and a route into this component
+- [x] 9.9 Propose the voice half of the search as its own change — there is no second-brain tool on the Gemini surface today, so it needs a tool declaration, a main-process handler, and a route into this component
