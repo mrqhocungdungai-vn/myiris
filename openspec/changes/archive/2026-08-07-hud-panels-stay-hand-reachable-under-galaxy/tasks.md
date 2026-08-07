@@ -30,7 +30,7 @@
 
 ## 6. Verify in the app
 
-- [ ] 6.1 With the galaxy open in the Glass HUD and hand control on: dwell a task card and confirm it opens, dwell a column toggle and confirm it collapses, and confirm the galaxy opens no note from those same hand positions.
-- [ ] 6.2 Confirm an open palm scrolls the tasks and comms columns with the galaxy open, that two open palms zoom the camera without scrolling either column, and that a fist orbit continues while the hand crosses a column.
-- [ ] 6.3 Repeat 6.1 with the drawing panel open in place of the galaxy, and confirm the excalidraw toolbar itself is still not dwell-clickable.
-- [ ] 6.4 The focus mode, both readers: open a vault note over the galaxy and confirm nothing outside it responds — no task card, no column toggle, no orb control, no node behind it; then open a task from the HUD and confirm the same. Close each and confirm the galaxy and the chrome both answer the hand again immediately, with no camera jump.
+- [x] 6.1 With the galaxy open in the Glass HUD and hand control on: dwell a task card and confirm it opens, dwell a column toggle and confirm it collapses, and confirm the galaxy opens no note from those same hand positions.
+- [x] 6.2 Confirm an open palm scrolls the tasks and comms columns with the galaxy open, that two open palms zoom the camera without scrolling either column, and that a fist orbit continues while the hand crosses a column.
+- [x] 6.3 Repeat 6.1 with the drawing panel open in place of the galaxy, and confirm the excalidraw toolbar itself is still not dwell-clickable.
+- [x] 6.4 The focus mode, both readers: open a vault note over the galaxy and confirm nothing outside it responds — no task card, no column toggle, no orb control, no node behind it; then open a task from the HUD and confirm the same. Close each and confirm the galaxy and the chrome both answer the hand again immediately, with no camera jump.
