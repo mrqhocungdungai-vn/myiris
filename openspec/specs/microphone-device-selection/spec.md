@@ -1,12 +1,12 @@
 ## Purpose
 
 Lets the user pick a specific microphone input device for Iris to capture from, instead of always using the OS default. The selection governs both places Iris opens a microphone stream — Gemini Live conversation capture (`useAudioPipeline`) and local "Hey Iris" wake-word detection (`useWakeWord`) — persists across restarts, applies live via hot-swap to whichever consumer currently holds an open stream, and automatically falls back to System Default if the selected device fails, since a non-functioning microphone breaks the core product rather than being merely optional.
-
 ## Requirements
-
 ### Requirement: Microphone input device selection and persistence
 
-The app SHALL let the user select which `audioinput` device Iris captures from, via a single selector in the SetupPanel's Permissions section (see `setup-panel` spec) that governs **both** places Iris opens a microphone stream: `useAudioPipeline` (Gemini Live conversation capture) and `useWakeWord` (local "Hey Iris" wake-word detection). The selector SHALL offer a `"System Default"` option plus one entry per enumerated `audioinput` device (via `navigator.mediaDevices.enumerateDevices()`), SHALL remain disabled/hidden with an explanatory hint until the Microphone permission is granted, and SHALL live-refresh its option list on `navigator.mediaDevices.ondevicechange` while the panel is mounted. The selected device id SHALL persist across app restarts (`localStorage`, independent of the camera's persisted selection). This control SHALL exist only in the Orbital Deck's SetupPanel — it SHALL NOT be exposed in Glass HUD, nor as a Gemini-callable tool.
+The app SHALL let the user select which `audioinput` device Iris captures from, via a single selector in the SetupPanel's Permissions section (see `setup-panel` spec) that governs **both** places Iris opens a microphone stream: `useAudioPipeline` (Gemini Live conversation capture) and `useWakeWord` (local "Hey Iris" wake-word detection). The selector SHALL offer a `"System Default"` option plus one entry per enumerated `audioinput` device (via `navigator.mediaDevices.enumerateDevices()`), SHALL remain disabled/hidden with an explanatory hint until the Microphone permission is granted **at the operating-system level**, on the terms of `setup-panel`'s "The Permissions step reports the operating system's answer", and SHALL live-refresh its option list on `navigator.mediaDevices.ondevicechange` while the panel is mounted. The selected device id SHALL persist across app restarts (`localStorage`, independent of the camera's persisted selection). This control SHALL exist only in the Orbital Deck's SetupPanel — it SHALL NOT be exposed in Glass HUD, nor as a Gemini-callable tool.
+
+The gate SHALL NOT be the renderer's own view of the browser engine's permission store. The app grants microphone permission to its own document unconditionally as a security measure, so that store answers with the app's decision rather than the user's — and the selector would populate with blank-labelled devices from a permission the operating system has never granted, which is the state this gate exists to prevent. The requirement's wording is unchanged in shape and changed in meaning: the same selector will now stay hidden in cases where it previously appeared, and those are the cases where Iris could not capture anyway.
 
 #### Scenario: Choosing a specific microphone
 
@@ -15,8 +15,13 @@ The app SHALL let the user select which `audioinput` device Iris captures from, 
 
 #### Scenario: Microphone selector gated on permission
 
-- **WHEN** the Microphone permission has not yet been granted
+- **WHEN** the operating system has not granted the Microphone permission
 - **THEN** the microphone device selector is disabled or hidden with a hint to grant Microphone permission first, instead of showing devices with blank or meaningless names
+
+#### Scenario: The app's own internal grant does not open the selector
+
+- **WHEN** the app has granted its own document microphone access internally while the operating system has not granted it
+- **THEN** the selector stays hidden, because the gate reads the operating system's answer rather than the renderer's
 
 #### Scenario: Device list stays live while Settings is open
 
@@ -70,3 +75,4 @@ If the currently selected microphone device (whether just chosen or loaded from 
 
 - **WHEN** the fallback retry against System Default also fails
 - **THEN** the failure is logged the same way an AudioWorklet load failure is already logged today, and capture stops (there is no further fallback target)
+

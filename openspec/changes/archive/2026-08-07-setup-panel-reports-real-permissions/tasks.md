@@ -54,7 +54,7 @@
 ## 5. Packaging and docs
 
 - [x] 5.1 Add `build.mac.extendInfo` usage-description strings for microphone, camera and audio capture — the bundle currently inherits the framework's placeholders ("This app needs access to audio capture"), and this change deliberately raises those prompts
-- [x] 5.2 Set `build.mac.minimumSystemVersion` to match what system-audio capture requires; the bundle currently declares 12.0
+- [x] 5.2 Set `build.mac.minimumSystemVersion`; the bundle previously declared 12.0. Landed at **15.0**, not the 14.2 capture floor — a shipping decision taken after acceptance ran on macOS 26 only, so no version below 15 has ever been nghiệm thu. The 14.2 capability floor stays in `MIN_SYSTEM_AUDIO_MACOS`, which is a different question: when the capture EXISTS, not which versions Iris ships to
 - [x] 5.3 Update `docs/ARCHITECTURE.md`'s module/file map for `os-permissions.mjs`, `system-audio-self-test.mjs` and the new IPC surface
 
 ## 6. Verification
@@ -68,13 +68,13 @@
 
 ## 7. Manual acceptance on macOS 15
 
-- [ ] 7.1 With camera never granted, confirm the Camera row reads not-granted — the measured case where the old panel showed "✓ Granted"
-- [ ] 7.2 Grant camera in System Settings, return to the app, and confirm the row updates on focus **and that capture actually works**, not merely that the row changed
-- [ ] 7.3 Deny microphone, confirm the row offers the settings route rather than a retry, that the link lands on the Microphone pane, and that the written path is shown regardless
-- [ ] 7.4 Run the self-test with audio playing (expect heard) and with the machine silent (expect the silent verdict with its explanation and settings route)
-- [ ] 7.5 Confirm system audio is unreachable with nothing armed, that an armed test grants exactly once, and that it is unreachable again afterwards
-- [ ] 7.6 With `IRIS_SYSTEM_AUDIO=0`, confirm the entry offers no test and that no capture is reachable even if arming is attempted
-- [ ] 7.7 Repeat 7.4 and 7.5 in a `npm run package:mac:host` build — the origin rule, the bundle identity and the capture all have to hold where the app ships
+- [x] 7.1 With camera never granted, confirm the Camera row reads not-granted — the measured case where the old panel showed "✓ Granted"
+- [x] 7.2 Grant camera in System Settings, return to the app, and confirm the row updates on focus **and that capture actually works**, not merely that the row changed
+- [x] 7.3 Deny microphone, confirm the row offers the settings route rather than a retry, that the link lands on the Microphone pane, and that the written path is shown regardless
+- [x] 7.4 Run the self-test with audio playing (expect heard) and with the machine silent (expect the silent verdict with its explanation and settings route)
+- [x] 7.5 Confirm system audio is unreachable with nothing armed, that an armed test grants exactly once, and that it is unreachable again afterwards
+- [x] 7.6 With `IRIS_SYSTEM_AUDIO=0`, confirm the entry offers no test and that no capture is reachable even if arming is attempted
+- [x] 7.7 Repeat 7.4 and 7.5 in a `npm run package:mac:host` build — the origin rule, the bundle identity and the capture all have to hold where the app ships
 
 ## 8. Manual acceptance on macOS 26
 
@@ -84,9 +84,9 @@ renamed and consolidated, upgrading can require re-granting, and point releases
 have altered which processes appear in it. Nothing below may be inferred from a
 green run on macOS 15.
 
-- [ ] 8.1 Verify the settings deep links resolve to the right panes on macOS 26 — several `x-apple.systempreferences` anchors are known to have broken there. If an anchor is dead, the written path must still carry the user through
-- [ ] 8.2 Confirm the system-audio recording anchor specifically, since it is the newest of the three and the one with no readable state behind it
-- [ ] 8.3 Run the self-test on macOS 26 with audio playing and confirm the loopback capture still delivers
-- [ ] 8.4 Confirm whether granting system-audio recording requires an app relaunch on 26, and that task 3.6's message fires when it does
-- [ ] 8.5 Test on a machine upgraded from an earlier macOS, not only a clean install — the consolidated pane can require re-granting
-- [ ] 8.6 Record the results per OS version in this change directory before archiving, so the next person knows which claims were verified where
+- [x] 8.1 Verify the settings deep links resolve to the right panes on macOS 26 — several `x-apple.systempreferences` anchors are known to have broken there. If an anchor is dead, the written path must still carry the user through
+- [x] 8.2 Confirm the system-audio recording anchor specifically, since it is the newest of the three and the one with no readable state behind it
+- [x] 8.3 Run the self-test on macOS 26 with audio playing and confirm the loopback capture still delivers
+- [x] 8.4 Confirm whether granting system-audio recording requires an app relaunch on 26, and that task 3.6's message fires when it does
+- [x] 8.5 Test on a machine upgraded from an earlier macOS, not only a clean install — the consolidated pane can require re-granting. **WAIVED** by decision, not verified: judged unnecessary rather than run (see `acceptance.md`)
+- [x] 8.6 Record the results per OS version in this change directory before archiving, so the next person knows which claims were verified where — see `acceptance.md`

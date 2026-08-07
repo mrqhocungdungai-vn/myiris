@@ -44,9 +44,14 @@ The app SHALL additionally refuse a self-test grant for any request that asks fo
 - **WHEN** system-audio capture is granted for a running self-test
 - **THEN** the granted stream carries audio only, on the same terms as the mode's own capture
 
-#### Scenario: System audio is unreachable with neither condition holding
+#### Scenario: System audio is unreachable outside the mode
 - **WHEN** the app's own document requests system-audio capture while listen-only mode is not engaged and no self-test is armed
 - **THEN** the request is denied
+
+Note: this scenario's condition is what this change narrowed. It previously
+read "while listen-only mode is not engaged" alone, which is no longer the
+whole rule — the self-test is a second door, and the denial now requires
+neither condition to hold rather than just the mode being off.
 
 #### Scenario: The escape hatch outranks the self-test
 - **WHEN** system audio is disabled by configuration and a self-test is armed
@@ -55,6 +60,10 @@ The app SHALL additionally refuse a self-test grant for any request that asks fo
 #### Scenario: The escape hatch outranks the mode
 - **WHEN** system audio is disabled by configuration and listen-only mode is engaged
 - **THEN** the request is denied, exactly as before this change
+
+#### Scenario: The mode state is read from its owner
+- **WHEN** a system-audio capture request is decided
+- **THEN** the mode state consulted is the main process's own, not one reported by the renderer
 
 #### Scenario: Every condition is read from its owner
 - **WHEN** a system-audio capture request is decided

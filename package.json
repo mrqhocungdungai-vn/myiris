@@ -114,7 +114,7 @@
     "mac": {
       "category": "public.app-category.productivity",
       "icon": "build/icon.png",
-      "minimumSystemVersion": "14.2",
+      "minimumSystemVersion": "15.0",
       "extendInfo": {
         "NSMicrophoneUsageDescription": "Iris listens to your microphone so you can talk to her, and for local \"Hey Iris\" wake-word detection.",
         "NSCameraUsageDescription": "Iris reads your camera for hand-gesture control and the eye HUD. Nothing is recorded or sent anywhere.",
