@@ -20,7 +20,6 @@ import {
 import {
   CENTROID_ANCHOR,
   easeAnchor,
-  pickAnchorAt,
   pickPivotAt,
   rectCentre,
   shouldReleaseAnchor,
@@ -66,6 +65,7 @@ export type GalaxyCameraDriveParams = {
   dwellThresholdPx: number;
   dwellHoldMs: number;
   anchorThresholdPx: number;
+  pointPivotDeadBandPx: number;
   candidateIntervalMs: number;
   orbitSensitivity: number;
   zoomMinRadius: number;
@@ -92,6 +92,7 @@ export function useGalaxyCameraDrive({
   dwellThresholdPx,
   dwellHoldMs,
   anchorThresholdPx,
+  pointPivotDeadBandPx,
   candidateIntervalMs,
   orbitSensitivity,
   zoomMinRadius,
@@ -124,6 +125,11 @@ export function useGalaxyCameraDrive({
   // the dolly's reference reset far more often than what was even visible on
   // screen). One evaluation, one cadence, read by both.
   const pivotPickRef = useRef<GalaxyAnchor | null>(null);
+  // The sight position the last COMMITTED point pivot was computed from — the
+  // dead-band a point pivot needs and a node one does not, since a node's
+  // incumbent id already makes "did this actually change" a discrete
+  // question (design.md D18).
+  const lastPointPivotSightRef = useRef<{ x: number; y: number } | null>(null);
 
   // Gesture drive (design.md D4b/D5): a thin driver over the pure policy in
   // src/lib/galaxy-nav.ts. Schedules NOTHING while gestures are off or the
@@ -321,18 +327,48 @@ export function useGalaxyCameraDrive({
         // D10) — this is the same O(nodes) projection the titles pay for, and
         // a candidate that changed at frame rate would both cost more than it
         // is worth and read as flicker.
+        //
+        // `pickPivotAt`, not `pickAnchorAt` (design.md D18): over empty space
+        // the live zoom re-aim used to freeze at whatever the engage-time pivot
+        // was for the WHOLE drive (D15's "over empty space the engage-time
+        // pivot stands" — true and intended for the one-time engage pick), so
+        // moving the sight during an already-live zoom never followed to a new
+        // empty-space target, only to a node. `pickPivotAt`'s point fallback
+        // fixes that. The throttled cadence, not every frame, is what keeps a
+        // live point re-derivation from chasing its own feedback — the exact
+        // concern D14 raised against doing this per frame in the first place.
         if (rect && sight && now - lastCandidateSelect >= candidateIntervalMs) {
           lastCandidateSelect = now;
-          const picked = pickAnchorAt(
+          const picked = pickPivotAt(
             positionsRef.current.values(),
             fg.camera(),
             rect,
             sight,
             anchor.anchorRef.current,
             anchorThresholdPx,
+            anchor.displayedAnchorRef.current,
           );
           candidateIdRef.current = picked.kind === "node" ? picked.id : null;
-          pivotPickRef.current = picked;
+          if (picked.kind === "point") {
+            // A point has no id, so "did this change" is never a discrete
+            // question the way a node's incumbent id makes it — every tick
+            // would otherwise read as a change under ordinary hand jitter and
+            // reset the zoom's reference just as often as the per-frame version
+            // of this defect already fixed once (D17). Committed only once the
+            // sight has actually moved past the dead-band since the last commit.
+            const last = lastPointPivotSightRef.current;
+            const movedEnough = !last || Math.hypot(sight.x - last.x, sight.y - last.y) >= pointPivotDeadBandPx;
+            if (movedEnough) {
+              pivotPickRef.current = picked;
+              lastPointPivotSightRef.current = sight;
+            }
+          } else {
+            pivotPickRef.current = picked;
+            // Leaving a node clears the point dead-band's memory, so the first
+            // point pivot reached after it always commits rather than being
+            // measured against a sight position from before the node.
+            lastPointPivotSightRef.current = null;
+          }
         }
 
         const drive = driveFor(hand);
@@ -558,21 +594,25 @@ export function useGalaxyCameraDrive({
     // it would re-aim on every frame of the motion that is meant to be turning
     // the camera.
     //
-    // NODES ONLY, deliberately (`pickAnchorAt`, not `pickPivotAt`): a point
-    // pivot is derived by crossing the sight ray with the plane at the current
-    // working depth, and the camera is meanwhile easing its aim ONTO that pivot
-    // — which recentres it on screen. Re-deriving from the off-centre sight each
-    // frame would then walk the pivot sideways, chasing itself. A node is a
-    // fixed thing in the world with no such feedback, so re-targeting between
-    // notes mid-zoom is stable. Over empty space the engage-time pivot stands.
+    // Reads `pivotPickRef` — the SAME throttled pick the candidate ring shows
+    // — rather than picking again here. It used to pick fresh every frame via
+    // `pickAnchorAt` (nodes only), which reset the dolly's reference up to 6x
+    // more often than the ring's own 100ms cadence, so moving the sight while
+    // zooming stalled the dolly far more than the visible candidate ever
+    // suggested it would (design.md D17).
     //
-    // Reads `pivotPickRef` — the SAME throttled, dead-banded pick the candidate
-    // ring shows — rather than picking again here. It used to: a fresh
-    // `pickAnchorAt` every frame reset the dolly's reference up to 6x more often
-    // than the ring's own 100ms cadence, so moving the sight while zooming
-    // stalled the dolly far more than the visible candidate ever suggested it
-    // would (manual pass after 8.7/9.8). One evaluation, one cadence, both
-    // consumers reading it, is the fix — not a slower reaim, a shared one.
+    // Points, not just nodes, since D18: restricting the live re-aim to nodes
+    // meant that over empty space the engage-time pivot stood for the WHOLE
+    // drive (D15) — correct for a one-shot engage, but it meant moving the
+    // sight to a different empty-space target mid-zoom never followed there at
+    // all, only a node re-anchor did. A point pivot is derived by crossing the
+    // sight ray with the plane at the current working depth, and doing that
+    // every FRAME while the camera eases its aim onto the previous pivot is
+    // what D14 correctly ruled out — the ray and the pivot it produces would
+    // chase each other. Doing it on the ring's throttled cadence instead, with
+    // a screen-space dead-band on top (D18, since a point has no id to hold
+    // still the way a node's incumbent does), keeps the same protection without
+    // giving up empty-space targets entirely.
     function reaimZoomFromSight(fg: Fg, picked: GalaxyAnchor, curDist: number) {
       if (!anchor.setAnchor(picked, { ease: false })) return;
       reseedAroundAnchor(fg, curDist);

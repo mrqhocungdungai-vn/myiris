@@ -405,6 +405,70 @@ duplicate evaluation that caused the disagreement, and neither explains why
 the ring and the zoom were allowed to see different answers to the same
 question in the first place.
 
+### D18 — Empty-space pivots follow the sight during a zoom too, throttled and dead-banded
+
+*Added after D17 was tested and the report continued: moving the sight during
+a zoom still would not reach the intended area, "anywhere" — not only where
+two neighbouring nodes could flap.*
+
+D17 fixed the wrong half of the problem. The unthrottled reaim was real and
+worth fixing, but the dominant cause was upstream of it: the live re-aim during
+a zoom only ever considered nodes (`pickAnchorAt`). D15 already recorded why —
+"over empty space the engage-time pivot stands for the drive" — and that
+sentence is the bug once read as a behaviour rather than a design note. It
+means that for any target that is not itself a note (the common case — dots
+are small, most of the canvas is not one), the pivot is whatever was under the
+sight at the moment the two-palm pose was first recognised, for the entire
+rest of the drive. Moving the hands afterward changes what the reticle shows
+without changing what the camera dollies toward, unless the new position
+happens to land on a different node. A user aiming at a gap between notes, or
+translating both hands to reposition before the pinch has finished registering,
+gets a camera that never follows — which reads exactly as "anywhere, doesn't
+zoom smoothly", because for most of the canvas it is not zooming toward
+anywhere the hand indicated at all.
+
+**Fix: `pickPivotAt` (which already has the point fallback D15 built) replaces
+`pickAnchorAt` in the same throttled evaluation D17 introduced.** This is not
+the per-frame point re-derivation D14 explicitly ruled out — that concern was
+about recomputing every frame while the camera's own easing perturbs the very
+ray the computation depends on, a closed loop with no natural damping. Once
+the recomputation is throttled to the ring's 100 ms tick, each step is a
+discrete correction against whatever the camera has settled toward since the
+last one, structurally the same shape as a node's discrete id-keyed switch —
+not a continuous loop chasing itself.
+
+**A point pivot still needs a dead-band a node never did.** A node's identity
+is discrete — the same id is the same value, so "did the pivot change" is a
+question `anchorsEqual` answers exactly, and `nearestNodeAt`'s incumbent logic
+already damps switching between near-tied candidates. `sightPivotPoint`
+returns a fresh float triple on every call with no notion of "the same point as
+last time" — so with no additional guard, ordinary hand-tracking jitter (±10–
+20 px, per the proposal's own numbers) would read as *some* change on nearly
+every 100 ms tick, and `reseedAroundAnchor` would reset the zoom's accumulated
+spread that often — the throttled sibling of the exact defect D17 fixed at
+frame rate. `POINT_PIVOT_DEAD_BAND_PX` (24, `VaultGalaxy.tsx`) requires the
+sight to have moved past it, in screen pixels, since the last *committed*
+point pivot before a new one is accepted; the last-committed-sight memory is
+cleared on leaving a node, so the first point pivot reached after one always
+commits rather than being measured against a stale position from before it.
+
+*Why 24, not `DEAD_BAND_PX` (14, the node dead-band) or `ANCHOR_THRESHOLD_PX`
+(130, how far a node search reaches):* the node dead-band exists to break
+near-ties between two candidates already in range of a threshold search, a
+different question from "has the sight moved enough to bother." The anchor
+threshold is a search radius, not a movement gate. Between the two, closer to
+the node dead-band's scale but a little wider, on the reasoning that a search
+radius has to tolerate an intentionally-still hand's jitter fully, while a
+movement gate only has to be wider than that jitter, not immune to a
+threshold search's own edge noise. Not measured against tracked hand data;
+revisit from the next manual pass if it reads as either sticky or twitchy.
+
+*Alternative considered:* keep the point pivot frozen at engage, as D15 left
+it, and treat this as intended scope — the rail exists for exactly the
+"reach a note that is not near where I'm already looking" case. Rejected as
+the sole answer: the report was about zooming toward a REGION, not a note by
+name, which the rail cannot help with regardless of how well it works.
+
 ### D9 — The rail is chrome, and that is the whole of its reachability
 
 The rail island carries `HUD_CHROME_CLASS` and `hud-hit`. It then inherits both the

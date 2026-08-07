@@ -73,6 +73,16 @@ const ZOOM_MAX_RADIUS = 2500;
 // candidate ring are what keep a wider radius predictable — the user can see
 // which node it has picked before committing.
 const ANCHOR_THRESHOLD_PX = 130;
+// How far the sight has to move, in screen pixels, before a new EMPTY-SPACE
+// pivot during a live zoom is accepted (design.md D18). A node pivot needs no
+// such guard — `nearestNodeAt`'s incumbent dead-band already makes it a
+// discrete, id-keyed value. A point pivot has no id: `sightPivotPoint`
+// computes a fresh float position every tick, so with no guard at all the
+// ordinary jitter of hand tracking would read as "moved" on nearly every
+// throttled tick and reset the zoom's accumulated spread that often — which
+// is indistinguishable, in feel, from the per-frame version of the same
+// defect this file already fixed once (D17).
+const POINT_PIVOT_DEAD_BAND_PX = 24;
 // A rail step's flight: long enough that the user sees where in the galaxy they
 // were taken (the spec requires the travel to be visible), short enough not to
 // feel like waiting.
@@ -766,6 +776,7 @@ function GalaxyCanvas({
     dwellThresholdPx: DWELL_THRESHOLD_PX,
     dwellHoldMs: DWELL_HOLD_MS,
     anchorThresholdPx: ANCHOR_THRESHOLD_PX,
+    pointPivotDeadBandPx: POINT_PIVOT_DEAD_BAND_PX,
     candidateIntervalMs: SELECT_INTERVAL_MS,
     orbitSensitivity: ORBIT_SENSITIVITY,
     zoomMinRadius: ZOOM_MIN_RADIUS,

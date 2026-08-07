@@ -75,6 +75,7 @@
 - [x] 8.6 Unit-test 8.1-8.2: the midpoint holds still while palms spread symmetrically, the fallbacks chain, and a node under an off-centre sight wins over one at screen centre
 - [ ] 8.7 Manual pass on the sight specifically: whether aiming by hand actually lands, and whether the dolly stalls from the anchor flapping between neighbours mid-zoom
 - [x] 8.8 Fix the dolly-stalls-while-moving finding from 8.7 (D17): the zoom's per-frame re-aim was calling `pickAnchorAt` fresh every frame instead of reading the ring's own throttled pick, so a moved sight reset the zoom reference far more often than the visible candidate ever suggested — `pivotPickRef` now shares one evaluation between both consumers
+- [x] 8.9 Fix the "still won't zoom into the area, anywhere" follow-up to 8.8 (D18): the live re-aim during a zoom was node-only, so over empty space the engage-time pivot stood for the whole drive and moving the sight to a new empty-space target never followed there at all — the throttled evaluation now runs `pickPivotAt` (node-or-point) instead of `pickAnchorAt` (node-or-unchanged), gated by a new `POINT_PIVOT_DEAD_BAND_PX` screen-space dead-band so hand jitter alone cannot reset the zoom reference between ticks
 
 ## 9. The pivot is the mark, and notes are findable by name (D15/D16)
 
