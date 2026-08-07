@@ -121,27 +121,28 @@ region they were looking at. Reading the sight off the hands inverts it: the use
 puts their hands over the region and acts, in one motion, with no camera work
 first.
 
-The galaxy's one camera drive takes its input from the **distance between the
-hands**, so the sight SHALL keep aiming for the whole of the drive: the hands'
-midpoint is unaffected by them parting, which leaves it free to go on aiming while
-they spread. Spreading the palms SHALL therefore travel toward whatever the sight
-is on at that moment, not toward wherever it happened to be when the pose was
-first recognized.
+**The sight SHALL follow a SINGLE hand, and SHALL NOT exist while two palms are
+up.** Aiming and zooming are carried by different numbers of hands rather than by
+the same pair: the sight was previously the midpoint between two open palms, on
+the reasoning that a symmetric spread leaves that midpoint still — true of the
+geometry and false of hands, so every zoom was also a slight re-aim. While two
+palms are up there SHALL be no aim point, and the sight mark SHALL be hidden,
+since a mark shown then would claim the zoom is going somewhere it is not.
 
 #### Scenario: The sight follows the hands rather than the centre of the screen
 
 - **WHEN** hand control is on, the galaxy is active, and the user moves their hands across the frame
 - **THEN** the sight moves with them, and a camera drive engaged there aims at what the sight is over — not at whatever sits at the centre of the screen
 
-#### Scenario: The sight keeps aiming while the hands spread
+#### Scenario: The sight disappears while two palms zoom
 
-- **WHEN** the user moves both hands onto a different note part-way through a spread
-- **THEN** the drive re-aims onto what the sight is over at that moment, rather than staying on whatever it was over when the pose was first recognized
+- **WHEN** the user raises a second open palm to zoom
+- **THEN** the sight mark is hidden and the hands' movement no longer changes what the camera is aimed at
 
-#### Scenario: A sight with no hand in frame falls back to the centre of the view
+#### Scenario: No hand in frame means nothing is being aimed at
 
 - **WHEN** hand control is on and the galaxy is active but no hand is in frame
-- **THEN** the sight rests at the centre of the view, so there is always a defined aim point
+- **THEN** no sight is shown and no new target is chosen — the note already locked is kept
 
 ### Requirement: What a grab will take hold of is visible before the grab
 

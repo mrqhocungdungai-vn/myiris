@@ -9,7 +9,7 @@ import {
   easeRadius,
   inspectingHand,
   isHandLowered,
-  sightPoint,
+  aimPoint,
   zoomRadius,
   handDistance,
   nearestNodeAt,
@@ -23,8 +23,8 @@ import {
   INITIAL_ZOOM_LOCK,
   easeAnchor,
   pickZoomTarget,
+  viewCentrePoint,
   zoomLockStep,
-  rectCentre,
   shouldReleaseAnchor,
   type GalaxyAnchor,
   type ZoomLockState,
@@ -335,15 +335,22 @@ export function useGalaxyCameraDrive({
         const rect = containerRef.current?.getBoundingClientRect() ?? null;
         const hand = handRef.current;
 
-        // Where the camera is AIMED, in window pixels: the midpoint of two open
-        // palms, else the primary hand's point, else the centre of the view
-        // (design.md D14). It follows the hands rather than sitting at screen
-        // centre, because a centre-pinned sight can only be aimed by first
-        // flying the camera until the target is in the middle — the hardest part
-        // of the task, demanded before the easy part is allowed to start.
-        const sight = rect ? sightPoint(hand, rectCentre(rect)) : null;
-        if (sight && reticleRef.current) {
-          reticleRef.current.style.transform = `translate3d(${sight.x}px, ${sight.y}px, 0) translate(-50%, -50%)`;
+        // Where the user is AIMING, in window pixels — or null while two open
+        // palms are up, because then they are zooming and not aiming at all
+        // (design.md D24). One hand aims; two hands zoom. Splitting the two
+        // jobs across different numbers of hands is what stops a zoom from
+        // also re-aiming, which no amount of damping ever fully fixed while
+        // one pair of hands carried both.
+        const aim = aimPoint(hand);
+        if (reticleRef.current) {
+          if (aim) {
+            reticleRef.current.style.transform = `translate3d(${aim.x}px, ${aim.y}px, 0) translate(-50%, -50%)`;
+            reticleRef.current.style.visibility = "visible";
+          } else {
+            // Hidden rather than parked somewhere: a mark shown while nothing
+            // is being aimed would claim the zoom is going there.
+            reticleRef.current.style.visibility = "hidden";
+          }
         }
 
         // Re-select what a grab would take hold of, rate-limited (design.md
@@ -358,13 +365,18 @@ export function useGalaxyCameraDrive({
         // with it, and so is the whole self-chasing feedback loop D14/D18 kept
         // fighting: a note is a fixed thing in the world, so re-targeting
         // between notes is stable in a way a re-derived point never was.
-        if (rect && sight && now - lastCandidateSelect >= candidateIntervalMs) {
+        if (!aim) {
+          // Not aiming, so there is no candidate — `zoomLockStep` reads this as
+          // "keep the lock", which is exactly right: bringing up the second
+          // palm to zoom must not drop the note that was just chosen.
+          candidateIdRef.current = null;
+        } else if (rect && now - lastCandidateSelect >= candidateIntervalMs) {
           lastCandidateSelect = now;
           const picked = pickZoomTarget(
             positionsRef.current.values(),
             fg.camera(),
             rect,
-            sight,
+            aim,
             anchor.anchorRef.current,
             anchorThresholdPx,
           );
@@ -478,13 +490,33 @@ export function useGalaxyCameraDrive({
             // and a grab must take hold of what the user was shown it would —
             // a second, independent pick at engage could differ from the mark
             // by a frame's worth of hand movement and grab something else.
-            engageMovedAnchorRef.current = pivotPickRef.current
-              ? anchor.setAnchor(pivotPickRef.current, {
-                  // The drive's own per-frame write eases the aim; the mouse-path
-                  // ease must not also run and fight it.
-                  ease: false,
-                })
-              : false;
+            //
+            // With NOTHING locked, the pivot is the point at the centre of the
+            // view, at the distance the camera is already working at (D24) —
+            // so an un-targeted zoom simply moves in and out along the axis it
+            // is already looking down. Anchoring to the graph's centroid
+            // instead would drift the view sideways whenever the centroid sat
+            // off-centre, which after any travel it usually does.
+            const engageTarget =
+              pivotPickRef.current ??
+              ({
+                kind: "point",
+                position: viewCentrePoint(
+                  fg.camera(),
+                  fg.camera().position.distanceTo(
+                    new THREE.Vector3(
+                      anchor.displayedAnchorRef.current.x,
+                      anchor.displayedAnchorRef.current.y,
+                      anchor.displayedAnchorRef.current.z,
+                    ),
+                  ),
+                ),
+              } satisfies GalaxyAnchor);
+            engageMovedAnchorRef.current = anchor.setAnchor(engageTarget, {
+              // The drive's own per-frame write eases the aim; the mouse-path
+              // ease must not also run and fight it.
+              ease: false,
+            });
             // Seeded from the LIVE camera against the TARGET anchor, and the
             // camera's position is never written — so "engaging never teleports"
             // is a property of the code's shape rather than a rule to remember

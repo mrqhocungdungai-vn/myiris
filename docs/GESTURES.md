@@ -133,8 +133,9 @@ chrome above it:
 | --- | --- |
 | `Pointing_Up` | Node dwell — hold over a node 300 ms to **open** it (same dwell mechanic as the deck) |
 | `Victory` (two fingers) | **Inspect** — hold near a node to light up its link cluster while held. Selects nothing, opens nothing, leaves nothing behind |
+| A single hand, **any pose** | **Aims** — the sight follows it and chooses the note to lock (D24). Aiming commits to nothing, so it needs no pose of its own |
 | `Closed_Fist` | **Nothing** — the orbit was removed (D20). Mouse drag still orbits freely |
-| Two open palms | Fly the camera toward/away from the **target note** (below) — not a galaxy binding but the general two-hand rule applied to whichever layer owns the surface |
+| Two open palms | Fly the camera toward/away from the **locked note** — and while both palms are up nothing is being aimed, so the sight is hidden and an uneven spread cannot re-target (D24). With no note locked, moves along the axis the camera already looks down |
 | Anything else (a single open palm, unrecognized, resting) | Drives nothing |
 | A hand in the **bottom third of the frame**, whatever it is doing | Drives nothing, and releases a drive in progress |
 

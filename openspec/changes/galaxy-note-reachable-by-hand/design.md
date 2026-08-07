@@ -772,6 +772,61 @@ rather than sluggish, and it keeps mid-flight retargeting (D20/D21) usable
 rather than nominal. It is one constant, named and commented as the knob to
 turn, and the manual pass is what settles it.
 
+### D24 — One hand aims, two hands zoom
+
+*Proposed by the user after D23 shipped: "I found you can use one hand to lock
+the target — drop the + when using two hands. Once locked it is easy to zoom in
+and out; and when two hands zoom with no target, just zoom in and out at the
+middle of the screen. That would be easier to use."*
+
+**This is the fix the previous ten decisions were approximating.** From D14
+onward the sight was the midpoint between two open palms, justified by a piece
+of geometry that is true and irrelevant: a *symmetric* spread leaves the
+midpoint still. Hands do not spread symmetrically. So every zoom was also,
+slightly, a re-aim — the camera re-targeted on the very motion that was meant
+only to change distance. D17 shared the throttle, D18 widened what could be
+targeted, D19 damped the radius and gated retargets, D21 stopped the reseed
+rewriting the gesture, D23 added a temporal hold. Each removed a symptom of that
+one coupling, and none removed the coupling. Splitting the two jobs across
+different *numbers of hands* removes it structurally: while two palms are up
+there is no aim point at all, so an uneven spread has nothing to re-aim.
+
+The user found it by use rather than by reading the code, and it is worth
+recording that an earlier multi-agent review proposed exactly this
+("decouple aiming from zooming") and it was **rejected** at the time in favour
+of a smaller, in-place fix. That was the wrong call, and the reasoning that made
+it wrong is visible in hindsight: the smaller fix was preferred because it did
+not require a new mechanism, but the defect was never a missing mechanism — it
+was one signal carrying two meanings.
+
+**Aiming needs no pose of its own.** A single hand aims in ANY pose. Aiming
+commits to nothing, so it does not need to be distinguished from resting the
+way the committing actions do; the poses stay reserved for what commits
+(`Pointing_Up` opens a note, `Victory` reveals its links). This also resolves a
+collision that a pose-based aim would have created: `Pointing_Up` already opens
+a note after 300 ms, well before the 1500 ms lock could commit, so aiming with
+the pointing finger specifically would have opened notes instead of choosing
+them.
+
+**Ceasing to aim keeps the lock.** `aimPoint` returns null while two palms are
+up, and `zoomLockStep` already reads a null candidate as "keep what is locked"
+(D23) — so raising the second palm to zoom cannot drop the note just chosen.
+That the two decisions compose without a special case is a sign the D23 rule was
+stated at the right level.
+
+**An un-targeted zoom moves along the view axis.** With no note locked the pivot
+is the point at the centre of the view at the camera's current working distance
+(`viewCentrePoint`), which is the plain reading of "just zoom in and out at the
+middle of the screen". Anchoring to the centroid instead would drift the view
+sideways whenever the centroid sat off-centre — which, after any travel, it
+usually does. This is safe to recompute per frame in a way D20's deleted
+sight-pivot was not: the camera looks *at* this point, so re-deriving returns
+the same point. It is a fixed point of its own feedback rather than one that
+walks.
+
+**The sight mark is hidden while zooming**, not parked somewhere. A mark shown
+while nothing is being aimed at would claim the zoom is going there.
+
 ### D9 — The rail is chrome, and that is the whole of its reachability
 
 The rail island carries `HUD_CHROME_CLASS` and `hud-hit`. It then inherits both the

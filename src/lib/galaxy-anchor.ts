@@ -249,6 +249,34 @@ export function zoomLockStep(
   return { state: next, lockedId: state.lockedId, acquiringId: candidateId, progress: 0 };
 }
 
+// Reused across frames — this runs inside the gesture loop, which must not
+// allocate per frame.
+const forwardScratch = new THREE.Vector3();
+
+/**
+ * The world point at the CENTRE of the view, `distance` in front of the camera
+ * (galaxy-note-reachable-by-hand design.md D24).
+ *
+ * What an un-targeted zoom turns around: with no note locked, spreading the
+ * hands simply moves in and out along the axis the camera is already looking
+ * down, which is the plain reading of "just zoom in and out at the middle of
+ * the screen". Anchoring to the graph's centroid instead would drift the view
+ * sideways whenever the centroid was off-centre, which after any travel it
+ * usually is.
+ *
+ * Safe to recompute while the camera moves, unlike the sight-derived pivot D20
+ * deleted: the camera looks AT this point, so re-deriving it returns the same
+ * point — a fixed point of its own feedback rather than one that walks.
+ */
+export function viewCentrePoint(camera: THREE.Camera, distance: number): Vec3 {
+  camera.getWorldDirection(forwardScratch);
+  return {
+    x: camera.position.x + forwardScratch.x * distance,
+    y: camera.position.y + forwardScratch.y * distance,
+    z: camera.position.z + forwardScratch.z * distance,
+  };
+}
+
 /** The centre of `rect` in window pixels — the sight's fallback when no hand is in frame. */
 export function rectCentre(rect: ScreenRect): { x: number; y: number } {
   return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };

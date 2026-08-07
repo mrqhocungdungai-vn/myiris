@@ -19,7 +19,11 @@ The galaxy drives SHALL be partitioned by hand pose so they never act at once on
 
 The camera SHALL look at the galaxy's **anchor** (see `second-brain-galaxy-view`, "The camera turns and dollies around a movable anchor") — never at an assumed world origin, and no longer at the graph's centroid unconditionally. **The anchor a camera drive takes SHALL always be a note**, resolved as the note nearest the sight (see `second-brain-galaxy-view`, "The camera is aimed by a sight that follows the hands") within a bounded screen distance and excluding nodes behind the camera. Where two candidate notes overlap on screen, the one **nearer the camera** SHALL win, because that is the one drawn over the other and therefore the only one the user can see to aim at; depth SHALL NOT otherwise outrank aim, since a note's distance is invisible to the user except through that overlap. When no note is near enough the current anchor SHALL be kept, so aiming at empty space neither throws the view back to the middle of the vault nor sends it to some distant note the user never aimed at.
 
-The drive SHALL keep re-resolving its target for as long as the pose is held, so moving both hands onto a different note mid-flight re-aims onto it — the drive's input is the *distance* between the hands, which leaves their midpoint free to go on aiming. A change of target SHALL NOT move the camera, and SHALL NOT alter how far the hands must spread to cover the remaining distance: the reference the spread is measured against SHALL be preserved across a re-target rather than re-read from the hands' current separation, or the spread already spent would stop counting and the travel remaining would collapse mid-gesture.
+**Aiming and zooming SHALL be carried by different numbers of hands.** A SINGLE hand — in any pose — SHALL aim, and while two open palms are up there SHALL be no aim point at all, so a zoom cannot re-target however unevenly the hands move. Aiming SHALL commit to nothing and SHALL therefore require no pose of its own; the poses remain reserved for what does commit. The sight mark SHALL be shown only while the user is actually aiming, and SHALL be hidden while two palms are zooming, since a mark shown then would claim the zoom is going where it is not.
+
+When a note is locked, the drive SHALL travel toward it. When NO note is locked, the drive SHALL move in and out along the axis the camera is already looking down — the point at the centre of the view, at the distance the camera is currently working at — rather than toward the graph's centroid, which after any travel is usually off-centre and would drift the view sideways.
+
+Bringing up a second palm SHALL NOT drop the note already chosen: ceasing to aim keeps the lock rather than clearing it. A change of target SHALL NOT move the camera, and SHALL NOT alter how far the hands must spread to cover the remaining distance: the reference the spread is measured against SHALL be preserved across a re-target rather than re-read from the hands' current separation, or the spread already spent would stop counting and the travel remaining would collapse mid-gesture.
 
 Seeding SHALL re-derive from the **live** camera, so a gesture drive that begins after the user moved the camera with the mouse continues from where the mouse left it rather than jumping back to where gesture control last was — **including what the camera is aimed at**, not only where it sits. The camera drive SHALL be smooth and stable: the displayed distance SHALL be eased toward what the hands ask for rather than tracking it frame for frame, since the hand-tracked separation carries noise that would otherwise reach the camera at full gain. These bindings SHALL engage only while the galaxy is active and no reader is open, so they never collide with the reader's `Closed_Fist`-closes-reader binding or with the deck's fist-rotates-the-orb binding. **Mouse drag/scroll camera control SHALL remain working after every exit from a gesture drive** — not only when a gesture is released, but also when hand control is switched off mid-drive, a reader opens mid-drive, Iris goes to sleep mid-drive, or the hand simply leaves the frame; the gesture drive SHALL NOT be able to leave the built-in camera controls permanently disabled for the rest of the galaxy session, and SHALL NOT restore them by overwriting what the camera was aimed at.
 
@@ -53,10 +57,20 @@ Seeding SHALL re-derive from the **live** camera, so a gesture drive that begins
 - **WHEN** the user brings up two open palms while no note is near the sight
 - **THEN** the current anchor is kept — the mark does not run away to a distant note, and the view is not thrown back to the middle of the vault
 
-#### Scenario: Re-aiming mid-flight does not disturb the travel already spent
+#### Scenario: Two palms zoom without re-aiming
 
-- **WHEN** the user moves both hands onto a different note part-way through a spread
-- **THEN** the camera re-aims onto the new note without jumping, and continuing to spread keeps covering distance at the same rate — the spread already made is not discarded
+- **WHEN** the user is zooming with two open palms and their hands part unevenly, moving the midpoint between them
+- **THEN** the camera's target does not change and the sight mark is not shown — two hands supply distance only
+
+#### Scenario: Choosing a note with one hand, then zooming to it with two
+
+- **WHEN** the user aims one hand at a note until it locks, then brings up a second open palm and spreads
+- **THEN** the locked note is kept and the camera travels toward it — raising the second hand does not drop the choice
+
+#### Scenario: Zooming with nothing chosen
+
+- **WHEN** the user zooms with two open palms and no note is locked
+- **THEN** the camera moves in and out along the axis it is already looking down, keeping what is at the centre of the view at the centre
 
 #### Scenario: A pinch does nothing in the galaxy
 

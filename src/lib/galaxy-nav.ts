@@ -273,31 +273,35 @@ export function isHandLowered(point: HandPoint | null, viewportHeight: number): 
 }
 
 /**
- * Where the camera's **sight** is on screen — the point a camera drive aims at,
- * in window pixels (galaxy-note-reachable-by-hand design.md D14).
+ * Where the user is **aiming**, in window pixels — or `null` when they are not
+ * aiming at all (galaxy-note-reachable-by-hand design.md D24).
  *
- * The midpoint between two open palms when both are up, otherwise the primary
- * hand's own point, otherwise `fallback` (the centre of the view) when there is
- * no hand at all.
+ * **One hand aims; two hands zoom.** The two jobs are split between different
+ * numbers of hands rather than being carried by the same pair, and that split is
+ * the whole point. This used to return the midpoint between two open palms,
+ * on the reasoning that spreading them symmetrically leaves their midpoint
+ * still — true of the geometry, and false of hands. Real palms part
+ * asymmetrically, so every zoom was also, slightly, a re-aim; the camera then
+ * re-targeted on the very motion that was meant only to change distance. Every
+ * defect from D14 through D23 was a symptom of that one coupling, and each was
+ * damped rather than removed. Splitting the roles removes it: while two palms
+ * are up there is no aim point at all, so a zoom cannot re-aim however
+ * unevenly the hands move.
  *
- * It follows the HANDS, not the screen. A sight pinned to screen centre can only
- * be aimed by first flying the camera until the thing you want is in the middle
- * — which is the hardest part of the task, demanded before the easy part is
- * allowed to start. Spreading two palms then dollies toward whatever happened
- * to be at the centre, which is arbitrary. Reading the sight off the hands
- * inverts that: put your hands over the region, spread them, and the camera goes
- * there.
+ * With one hand — in ANY pose, not only `Pointing_Up` — the aim follows that
+ * hand. Aiming is not itself a drive and commits to nothing, so it needs no
+ * pose of its own; the poses stay reserved for the things that DO commit
+ * (opening a note, revealing its links).
  *
- * The two-palm midpoint specifically, because the zoom's INPUT is the distance
- * between the hands — so their midpoint is free to carry the aim without the two
- * meanings interfering. Spreading symmetrically leaves the midpoint still.
+ * Returns `null` with no hand in frame. There is deliberately no fallback to
+ * the centre of the view: a fallback would mean the camera is always aiming at
+ * something, and "nothing is being aimed at" is a state the caller must be able
+ * to see — it is what makes an un-targeted zoom fall back to the middle of the
+ * screen instead of at some note the user never chose.
  */
-export function sightPoint(hand: Pick<HandState, "hands" | "point">, fallback: HandPoint): HandPoint {
-  const palms = hand.hands.filter((item) => item.openPalm);
-  if (palms.length >= 2) {
-    return { x: (palms[0].point.x + palms[1].point.x) / 2, y: (palms[0].point.y + palms[1].point.y) / 2 };
-  }
-  return hand.point ?? fallback;
+export function aimPoint(hand: Pick<HandState, "hands" | "point">): HandPoint | null {
+  if (hand.hands.filter((item) => item.openPalm).length >= 2) return null;
+  return hand.point ?? null;
 }
 
 // `orbitStep` and its `Spherical` type lived here until D20 removed the fist

@@ -12,7 +12,7 @@ import {
   ZOOM_EASE_MS,
   focusNeighborhood,
   isHandLowered,
-  sightPoint,
+  aimPoint,
   type DwellState,
   type GalaxyNavNode,
 } from "./galaxy-nav";
@@ -407,42 +407,39 @@ describe("isHandLowered", () => {
   });
 });
 
-describe("sightPoint", () => {
-  const FALLBACK = { x: 400, y: 300 };
-  function palm(id: string, x: number, y: number): TrackedHand {
+describe("aimPoint", () => {
+  function palm(id: string, x: number, y: number, openPalm = true): TrackedHand {
     return {
       id,
       point: { x, y },
       wristPoint: { x, y },
       landmarks: [],
-      gesture: "Open_Palm",
+      gesture: openPalm ? "Open_Palm" : "None",
       gestureScore: 0.9,
       pointing: false,
-      openPalm: true,
+      openPalm,
       fist: false,
       pinchDistance: 0,
     } as TrackedHand;
   }
 
-  it("aims at the midpoint between two open palms", () => {
+  // D24's whole point: two hands zoom, and while they do the user is not
+  // aiming at all. Real palms part asymmetrically, so a midpoint carried as
+  // the aim made every zoom a slight re-aim.
+  it("returns null while two open palms are up — two hands zoom, they do not aim", () => {
     const hand = { hands: [palm("a", 100, 200), palm("b", 300, 400)], point: { x: 999, y: 999 } };
-    expect(sightPoint(hand, FALLBACK)).toEqual({ x: 200, y: 300 });
+    expect(aimPoint(hand)).toBeNull();
   });
 
-  it("holds the midpoint still while the palms spread symmetrically", () => {
-    // The zoom's INPUT is the distance between the hands, so its aim must not
-    // drift as they part — that is why the midpoint carries it.
-    const near = { hands: [palm("a", 180, 300), palm("b", 220, 300)], point: null };
-    const far = { hands: [palm("a", 60, 300), palm("b", 340, 300)], point: null };
-    expect(sightPoint(near, FALLBACK)).toEqual(sightPoint(far, FALLBACK));
+  it("aims at the single hand's own point, whatever pose it is in", () => {
+    expect(aimPoint({ hands: [palm("a", 100, 200)], point: { x: 111, y: 222 } })).toEqual({ x: 111, y: 222 });
+    // A resting hand aims too — aiming commits to nothing, so it needs no pose.
+    expect(aimPoint({ hands: [palm("a", 100, 200, false)], point: { x: 5, y: 6 } })).toEqual({ x: 5, y: 6 });
   });
 
-  it("falls back to the primary hand's point with only one hand up", () => {
-    const hand = { hands: [palm("a", 100, 200)], point: { x: 111, y: 222 } };
-    expect(sightPoint(hand, FALLBACK)).toEqual({ x: 111, y: 222 });
-  });
-
-  it("falls back to the view's centre with no hand at all", () => {
-    expect(sightPoint({ hands: [], point: null }, FALLBACK)).toEqual(FALLBACK);
+  it("returns null with no hand in frame, rather than falling back to the view centre", () => {
+    // "Nothing is being aimed at" has to be visible to the caller: it is what
+    // makes an un-targeted zoom fall back to the middle of the screen.
+    expect(aimPoint({ hands: [], point: null })).toBeNull();
   });
 });
