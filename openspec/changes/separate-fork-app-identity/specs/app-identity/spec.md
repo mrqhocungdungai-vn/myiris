@@ -11,11 +11,13 @@ This repository is a fork of `ASHR12/iris`. Every identifier by which macOS, the
 The four identifiers SHALL be:
 
 - **Bundle identifier**: `app.myiris.voice` (upstream: `app.iris.voice`). It SHALL be declared identically in the packaging configuration and in the constant the installer's ownership guard compares against, so the two can never disagree about which bundle the app owns.
-- **Product name**: `MyIris` (upstream: `Iris`). This is the name the packaging configuration emits, the name the app registers with the window server, and the name the installer builds its paths from.
+- **Product name**: `MyIris` (upstream: `Iris`). This is the name the packaging configuration emits, the name the app registers with the window server, the name the installer builds its paths from, and the name the operating system shows the user — the application menu's own title, the About panel, and the tray tooltip. A bundle named `MyIris.app` whose menu bar reads `Iris` would reintroduce, in the one place the user actually looks, the ambiguity this capability exists to remove.
 - **Install path**: `/Applications/MyIris.app` (upstream: `/Applications/Iris.app`), derived from the product name rather than stated independently.
 - **State root**: `~/.myiris` (upstream: `~/.iris`).
 
-A single hard-coded product name or bundle identifier SHALL NOT appear in more than one place in a form that can drift; each SHALL have exactly one authoritative declaration that every other consumer derives from or is asserted equal to.
+A single hard-coded product name or bundle identifier SHALL NOT appear in more than one place in a form that can drift; each SHALL have exactly one authoritative declaration that every other consumer derives from or is asserted equal to. The same SHALL hold for the state-root directory name, with the one exemption named in the next requirement — a derivation of a *historical* path is not a second declaration of the current one.
+
+The persona the user speaks to, and the wake word that summons it, are NOT app identity and SHALL NOT change with it. They name a character, not an application, and nothing in the operating system distinguishes two installs by them.
 
 #### Scenario: No identifier is shared with upstream
 
@@ -32,74 +34,56 @@ A single hard-coded product name or bundle identifier SHALL NOT appear in more t
 - **WHEN** this app and the upstream app are both installed on the same machine
 - **THEN** each occupies its own path under `/Applications`, each carries its own bundle identifier, and neither reads nor writes the other's state root
 
-### Requirement: All app-owned local state lives under one home-directory root
+#### Scenario: The persona keeps its name when the app is renamed
 
-Every file the app writes to the user's home directory outside of OS-managed locations SHALL live under a single root, `~/.myiris`. That root SHALL cover, at minimum: the packaged-build configuration file, the Claude configuration directory the app pins for its runs, the session store, the drawing-canvas store, and the default working directory for runs when no project folder is selected.
+- **WHEN** the app identity changes
+- **THEN** the voice persona's name and the wake word that summons it are unchanged, and the copy the user reads and hears still names the character as before
 
-No app-owned state SHALL be written to `~/.iris`, and the app SHALL NOT read configuration from `~/.iris` — including as a fallback — once the migration below has had its chance to run, because a fallback read is exactly how the fork would pick up an upstream install's configuration.
+### Requirement: All app-owned configuration and runtime state lives under one home-directory root
 
-#### Scenario: A packaged run writes only under the new root
+Every file the app writes as its **own configuration or runtime state** SHALL live under a single home-directory root, `~/.myiris`. That root SHALL cover, at minimum: the packaged-build configuration file, the Claude configuration directory the app pins for its runs, the session store, the drawing-canvas store, and the default working directory for runs when no project folder is selected. There SHALL be exactly one authoritative declaration of that directory name, from which every accessor derives.
+
+The scope is app-owned state, not everything the app can write. **User-authored content is deliberately outside it.** The second-brain notes vault (`~/iris-second-brain`) SHALL remain at its own top-level path and SHALL NOT be moved under the state root, for two reasons: it is plain markdown the user opens in other tools, where a relocated path breaks their own links and vault registrations; and the upstream project writes a different path entirely, so it is not a collision point and moving it buys no separation. Content the app writes into a project folder the user selected is outside the scope for the same reason.
+
+No app-owned state SHALL be written to `~/.iris`, and the app SHALL NOT read configuration from `~/.iris` — including as a fallback — because a fallback read is exactly how this app would pick up an upstream install's configuration.
+
+One derivation SHALL be exempt, and SHALL keep naming the old root. Locating the artifacts an **older build of this app** left in the user's own Claude Code directory requires reproducing the path that build ran against, since the transcript directory on disk is named after it. That derivation is a statement about files already written, not about where state lives now, so it SHALL continue to name the pre-rename path. Updating it to the current root would make the cleanup silently find nothing rather than fail — and the leftovers it exists to report would stay in the user's directory unnoticed.
+
+#### Scenario: A packaged run writes its own state only under the new root
 
 - **WHEN** a packaged build starts, loads its configuration, opens a session, and completes a run against the default workspace
-- **THEN** every file it created or modified in the home directory outside OS-managed locations is under `~/.myiris`, and nothing under `~/.iris` was created or modified
+- **THEN** every configuration and runtime file it created or modified in the home directory, outside OS-managed locations and outside the notes vault, is under `~/.myiris`, and nothing under `~/.iris` was created or modified
+
+#### Scenario: The notes vault stays where the user's other tools expect it
+
+- **WHEN** the app ensures the notes vault exists and writes a capture into it
+- **THEN** the vault is at `~/iris-second-brain`, unchanged by the state-root rename, and remains openable at that path by an external editor
 
 #### Scenario: No fallback read of the old root
 
 - **WHEN** the app resolves its configuration file and `~/.iris/.env` exists but `~/.myiris/.env` does not
 - **THEN** the app does not read `~/.iris/.env`, and behaves as it would with no configuration file at all
 
-### Requirement: An existing state root is migrated once, and only when it provably belongs to this app
+#### Scenario: Leftovers from a pre-rename build are still found
 
-On startup, before any component that reads or writes the state root is constructed, the app SHALL perform a one-time migration: when `~/.myiris` does not exist and `~/.iris` does, and the contents of `~/.iris` identify it as this app's own, the app SHALL relocate that directory to `~/.myiris`.
+- **WHEN** the app reports what an older build wrote into the user's own Claude Code directory, on a machine where that older build ran against the pre-rename workspace
+- **THEN** the transcript directory named after the pre-rename workspace path is reported, rather than the cleanup finding nothing because it looked for a path no build ever ran against
 
-Ownership SHALL be established from marker files, not assumed from the path. The directory SHALL be treated as this app's own only when it contains at least one file this app writes and the upstream project does not, and contains no file the upstream project writes and this app does not. When the markers are ambiguous, or when both sets are present, the app SHALL leave `~/.iris` untouched and start with an empty state root — a fresh start is recoverable, and consuming another application's data is not.
+### Requirement: There is no migration from the pre-rename state root
 
-The relocation SHALL be a move, not a copy. A copy would leave this app's data at the shared path, where an upstream install would later read it — which is the collision this capability exists to remove.
+The app SHALL NOT read, move, copy, or delete `~/.iris`. It has never had a released build that wrote there, so there is no user data to carry across, and the directory's only plausible owners are the upstream project or a pre-rename development run — neither of which this app may claim.
 
-A migration that cannot be completed SHALL NOT prevent the app from starting. The app SHALL leave the source directory as it found it, start with an empty state root, and record what happened, rather than aborting launch or proceeding with a half-moved directory.
+A first launch on a machine that happens to carry `~/.iris` SHALL therefore behave exactly like a first launch on a clean machine: the app creates its own state root and starts unconfigured, and the existing directory is left byte-for-byte as it was found.
 
-#### Scenario: A previous install's data is carried across
+#### Scenario: An existing pre-rename directory is ignored, not adopted
 
-- **WHEN** the app starts with `~/.iris` present carrying this app's marker files, no upstream marker files, and `~/.myiris` absent
-- **THEN** the directory is relocated to `~/.myiris` with its contents intact, `~/.iris` no longer exists, and the session store, canvas, workspace, and Claude configuration directory are all readable at their new paths
+- **WHEN** the app starts on a machine where `~/.iris` exists, whatever it contains
+- **THEN** the app neither reads nor modifies it, creates and uses `~/.myiris` instead, and `~/.iris` is left exactly as it was
 
-#### Scenario: An upstream install's data is never taken
+#### Scenario: A first launch starts unconfigured
 
-- **WHEN** the app starts with `~/.iris` present carrying the upstream project's marker files and `~/.myiris` absent
-- **THEN** `~/.iris` is left exactly as it was, and the app starts with an empty state root
-
-#### Scenario: Ambiguous contents are left alone
-
-- **WHEN** `~/.iris` contains marker files from both projects, or contains neither project's markers
-- **THEN** the app leaves the directory untouched and starts with an empty state root
-
-#### Scenario: Migration runs at most once
-
-- **WHEN** the app starts and `~/.myiris` already exists
-- **THEN** no migration is attempted regardless of whether `~/.iris` exists, and any existing `~/.iris` is left untouched
-
-#### Scenario: A failed migration does not block launch
-
-- **WHEN** the relocation cannot be completed
-- **THEN** the app starts normally with an empty state root, the source directory is left as it was found, and the failure is recorded
-
-### Requirement: Migration preserves run history for the default workspace
-
-The Claude configuration directory stores each project's transcripts in a directory named after a slug derived from that project's working directory path. Moving the state root changes the default workspace's path, and therefore its slug, which would orphan every transcript belonging to runs against the default workspace — a resumed session would silently find no prior conversation.
-
-The migration SHALL therefore also rename the transcript directory whose slug was derived from the old default workspace path to the slug derived from the new one, so a session resumed after the migration continues the same conversation. Transcript directories for user-selected project folders SHALL be left untouched, since those paths are unaffected by the rename.
-
-When the target slug directory already exists, or the source slug directory does not, the migration SHALL leave both as they are — this repair is best-effort and SHALL NOT fail the migration or the launch.
-
-#### Scenario: A session resumed after migration keeps its history
-
-- **WHEN** a run completed against the default workspace before the migration, and a session is resumed against the default workspace after it
-- **THEN** the run resumes the same conversation, having found the transcript the earlier run wrote
-
-#### Scenario: Project-folder transcripts are untouched
-
-- **WHEN** the migration runs and transcripts exist for user-selected project folders
-- **THEN** those transcript directories keep their names and contents unchanged
+- **WHEN** the app starts with no `~/.myiris` present
+- **THEN** it starts with an empty state root and surfaces its normal first-run setup path, rather than searching elsewhere for configuration
 
 ### Requirement: The installer refuses any bundle it does not own
 
@@ -121,21 +105,20 @@ With the identifier now distinct from upstream's, this guard SHALL refuse an ups
 
 - **WHEN** a bundle sits at this app's install path carrying this app's own bundle identifier
 - **THEN** the installer replaces it as before
+### Requirement: State macOS derives from the identity is not app-managed
 
-### Requirement: OS-managed per-app state is abandoned, not migrated
+Two locations are named by macOS from the product name and the bundle identifier rather than by this app: the Electron user-data directory (`~/Library/Application Support/<product name>`, which is where the renderer's web storage lives) and the preferences property list (`~/Library/Preferences/<bundle id>.plist`). The app SHALL NOT create, move, or clean up either one. They follow the identity automatically, and they regenerate on first launch.
 
-Directories macOS derives from the product name or the bundle identifier — the Electron user-data directory and the preferences property list — SHALL NOT be migrated. They hold only framework state that regenerates on first launch under the new names, and nothing the user authored.
+A consequence worth stating, because it is what a reader will otherwise trip over: the renderer's interface preferences — interface sounds, gesture control, the selected camera and microphone, WebGL fidelity, the ambient-capture opt-in, the HUD camera size, and whether the listen-only consent notice has been shown — live in that derived directory and not in the configuration file. Changing the product name therefore points the app at a fresh set of defaults, in a development run as well as a packaged one, since the name is registered before any window exists.
 
-Changing the bundle identifier resets the app's privacy grants, because macOS keys microphone, camera, and screen-recording permission by bundle identifier. The app SHALL treat this as expected first-run behavior rather than an error condition, surfacing its existing permission prompts. The documentation SHALL state that these permissions must be granted again after this change.
+Privacy grants behave the same way: macOS keys microphone, camera, and screen-recording permission by bundle identifier, so the app SHALL treat a first launch under its identifier as an ordinary first run — surfacing its existing permission prompts rather than reporting an error.
 
-Because the previously installed bundle carries the old identifier, it is indistinguishable from an upstream install once this change lands, so the installer SHALL NOT remove it. The documentation SHALL name it as a manual cleanup step.
+#### Scenario: Permissions are requested on first launch
 
-#### Scenario: Permissions are re-requested on first launch
-
-- **WHEN** the app launches for the first time under the new bundle identifier
+- **WHEN** the app launches for the first time under its bundle identifier
 - **THEN** it requests microphone, camera, and screen-recording permission through its normal permission flow rather than reporting an error
 
-#### Scenario: The stale bundle is left for the user
+#### Scenario: Derived directories are left to macOS
 
-- **WHEN** the installer runs on a machine carrying a bundle installed before this change
-- **THEN** that bundle is not removed, and the documentation tells the user how to delete it
+- **WHEN** the app runs and writes renderer preferences and window state
+- **THEN** they land in the directories macOS derives from the product name and bundle identifier, and no code in the app creates, relocates, or removes those directories

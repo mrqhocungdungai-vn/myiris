@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { isSessionAlive, nameSession } from "./run-sessions.mjs";
 
-const HOME = "/fake/.iris/claude-home";
+const HOME = "/fake/.myiris/claude-home";
 
 describe("isSessionAlive", () => {
   it("reports a session the runtime knows about", async () => {
@@ -46,7 +46,7 @@ describe("isSessionAlive", () => {
 // The reason this module exists. Measured: with CLAUDE_CONFIG_DIR unset,
 // listSessions() returned 32 of the USER's own Claude Code sessions out of
 // ~/.claude — the boundary Iris must never cross — and would find none of
-// Iris's own, which live under ~/.iris/claude-home.
+// Iris's own, which live under ~/.myiris/claude-home.
 describe("the config directory is pinned for the call and restored after it", () => {
   it("pins Iris's own home while the probe runs", async () => {
     const env = {};

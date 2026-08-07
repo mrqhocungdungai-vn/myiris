@@ -8,6 +8,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
+import { sessionStoreFile } from "./app-paths.mjs";
 import { closePoSession } from "./po-session.mjs";
 import { writeFileAtomicSync, quarantineFile } from "./atomic-file.mjs";
 import {
@@ -62,10 +63,10 @@ export function createSessionStore({
   abandonPendingReview,
   showOpenDialog,
   getMainWindow,
-  // Evaluated at call time, not module load — so os.homedir() reflects
-  // whatever it resolves to when the store is actually constructed (real
-  // homedir in production, a mocked temp dir in tests).
-  storeFile = path.join(os.homedir(), ".iris", "claude-sessions.json"),
+  // Evaluated at call time, not module load — sessionStoreFile() resolves
+  // os.homedir() when the store is actually constructed, so it reflects the real
+  // homedir in production and a mocked temp dir in tests.
+  storeFile = sessionStoreFile(),
 }) {
   let sessionStore = { active: null, sessions: [] };
 

@@ -1,5 +1,5 @@
 import os from "node:os";
-import path from "node:path";
+import { claudeHome } from "./app-paths.mjs";
 
 // Shared by both role workers (harden-security-boundaries D12): a worker
 // subprocess or SDK session gets an environment derived from the parent by
@@ -17,24 +17,17 @@ export function computeWorkerEnv(baseEnv, excludeKeys) {
 
 // Iris's own Claude Code state directory, kept away from the user's ~/.claude.
 //
-// `settingSources` is NOT the whole story: a handful of inputs are read and
-// written regardless of it, and they all live under CLAUDE_CONFIG_DIR (default
-// ~/.claude) — the session transcript for every run, the always-read
-// .claude.json global config, and auto-memory. Measured before this existed:
-// one DEV run against ~/.iris/workspace left a 57 KB transcript in
-// ~/.claude/projects/-Users-...--iris-workspace/. That is the user's own Claude
-// Code history directory, and Iris was writing the contents of their projects
-// into it.
+// A delegation, not a definition. The path and the full reasoning for pinning
+// CLAUDE_CONFIG_DIR to it — why `settingSources` is not sufficient on its own,
+// what was measured leaking into the user's ~/.claude/projects/ before it existed,
+// why it must be stable rather than a temp directory, and why it is deliberately
+// not overridable by an environment variable — now live on `claudeHome()` in
+// app-paths.mjs, alongside every other child of the state root. Read it there.
 //
-// Pointing the whole directory at Iris's own storage is the documented fix and
-// covers all of those inputs at once (the CLI creates the directory, and its
-// own .claude.json inside it, on first use — nothing here has to mkdir).
-//
-// Deliberately NOT overridable by an environment variable: the only interesting
-// value to override it *to* is the user's ~/.claude, which is exactly what this
-// prevents. Tests inject via the `claudeHome` option instead.
+// Kept as an export because it is this module's established name for the value and
+// computeClaudeWorkerEnv's default below, plus run-sessions.mjs, both call it.
 export function irisClaudeHome(homedir = os.homedir) {
-  return path.join(homedir(), ".iris", "claude-home");
+  return claudeHome(homedir);
 }
 
 // The single credential policy both roles run under. DEV used to strip

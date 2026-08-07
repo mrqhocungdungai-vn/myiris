@@ -6,7 +6,7 @@ import { createSessionStore } from "./session-store.mjs";
 
 let homeDir;
 let restoreHome;
-const STORE_PATH = () => path.join(homeDir, ".iris", "claude-sessions.json");
+const STORE_PATH = () => path.join(homeDir, ".myiris", "claude-sessions.json");
 
 beforeEach(() => {
   homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "iris-session-store-"));

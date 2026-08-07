@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Builds, packages, and installs Iris into /Applications, then launches it.
+// Builds, packages, and installs this app into /Applications, then launches it.
 //
 // Why this exists: `package:mac` leaves an .app under `release/`, and nothing
 // puts it where a macOS user expects to find and launch an application. The
@@ -18,10 +18,12 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { userConfigFile } from "../electron/app-paths.mjs";
 import {
   BUNDLE_ID,
   INSTALLED_APP_PATH,
   INSTALLED_EXECUTABLE,
+  LEGACY_INSTALLED_APP_PATH,
   PRODUCT_NAME,
   classifyProbeResult,
   classifyQuitResult,
@@ -94,7 +96,8 @@ function inspectDestination() {
   });
 }
 
-const REFUSAL_HINT = "Nothing was removed. Move or rename that item yourself if you want Iris installed here.";
+const REFUSAL_HINT =
+  `Nothing was removed. Move or rename that item yourself if you want ${PRODUCT_NAME} installed here.`;
 
 const preflight = inspectDestination();
 if (preflight.action === "refuse") fail(preflight.reason, REFUSAL_HINT);
@@ -105,7 +108,7 @@ if (preflight.action === "refuse") fail(preflight.reason, REFUSAL_HINT);
 // package:mac:host builds the host arch only, which is what `npm ci` installed
 // a Claude binary for. Building both here would need the ~250 MB foreign
 // binary fetched for a bundle this machine cannot run.
-log(`packaging Iris for ${process.arch}…`);
+log(`packaging ${PRODUCT_NAME} for ${process.arch}…`);
 try {
   run("npm", ["run", "package:mac:host"], { cwd: repoRoot, stdio: "inherit" });
 } catch {
@@ -140,7 +143,7 @@ if (!archCheck.ok) fail(archCheck.reason);
 log(`architecture verified: ${archCheck.archs.join(", ")}`);
 
 // ---------------------------------------------------------------------------
-// 3. Quit a running installed Iris — never kill it.
+// 3. Quit a running installed instance — never kill it.
 // ---------------------------------------------------------------------------
 // The probe is scoped to the INSTALLED executable path. There is no
 // single-instance lock in this app, so `npm run dev` and the installed copy can
@@ -153,7 +156,7 @@ function probeRunning() {
     // whether a live process is using it.
     fail(
       `Aborting: ${classified.reason}.`,
-      "Nothing was installed. Quit Iris yourself and re-run, or check that `pgrep` is available.",
+      `Nothing was installed. Quit ${PRODUCT_NAME} yourself and re-run, or check that \`pgrep\` is available.`,
     );
   }
   return classified.outcome === "running";
@@ -162,7 +165,7 @@ function probeRunning() {
 const wasRunning = probeRunning();
 
 if (wasRunning) {
-  log("an installed Iris is running — asking it to quit…");
+  log(`an installed ${PRODUCT_NAME} is running — asking it to quit…`);
   // osascript, never kill. The Apple Event reaches app.quit() and runs the real
   // teardown; SIGTERM/SIGKILL skip `before-quit`, which orphans Claude and its
   // descendant tool subprocesses (the process-group termination in the
@@ -191,8 +194,8 @@ if (wasRunning) {
     // Abort rather than escalate. A copy over a live teardown is a
     // half-replaced bundle, which is worse than not installing at all.
     fail(
-      "Iris did not quit within its shutdown budget — aborting instead of copying over a running app.",
-      "Quit Iris yourself and re-run, or raise IRIS_SHUTDOWN_DEADLINE_MS if teardown genuinely needs longer.",
+      `${PRODUCT_NAME} did not quit within its shutdown budget — aborting instead of copying over a running app.`,
+      `Quit ${PRODUCT_NAME} yourself and re-run, or raise IRIS_SHUTDOWN_DEADLINE_MS if teardown genuinely needs longer.`,
     );
   }
   log("the running instance has quit");
@@ -238,22 +241,22 @@ try {
 tryRun("xattr", ["-dr", "com.apple.quarantine", INSTALLED_APP_PATH]);
 
 // ---------------------------------------------------------------------------
-// 5. Keep the build output from showing up as a second Iris.
+// 5. Keep the build output from showing up as a second copy of the app.
 // ---------------------------------------------------------------------------
 // release/ is kept, not deleted: it is the build product, and removing it would
 // make "install the last build" impossible. Excluded from Spotlight instead, so
-// exactly one Iris appears in Finder and Spotlight search.
+// exactly one copy appears in Finder and Spotlight search.
 try {
   fs.writeFileSync(path.join(releaseRoot, ".metadata_never_index"), "");
 } catch {
-  log("WARNING: could not mark release/ as unindexed — a second Iris may appear in Spotlight.");
+  log(`WARNING: could not mark release/ as unindexed — a second ${PRODUCT_NAME} may appear in Spotlight.`);
 }
 
 // ---------------------------------------------------------------------------
 // 6. Launch.
 // ---------------------------------------------------------------------------
 // ELECTRON_RUN_AS_NODE is deleted for the same reason scripts/run-electron.mjs
-// deletes it: a shell that exports it starts Iris headless, with no window and
+// deletes it: a shell that exports it starts the app headless, with no window and
 // no obvious cause.
 const env = { ...process.env };
 delete env.ELECTRON_RUN_AS_NODE;
@@ -266,5 +269,28 @@ try {
 }
 
 log("done.");
-log("The installed app reads ~/.iris/.env — NOT this repository's .env.");
+log(`The installed app reads ${userConfigFile()} — NOT this repository's .env.`);
 log("If it reports a missing GEMINI_API_KEY, put your key there and relaunch.");
+
+// ---------------------------------------------------------------------------
+// 7. Name the one thing this installer deliberately will not clean up.
+// ---------------------------------------------------------------------------
+// A bundle installed before this app was given an identity of its own carries
+// upstream's identifier, which makes it indistinguishable from an actual upstream
+// install — so decideInstallAction() refuses it, correctly, even when it happens to
+// be the user's own stale build. Refusing silently would leave two apps in
+// /Applications with no explanation of why, so the refusal is stated here instead.
+//
+// Not offered as an automated step on purpose: the whole reason this change exists
+// is that the installer used to delete a bundle carrying that identifier.
+if (fs.existsSync(LEGACY_INSTALLED_APP_PATH)) {
+  log("");
+  log(`NOTE: ${LEGACY_INSTALLED_APP_PATH} is still installed and was deliberately left alone.`);
+  log(
+    "  It carries the bundle identifier this app used before it was renamed, which is also the " +
+      "upstream project's — so this installer cannot tell your old build apart from an upstream install, " +
+      "and refuses to remove either.",
+  );
+  log(`  If it is your own old build: quit it, then delete ${LEGACY_INSTALLED_APP_PATH} by hand.`);
+  log("  If you actually use the upstream app, leave it — both now install side by side.");
+}

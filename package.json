@@ -1,6 +1,6 @@
 {
   "name": "iris-claude-voice",
-  "productName": "Iris",
+  "productName": "MyIris",
   "version": "0.1.0",
   "private": true,
   "license": "MIT",
@@ -81,8 +81,8 @@
     "three": "$three"
   },
   "build": {
-    "appId": "app.iris.voice",
-    "productName": "Iris",
+    "appId": "app.myiris.voice",
+    "productName": "MyIris",
     "directories": {
       "output": "release",
       "buildResources": "build"

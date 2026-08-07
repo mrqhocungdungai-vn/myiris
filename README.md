@@ -12,6 +12,26 @@ A desktop voice companion built on **Gemini Live** for natural realtime conversa
 "App Environment" below for the `IRIS_ALLOW_ANY_PLATFORM` developer escape
 hatch.
 
+### Relationship to upstream
+
+This fork installs as **`MyIris`**, deliberately. It carries its own bundle
+identifier (`app.myiris.voice`), its own application name, its own install path
+(`/Applications/MyIris.app`), and its own state root (`~/.myiris`) — none of them
+shared with `ASHR12/iris`, which uses `app.iris.voice`, `/Applications/Iris.app`,
+and `~/.iris`.
+
+That separation is not cosmetic. macOS keys microphone, camera, and
+screen-recording grants by bundle identifier, and the installer's safety check
+refuses to remove a bundle whose identifier is not its own. While the two projects
+declared the *same* identifier, installing either one silently deleted the other's
+app and both shared one set of permissions. Now **both can be installed side by
+side**, each with its own permissions and its own data, and neither can overwrite
+the other.
+
+**The persona is still Iris.** Only the application was renamed — she answers to
+the same name, the wake word is unchanged, and everything you see and hear in the
+interface still calls her Iris.
+
 ## Quickstart (chat only)
 
 ```bash
@@ -88,7 +108,7 @@ Settings → **"Claude pipeline"**:
 Either one enables the pipeline; the subscription token wins if both are set.
 Nothing else has to be installed: the skills and `/opsx` commands the personas
 invoke ship inside the app and are loaded per run, and Iris keeps its own Claude
-state in `~/.iris/claude-home`, so it never reads or writes your own `~/.claude`.
+state in `~/.myiris/claude-home`, so it never reads or writes your own `~/.claude`.
 That isolation also means Iris can't use your terminal Claude Code login — the
 credential above is what it authenticates with. See the guide for the full
 walkthrough and troubleshooting.
@@ -113,7 +133,7 @@ Iris runs as **two co-equal modes**:
 Iris reads environment values from:
 
 1. `.env` in this repo (development and `npm start`).
-2. `~/.iris/.env` (packaged app).
+2. `~/.myiris/.env` (packaged app).
 3. `.env` bundled next to app resources (optional packaging flow).
 
 Copy the example file:
@@ -136,7 +156,7 @@ IRIS_USER_NAME=there
 GEMINI_LIVE_MODEL=models/gemini-3.1-flash-live-preview
 GEMINI_LIVE_VOICE=Zephyr
 # CLAUDE_CODE_OAUTH_TOKEN=your_setup_token_value
-# IRIS_CLAUDE_CWD=/Users/you/.iris/workspace
+# IRIS_CLAUDE_CWD=/Users/you/.myiris/workspace
 # IRIS_CLAUDE_PERMISSION_MODE=bypassPermissions
 # IRIS_PO_QUESTION_TIMEOUT_MS=300000
 # IRIS_ALLOW_ANY_PLATFORM=1
@@ -146,7 +166,7 @@ The `IRIS_CLAUDE_*` values are optional. A Claude credential — either
 `CLAUDE_CODE_OAUTH_TOKEN` (subscription) or `ANTHROPIC_API_KEY` (metered) — is
 what enables the pipeline; both roles use it. Set or clear either from
 Settings → Claude pipeline instead of editing this file; that path also works in
-a packaged build, where the file lives at `~/.iris/.env`. There is no setting for
+a packaged build, where the file lives at `~/.myiris/.env`. There is no setting for
 the Claude or OpenSpec binary: both ship inside the app.
 
 `IRIS_ALLOW_ANY_PLATFORM` is a developer escape hatch: Iris refuses to launch
@@ -237,18 +257,18 @@ npm run install:mac
 ```
 
 One command: builds, packages for **this machine's** architecture, installs to
-`/Applications/Iris.app`, and launches it. If Iris is already installed and
+`/Applications/MyIris.app`, and launches it. If MyIris is already installed and
 running it is asked to quit first (a real quit, so background Claude work tears
 down cleanly); if it will not quit, the install aborts rather than copying over
 a live app. A `npm run dev` session is left alone.
 
-**The installed app reads `~/.iris/.env`, not this repository's `.env`.** A
+**The installed app reads `~/.myiris/.env`, not this repository's `.env`.** A
 working `.env` here does not carry over — the first launch will report a missing
-`GEMINI_API_KEY` until you create `~/.iris/.env` with at least:
+`GEMINI_API_KEY` until you create `~/.myiris/.env` with at least:
 
 ```bash
-mkdir -p ~/.iris && cp .env.example ~/.iris/.env
-# then edit ~/.iris/.env and set GEMINI_API_KEY
+mkdir -p ~/.myiris && cp .env.example ~/.myiris/.env
+# then edit ~/.myiris/.env and set GEMINI_API_KEY
 ```
 
 The app is **unsigned** — there is no signing identity, hardened runtime, or
@@ -361,7 +381,7 @@ the one you're on.
 in the orb control cluster. Hidden by default; while open, its region (and,
 while active, the whole HUD) accepts clicks so you can draw, use the color
 picker, and reach excalidraw's own Open/Save/Export-image menu. The working
-board auto-persists to `~/.iris/canvas.json` and survives toggles, HUD/deck
+board auto-persists to `~/.myiris/canvas.json` and survives toggles, HUD/deck
 switches, and restarts. Works without Claude — it's a plain whiteboard today.
 
 ## Notes

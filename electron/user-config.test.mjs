@@ -256,11 +256,20 @@ describe("user-config: writeUserConfig", () => {
 });
 
 describe("user-config: userConfigPath", () => {
-  it("uses the repo .env in dev and ~/.iris/.env when packaged", () => {
+  it("uses the repo .env in dev and ~/.myiris/.env when packaged", () => {
     const devConfig = make({ getIsPackaged: () => false });
     expect(devConfig.userConfigPath()).toBe(path.join(repoRoot, ".env"));
 
     const packagedConfig = make({ getIsPackaged: () => true });
-    expect(packagedConfig.userConfigPath()).toBe(path.join(os.homedir(), ".iris", ".env"));
+    expect(packagedConfig.userConfigPath()).toBe(path.join(os.homedir(), ".myiris", ".env"));
+  });
+
+  it("never falls back to the pre-rename state root", () => {
+    // A fallback read of ~/.iris is how this app would silently pick up an
+    // upstream install's credentials — the collision the app-identity capability
+    // exists to remove. Asserted as an absence, because the failure mode is a
+    // path that quietly still works.
+    const packagedConfig = make({ getIsPackaged: () => true });
+    expect(packagedConfig.userConfigPath()).not.toContain(`${path.sep}.iris${path.sep}`);
   });
 });

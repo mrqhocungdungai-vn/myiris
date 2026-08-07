@@ -6,7 +6,8 @@ import electron from "electron";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import os from "node:os";
+import { PRODUCT_NAME } from "./app-identity.mjs";
+import { canvasStoreFile } from "./app-paths.mjs";
 import { closeAllPoSessions } from "./po-session.mjs";
 import { shouldRefuseLaunch } from "./platform.mjs";
 import { loadEnvFile, envFlag, shutdownDeadlineMs, systemAudioEnabled } from "./user-config.mjs";
@@ -20,9 +21,14 @@ const { app, BrowserWindow, nativeImage, dialog, globalShortcut, shell } = elect
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
 
-// Name the app "Iris" (menu bar / about panel). The Dock tile fully reflects this
-// only in a packaged build; in dev the generic Electron bundle name is used.
-app.setName("Iris");
+// Name the app (menu bar / about panel) from the single identity declaration in
+// app-identity.mjs. The Dock tile fully reflects this only in a packaged build; in
+// dev the generic Electron bundle name is used.
+//
+// Runs at module scope, so it also decides `app.getPath("userData")` for a DEV run
+// — which is why changing PRODUCT_NAME resets the renderer's localStorage in dev
+// too, not only for the installed app (see the app-identity capability).
+app.setName(PRODUCT_NAME);
 
 const iconPath = path.join(repoRoot, "build", "icon.png");
 const appIcon = fs.existsSync(iconPath) ? nativeImage.createFromPath(iconPath) : null;
@@ -41,7 +47,7 @@ if (loopbackSwitch) app.commandLine.appendSwitch(loopbackSwitch.name, loopbackSw
 // Drawing panel scene seam (hud-drawing-canvas): the renderer pushes the
 // serialized excalidraw scene here; this is the same cache the
 // canvas-claude-mcp change reads from. See design.md D5.
-const CANVAS_STORE_FILE = path.join(os.homedir(), ".iris", "canvas.json");
+const CANVAS_STORE_FILE = canvasStoreFile();
 
 const wiring = createWiring({
   repoRoot,

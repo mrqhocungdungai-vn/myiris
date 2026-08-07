@@ -39,6 +39,7 @@ cannot). See the `verb-tool-surface` and `voice-decision-relay` specs.
 | Using the pipeline as a user (setup, voice walkthrough, troubleshooting) | [docs/PIPELINE_GUIDE.md](docs/PIPELINE_GUIDE.md) |
 | Gesture/hand control (MediaPipe config, gesture→action mapping), the decorative eye HUD sharing that camera session, and HUD mode's camera-zoom toggle | [docs/GESTURES.md](docs/GESTURES.md) |
 | **Listen-only mode — Iris's meeting mode** (complete silence, system-audio capture mixed with the mic, `inbox/meetings/` retention, main-process ownership) | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#listen-only-mode--iriss-meeting-mode) + `openspec/specs/listen-only-mode/spec.md` |
+| **App identity** — why this fork installs as `MyIris` / `app.myiris.voice` / `~/.myiris` and must never share an identifier with upstream `ASHR12/iris`; there is no migration from `~/.iris`, and the one `.iris` literal left in the code is frozen history | `openspec/specs/app-identity/spec.md` + `electron/app-identity.mjs` (the single declaration) |
 | Env vars, packaging, setup from source | [README.md](README.md) + `.env.example` |
 | How the Claude Agent SDK itself works — hooks, subagents, MCP, permissions, sessions, plugins, skills, structured outputs, hosting, cost tracking, TS/Python reference | NotebookLM notebook **`claude-agent-sdk`**, id `b7301ab8-69c2-4cdf-bd28-19931d678aed` — ask it via the `notebooklm` MCP (`notebook_ask`). A **reference library of the upstream SDK docs**, consulted while developing; it holds nothing about Iris and never describes Iris's behavior. |
 
@@ -86,7 +87,7 @@ tracks *that*, guarded by `scripts/check-types-node.mjs`.
 ## Runtime prerequisites
 
 - **macOS only** — Iris refuses to launch elsewhere (`IRIS_ALLOW_ANY_PLATFORM=1` is the developer escape hatch).
-- **`GEMINI_API_KEY`** in `.env` (repo `.env` in dev, `~/.iris/.env` when packaged). Enough on its own for chat-only mode.
+- **`GEMINI_API_KEY`** in `.env` (repo `.env` in dev, `~/.myiris/.env` when packaged). Enough on its own for chat-only mode.
 - **Optional, for the pipeline:** a Claude credential — `CLAUDE_CODE_OAUTH_TOKEN` (subscription) or `ANTHROPIC_API_KEY` (metered). Claude Code and OpenSpec themselves are **bundled, not host prerequisites**, and there is deliberately no override pointing at a host install. See [docs/PIPELINE_INTERNALS.md](docs/PIPELINE_INTERNALS.md).
 
 ## Living spec (OpenSpec)
@@ -97,7 +98,7 @@ tracks *that*, guarded by `scripts/check-types-node.mjs`.
 
 ## Conventions
 
-- **Iris never reads or writes the user's `~/.claude`.** This takes *two* mechanisms — `settingSources` excluding the `user` scope, **and** pinning `CLAUDE_CONFIG_DIR` to `~/.iris/claude-home`, because transcripts, `.claude.json`, and auto-memory are read/written regardless of `settingSources`. Both live in `worker-env.mjs`; the reasoning and its consequences are in [docs/PIPELINE_INTERNALS.md](docs/PIPELINE_INTERNALS.md).
+- **Iris never reads or writes the user's `~/.claude`.** This takes *two* mechanisms — `settingSources` excluding the `user` scope, **and** pinning `CLAUDE_CONFIG_DIR` to `~/.myiris/claude-home`, because transcripts, `.claude.json`, and auto-memory are read/written regardless of `settingSources`. Both live in `worker-env.mjs`; the reasoning and its consequences are in [docs/PIPELINE_INTERNALS.md](docs/PIPELINE_INTERNALS.md).
 - **Configure a run only through options the Agent SDK declares.** An undeclared option is silently dropped — `appendSystemPrompt` was, for months, and the resident session ran with no base prompt while the tests claimed otherwise. `electron/sdk-options.test.mjs` asserts each run shape's complete options key set; add a field ⇒ add it there. Full audit in [docs/REFERENCE.md](docs/REFERENCE.md).
 - **Every run carries a turn and spend ceiling**, and a run that hits one finalizes as `limited` — its own terminal status, never `failed`. Same rule for a run whose question went unanswered: `unanswered`, and nothing downstream may report it as a decision. Cost is recorded from the runtime, never estimated.
 - **A verb is defined in exactly one place.** `gemini-tools.mjs` derives its declarations from the registry, `run-dispatch.mjs` derives the park label, `run-exec.mjs` derives the `query()` options. Adding a verb means adding a record — three hand-wired copies is the mechanism that produced the silently-dropped `appendSystemPrompt`.

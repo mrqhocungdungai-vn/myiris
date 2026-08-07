@@ -10,10 +10,18 @@
 //
 // Electron-free and dependency-free, like every module under electron/ that is
 // not one of the four permitted to import Electron.
+import { BUNDLE_ID, PRODUCT_NAME } from "./app-identity.mjs";
 
-/** The bundle this installer is allowed to touch, and nothing else. */
-export const PRODUCT_NAME = "Iris";
-export const BUNDLE_ID = "app.iris.voice";
+// The bundle this installer is allowed to touch, and nothing else.
+//
+// Re-exported rather than re-declared. These used to be declared here, which put
+// the identifier the ownership guard compares against in a different file from
+// the identifier the packaged bundle carries — and the guard is only meaningful
+// while those two agree. app-identity.mjs is now the single declaration, and
+// app-identity.test.mjs holds it in step with package.json. The re-export keeps
+// every existing importer of this module (scripts/install-mac.mjs, the tests)
+// working unchanged.
+export { BUNDLE_ID, PRODUCT_NAME };
 
 // Deliberately a hard-coded constant, NOT an argument or an environment
 // variable. An override cannot satisfy the "is this Iris at the expected path"
@@ -24,6 +32,20 @@ export const INSTALLED_APP_PATH = `${INSTALL_DIR}/${PRODUCT_NAME}.app`;
 
 /** The executable inside the installed bundle — used to scope the running-instance probe. */
 export const INSTALLED_EXECUTABLE = `${INSTALLED_APP_PATH}/Contents/MacOS/${PRODUCT_NAME}`;
+
+// Where a bundle installed BEFORE this app had an identity of its own still sits.
+//
+// Reported, never removed. It carries the pre-rename bundle identifier, which is
+// also the upstream project's, so decideInstallAction() cannot tell a user's stale
+// build apart from a genuine upstream install and refuses both — which is correct,
+// and is the entire defect this capability was written to fix. The installer names
+// it so the refusal is explained rather than leaving two apps in /Applications for
+// no visible reason.
+//
+// A literal, like the historical slug in pipeline-install.mjs: it is a fact about
+// what is on disk, not a declaration of this app's identity, and it must not follow
+// PRODUCT_NAME.
+export const LEGACY_INSTALLED_APP_PATH = `${INSTALL_DIR}/Iris.app`;
 
 // electron-builder's output directory naming for the `dir` target: the host
 // arch on an Intel build lands in `mac/`, every other arch gets an `-<arch>`
@@ -49,11 +71,11 @@ export function releaseSubdirForArch(arch) {
 /**
  * Pick the source bundle by ARCHITECTURE, never by first match.
  *
- * All three packaging scripts can emit both `release/mac/Iris.app` (x64) and
- * `release/mac-arm64/Iris.app` (arm64). A scan that takes whichever it finds
- * first will happily install the arm64 build on an Intel Mac, where it cannot
- * execute at all — and the symptom is a bundle that silently refuses to launch,
- * not an error naming the cause.
+ * All three packaging scripts can emit both `release/mac/<PRODUCT_NAME>.app`
+ * (x64) and `release/mac-arm64/<PRODUCT_NAME>.app` (arm64). A scan that takes
+ * whichever it finds first will happily install the arm64 build on an Intel Mac,
+ * where it cannot execute at all — and the symptom is a bundle that silently
+ * refuses to launch, not an error naming the cause.
  *
  * @param {{ releaseRoot: string, arch: string, exists: (p: string) => boolean }} deps
  * @returns {{ ok: true, path: string, subdir: string } | { ok: false, reason: string }}
@@ -259,14 +281,17 @@ export function classifyQuitResult({ wasRunning, status, stderr }) {
 
   const detail = String(stderr ?? "").trim();
   // -1743 is errAEEventNotPermitted: the user has not granted this terminal
-  // Automation access to Iris. Naming it turns an opaque failure into an
-  // instruction, because the fix is a settings pane the user has to visit.
+  // Automation access to this app. Naming it turns an opaque failure into an
+  // instruction, because the fix is a settings pane the user has to visit — and
+  // the app has to be named from PRODUCT_NAME, since the user is looking for one
+  // specific row in that pane and a stale name sends them to the wrong one (or to
+  // a row that belongs to a different application entirely).
   const isPermission = detail.includes("-1743") || /not (been )?(allowed|permitted)/i.test(detail);
   return {
     outcome: "refused",
     reason: isPermission
-      ? "macOS refused the quit request: this terminal does not have Automation permission for Iris. " +
-        "Grant it in System Settings → Privacy & Security → Automation, or quit Iris yourself and re-run."
+      ? `macOS refused the quit request: this terminal does not have Automation permission for ${PRODUCT_NAME}. ` +
+        `Grant it in System Settings → Privacy & Security → Automation, or quit ${PRODUCT_NAME} yourself and re-run.`
       : `The quit request failed${detail ? `: ${detail}` : "."}`,
   };
 }

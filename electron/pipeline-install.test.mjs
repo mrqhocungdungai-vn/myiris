@@ -123,6 +123,12 @@ describe("pipeline-install", () => {
   it("offers to remove the transcript directory for Iris's own workspace", () => {
     // Runs used to inherit the default CLAUDE_CONFIG_DIR, so every one of them
     // wrote a transcript into the user's ~/.claude/projects/.
+    //
+    // ".iris" here is deliberate and must NOT be updated to the current state
+    // root, for the same reason legacyTranscriptDir() keeps the literal: the
+    // transcripts this asserts on were written against the PRE-RENAME workspace
+    // path, and that is the only slug they can be found under. Updating it would
+    // make this test agree with a version of the code that finds nothing.
     const dir = path.join(homeDir, ".claude", "projects", path.join(homeDir, ".iris", "workspace").replace(/[/.]/g, "-"));
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, "session.jsonl"), "{}");

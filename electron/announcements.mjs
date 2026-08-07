@@ -82,7 +82,7 @@ export function createAnnouncements({
       last_verb_used: workstream?.last_verb_used ?? null,
       note: cwd
         ? `Claude's file/terminal work for this session happens inside ${cwd}.`
-        : "No project folder is selected for this session, Claude falls back to the default workspace (~/.iris/workspace). The user can pick a folder from the UI.",
+        : "No project folder is selected for this session, Claude falls back to the default workspace (~/.myiris/workspace). The user can pick a folder from the UI.",
     };
   }
 

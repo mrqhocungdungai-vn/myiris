@@ -20,9 +20,9 @@ describe("toUnpackedPath", () => {
   });
 
   it("rewrites a packaged path to its app.asar.unpacked twin", () => {
-    const packed = "/Applications/Iris.app/Contents/Resources/app.asar/node_modules/x/claude";
+    const packed = "/Applications/MyIris.app/Contents/Resources/app.asar/node_modules/x/claude";
     expect(toUnpackedPath(packed, { existsSync: () => true })).toBe(
-      "/Applications/Iris.app/Contents/Resources/app.asar/node_modules/x/claude".replace(
+      "/Applications/MyIris.app/Contents/Resources/app.asar/node_modules/x/claude".replace(
         "/app.asar/",
         "/app.asar.unpacked/",
       ),
@@ -32,7 +32,7 @@ describe("toUnpackedPath", () => {
   it("falls back to the packed path when asarUnpack was misconfigured", () => {
     // Without the fallback the caller would report ENOENT on an app.asar.unpacked
     // path the user has never heard of; the packed path at least names the app.
-    const packed = "/Applications/Iris.app/Contents/Resources/app.asar/node_modules/x/claude";
+    const packed = "/Applications/MyIris.app/Contents/Resources/app.asar/node_modules/x/claude";
     expect(toUnpackedPath(packed, { existsSync: () => false })).toBe(packed);
   });
 
@@ -77,11 +77,11 @@ describe("resolveBundledClaude", () => {
   it("returns the unpacked path when packaged", () => {
     const requireImpl = fakeRequire({
       "@anthropic-ai/claude-agent-sdk-darwin-x64/package.json":
-        "/Iris.app/Contents/Resources/app.asar/node_modules/@anthropic-ai/claude-agent-sdk-darwin-x64/package.json",
+        "/MyIris.app/Contents/Resources/app.asar/node_modules/@anthropic-ai/claude-agent-sdk-darwin-x64/package.json",
     });
 
     expect(resolveBundledClaude({ requireImpl, existsSync: () => true, platform: "darwin", arch: "x64" })).toBe(
-      "/Iris.app/Contents/Resources/app.asar.unpacked/node_modules/@anthropic-ai/claude-agent-sdk-darwin-x64/claude",
+      "/MyIris.app/Contents/Resources/app.asar.unpacked/node_modules/@anthropic-ai/claude-agent-sdk-darwin-x64/claude",
     );
   });
 });
