@@ -673,6 +673,45 @@ against real hand tracking. `PIVOT_RETARGET_DEAD_BAND_PX` (24) is now *more*
 load-bearing than in D19, since a depth-aware picker can flip on an occluder
 drifting between camera and target with no hand movement at all.
 
+### D22 — A mark may not hide the name of the thing it marks
+
+*Added after the manual pass confirmed D20/D21 worked — "it locks onto a note
+to zoom in/out very accurately, but the white ring is so big it covers the
+note's title, so it is very hard to read."*
+
+The marks and the titles were designed against each other without either
+noticing. `galaxy-anchor-rings.ts` draws with `depthTest: false` and
+`renderOrder: 2` so a mark reads even when the node it marks sits behind the
+dense core — correct, and load-bearing for "what would I grab". Labels
+(`galaxy-label-sprites.ts`) draw with the default `renderOrder` of 0. So the
+rings always painted **after**, and therefore over, the titles.
+
+Geometry made the collision certain rather than incidental: a title sits at
+`LABEL_Y_OFFSET` 6 with `LABEL_WORLD_HEIGHT` 5, so it occupies roughly 3.5–8.5
+world units above the dot, while a node's own sphere is ~4 units. Any ring wide
+enough to stand clear of the dot it marks is wide enough to reach the text.
+Sizing alone cannot resolve it — a ring small enough to stay under the title
+would be inside the node.
+
+So the **label wins the draw order** (`renderOrder: 3`), which states the rule
+directly: a mark exists to say "this is the note", so a mark that hides the
+note's name defeats its own purpose. The label keeps `depthTest: true` and the
+rings keep `depthWrite: false`, so this changes only which of the two is on top,
+not the label's own occlusion behaviour.
+
+Draw order alone was not enough, though. Legible-over-a-bright-ring is still
+worse than legible, and D21's `ZOOM_MIN_RADIUS` of 40 is exactly where an
+anchored note is inspected most closely — the marks were sized for a camera much
+further out, and at arrival read as a white disc around the note rather than a
+ring on it. Both the diameters (16/24/34 → 13/17/23) and the stroke weights
+(5/9/14 → 5/6/9) come down, and the two brighter rings lose a little alpha. The
+marks still differ from each other in weight, which is the whole of how D10 keeps
+them distinguishable without spending a colour.
+
+*Unvalidated, like every other constant in this cluster:* these are reasoned
+from the label geometry rather than measured, and the next manual pass should
+say whether the engaged mark is still unmistakable at the new weight.
+
 ### D9 — The rail is chrome, and that is the whole of its reachability
 
 The rail island carries `HUD_CHROME_CLASS` and `hud-hit`. It then inherits both the

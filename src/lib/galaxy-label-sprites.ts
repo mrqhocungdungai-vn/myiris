@@ -57,6 +57,14 @@ function createSlot(): Slot {
   });
   const sprite = new THREE.Sprite(material);
   sprite.visible = false;
+  // Above the anchor marks (`galaxy-anchor-rings.ts` uses renderOrder 2), which
+  // are drawn with `depthTest: false` so they read through the dense core. That
+  // makes them paint over whatever was drawn before them — including the title
+  // of the very note they are marking, whose band they necessarily cross: the
+  // label sits ~3.5-8.5 world units above the dot and any ring wide enough to
+  // stand clear of the dot reaches it. A mark exists to say "this is the note",
+  // so a mark that hides the note's name defeats itself; the name wins.
+  sprite.renderOrder = 3;
   return { ctx, texture, material, sprite, assignedId: null };
 }
 

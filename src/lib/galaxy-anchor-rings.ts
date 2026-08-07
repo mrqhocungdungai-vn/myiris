@@ -31,23 +31,31 @@ const CANVAS_SIZE = 128;
 // the dot, not the dot's colour) and from each other in WEIGHT.
 const CANDIDATE_COLOR = "rgba(214, 228, 255, 0.42)";
 const CANDIDATE_LINE_PX = 5;
-const ANCHOR_COLOR = "rgba(255, 255, 255, 0.92)";
-const ANCHOR_LINE_PX = 9;
+const ANCHOR_COLOR = "rgba(255, 255, 255, 0.80)";
+const ANCHOR_LINE_PX = 6;
 // The same ring again, drawn heavier, shown ONLY while a camera drive is
 // actually engaged (galaxy-note-reachable-by-hand tasks.md 6.5, from the manual
 // pass): closing a fist has to pass MediaPipe's three-consecutive-frame pose
 // gate before anything can happen, and with no mark for "the grab caught" that
 // unavoidable delay reads as the anchor being slow to move. A distinct engaged
 // state turns the wait into visible confirmation.
-const ENGAGED_COLOR = "rgba(255, 255, 255, 0.98)";
-const ENGAGED_LINE_PX = 14;
+const ENGAGED_COLOR = "rgba(255, 255, 255, 0.92)";
+const ENGAGED_LINE_PX = 9;
 
 // World-space diameters. A node's own sphere is ~4 units (three-forcegraph's
-// default `nodeRelSize`), so both rings stand clear of the dot they mark, and
-// the anchor's is the wider of the two.
-const CANDIDATE_WORLD_SIZE = 16;
-const ANCHOR_WORLD_SIZE = 24;
-const ENGAGED_WORLD_SIZE = 34;
+// default `nodeRelSize`), so every ring stands clear of the dot it marks, and
+// the engaged one is the widest.
+//
+// Kept as tight to the dot as that clearance allows (D22). The title sits
+// ~3.5-8.5 units above the node, so a ring wide enough to clear the dot at all
+// necessarily crosses the text band — the label's own render order is what
+// keeps the words legible over it, but a fat, bright ring still costs contrast
+// behind them. These were 16/24/34 with 5/9/14px strokes, which at the new
+// arrival distance read as a white disc around the note rather than a ring on
+// it. Narrower and dimmer marks say the same thing and cover less of it.
+const CANDIDATE_WORLD_SIZE = 13;
+const ANCHOR_WORLD_SIZE = 17;
+const ENGAGED_WORLD_SIZE = 23;
 
 export type Vec3Like = { x: number; y: number; z: number };
 
