@@ -67,12 +67,28 @@ html:not(.hud-mode) .setup-backdrop {
   pointer-events: none;
 }
 
+/* ===== HUD chrome =====
+   The islands that stay on top of a coexisting layer (the second-brain galaxy,
+   the drawing panel): the review/question stack, the tasks column, the
+   comms/camera column, and the orb cluster. This one rule is why they paint
+   above such a layer AND — via `src/lib/hudChrome.ts`, which matches this same
+   class — why the hand can still dwell-click them while one is open
+   (hud-panels-stay-hand-reachable-under-galaxy design.md D1). An island that
+   omits the class drops beneath the layer, which is a visible failure rather
+   than a silently hand-unreachable one. Do not re-state this z-index on the
+   individual islands.
+   Not chrome, deliberately: an open reader. It paints a full-screen backdrop
+   (`.reader-backdrop`, z-index 40) over all of this, takes every gesture, and
+   holds them until it closes — hand reach follows mouse reach either way. */
+.hud-chrome {
+  z-index: 2;
+}
+
 /* ===== Orb cluster (bottom-right) ===== */
 .hud-orb-cluster {
   position: absolute;
   right: 26px;
   bottom: 24px;
-  z-index: 2;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -209,7 +225,6 @@ html:not(.hud-mode) .setup-backdrop {
   position: absolute;
   top: 18px;
   right: 18px;
-  z-index: 2;
   display: flex;
   flex-direction: column;
   align-items: flex-end;
@@ -237,7 +252,6 @@ html:not(.hud-mode) .setup-backdrop {
   position: absolute;
   left: 22px;
   bottom: 24px;
-  z-index: 2;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -666,8 +680,9 @@ html:not(.hud-mode) .setup-backdrop {
 
 /* ===== Second-brain galaxy (toggleable, second-brain-galaxy-view) =====
    Fullscreen (unlike the bounded drawing panel) — an immersive "fly through
-   your vault" backdrop — but z-index 1 keeps it beneath the orb
-   cluster/tasks/comms (z-index 2) so the toggle stays reachable to close it. */
+   your vault" backdrop — but z-index 1 keeps it beneath `.hud-chrome` (above),
+   so every HUD island stays visible, clickable and dwell-reachable over it
+   rather than only the toggle that closes it. */
 .hud-galaxy,
 .hud-galaxy-loading,
 .hud-galaxy-empty {

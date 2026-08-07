@@ -97,11 +97,37 @@ flowchart TD
   AppUI -->|"Closed_Fist"| Close["Close reader"]
 ```
 
+### Which layer owns the hand
+
+The Glass HUD has two gesture modes, and nothing declares which is in force —
+it is already visible on screen. **Hand reach follows mouse reach**: whatever
+the mouse can click at this moment, the hand can dwell at this moment.
+
+- **Shared, decided by position.** The galaxy and the drawing panel are painted
+  *beneath* `.hud-chrome` — the review stack, the tasks column, the comms
+  column, the orb island — which stay visible and mouse-clickable over them. So
+  each keeps its own bindings and the hand belongs to whichever one it is over:
+  dwell and palm-scroll work on the chrome, the layer's own drives work on the
+  layer. `src/lib/hudChrome.ts` is the single declaration both the CSS stacking
+  and the gesture loops read.
+- **Focused, held exclusively.** An open reader — the task run-reader or the
+  vault note reader — paints a full-screen backdrop over all of it and takes
+  *every* gesture until it closes, at which point the hand returns to the shared
+  mode. `App.tsx`'s one `readerOpen` value is what says so.
+
+One asymmetry inside the shared mode: the galaxy's **pointing** drives (node
+dwell, inspect) yield over chrome, so a finger aimed at a task card never also
+charges a dwell on a node behind it. Its **camera** drives (fist orbit, two-palm
+zoom) do not yield — they act on the whole view, and stalling an orbit because
+the hand crossed a panel would feel broken. Authoritative: the
+`two-hand-gestures` and `second-brain-gesture-nav` specs.
+
 ### Second-brain galaxy gestures
 
 The second-brain galaxy (`src/lib/galaxy-nav.ts`, driven by `VaultGalaxy.tsx`)
-partitions the hand into its own set of drives, active only while the galaxy
-is open and no reader is open over it:
+partitions the hand into its own set of drives, active while the galaxy is open,
+no reader is open over it, and the hand is over the galaxy rather than the HUD
+chrome above it:
 
 | Pose | Action |
 | --- | --- |

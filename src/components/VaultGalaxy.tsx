@@ -16,6 +16,7 @@ import {
   type GalaxyDrive,
   type GalaxyNavNode,
 } from "../lib/galaxy-nav";
+import { hudChromeAtPoint } from "../lib/hudChrome";
 import { selectLabels } from "../lib/galaxy-labels";
 import { createLabelPool, type LabelPool } from "../lib/galaxy-label-sprites";
 
@@ -827,8 +828,21 @@ function GalaxyCanvas({
         // primary is chosen with a preference for POINTING hands, so a Victory
         // hand can lose primacy while still being the hand the user is
         // inspecting with (design.md D4).
-        const targetPoint =
+        const pointingAt =
           drive === "inspect" ? inspectingHand(hand)?.point ?? null : drive === "dwell" ? hand.point : null;
+
+        // The galaxy owns the hand only where the galaxy is the top layer
+        // (hud-panels-stay-hand-reachable-under-galaxy design.md D3). The HUD
+        // chrome is painted above it and keeps its own dwell, so a finger aimed
+        // at a task card must not also charge a node dwell on whatever node
+        // projects behind that card, nor light its cluster.
+        //
+        // Only the POINTING drives yield. Orbit and zoom are read above and are
+        // untouched: they act on the whole view rather than on a thing under
+        // the finger, and a camera that stalled whenever the hand crossed a
+        // panel would read as a worse fault than the one this fixes.
+        const targetPoint =
+          pointingAt && hudChromeAtPoint(pointingAt.x, pointingAt.y) ? null : pointingAt;
 
         // Only a pose that MEANS to point at something resolves a target
         // (design.md D3): the charging dwell, or the inspect pose. An earlier

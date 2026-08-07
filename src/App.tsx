@@ -12,6 +12,7 @@ import {
 } from "./lib/tasks";
 import { isVerb, modelLabel, verbLabel } from "./lib/verbs";
 import { resolveGestureContext, orbGestureEngaged } from "./lib/gestureContext";
+import { isHudChrome } from "./lib/hudChrome";
 import { readWebglHighFidelity, deriveWebglSettings, WEBGL_QUALITY_STORAGE_KEY } from "./lib/webgl-quality";
 import { uiSounds } from "./lib/sounds";
 import { useAudioPipeline } from "./hooks/useAudioPipeline";
@@ -1353,6 +1354,12 @@ export default function App() {
   }
 
   const expandedTask = useMemo(() => tasks.find((task) => task.id === expandedTaskId) ?? null, [tasks, expandedTaskId]);
+  // The focus mode's one condition (hud-panels-stay-hand-reachable-under-galaxy
+  // design.md D0/D6): an open reader — task run-reader or vault note reader —
+  // paints a full-screen backdrop and takes EVERY gesture until it closes. One
+  // value, read by both gesture loops, the galaxy, and the context resolver, so
+  // the four cannot disagree about whether something is being read.
+  const readerOpen = expandedTaskId != null || openNote != null;
   // Bookkeeping (which element, when it started, whether it already fired)
   // stays in a ref — only the render-visible facts below become state.
   const dwellRef = useRef<{ el: HTMLElement; startedAt: number; fired: boolean } | null>(null);
@@ -1391,11 +1398,11 @@ export default function App() {
     };
     const loop = () => {
       const h = liveHandRef.current;
-      // Suppressed while the reader is open — it owns the pointer/gesture
-      // surface itself. (Suppression for the drawing panel / second-brain
-      // galaxy is handled below, AFTER actionable resolves, so the HUD
-      // control island can be exempted — design.md D11.)
-      if (!handControl || !h.present || !h.point || !h.pointing || expandedTaskId) {
+      // Focus mode: an open reader takes every gesture until it closes, so
+      // nothing outside it dwells. (The shared mode's positional rule for a
+      // coexisting layer is applied below, AFTER actionable resolves, since it
+      // needs an element to test.)
+      if (!handControl || !h.present || !h.point || !h.pointing || readerOpen) {
         dwellRef.current = null;
         syncDwell(false, false);
         raf = requestAnimationFrame(loop);
@@ -1411,13 +1418,13 @@ export default function App() {
         return;
       }
 
-      // A fullscreen HUD layer (drawing panel or second-brain galaxy) owns
-      // the pointer/gesture surface beneath it (for the galaxy, gesture
-      // bindings are its own — second-brain-gesture-nav) — EXCEPT the HUD
-      // control island, which stays dwell-reachable so a layer opened
-      // hands-free can also be closed hands-free (design.md D11). Resolved
-      // after `actionable` so there is something to test against here.
-      if ((drawingActive || secondBrainActive) && !actionable.closest(".hud-controls")) {
+      // Shared mode: a coexisting HUD layer (the drawing panel or the
+      // second-brain galaxy) owns only the surface it actually occupies. Both
+      // are painted BENEATH `.hud-chrome`, where the islands stay visible and
+      // mouse-clickable — so the hand reaches them too, and only the layer's
+      // own surface is suppressed. Testing "is a layer active" instead left
+      // every island but `.hud-controls` visible, clickable, and untouchable.
+      if ((drawingActive || secondBrainActive) && !isHudChrome(actionable)) {
         dwellRef.current = null;
         syncDwell(false, false);
         raf = requestAnimationFrame(loop);
@@ -1444,18 +1451,28 @@ export default function App() {
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [handControl, expandedTaskId, drawingActive, secondBrainActive]);
+  }, [handControl, readerOpen, drawingActive, secondBrainActive]);
 
   // Open-palm hold-to-scroll: scrolls whichever scrollable region (Comms or
-  // Work Stream column) is under the hand.
+  // Work Stream column, on the deck or in the HUD) is under the hand.
   useEffect(() => {
     let raf = 0;
-    const SCROLLABLES = ".activity-timeline, .comms-scroll, .work-scroll, .history-grid";
+    // `.hud-work` / `.hud-comms` are the HUD's own scroll containers. Without
+    // them this loop only ever named deck classes, so palm-scroll in the Glass
+    // HUD never worked at all — layer or no layer (design.md D4).
+    const SCROLLABLES =
+      ".activity-timeline, .comms-scroll, .work-scroll, .history-grid, .hud-work, .hud-comms";
     const loop = () => {
       const h = liveHandRef.current;
-      if (handControl && h?.openPalm && h.point && !expandedTaskId && !showHistory && !drawingActive && !secondBrainActive) {
+      // Two open palms mean scale, and only scale (design.md D5) — otherwise a
+      // palm drifting over a column mid-zoom would scroll it as well.
+      const twoPalms = (h?.hands.filter((item) => item.openPalm).length ?? 0) >= 2;
+      if (handControl && h?.openPalm && h.point && !twoPalms && !readerOpen && !showHistory) {
         const el = document.elementFromPoint(h.point.x, h.point.y);
-        const target = el?.closest<HTMLElement>(SCROLLABLES) ?? null;
+        // Shared mode, same positional rule as the dwell: a coexisting layer
+        // owns its own surface, the chrome above it keeps its own bindings.
+        const layerOwnsPoint = (drawingActive || secondBrainActive) && !isHudChrome(el);
+        const target = layerOwnsPoint ? null : el?.closest<HTMLElement>(SCROLLABLES) ?? null;
         if (target) {
           const rect = target.getBoundingClientRect();
           const center = rect.top + rect.height / 2;
@@ -1472,7 +1489,7 @@ export default function App() {
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [handControl, expandedTaskId, showHistory, drawingActive, secondBrainActive]);
+  }, [handControl, readerOpen, showHistory, drawingActive, secondBrainActive]);
 
   // Closed-fist rotates the Arc Reactor orb, pinch scales it — only on the
   // deck, with the reader closed and neither the drawing panel nor the
@@ -1535,12 +1552,12 @@ export default function App() {
   const gestureContext = useMemo(
     () =>
       resolveGestureContext({
-        readerOpen: expandedTaskId != null || openNote != null,
+        readerOpen,
         secondBrainActive,
         drawingActive,
         historyOpen: showHistory,
       }),
-    [expandedTaskId, openNote, secondBrainActive, drawingActive, showHistory],
+    [readerOpen, secondBrainActive, drawingActive, showHistory],
   );
 
   const handAction = useMemo(() => {
@@ -1872,7 +1889,7 @@ export default function App() {
           galaxyPositionsRef={galaxyPositionsRef}
           onOpenNote={openNoteFromGalaxy}
           onForceCloseSecondBrain={() => setSecondBrainActive(false)}
-          readerOpen={openNote != null || expandedTaskId != null}
+          readerOpen={readerOpen}
           webglHighFidelity={webglHighFidelity}
         />
       ) : (

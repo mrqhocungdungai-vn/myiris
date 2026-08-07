@@ -35,6 +35,7 @@ import type { EyeState } from "../hooks/useEyeTracking";
 import { createReadoutLayout } from "../lib/eye-hud";
 import { formatRecStamp } from "../lib/rec-clock";
 import { acceptedKey } from "../lib/tasks";
+import { HUD_CHROME_CLASS } from "../lib/hudChrome";
 
 function HudCamera({
   stream,
@@ -330,7 +331,7 @@ export default function HudShell({
           a lit, always-visible island rather than tucked behind a toggle. A
           parked review stacks beneath it (design.md D3) in the same island. */}
       {pipelineAvailable && (poQuestion || taskReview) ? (
-        <div className="hud-review-stack hud-hit">
+        <div className={`hud-review-stack hud-hit ${HUD_CHROME_CLASS}`}>
           {poQuestion ? (
             <PoQuestionBanner
               questions={poQuestion.questions}
@@ -352,7 +353,7 @@ export default function HudShell({
 
       {/* Slim work stream, top-right — collapsible like Comms (pipeline-only) */}
       {pipelineAvailable && visibleTasks.length > 0 ? (
-        <div className="hud-right">
+        <div className={`hud-right ${HUD_CHROME_CLASS}`}>
           <button
             type="button"
             className={`hud-comms-toggle hud-hit ${workOpen ? "open" : ""}`}
@@ -382,7 +383,7 @@ export default function HudShell({
       ) : null}
 
       {/* Left column, bottom-left: collapsible comms on top, camera at the corner */}
-      <div className="hud-left">
+      <div className={`hud-left ${HUD_CHROME_CLASS}`}>
         {recentTranscript.length > 0 ? (
           <>
             <button
@@ -473,7 +474,7 @@ export default function HudShell({
       </div>
 
       {/* Orb cluster, bottom-right */}
-      <div className="hud-orb-cluster hud-hit">
+      <div className={`hud-orb-cluster hud-hit ${HUD_CHROME_CLASS}`}>
         <div className={`hud-caption ${captionDim ? "dim" : ""}`}>
           {awake ? caption : wakeWordEnabled ? "Say “Hey Iris”" : "Iris is asleep"}
         </div>

@@ -537,6 +537,10 @@
    orb/camera/comms clusters (bottom). Both banners can be live at once
    (prompt-review-gate spec D3) — they stack in this one flex column, PO
    question first. */
+/* Stacking comes from `.hud-chrome` in hud.css, which this element also
+   carries — that is what keeps it above an open galaxy/drawing panel and
+   dwell-reachable there. It previously declared no z-index at all, so the
+   galaxy (z-index 1) painted straight over a live PO question. */
 .hud-review-stack {
   position: absolute;
   top: 18px;
