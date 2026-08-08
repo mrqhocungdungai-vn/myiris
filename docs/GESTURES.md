@@ -455,9 +455,12 @@ A failed model load degrades to "no overlays" with nothing shown to the user.
 | --- | --- |
 | Tracking hook, `EyeState`/`TrackedEye` types | `src/hooks/useEyeTracking.ts` |
 | Iris center/radius, the presence gate | `src/lib/eye.ts` |
-| Ring geometry, acquire easing, panel side-selection | `src/lib/eye-hud.ts` |
+| Ring geometry, acquire easing, the lock beat, the dial gauge, panel side-selection | `src/lib/eye-hud.ts` |
 | The SVG ring stack and the tether | `src/components/EyeReticle.tsx` |
 | The HTML telemetry panel | `src/components/EyeReadout.tsx` |
+| Value formatting, meter scales, the display ease, the load ladder | `src/lib/telemetry-format.ts` |
+| Host sampling (main process) | `electron/system-telemetry.mjs`, `electron/capabilities/hud-telemetry.mjs` |
+| The renderer's subscription | `src/hooks/useSystemTelemetry.ts` |
 | Styling | `src/styles/claude.css` |
 
 **Which eye gets what is fixed.** The ring is driven by MediaPipe's
@@ -474,7 +477,56 @@ function of that eye alone (`resolveReadoutLayout` in `eye-hud.ts`), so near the
 frame's left edge it is simply **clipped**. That is deliberate: it keeps each
 eye's instrument in its own half of the frame, where the two can never collide,
 and it keeps the panel from relocating while the user turns their head. The
-content is placeholder telemetry, so clipping loses nothing real.
+readout is decorative and nothing depends on reading it, so clipping loses
+nothing real — and that has to stay true, because the moment something needs
+the panel legible this placement rule has to be re-opened.
+
+### What the panel shows
+
+**The real host** (`hud-readout-shows-real-telemetry`): processor utilization,
+graphics utilization, and network throughput in each direction, measured in the
+main process **once a second, and only while the camera is on**. There is no
+separate switch, nothing is sampled in the background, nothing is written to
+disk, and nothing outside these two overlay components may read the numbers —
+no verb, no prompt, no run.
+
+Everything comes from the platform without elevated privileges: the processor
+from `os.cpus()` deltas (no subprocess at all), graphics from `ioreg`, network
+from `netstat -ib` byte counters. Two parser traps are load-bearing and both are
+pinned by fixtures in `electron/system-telemetry.test.mjs` — the graphics
+dictionary carries a decoy key that a slightly loose pattern matches *first* and
+reports roughly triple, and the network table's rows vary in column count so
+only their trailing fields can be indexed.
+
+**A measurement that cannot be taken reads as absent, never as zero** — a host
+with no graphics counter, a failed probe, the first second before a rate exists.
+Zero is a claim about the machine; absence is the truth.
+
+**Utilizations ease between samples; rates do not.** A utilization is a level,
+so interpolating shows values the machine genuinely passed through. A byte rate
+is an integral over the sample window, so a value between two window-averages is
+the average of nothing — and since rates span decades, easing one would draw
+magnitudes that never happened. Displayed figures are written **only when the
+rendered value changes**, which is also why the rows no longer update in
+lockstep: the panel's old tell was six elements flashing on one shared interval.
+
+Under real load a single ladder — with hysteresis and a minimum dwell, read from
+raw samples rather than eased ones — moves the status token, speeds up the scan
+band, and puts the panel's **one** warning tone on whichever utilization is
+higher. At nominal load no row is amber at all. The ring answers separately: its
+24-tick dial is lit from processor load, which is what finally makes the
+"graduated element" the spec asks for measure something. The ring alerts; the
+panel reports.
+
+The foot carries the last fourteen real processor samples as discrete bars — the
+only element in the HUD with a time axis. Bars rather than block glyphs on
+purpose: the font stack falls back, fallback glyphs can differ in advance width,
+and a data-driven glyph strip would therefore change width with its data.
+
+The panel's height budget is tight and the arithmetic is recorded on
+`READOUT_GEOMETRY.height` in `src/lib/eye-hud.ts`. **Any new row has to be paid
+for there**, and checked against the *deck's* camera dock — the HUD's larger
+frame has slack and will hide an overflow.
 
 ### HUD camera zoom
 

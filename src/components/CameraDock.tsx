@@ -106,6 +106,7 @@ export default function CameraDock({
   handRef,
   eye,
   eyeRef,
+  telemetryRef,
   stream,
   actionLabel,
   actionTone,
@@ -117,6 +118,8 @@ export default function CameraDock({
   eye: EyeState;
   /** Per-frame eye data (useEyeTracking's stateRef) — feeds the eye overlays. */
   eyeRef: { current: EyeState };
+  /** Latest host measurement (useSystemTelemetry's sampleRef) — feeds the readout and the ring's dial. */
+  telemetryRef: { current: TelemetrySample };
   stream: MediaStream | null;
   actionLabel: string;
   actionTone: string;
@@ -143,8 +146,8 @@ export default function CameraDock({
           <video ref={videoRef} autoPlay playsInline muted />
           <div className="cam-scan" />
           <HandSkeleton hands={hand.hands} handsRef={handRef} />
-          <EyeReticle eye={eye} eyeRef={eyeRef} layoutRef={readoutLayoutRef} />
-          <EyeReadout eye={eye} eyeRef={eyeRef} layoutRef={readoutLayoutRef} />
+          <EyeReticle eye={eye} eyeRef={eyeRef} telemetryRef={telemetryRef} layoutRef={readoutLayoutRef} />
+          <EyeReadout eye={eye} eyeRef={eyeRef} telemetryRef={telemetryRef} layoutRef={readoutLayoutRef} />
           <span className="cam-status">
             <i />
             {hand.present ? "tracking" : "no hand"}

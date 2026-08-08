@@ -21,11 +21,19 @@ const SEARCH_EXTENSIONS = new Set([".ts", ".tsx"]);
 
 // Classes confirmed built dynamically rather than written as a literal
 // className, each with a reason — the explicit allowance design D2/task 2.4
-// requires. Empty today: every dynamic className in the renderer (`deck`,
-// `deck-body`, `boot-line`, `project-bar`, `hud-mode`, and the
-// `classList.toggle` call in App.tsx) was enumerated for this change and none
-// constructs a claude.css class. Add an entry here, with why, if that changes.
-const DYNAMIC_ALLOWLIST = new Map();
+// requires. Add an entry here, with why, if a new one appears.
+const DYNAMIC_ALLOWLIST = new Map(
+  // The eye readout's history strip (hud-readout-shows-real-telemetry D11): one
+  // bar height per quantized processor sample. The class strings are built once
+  // into BAR_CLASS in src/lib/telemetry-format.ts and thereafter only indexed,
+  // precisely so updating the strip never builds a string on the frame path — so
+  // none of them appears as a literal here. HISTORY_LEVELS in that module is the
+  // count; keep the two in step.
+  ["h0", "h1", "h2", "h3", "h4", "h5", "h6", "h7", "h8"].map((name) => [
+    name,
+    "eye-readout history-strip bar height, indexed out of BAR_CLASS in src/lib/telemetry-format.ts",
+  ]),
+);
 
 function stripComments(css) {
   return css.replace(/\/\*[\s\S]*?\*\//g, "");

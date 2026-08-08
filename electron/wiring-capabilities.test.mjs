@@ -101,18 +101,28 @@ function makeDeps(overrides = {}) {
 }
 
 describe("wiring-capabilities: createCapabilitiesWiring", () => {
-  it("constructs both capabilities, run-exec, and the Gemini modules without throwing", () => {
+  it("constructs every capability, run-exec, and the Gemini modules without throwing", () => {
     expect(() => createCapabilitiesWiring(makeDeps())).not.toThrow();
   });
 
-  it("returns both capabilities in the capabilities array, in canvas-then-second-brain order", () => {
+  it("returns every capability in the capabilities array, in registration order", () => {
     const result = createCapabilitiesWiring(makeDeps());
-    expect(result.capabilities).toHaveLength(2);
+    expect(result.capabilities).toHaveLength(3);
     expect(result.capabilities[0]).toBe(result.canvasCapability);
     expect(result.capabilities[1]).toBe(result.secondBrainCapability);
+    expect(result.capabilities[2]).toBe(result.hudTelemetryCapability);
   });
 
-  it("passes both capabilities into geminiTools and geminiPrompts for composition", () => {
+  it("registers the HUD telemetry capability with no tool declaration to contribute", () => {
+    // The tool and prompt composition below runs over every capability, so a
+    // capability that contributes nothing to either has to be tolerated rather
+    // than special-cased — the contract says every field is optional.
+    const result = createCapabilitiesWiring(makeDeps());
+    expect(result.hudTelemetryCapability.toolDeclarations).toEqual([]);
+    expect(result.hudTelemetryCapability.promptFragment).toBeUndefined();
+  });
+
+  it("passes every capability into geminiTools and geminiPrompts for composition", () => {
     const result = createCapabilitiesWiring(makeDeps());
     expect(createGeminiTools).toHaveBeenCalledWith(expect.objectContaining({ capabilities: result.capabilities }));
     expect(createGeminiPrompts).toHaveBeenCalledWith(expect.objectContaining({ capabilities: result.capabilities }));

@@ -19,6 +19,7 @@ import { useAudioPipeline } from "./hooks/useAudioPipeline";
 import { useHandoffFx } from "./hooks/useHandoffFx";
 import { useHandControl, SYSTEM_DEFAULT_CAMERA, type HandPoint } from "./hooks/useHandControl";
 import { useEyeTracking } from "./hooks/useEyeTracking";
+import { useSystemTelemetry } from "./hooks/useSystemTelemetry";
 import { useWakeWord } from "./hooks/useWakeWord";
 import { SYSTEM_DEFAULT_MIC } from "./lib/mic-device";
 import { wakeCaption } from "./lib/wake-caption";
@@ -1402,6 +1403,14 @@ export default function App() {
   // handControl boolean as everything else — no new toggle, no new preference.
   const { state: eye, stateRef: liveEyeRef } = useEyeTracking(handStream, handControl);
 
+  // The readout panel's host measurements, on the same gate and here for the
+  // same reason: EyeReadout mounts in BOTH camera surfaces and unmounts on every
+  // face loss, so subscribing inside it would open two subscriptions and thrash
+  // the sampler on every blink. Gated on the camera rather than on a face being
+  // present — presence flickers by design, and the sampler needs a second of
+  // observation before it can report a rate at all.
+  const { sampleRef: liveTelemetryRef } = useSystemTelemetry(handControl);
+
   useEffect(() => {
     if (handError) pushLog("error", `Hand control: ${handError}`);
   }, [handError]);
@@ -1891,6 +1900,7 @@ export default function App() {
           handRef={liveHandRef}
           eye={eye}
           eyeRef={liveEyeRef}
+          telemetryRef={liveTelemetryRef}
           handStream={handStream}
           handActionLabel={handAction.label}
           handActionTone={handAction.tone}
@@ -1959,6 +1969,7 @@ export default function App() {
               handRef={liveHandRef}
               eye={eye}
               eyeRef={liveEyeRef}
+              telemetryRef={liveTelemetryRef}
               stream={handStream}
               actionLabel={handAction.label}
               actionTone={handAction.tone}

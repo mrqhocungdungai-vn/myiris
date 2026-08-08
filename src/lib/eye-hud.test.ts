@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
   ACQUIRE_MS,
+  LOCK_MS,
+  LOCK_STRETCH,
   PANEL_MS,
   READOUT_GEOMETRY,
   TETHER_MS,
@@ -10,6 +12,8 @@ import {
   arcPath,
   createReadoutLayout,
   dashPattern,
+  gaugeTicks,
+  lockSettle,
   panelReveal,
   polarPoint,
   resolveReadoutLayout,
@@ -164,6 +168,75 @@ describe("the acquisition stagger", () => {
   it("never lets the panel lead the tether", () => {
     for (let t = 0; t < ACQUIRE_MS + TETHER_MS + PANEL_MS + 100; t += 13) {
       expect(panelReveal(t)).toBeLessThanOrEqual(tetherReveal(t));
+    }
+  });
+});
+
+describe("lockSettle", () => {
+  it("is at full stretch exactly when convergence completes", () => {
+    expect(lockSettle(ACQUIRE_MS)).toBe(1);
+    expect(lockSettle(0)).toBe(1);
+  });
+
+  it("has fully settled by the end of the beat", () => {
+    expect(lockSettle(ACQUIRE_MS + LOCK_MS)).toBe(0);
+    expect(lockSettle(ACQUIRE_MS + LOCK_MS + 5000)).toBe(0);
+  });
+
+  it("decays monotonically, never rebounding", () => {
+    let previous = Number.POSITIVE_INFINITY;
+    for (let t = ACQUIRE_MS; t <= ACQUIRE_MS + LOCK_MS; t += 7) {
+      const value = lockSettle(t);
+      expect(value).toBeLessThanOrEqual(previous);
+      previous = value;
+    }
+  });
+
+  it("stays in range, so the crosshair never inverts or overshoots its stretch", () => {
+    for (let t = 0; t <= ACQUIRE_MS + LOCK_MS + 200; t += 11) {
+      const value = lockSettle(t);
+      expect(value).toBeGreaterThanOrEqual(0);
+      expect(value).toBeLessThanOrEqual(1);
+      // The multiplier the reticle actually applies.
+      const stretch = 1 + (LOCK_STRETCH - 1) * value;
+      expect(stretch).toBeGreaterThanOrEqual(1);
+      expect(stretch).toBeLessThanOrEqual(LOCK_STRETCH);
+    }
+  });
+
+  it("spends most of the beat nearly settled, so the lock snaps rather than fades", () => {
+    expect(lockSettle(ACQUIRE_MS + LOCK_MS / 2)).toBeLessThan(0.2);
+  });
+
+  it("does not delay the tether or the panel", () => {
+    // The beat runs alongside the staged arrival; it must not gate it.
+    expect(tetherReveal(ACQUIRE_MS + TETHER_MS)).toBe(1);
+    expect(panelReveal(ACQUIRE_MS + TETHER_MS + PANEL_MS)).toBe(1);
+  });
+});
+
+describe("gaugeTicks", () => {
+  it("marks nothing at rest and everything at full", () => {
+    expect(gaugeTicks(0, 24)).toBe(0);
+    expect(gaugeTicks(1, 24)).toBe(24);
+  });
+
+  it("marks nothing — not zero — when there is no measurement", () => {
+    expect(gaugeTicks(null, 24)).toBe(0);
+    expect(gaugeTicks(Number.NaN, 24)).toBe(0);
+  });
+
+  it("stays within the dial for out-of-range readings", () => {
+    expect(gaugeTicks(-1, 24)).toBe(0);
+    expect(gaugeTicks(4, 24)).toBe(24);
+  });
+
+  it("rises with the measurement and never falls back", () => {
+    let previous = -1;
+    for (let value = 0; value <= 1; value += 0.01) {
+      const ticks = gaugeTicks(value, 24);
+      expect(ticks).toBeGreaterThanOrEqual(previous);
+      previous = ticks;
     }
   });
 });

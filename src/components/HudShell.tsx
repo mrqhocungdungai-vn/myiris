@@ -43,6 +43,7 @@ function HudCamera({
   handRef,
   eye,
   eyeRef,
+  telemetryRef,
   actionLabel,
   actionTone,
   enlarged,
@@ -53,6 +54,7 @@ function HudCamera({
   handRef: { current: HandState };
   eye: EyeState;
   eyeRef: { current: EyeState };
+  telemetryRef: { current: TelemetrySample };
   actionLabel: string;
   actionTone: string;
   /** glass-hud-mode: the camera-size control's state. Standard size is the default. */
@@ -89,8 +91,8 @@ function HudCamera({
         <video ref={videoRef} autoPlay playsInline muted />
         <div className="cam-scan" />
         <HandSkeleton hands={hand.hands} handsRef={handRef} />
-        <EyeReticle eye={eye} eyeRef={eyeRef} layoutRef={readoutLayoutRef} />
-        <EyeReadout eye={eye} eyeRef={eyeRef} layoutRef={readoutLayoutRef} />
+        <EyeReticle eye={eye} eyeRef={eyeRef} telemetryRef={telemetryRef} layoutRef={readoutLayoutRef} />
+        <EyeReadout eye={eye} eyeRef={eyeRef} telemetryRef={telemetryRef} layoutRef={readoutLayoutRef} />
         {/* Top-left, the one corner not already taken: `.cam-status` is
             top-right and `.gesture-chip` bottom-left (design D2). The
             RECORDING line and the clock are one block, so an audience reads
@@ -167,6 +169,7 @@ export default function HudShell({
   handRef,
   eye,
   eyeRef,
+  telemetryRef,
   handStream,
   handActionLabel,
   handActionTone,
@@ -241,6 +244,7 @@ export default function HudShell({
   // overlays are not specialized per surface, so both get identical props.
   eye: EyeState;
   eyeRef: { current: EyeState };
+  telemetryRef: { current: TelemetrySample };
   handStream: MediaStream | null;
   handActionLabel: string;
   handActionTone: string;
@@ -464,6 +468,7 @@ export default function HudShell({
               handRef={handRef}
               eye={eye}
               eyeRef={eyeRef}
+              telemetryRef={telemetryRef}
               actionLabel={handActionLabel}
               actionTone={handActionTone}
               enlarged={cameraEnlarged}

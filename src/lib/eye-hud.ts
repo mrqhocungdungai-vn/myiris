@@ -157,6 +157,45 @@ export function panelReveal(elapsedMs: number): number {
   return clamp01((elapsedMs - ACQUIRE_MS - TETHER_MS) / PANEL_MS);
 }
 
+/** How long the lock beat runs, after convergence completes. */
+export const LOCK_MS = 400;
+/** How much longer than its resting length the crosshair is drawn at the instant of lock. */
+export const LOCK_STRETCH = 2;
+
+/**
+ * The lock beat: 1 at the moment convergence completes, decaying to 0 over
+ * LOCK_MS. Multiplied into the crosshair's length and the core dot's opacity by
+ * the same per-frame loop that positions everything else — never a CSS
+ * transition, which that loop would cancel on the very next frame (design D8).
+ *
+ * Converging and then simply running forever leaves the acquisition without a
+ * resolution: the instrument reads as having started rather than as having
+ * acquired. This is the beat that closes it.
+ *
+ * Deliberately does NOT delay or overlap the tether and panel reveals above —
+ * it runs alongside them, so the staged arrival the spec requires is unchanged.
+ */
+export function lockSettle(elapsedMs: number): number {
+  if (elapsedMs <= ACQUIRE_MS) return 1;
+  const p = clamp01((elapsedMs - ACQUIRE_MS) / LOCK_MS);
+  // Cubic ease-out: most of the stretch is gone early, so the beat reads as a
+  // snap rather than as a slow shrink.
+  return (1 - p) ** 3;
+}
+
+/**
+ * How many of a `ticks`-graduation dial are marked at this utilization.
+ *
+ * The ring's graduated element exists because the spec requires "a measurable
+ * face rather than a set of plain circles" — and until now it measured nothing.
+ * This is what it measures. An absent reading marks nothing rather than marking
+ * zero, on the same rule as everywhere else.
+ */
+export function gaugeTicks(value: number | null, ticks: number): number {
+  if (value === null || !Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(ticks, Math.round(clamp01(value) * ticks)));
+}
+
 // ---------------------------------------------------------------------------
 // The readout's placement. All lengths are frame-normalized — x in frame
 // widths, y in frame heights — which is the one coordinate system the SVG
@@ -175,10 +214,35 @@ export type ReadoutGeometry = {
   rise: number;
 };
 
+/**
+ * `height` is the one knob the panel's drawn box and its placement math both
+ * read, so it is where the panel's content has to be paid for.
+ *
+ * The arithmetic, measured rather than estimated. In the deck's camera dock the
+ * frame is ~256px, which puts `font-size: clamp(6.5px, 3.1cqw, 10px)` in its
+ * fluid band — so font is 0.031·frameW and the panel's height in em is a
+ * constant `height × 0.75 / 0.031 = height × 24.19`. The readout's content
+ * measures **13.83em**: a 1.51em header, seven 1.26em rows, seven 0.3em gaps and
+ * 1.4em of padding.
+ *
+ * At the original 0.52 that is a 12.6em box holding 13.83em of content — the
+ * panel has been overflowing since it was built, silently, because
+ * `overflow: hidden` clipped a decorative glyph line and nothing was lost. The
+ * foot now carries twenty real measurements, so it has to fit: 0.62 gives a
+ * 15.0em box and 1.16em of slack, measured in the running app.
+ *
+ * Measure it the same way if you change it: sum the CHILDREN, not the last
+ * child's offset — `.foot` has `margin-top: auto`, so its offset tracks the box
+ * and will cheerfully report the box back to you as the content.
+ *
+ * ANY future row costs ~1.56em (row plus gap) and must be paid for here. Check
+ * it against the DECK dock, never the HUD's larger frame, which clamps at the
+ * 10px ceiling and has slack that hides the problem.
+ */
 export const READOUT_GEOMETRY: ReadoutGeometry = {
   offset: 0.075,
   width: 0.3,
-  height: 0.52,
+  height: 0.62,
   rise: -0.08,
 };
 

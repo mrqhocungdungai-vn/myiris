@@ -13,6 +13,7 @@ import { createGeminiTools } from "./gemini-tools.mjs";
 import { createGeminiPrompts } from "./gemini-prompts.mjs";
 import { createCanvasCapability } from "./capabilities/canvas.mjs";
 import { createSecondBrainCapability } from "./capabilities/second-brain.mjs";
+import { createHudTelemetryCapability } from "./capabilities/hud-telemetry.mjs";
 
 /**
  * @param {{
@@ -116,6 +117,16 @@ export function createCapabilitiesWiring({
     recentUtterances,
   });
 
+  // The eye HUD's readout telemetry (eye-tracking-hud). Contributes no tool and
+  // no prompt fragment — it exists to sample the host while the camera is on and
+  // push those samples to the overlays, and nothing downstream may read them.
+  // Both of its dependencies are already parameters here, so nothing new is
+  // threaded through wiring.mjs or main.mjs.
+  const hudTelemetryCapability = createHudTelemetryCapability({
+    emitToRenderer,
+    getMainWindow,
+  });
+
   const runExec = createRunExec({
     runQueue,
     emitEvent,
@@ -153,7 +164,7 @@ export function createCapabilitiesWiring({
   });
   const { startClaudeRun } = runExec;
 
-  const capabilities = [canvasCapability, secondBrainCapability];
+  const capabilities = [canvasCapability, secondBrainCapability, hudTelemetryCapability];
 
   const geminiTools = createGeminiTools({
     getPipelineAvailable,
@@ -174,6 +185,7 @@ export function createCapabilitiesWiring({
   return {
     canvasCapability,
     secondBrainCapability,
+    hudTelemetryCapability,
     startClaudeRun,
     capabilities,
     geminiTools,

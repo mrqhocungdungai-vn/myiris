@@ -32,7 +32,7 @@ import { SHARED_SESSION_VERBS, VERB_NAMES, resolveAllVerbs } from "./verbs.mjs";
  *   getPipelineAvailable: () => boolean,
  *   modelChoices: Array<{ id: string, label: string }>,
  *   envFlag: (name: string, fallback?: boolean) => boolean,
- *   capabilities?: Array<{ toolDeclarations?: any[] }>,
+ *   capabilities?: Array<{ toolDeclarations?: any[], [key: string]: any }>,
  * }} deps
  */
 export function createGeminiTools({ getPipelineAvailable, modelChoices, envFlag, capabilities = [] }) {

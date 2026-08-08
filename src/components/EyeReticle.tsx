@@ -1,13 +1,18 @@
 import { useEffect, useRef } from "react";
 import { EYE_READOUT, EYE_RING, type EyeState } from "../hooks/useEyeTracking";
 import {
+  ACQUIRE_MS,
   EYE_RING_BOOST,
+  LOCK_MS,
+  LOCK_STRETCH,
   RING_R,
   VIEW_H,
   VIEW_W,
   acquireScale,
   arcPath,
   dashPattern,
+  gaugeTicks,
+  lockSettle,
   polarPoint,
   resolveReadoutLayout,
   segmentRing,
@@ -53,18 +58,28 @@ const DIAL_TICKS = Array.from({ length: 24 }, (_, i) => {
   return { ...tickLine(deg, 106, long ? 124 : 117), long, deg };
 });
 
-const CROSSHAIR = [0, 90, 180, 270].map((deg) => tickLine(deg, 10, 22));
+const CROSSHAIR_DEGS = [0, 90, 180, 270];
+const CROSSHAIR_INNER = 10;
+const CROSSHAIR_OUTER = 22;
+const CROSSHAIR = CROSSHAIR_DEGS.map((deg) => tickLine(deg, CROSSHAIR_INNER, CROSSHAIR_OUTER));
 
 const ACCENT_MARKERS = [-ACCENT_SPAN / 2, ACCENT_SPAN / 2].map((deg) => polarPoint(62, deg));
 
 export default function EyeReticle({
   eye,
   eyeRef,
+  telemetryRef,
   layoutRef,
 }: {
   eye: EyeState;
   /** Per-frame eye data (useEyeTracking's stateRef) — drives every transform below. */
   eyeRef: { current: EyeState };
+  /**
+   * Latest host measurement. Drives L1's graduation and nothing else here — the
+   * ring is this capability's ALERTING instrument, so what it carries is the one
+   * quantity whose rise is worth alerting on (design D12).
+   */
+  telemetryRef: { current: TelemetrySample };
   /**
    * Shared with EyeReadout. This component OWNS it: it is mounted first, so it
    * resolves the layout early in the frame and the panel reads the value this
@@ -79,6 +94,12 @@ export default function EyeReticle({
   const tetherLineRef = useRef<SVGPathElement | null>(null);
   const tetherDotRef = useRef<SVGCircleElement | null>(null);
   const tetherTickRef = useRef<SVGLineElement | null>(null);
+  const dialTickRefs = useRef<Array<SVGLineElement | null>>([]);
+  const crossRefs = useRef<Array<SVGLineElement | null>>([]);
+  const coreRef = useRef<SVGCircleElement | null>(null);
+  // Last painted lit count, so only the ticks that actually changed are
+  // rewritten — a handful of attribute writes a second, not 24 per frame.
+  const litTicksRef = useRef(-1);
 
   useEffect(() => {
     let raf = 0;
@@ -114,6 +135,39 @@ export default function EyeReticle({
         accent.setAttribute("transform", `rotate(${((now % ACCENT_PERIOD_MS) / ACCENT_PERIOD_MS) * 360})`);
       }
 
+      // L1's graduation, from the measured processor load. The dial itself
+      // stays STATIC — it is the fixed reference the rotating layers are read
+      // against, and lighting a tick is not moving it.
+      const lit = gaugeTicks(telemetryRef.current.cpu, DIAL_TICKS.length);
+      if (lit !== litTicksRef.current) {
+        const from = Math.min(lit, Math.max(0, litTicksRef.current));
+        const to = Math.max(lit, litTicksRef.current);
+        for (let i = from; i < to; i += 1) {
+          const node = dialTickRefs.current[i];
+          if (!node) continue;
+          const long = DIAL_TICKS[i].long ? " long" : "";
+          node.setAttribute("class", `eye-tick${long}${i < lit ? " lit" : ""}`);
+        }
+        litTicksRef.current = lit;
+      }
+
+      // The lock beat (design D12/R2): the crosshair is drawn long at the
+      // instant convergence completes and snaps back over LOCK_MS, so the
+      // sequence resolves into a hold instead of simply ending.
+      if (elapsed <= ACQUIRE_MS + LOCK_MS) {
+        const settle = lockSettle(elapsed);
+        const outer = CROSSHAIR_OUTER * (1 + (LOCK_STRETCH - 1) * settle);
+        for (let i = 0; i < CROSSHAIR_DEGS.length; i += 1) {
+          const node = crossRefs.current[i];
+          if (!node) continue;
+          const line = tickLine(CROSSHAIR_DEGS[i], CROSSHAIR_INNER, outer);
+          node.setAttribute("x2", String(line.x2));
+          node.setAttribute("y2", String(line.y2));
+        }
+        const core = coreRef.current;
+        if (core) core.setAttribute("r", String(2.6 * (1 + settle)));
+      }
+
       const readoutEye = live.eyes[EYE_READOUT];
       const tetherGroup = tetherGroupRef.current;
       if (readoutEye && tetherGroup) {
@@ -144,7 +198,7 @@ export default function EyeReticle({
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [eyeRef, layoutRef]);
+  }, [eyeRef, layoutRef, telemetryRef]);
 
   if (!eye.present) return null;
 
@@ -178,10 +232,13 @@ export default function EyeReticle({
         {/* L1 — the graduated dial. Static, and with L3 it is the fixed
             reference the rotations are read against (spec: "A static reference
             is always present"). Do not animate it for extra motion. */}
-        {DIAL_TICKS.map((tick) => (
+        {DIAL_TICKS.map((tick, index) => (
           <line
             key={tick.deg}
-            className={`eye-tick ${tick.long ? "long" : ""}`}
+            className={`eye-tick${tick.long ? " long" : ""}`}
+            ref={(el) => {
+              dialTickRefs.current[index] = el;
+            }}
             x1={tick.x1}
             y1={tick.y1}
             x2={tick.x2}
@@ -232,9 +289,19 @@ export default function EyeReticle({
 
         {/* L7 — center crosshair. Static, pulsing dot. */}
         {CROSSHAIR.map((tick, index) => (
-          <line key={index} className="eye-cross" x1={tick.x1} y1={tick.y1} x2={tick.x2} y2={tick.y2} />
+          <line
+            key={index}
+            className="eye-cross"
+            ref={(el) => {
+              crossRefs.current[index] = el;
+            }}
+            x1={tick.x1}
+            y1={tick.y1}
+            x2={tick.x2}
+            y2={tick.y2}
+          />
         ))}
-        <circle className="eye-core" r={2.6} />
+        <circle className="eye-core" ref={coreRef} r={2.6} />
       </g>
     </svg>
   );

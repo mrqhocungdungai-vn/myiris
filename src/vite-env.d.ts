@@ -478,6 +478,30 @@ type IrisApi = {
   setAmbientCaptureEnabled: (enabled: boolean) => void;
   getAmbientCaptureState: () => Promise<AmbientCaptureState>;
   onAmbientCaptureState: (callback: (payload: { live: boolean }) => void) => () => void;
+  // eye-tracking-hud: host measurements for the readout panel. Sampling runs
+  // only while the camera is on, so the renderer starts and stops it — but it
+  // never reports a value back, and nothing outside the camera overlays reads
+  // one.
+  startSystemTelemetry: () => void;
+  stopSystemTelemetry: () => void;
+  onSystemTelemetrySample: (callback: (sample: TelemetrySample) => void) => () => void;
+};
+
+/**
+ * One host measurement. `cpu`/`gpu` are 0..1 fractions, `netRx`/`netTx` bytes
+ * per second, `at` a wall-clock timestamp from the main process.
+ *
+ * `null` is the single absence signal for every reason a value can be missing —
+ * no delta computable yet, the probe failed or timed out, this host has no such
+ * counter, or the platform offers no such measurement. It is never zero: zero is
+ * a claim about the machine, and absence is the truth.
+ */
+type TelemetrySample = {
+  at: number;
+  cpu: number | null;
+  gpu: number | null;
+  netRx: number | null;
+  netTx: number | null;
 };
 
 interface Window {

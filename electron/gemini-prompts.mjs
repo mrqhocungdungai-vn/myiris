@@ -68,7 +68,7 @@ export function meetingRecordNote({ relativePath, startedAt, endedAt }) {
  *   envFlag: (name: string, fallback?: boolean) => boolean,
  *   userDisplayName: () => string,
  *   workspaceContextLine: () => string,
- *   capabilities?: Array<{ promptFragment?: () => string }>,
+ *   capabilities?: Array<{ promptFragment?: () => string, [key: string]: any }>,
  * }} deps
  */
 export function createGeminiPrompts({

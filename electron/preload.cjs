@@ -198,4 +198,15 @@ contextBridge.exposeInMainWorld("iris", {
     ipcRenderer.on("ambient-capture:state", handler);
     return () => ipcRenderer.removeListener("ambient-capture:state", handler);
   },
+  // eye-tracking-hud's readout telemetry. Sampling the host is gated on the
+  // camera being on, so the renderer says when — but only ever "the camera is
+  // on"; main owns everything about what is measured and how often. There is no
+  // report-back channel and nothing here reads a value.
+  startSystemTelemetry: () => ipcRenderer.send("hud-telemetry:activate"),
+  stopSystemTelemetry: () => ipcRenderer.send("hud-telemetry:deactivate"),
+  onSystemTelemetrySample: (callback) => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on("hud-telemetry:sample", handler);
+    return () => ipcRenderer.removeListener("hud-telemetry:sample", handler);
+  },
 });
