@@ -4,7 +4,9 @@ import type { HandState } from "../hooks/useHandControl";
 import type { EyeState } from "../hooks/useEyeTracking";
 import EyeReticle from "./EyeReticle";
 import EyeReadout from "./EyeReadout";
+import CameraLog from "./CameraLog";
 import { createReadoutLayout } from "../lib/eye-hud";
+import type { LogLine } from "../types";
 
 const HAND_CONNECTIONS = [
   [0, 1], [1, 2], [2, 3], [3, 4],
@@ -107,6 +109,7 @@ export default function CameraDock({
   eye,
   eyeRef,
   telemetryRef,
+  logs,
   stream,
   actionLabel,
   actionTone,
@@ -120,6 +123,8 @@ export default function CameraDock({
   eyeRef: { current: EyeState };
   /** Latest host measurement (useSystemTelemetry's sampleRef) — feeds the readout and the ring's dial. */
   telemetryRef: { current: TelemetrySample };
+  /** camera-activity-log: the app's own log store, newest first. Filtered for display, never here. */
+  logs: LogLine[];
   stream: MediaStream | null;
   actionLabel: string;
   actionTone: string;
@@ -148,6 +153,7 @@ export default function CameraDock({
           <HandSkeleton hands={hand.hands} handsRef={handRef} />
           <EyeReticle eye={eye} eyeRef={eyeRef} telemetryRef={telemetryRef} layoutRef={readoutLayoutRef} />
           <EyeReadout eye={eye} eyeRef={eyeRef} telemetryRef={telemetryRef} layoutRef={readoutLayoutRef} />
+          <CameraLog logs={logs} />
           <span className="cam-status">
             <i />
             {hand.present ? "tracking" : "no hand"}

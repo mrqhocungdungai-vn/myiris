@@ -376,10 +376,125 @@
   position: relative;
   margin: 0 12px 12px;
   aspect-ratio: 4 / 3;
+  /* So overlays inside can size themselves in `cqw` and scale with the frame at
+     whatever size it happens to be, rather than being px-tuned for one surface
+     and wrong in the other. `.camera-frame` is already `position: relative`, so
+     the containment this introduces changes nothing about how the overlays are
+     positioned. */
+  container-type: inline-size;
   border-radius: var(--r-card);
   overflow: hidden;
   background: #040910;
   box-shadow: inset 0 0 0 1px var(--hairline);
+
+  /* camera-activity-log: ONE definition of the strip's band, read both by the
+     strip and by the gesture chip that has to clear it. Custom properties are
+     substituted at the use site, so the `cqw` here resolves against this frame
+     for every descendant that reads it — which is what keeps the two in step at
+     both camera sizes without either being tuned to the other. */
+  --cam-log-font: clamp(5.5px, 2.3cqw, 8px);
+  --cam-log-leading: 1.42;
+  --cam-log-lines: 5;
+  --cam-log-band: calc(var(--cam-log-lines) * var(--cam-log-leading) * var(--cam-log-font) + 0.9em);
+}
+
+/* ----- camera-activity-log: the app's own log, along the bottom of the frame ----- */
+
+/* z-index 1: above the video and its scan wash, and BELOW everything that
+   tracks something — the hand skeleton (2), the eye ring (3), the eye readout
+   (4). The readout's placement rule lets it reach the bottom of the frame when
+   the tracked face is low, so overlap is the normal case rather than an edge
+   one, and the strip is what gives way (design D5). */
+.cam-log {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1;
+  pointer-events: none;
+  /* The font-size belongs HERE, not on `.rows`: the padding below is in `em`,
+     and on an element with no font-size of its own that would silently resolve
+     against the 16px default — a strip scaled to the frame sitting on padding
+     that isn't. */
+  font-family: var(--font-mono);
+  font-size: var(--cam-log-font);
+  padding: 0 10px 0.7em;
+  /* Translucent, never opaque — the camera image stays visible through the whole
+     band. The wash only darkens enough to keep small text legible over a bright
+     shirt. */
+  background: linear-gradient(transparent, rgba(3, 9, 16, 0.62) 55%);
+}
+
+/* Nothing to show, nothing to darken. The band keeps its height regardless —
+   `.rows` reserves that — so this removes the wash without moving anything. A
+   production run with no warnings is the common case, and a permanently dimmed
+   strip of camera image with nothing in it is a cost with no return. */
+.cam-log:not(:has(.line)) {
+  background: none;
+}
+
+/* The band is `--cam-log-lines` tall whether it holds that many lines or none.
+   The gesture chip sits directly above it, and a strip that grew with its
+   content would nudge the chip on every arriving line (design D4). Lines are
+   pinned to the bottom and fill upward, so the newest is always in the same
+   place. */
+.cam-log .rows {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  overflow: hidden;
+  line-height: var(--cam-log-leading);
+  --cam-log-line: calc(var(--cam-log-leading) * 1em);
+}
+
+.cam-log .line {
+  display: flex;
+  gap: 0.7em;
+  white-space: nowrap;
+  animation: cam-log-in 260ms ease-out both;
+}
+
+/* Fixed-width and dimmer than the message: it is a timestamp, not the content,
+   and everything after it would shift if its width ever changed. */
+.cam-log .at {
+  flex: 0 0 auto;
+  color: rgba(var(--cyan-rgb), 0.4);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Truncated, never wrapped: wrapping would let one long line eat another's
+   place in the band, for a reason the user cannot see. */
+.cam-log .msg {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: rgba(207, 238, 255, 0.62);
+}
+
+/* Severity has to read without the message being read at all. Routine stays in
+   the informational tone; the warning tone is not spent on it. */
+.cam-log .warn .msg { color: rgba(var(--amber-rgb), 0.92); }
+.cam-log .warn .at { color: rgba(var(--amber-rgb), 0.5); }
+.cam-log .error .msg { color: rgba(var(--coral-rgb), 0.95); }
+.cam-log .error .at { color: rgba(var(--coral-rgb), 0.55); }
+
+/* Only the arriving line animates — it is keyed by the log entry's own id, so
+   React mounts exactly that one. It rises from under the band's clipped edge,
+   which is what a terminal does and what the fixed height already provides. */
+@keyframes cam-log-in {
+  from {
+    opacity: 0;
+    transform: translateY(var(--cam-log-line));
+  }
+  /* Stated rather than left implicit. `fill-mode: both` with a lone `from`
+     relies on the implicit to-keyframe resolving to the underlying value, which
+     is correct per spec but is exactly the kind of thing to write down when the
+     from-state is a full line of displacement. */
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .camera-frame video {
@@ -434,10 +549,14 @@
   stroke: rgba(var(--violet-rgb), 0.9);
 }
 
+/* Lifted to clear the activity band below it (camera-activity-log). It keeps
+   its corner, its shape and everything about how it reads — only the offset
+   changes, and it is expressed against the band's own definition so the two
+   cannot drift apart. */
 .gesture-chip {
   position: absolute;
   left: 10px;
-  bottom: 10px;
+  bottom: calc(var(--cam-log-band, 0px) + 8px);
   display: inline-flex;
   align-items: center;
   gap: 6px;

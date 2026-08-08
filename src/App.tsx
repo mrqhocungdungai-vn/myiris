@@ -166,7 +166,9 @@ export default function App() {
   const [claudeStatus, setClaudeStatus] = useState("offline");
   const [audioState, setAudioState] = useState("idle");
   const [transcript, setTranscript] = useState<TranscriptLine[]>([]);
-  const [, setLogs] = useState<LogLine[]>([]);
+  // Read at last. This was `const [, setLogs]` — written on every event and
+  // discarded — until camera-activity-log gave the stream somewhere to go.
+  const [logs, setLogs] = useState<LogLine[]>([]);
   const [tasks, setTasks] = useState<TaskCard[]>([]);
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
   const [focusedTaskId, setFocusedTaskId] = useState<string | null>(null);
@@ -1180,10 +1182,10 @@ export default function App() {
     }
 
     // listen-mode-hears-system-audio: something Iris overheard tried to make
-    // her act, and main refused it before dispatch. Surfaced as a notice rather
-    // than a log line because the log list is discarded (see setLogs above) —
-    // and an invisible refusal is indistinguishable from Iris quietly doing the
-    // work anyway.
+    // her act, and main refused it before dispatch. Surfaced as its own notice
+    // rather than left to the activity strip — the strip is ambient and scrolls
+    // away, and an unnoticed refusal is indistinguishable from Iris quietly
+    // doing the work anyway.
     if (event.type === "listen_only_refused") {
       setRefusedTool(readString(event.tool, "a task"));
       setListenOnlyNotice("refused");
@@ -1901,6 +1903,7 @@ export default function App() {
           eye={eye}
           eyeRef={liveEyeRef}
           telemetryRef={liveTelemetryRef}
+          logs={logs}
           handStream={handStream}
           handActionLabel={handAction.label}
           handActionTone={handAction.tone}
@@ -1970,6 +1973,7 @@ export default function App() {
               eye={eye}
               eyeRef={liveEyeRef}
               telemetryRef={liveTelemetryRef}
+              logs={logs}
               stream={handStream}
               actionLabel={handAction.label}
               actionTone={handAction.tone}

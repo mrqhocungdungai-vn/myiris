@@ -286,11 +286,10 @@ html:not(.hud-mode) .setup-backdrop {
 .hud-camera .camera-frame {
   margin: 0;
   aspect-ratio: 4 / 3;
-  /* So the REC stamp below can size itself in `cqw` and scale with the frame
-     at both camera sizes, instead of being px-tuned for one and wrong at the
-     other. `.camera-frame` is already `position: relative`, so the containment
-     this introduces changes nothing about how the overlays are positioned. */
-  container-type: inline-size;
+  /* `container-type: inline-size` used to be declared here, for the REC stamp
+     below. It now lives on the base `.camera-frame` rule in deck.css, because
+     the activity strip and the gesture chip need the same containment in BOTH
+     surfaces — re-declaring it here would be a second copy of one decision. */
   border-radius: var(--r-card);
   box-shadow:
     inset 0 0 0 1px var(--hairline-strong),

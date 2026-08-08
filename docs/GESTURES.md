@@ -528,6 +528,48 @@ The panel's height budget is tight and the arithmetic is recorded on
 for there**, and checked against the *deck's* camera dock — the HUD's larger
 frame has slack and will hide an overflow.
 
+### The activity strip
+
+Along the bottom of the frame, in both surfaces, the app's own log
+(`camera-activity-log`): the most recent entries, newest at the bottom.
+
+Nothing new is logged for it. The main process has always emitted
+`{ type: "log", level, message }` from the run executor, the run hooks (the
+destructive-command guard's refusals among them), the live session, the run
+stream, hotkey registration and the pipeline installer, and the renderer adds
+its own through `pushLog`. All of it was **collected and thrown away** —
+`App.tsx` held `const [, setLogs]`, written on every event and read by nobody.
+This change is mostly the deletion of that discard.
+
+**How much shows depends on how the app was started**, and on nothing else:
+`npm run dev` shows routine progress as well as anything warranting attention,
+the built bundle `npm start` runs shows only the latter. There is deliberately
+no control and no env override for it — a depth that can be changed is a
+preference, a preference invites persisting it, and a persisted one lets a
+production build be left permanently verbose by an experiment somebody forgot
+about, with the failure showing up on a livestream rather than at a desk. The
+threshold affects only what is **drawn**; every entry is still collected.
+
+The rule lives in `src/lib/activity-log.ts` rather than in the component,
+because what a production build *hides* is the one thing about this that nobody
+would notice being wrong by looking at it: a threshold off by one level draws a
+strip that looks entirely plausible while omitting every warning.
+
+The band is a fixed five lines tall whether it holds five or none, and each
+entry is truncated rather than wrapped — the gesture chip sits directly above
+it, and a strip that grew with its content would nudge the chip on every
+arriving line. `.gesture-chip`'s offset is expressed against the band's own
+definition (`--cam-log-band`, declared once on `.camera-frame`), so the two
+cannot drift apart at either camera size.
+
+It is drawn at `z-index: 1` — above the video and its scan wash, **below**
+everything that tracks something: the hand skeleton (2), the eye ring (3), the
+eye readout (4). The readout's placement rule lets it reach the bottom of the
+frame when the tracked face is low, so overlap is the normal case rather than an
+edge one, and the strip is what gives way. That is stated from the strip's side
+on purpose: `eye-tracking-hud` needs no amendment, and a future change to the
+eye overlays does not have to know this exists.
+
 ### HUD camera zoom
 
 HUD mode has a **Cam** pill above the camera dock that toggles the frame

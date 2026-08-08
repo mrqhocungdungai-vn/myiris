@@ -27,9 +27,10 @@ import ContextSupplementInput from "./ContextSupplementInput";
 import { HandSkeleton } from "./CameraDock";
 import EyeReticle from "./EyeReticle";
 import EyeReadout from "./EyeReadout";
+import CameraLog from "./CameraLog";
 import DrawingCanvas from "./DrawingCanvas";
 import VaultGalaxy, { type GalaxyNode } from "./VaultGalaxy";
-import type { HandoffTone, ReactorState, TaskCard, TranscriptLine } from "../types";
+import type { HandoffTone, LogLine, ReactorState, TaskCard, TranscriptLine } from "../types";
 import type { HandState } from "../hooks/useHandControl";
 import type { EyeState } from "../hooks/useEyeTracking";
 import { createReadoutLayout } from "../lib/eye-hud";
@@ -44,6 +45,7 @@ function HudCamera({
   eye,
   eyeRef,
   telemetryRef,
+  logs,
   actionLabel,
   actionTone,
   enlarged,
@@ -55,6 +57,7 @@ function HudCamera({
   eye: EyeState;
   eyeRef: { current: EyeState };
   telemetryRef: { current: TelemetrySample };
+  logs: LogLine[];
   actionLabel: string;
   actionTone: string;
   /** glass-hud-mode: the camera-size control's state. Standard size is the default. */
@@ -93,6 +96,7 @@ function HudCamera({
         <HandSkeleton hands={hand.hands} handsRef={handRef} />
         <EyeReticle eye={eye} eyeRef={eyeRef} telemetryRef={telemetryRef} layoutRef={readoutLayoutRef} />
         <EyeReadout eye={eye} eyeRef={eyeRef} telemetryRef={telemetryRef} layoutRef={readoutLayoutRef} />
+        <CameraLog logs={logs} />
         {/* Top-left, the one corner not already taken: `.cam-status` is
             top-right and `.gesture-chip` bottom-left (design D2). The
             RECORDING line and the clock are one block, so an audience reads
@@ -170,6 +174,7 @@ export default function HudShell({
   eye,
   eyeRef,
   telemetryRef,
+  logs,
   handStream,
   handActionLabel,
   handActionTone,
@@ -245,6 +250,8 @@ export default function HudShell({
   eye: EyeState;
   eyeRef: { current: EyeState };
   telemetryRef: { current: TelemetrySample };
+  /** camera-activity-log: the app's own log store, newest first. */
+  logs: LogLine[];
   handStream: MediaStream | null;
   handActionLabel: string;
   handActionTone: string;
@@ -469,6 +476,7 @@ export default function HudShell({
               eye={eye}
               eyeRef={eyeRef}
               telemetryRef={telemetryRef}
+              logs={logs}
               actionLabel={handActionLabel}
               actionTone={handActionTone}
               enlarged={cameraEnlarged}
