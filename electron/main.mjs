@@ -7,8 +7,10 @@ import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { ignoreBrokenPipe } from "./stdio-resilience.mjs";
+import { createLogSink, logConfigFromEnv } from "./log-sink.mjs";
+import { installLogTee } from "./log-tee.mjs";
 import { PRODUCT_NAME } from "./app-identity.mjs";
-import { canvasStoreFile } from "./app-paths.mjs";
+import { canvasStoreFile, logDir } from "./app-paths.mjs";
 import { closeAllPoSessions } from "./po-session.mjs";
 import { shouldRefuseLaunch } from "./platform.mjs";
 import { loadEnvFile, envFlag, shutdownDeadlineMs, systemAudioEnabled } from "./user-config.mjs";
@@ -45,6 +47,21 @@ const appIcon = fs.existsSync(iconPath) ? nativeImage.createFromPath(iconPath) :
 // design.md task 1.5.
 loadEnvFile({ repoRoot });
 
+// The diagnostic log (diagnostic-logging D8). Immediately after loadEnvFile,
+// because the sink's configuration comes from the environment and nothing
+// between the two logs — and BEFORE the wiring below, because a failure during
+// startup is otherwise the one class of failure the log cannot describe.
+//
+// The tee wraps process.stdout/stderr, so every `[IRIS][…]` line already
+// written anywhere in main is captured where it is already written, with no
+// call site changed. Its records reach the same redaction as everything else,
+// which is the point: a dependency printing a token is exactly the case that
+// cannot be fixed at the source.
+const logSink = createLogSink({ dir: logDir(), ...logConfigFromEnv() });
+const uninstallLogTee = installLogTee({
+  onLine: (msg, src) => logSink.write({ level: src === "main.stderr" ? "error" : "info", src, msg }),
+});
+
 // Chromium switches must be appended before the app is ready — after that the
 // browser process has already read its command line (listen-mode-hears-system-
 // audio D1). Reads IRIS_SYSTEM_AUDIO, so it has to follow loadEnvFile above.
@@ -68,6 +85,10 @@ const wiring = createWiring({
   // stays Electron-free.
   openPathExternally: (filePath) => shell.openPath(filePath),
   getIsPackaged: () => app.isPackaged,
+  // The event stream's tap (diagnostic-logging D8). The tee above catches
+  // everything main PRINTS; this catches what it EMITS, which is most of the
+  // account and is never printed at all.
+  recordLog: (record) => logSink.write(record),
 });
 const {
   emitEvent,
@@ -295,6 +316,10 @@ async function shutdownTeardown() {
   for (const cap of capabilities) {
     await cap.teardown?.();
   }
+  // Last, so anything the teardown above logged is in the file. Uninstalling
+  // the tee first flushes any partial line it was holding.
+  uninstallLogTee();
+  logSink.close();
 }
 
 app.on("will-quit", () => globalShortcut.unregisterAll());

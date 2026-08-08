@@ -33,9 +33,10 @@ import { createLiveWiring } from "./wiring-live.mjs";
  *   dialog: { showOpenDialog: Function, showSaveDialog: Function },
  *   openPathExternally?: (filePath: string) => Promise<any>,
  *   getIsPackaged: () => boolean,
+ *   recordLog?: (record: { level: string, src: string, msg: string, [key: string]: any }) => void,
  * }} deps
  */
-export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, envFlag, dialog, openPathExternally, getIsPackaged }) {
+export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, envFlag, dialog, openPathExternally, getIsPackaged, recordLog }) {
   // windowModule and liveSessionModule are constructed in wiring-live.mjs
   // (this phase's own module-scope bindings, needed by consumers here that
   // exist before that phase runs — rendererBridge, sessionStoreModule,
@@ -65,6 +66,10 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
 
   const rendererBridge = createRendererBridge({
     getMainWindow: () => getMainWindow(),
+    // diagnostic-logging: the event stream's tap, handed down from the
+    // composition root. A no-op by default there, so nothing here has to know
+    // whether logging is on.
+    recordLog,
     // Read at flush time, long after liveSessionModule is assigned below.
     isOverheard: () => Boolean(liveSessionModule?.getListenOnlyEngaged()),
   });
@@ -393,6 +398,9 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     appIcon,
     iconPath,
     envFlag,
+    // diagnostic-logging: reaches the window module, where the renderer's own
+    // faults are captured.
+    recordLog,
     emitEvent,
     emitToRenderer,
     flushTranscripts,

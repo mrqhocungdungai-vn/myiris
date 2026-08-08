@@ -30,6 +30,57 @@ so future changes don't reintroduce wrong/deprecated names or version drift.
 | Linter | `oxlint` `1.76.0` (exact) | `package.json`, rules in `.oxlintrc.json` | npm |
 | Secret scanner | `gitleaks` `8.30.1` — **not lockfile-pinned** | Homebrew, outside npm | `brew install gitleaks` |
 
+## The diagnostic log
+
+`~/.myiris/logs/iris.log` — JSONL, one record per line, rotated by size.
+Declared in `app-paths.mjs` like every other path Iris owns, so it is under the
+state root rather than macOS's `~/Library/Logs`: everything Iris keeps is in one
+place a user can find, back up, or delete as a unit.
+
+```bash
+tail -f ~/.myiris/logs/iris.log                                # follow it
+jq -r 'select(.level=="error") | "\(.at) \(.src) \(.msg)"' ~/.myiris/logs/iris.log
+jq -r 'select(.src=="renderer")' ~/.myiris/logs/iris.log        # interface faults only
+```
+
+Every record carries `at`, `level`, `src`, `msg`, plus whatever the source
+attached. `src` is the field that matters most:
+
+| `src` | what it is |
+| --- | --- |
+| `main.stdout` / `main.stderr` | everything the main process prints, captured by teeing those two streams (`log-tee.mjs`) — including output from dependencies, which no logging call of ours could have reached |
+| `event` | the internal event stream, tapped in `emitEvent`. Most of the app's account, and never printed at all |
+| `renderer` | the interface process's uncaught exceptions, its console warnings and errors, `render-process-gone`, `unresponsive`, and preload failures |
+
+**Three things about it are load-bearing, not incidental:**
+
+- **It records everything by default, at every level, in production as well as
+  development.** The file is where you look *after* something went wrong, so
+  what mattered cannot be decided before it happens. That is deliberately the
+  opposite of the camera preview's activity strip (`camera-activity-log`),
+  whose depth *does* follow the build mode — that one is a glance. Nothing
+  couples the two, so narrowing what is shown can never narrow what is recorded.
+- **Credentials are masked before anything is written**, from every source,
+  including output Iris did not produce. Redaction fails toward masking: a log
+  slightly harder to read is recoverable, a token pasted into a bug report is
+  not. The masked form says `[redacted]` so "no token was present" and "a token
+  was here" stay distinguishable.
+- **A failing log cannot take the app down.** Open, write, rotate and close are
+  each wrapped; a fault disables the sink for the session and reports itself
+  **once**, to the stream, never back into the log. An unwritable location costs
+  the log and nothing else — verified by pointing it at one and watching the app
+  start normally.
+
+Configuration is `IRIS_LOG`, `IRIS_LOG_LEVEL`, `IRIS_LOG_MAX_BYTES` and
+`IRIS_LOG_KEEP`, all documented in `.env.example`. Total disk is
+`(IRIS_LOG_KEEP + 1) × IRIS_LOG_MAX_BYTES` — 20 MB by default, computable in
+advance rather than discovered from a full disk.
+
+Note the one thing the tee does **not** change: captured output still reaches
+its original destination byte-for-byte, and `write`'s backpressure return value
+is passed straight back to the caller. Swallowing either would be a change to
+the app's behavior for the log's benefit.
+
 ## Known footguns / lessons (avoid repeating these)
 
 **Bumping the Agent SDK is also a Claude Code bump and a ~250 MB asset change.**

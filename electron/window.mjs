@@ -18,6 +18,25 @@ import { PRODUCT_NAME } from "./app-identity.mjs";
 const { app, BrowserWindow, Menu, Tray, screen } = electron;
 
 /**
+ * Which renderer console messages are worth a durable record, and at what level.
+ *
+ * Returns null for everything routine. Electron reports the level as a string
+ * in current versions and as a number in older ones, and both shapes are
+ * accepted rather than assumed — getting this wrong fails silently, by
+ * recording nothing, which is the failure mode this whole capability exists to
+ * remove.
+ *
+ * @param {unknown} level
+ * @returns {"warn" | "error" | null}
+ */
+export function rendererConsoleLevel(level) {
+  const text = String(level ?? "").toLowerCase();
+  if (text === "error" || text === "3") return "error";
+  if (text === "warning" || text === "warn" || text === "2") return "warn";
+  return null;
+}
+
+/**
  * @param {{
  *   repoRoot: string,
  *   appIcon: any,
@@ -31,6 +50,7 @@ const { app, BrowserWindow, Menu, Tray, screen } = electron;
  *   isListenOnlyEngaged: () => boolean,
  *   toggleListenOnly: () => void,
  *   onRendererGone?: () => void,
+ *   recordLog?: (record: { level: string, src: string, msg: string, [key: string]: any }) => void,
  * }} deps
  */
 export function createWindowModule({
@@ -49,6 +69,9 @@ export function createWindowModule({
   // both on a clean window close and on a renderer crash, since neither leaves
   // a capture graph behind (listen-mode-hears-system-audio 4.7).
   onRendererGone = () => {},
+  // diagnostic-logging: the renderer's faults reaching the file. Defaulted to
+  // a no-op so this module stays constructible without a sink.
+  recordLog = () => {},
 }) {
   let mainWindow = null;
 
@@ -108,18 +131,36 @@ export function createWindowModule({
     // role and nothing else calls openDevTools(), so the renderer console —
     // where IRIS_WAKE_DEBUG's score diagnostics land — is otherwise unreachable
     // by menu or accelerator in both dev and packaged builds.
-    if (envFlag("IRIS_WAKE_DEBUG", false)) {
-      mainWindow.webContents.openDevTools();
-      // Lets scripts/check-wake-e2e.mjs (fix-vendored-runtime-path-resolution
-      // design D8) assert on renderer console output without a DOM dependency.
-      // Electron 42 passes this listener a single details object — {message,
-      // level, lineNumber, sourceId} — not the widely-documented 5-arg (event,
-      // level, message, line, sourceId) form; that form yields `undefined`
-      // here and surfaces as a script timeout with a misleading cause.
-      mainWindow.webContents.on("console-message", (details) => {
-        console.log(`[renderer] ${details.message}`);
-      });
-    }
+    const wakeDebug = envFlag("IRIS_WAKE_DEBUG", false);
+    if (wakeDebug) mainWindow.webContents.openDevTools();
+    // Electron 42 passes this listener a single details object — {message,
+    // level, lineNumber, sourceId} — not the widely-documented 5-arg (event,
+    // level, message, line, sourceId) form; that form yields `undefined` here
+    // and surfaces as a script timeout with a misleading cause.
+    mainWindow.webContents.on("console-message", (details) => {
+      // NO FLAG GATES THE RECORDING (diagnostic-logging). A renderer exception
+      // is the most common way this app breaks for a user, and until now it
+      // left nothing behind at all unless a debug flag happened to be set —
+      // which it never is on the machine where the failure happens.
+      //
+      // Only warnings and errors are recorded: the renderer's routine console
+      // output is React's and Vite's, not Iris's, and a file it fills is a file
+      // nobody reads.
+      const level = rendererConsoleLevel(details?.level);
+      if (level) {
+        recordLog({
+          level,
+          src: "renderer",
+          msg: String(details?.message ?? ""),
+          at_source: details?.sourceId ? `${details.sourceId}:${details.lineNumber ?? "?"}` : undefined,
+        });
+      }
+      // Printing stays behind the flag, unchanged: the terminal is the one
+      // destination where volume costs something, and
+      // scripts/check-wake-e2e.mjs asserts on this line
+      // (fix-vendored-runtime-path-resolution design D8).
+      if (wakeDebug) console.log(`[renderer] ${details.message}`);
+    });
     // Navigation containment and the external-link handoff now live on
     // app.on("web-contents-created") in renderer-security.mjs, covering every
     // web contents the app ever creates instead of just this one window.
@@ -127,9 +168,29 @@ export function createWindowModule({
     // "closed" event, so an active vault-graph fs.watch stream would
     // otherwise orphan while a fresh renderer starts a second one
     // (second-brain-galaxy-view design.md D3 M3).
-    mainWindow.webContents.on("render-process-gone", () => {
+    mainWindow.webContents.on("render-process-gone", (_event, details) => {
+      // The interface process dying is the single most important thing this app
+      // can record about itself, and it is exactly what an in-memory log cannot.
+      recordLog({
+        level: "error",
+        src: "renderer",
+        msg: `render process gone: ${details?.reason ?? "unknown"}`,
+        reason: details?.reason,
+        exitCode: details?.exitCode,
+      });
       stopVaultGraphWatch();
       onRendererGone();
+    });
+    mainWindow.webContents.on("unresponsive", () => {
+      recordLog({ level: "warn", src: "renderer", msg: "render process became unresponsive" });
+    });
+    mainWindow.webContents.on("preload-error", (_event, preloadPath, error) => {
+      recordLog({
+        level: "error",
+        src: "renderer",
+        msg: `preload failed: ${error?.message ?? error}`,
+        preloadPath,
+      });
     });
     mainWindow.webContents.on("did-start-navigation", (_event, _url, _isInPlace, isMainFrame) => {
       if (isMainFrame) stopVaultGraphWatch();

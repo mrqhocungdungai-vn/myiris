@@ -111,3 +111,19 @@ export function canvasStoreFile(homedir = os.homedir) {
 export function defaultWorkspace(homedir = os.homedir) {
   return path.join(stateRoot(homedir), "workspace");
 }
+
+/**
+ * Where the diagnostic log and its rotated predecessors live.
+ *
+ * Under the state root rather than macOS's `~/Library/Logs`, so everything Iris
+ * owns stays in one place a user can find, back up, or delete as a unit — the
+ * same reasoning app-identity gives for the root itself. The cost is that
+ * Console.app will not surface it; the log is meant to be read in a terminal or
+ * attached to a report, so that is not a cost this capability pays for.
+ *
+ * @param {() => string} homedir
+ * @returns {string}
+ */
+export function logDir(homedir = os.homedir) {
+  return path.join(stateRoot(homedir), "logs");
+}

@@ -42,12 +42,16 @@ import { systemAudioEnabled, systemAudioGain } from "./user-config.mjs";
  *   },
  *   setWindowModule: (mod: any) => void,
  *   setLiveSessionModule: (mod: any) => void,
+ *   recordLog?: (record: { level: string, src: string, msg: string, [key: string]: any }) => void,
  * }} deps
  */
 export function createLiveWiring({
   repoRoot,
   appIcon,
   iconPath,
+  // diagnostic-logging: handed straight to the window module, which is where
+  // the renderer's faults are captured. Nothing here reads it.
+  recordLog = () => {},
   envFlag,
   emitEvent,
   emitToRenderer,
@@ -173,6 +177,7 @@ export function createLiveWiring({
     repoRoot,
     appIcon,
     iconPath,
+    recordLog,
     getAppDevUrl: () => rendererSecurity.appDevUrl,
     envFlag,
     emitToRenderer,

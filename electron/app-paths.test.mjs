@@ -6,6 +6,7 @@ import {
   canvasStoreFile,
   claudeHome,
   defaultWorkspace,
+  logDir,
   sessionStoreFile,
   stateRoot,
   userConfigFile,
@@ -54,6 +55,13 @@ describe("app-paths resolves every child of the state root", () => {
     expect(stateRoot(shifting)).toBe(path.join("/home/first", STATE_ROOT_DIR));
     current = "/home/second";
     expect(stateRoot(shifting)).toBe(path.join("/home/second", STATE_ROOT_DIR));
+  });
+
+  it("puts the diagnostic log under the state root, with everything else Iris owns", () => {
+    expect(logDir(fakeHomedir)).toBe(path.join(stateRoot(fakeHomedir), "logs"));
+    // Not macOS's ~/Library/Logs: everything Iris owns stays in one place a
+    // user can find, back up, or delete as a unit.
+    expect(logDir(fakeHomedir)).not.toContain("Library");
   });
 
   it("never resolves the Claude configuration directory into the user's own ~/.claude", () => {

@@ -22,11 +22,16 @@ export const RECENT_UTTERANCE_MAX_AGE_MS = 10 * 60 * 1000; // 10 minutes
  *   getMainWindow: () => any,
  *   now?: () => number,
  *   isOverheard?: () => boolean,
+ *   recordLog?: (record: { level: string, src: string, msg: string, [key: string]: any }) => void,
  * }} deps
  */
 export function createRendererBridge({
   getMainWindow,
   now = Date.now,
+  // The diagnostic log's tap on the event stream (diagnostic-logging D8).
+  // Defaulted to a no-op so this module stays independently constructible and
+  // every existing test of it needs no sink.
+  recordLog = () => {},
   // Whether what Iris is hearing right now is OVERHEARD rather than spoken to
   // her — true exactly while listen-only mode is engaged, when system audio is
   // mixed into the same stream. A line may then be the user, someone else in
@@ -95,8 +100,23 @@ export function createRendererBridge({
   }
 
   function emitEvent(event) {
-    // DIAGNOSTIC: surface all events to the dev terminal (the renderer's log
-    // list is not rendered, so fatal/connection errors were otherwise invisible).
+    // The diagnostic log gets EVERY event, whatever its type — the file is an
+    // investigation, and what mattered cannot be decided before the failure it
+    // has to explain (diagnostic-logging D7). `{type:"log"}` events carry their
+    // own level; anything else is a status transition, which is info.
+    const { type, level, message, ...rest } = event ?? {};
+    recordLog({
+      level: type === "fatal" ? "error" : String(level ?? "info"),
+      src: "event",
+      msg: String(message ?? type ?? ""),
+      type,
+      ...rest,
+    });
+
+    // DIAGNOSTIC: a narrow selection to the dev terminal. Deliberately still
+    // narrow after camera-activity-log gave the renderer's log list somewhere
+    // to go and diagnostic-logging gave every event a file — the terminal is
+    // the one destination where volume costs something.
     if (event?.type === "fatal") {
       console.error("[IRIS][fatal]", event.message || "", event.error || "");
     } else if (event?.type === "gemini_status" || event?.type === "sidecar_status") {
