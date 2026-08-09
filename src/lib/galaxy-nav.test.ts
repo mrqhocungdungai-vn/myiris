@@ -17,6 +17,8 @@ import {
   reelsToLock,
   zoomSpan,
   zoomKind,
+  drivingHands,
+  driveIsLowered,
   engagementKey,
   type DwellState,
   type GalaxyNavNode,
@@ -314,6 +316,59 @@ describe("driveFor", () => {
     expect(engagementKey(null, { hands: fistOnly })).toBeNull();
     expect(engagementKey("dwell", { hands: fistOnly })).toBeNull();
     expect(engagementKey("inspect", { hands: fistOnly })).toBeNull();
+  });
+
+  // The lowered-hand release must ask the hands that DRIVE. With a fist and a
+  // palm neither hand points, so the primary is sticky from an earlier
+  // interaction — reading it made the same gesture live or die on history the
+  // user cannot see.
+  it("names both hands of a reel-in, and both palms of a spread", () => {
+    const fist = makeTrackedHand({ id: "l", fist: true });
+    const palm = makeTrackedHand({ id: "r", openPalm: true });
+    expect(drivingHands("zoom", { hands: [fist, palm] }).map((h) => h.id).sort()).toEqual(["l", "r"]);
+
+    const palms = [makeTrackedHand({ id: "a", openPalm: true }), makeTrackedHand({ id: "b", openPalm: true })];
+    expect(drivingHands("zoom", { hands: palms }).map((h) => h.id).sort()).toEqual(["a", "b"]);
+  });
+
+  it("names only the fist that turns the view, not a hand resting beside it", () => {
+    const fist = makeTrackedHand({ id: "f", fist: true, point: { x: 900, y: 100 } });
+    const resting = makeTrackedHand({ id: "rest" });
+    expect(drivingHands("orbit", { hands: [fist, resting] }).map((h) => h.id)).toEqual(["f"]);
+  });
+
+  it("names no hands for the drives that are not camera drives", () => {
+    const hands = [makeTrackedHand({ id: "l", pointing: true })];
+    expect(drivingHands("dwell", { hands })).toEqual([]);
+    expect(drivingHands("inspect", { hands })).toEqual([]);
+    expect(drivingHands(null, { hands })).toEqual([]);
+  });
+
+  it("releases a reel-in when the HOLDING fist drops, not only the moving palm", () => {
+    const H = 900; // lowered below y = 600
+    const lowFist = makeTrackedHand({ id: "l", fist: true, point: { x: 300, y: 700 } });
+    const highPalm = makeTrackedHand({ id: "r", openPalm: true, point: { x: 700, y: 200 } });
+    // The primary hand's own point is high — the old check would have kept the
+    // drive alive here whenever the palm held the sticky primary title.
+    const hand = { hands: [lowFist, highPalm], point: { x: 700, y: 200 } };
+
+    expect(driveIsLowered("zoom", hand, H)).toBe(true);
+  });
+
+  it("keeps a reel-in alive while both hands are up", () => {
+    const H = 900;
+    const fist = makeTrackedHand({ id: "l", fist: true, point: { x: 300, y: 200 } });
+    const palm = makeTrackedHand({ id: "r", openPalm: true, point: { x: 700, y: 250 } });
+
+    expect(driveIsLowered("zoom", { hands: [fist, palm], point: { x: 300, y: 880 } }, H)).toBe(false);
+  });
+
+  it("releases a spread when either palm drops", () => {
+    const H = 900;
+    const high = makeTrackedHand({ id: "a", openPalm: true, point: { x: 300, y: 100 } });
+    const low = makeTrackedHand({ id: "b", openPalm: true, point: { x: 700, y: 800 } });
+
+    expect(driveIsLowered("zoom", { hands: [high, low], point: { x: 300, y: 100 } }, H)).toBe(true);
   });
 
   it("returns null for a single open palm, an unrecognized gesture, and a resting hand", () => {

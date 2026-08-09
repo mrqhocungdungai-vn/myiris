@@ -365,6 +365,54 @@ export function reelsToLock(hand: Pick<HandState, "hands">): boolean {
  * holding the old basis, and the ratio law turns that discontinuity straight
  * into a lurch.
  */
+/**
+ * The hands a camera drive actually reads, so that "a hand that has dropped
+ * SHALL NOT drive the camera" can be asked of the right ones.
+ *
+ * The check used to read the PRIMARY hand's point. With a fist and an open
+ * palm neither hand is pointing, so `choosePrimary` falls back to whichever
+ * hand was primary before — sticky from some earlier interaction, and
+ * therefore arbitrary. The drive then lived or died on a hand chosen for
+ * unrelated reasons: hold the fist a little low, as people do with the hand
+ * that is only holding, and the whole drive releases mid-gesture; hold the
+ * same pose with the other hand primary and it survives. Same gesture, two
+ * outcomes, decided by history the user cannot see.
+ */
+export function drivingHands(drive: GalaxyDrive, hand: Pick<HandState, "hands">): TrackedHand[] {
+  if (drive === "zoom") {
+    const palms = hand.hands.filter((item) => item.openPalm);
+    if (palms.length >= 2) return palms.slice(0, 2);
+    const fist = hand.hands.find((item) => item.fist);
+    return fist && palms.length === 1 ? [fist, palms[0]] : [];
+  }
+  if (drive === "orbit") {
+    const fist = preferredHand(hand.hands.filter((item) => item.fist));
+    return fist ? [fist] : [];
+  }
+  return [];
+}
+
+/**
+ * Whether this frame's camera drive is being made by a lowered hand — the whole
+ * question, driver selection included, so the caller cannot compose it wrongly.
+ *
+ * ANY driving hand being low releases the drive. A two-hand drive with one arm
+ * dropping is a user putting an arm down, and the span between the hands is
+ * changing for that reason rather than because they are steering.
+ *
+ * The primary hand is the fallback only where a drive reads no hands at all,
+ * which the camera drives never do.
+ */
+export function driveIsLowered(
+  drive: GalaxyDrive,
+  hand: Pick<HandState, "hands" | "point">,
+  viewportHeight: number,
+): boolean {
+  const drivers = drivingHands(drive, hand);
+  if (drivers.length === 0) return isHandLowered(hand.point, viewportHeight);
+  return drivers.some((driver) => isHandLowered(driver.point, viewportHeight));
+}
+
 export function zoomKind(hand: Pick<HandState, "hands">): "spread" | "reel" | null {
   if (hand.hands.filter((item) => item.openPalm).length >= 2) return "spread";
   if (reelsToLock(hand)) return "reel";

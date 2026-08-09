@@ -8,7 +8,7 @@ import {
   driveFor,
   easeRadius,
   inspectingHand,
-  isHandLowered,
+  driveIsLowered,
   aimPoint,
   orbitStep,
   engagementKey,
@@ -412,7 +412,12 @@ export function useGalaxyCameraDrive({
         // the reference release, the control restore and the highlight clearing
         // all follow with no new code. Window pixels, because that is the space
         // `HandPoint` is already in.
-        const lowered = isHandLowered(hand.point, window.innerHeight);
+        // Asked of the hands that DRIVE, not of the primary hand. A two-hand
+        // drive has no pointing hand, so the primary is whichever hand was
+        // primary before — sticky from an earlier interaction. Reading it made
+        // the release depend on history the user cannot see: the same reel-in
+        // survived or died according to which hand happened to hold the title.
+        const lowered = driveIsLowered(drive, hand, window.innerHeight);
         const activeCameraDrive = !lowered && (drive === "orbit" || drive === "zoom") ? drive : null;
         applyRings(activeCameraDrive !== null);
         setReticleEngaged(activeCameraDrive !== null);

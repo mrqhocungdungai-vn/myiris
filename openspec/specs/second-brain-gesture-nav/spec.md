@@ -356,6 +356,15 @@ A hand that has dropped to the lower part of the camera frame SHALL NOT drive th
 galaxy camera: a camera drive in progress SHALL be released, and a new one
 SHALL NOT engage, until the hand is raised again.
 
+**The hands asked SHALL be the hands the drive reads** — both palms of a
+two-palm zoom, both hands of a reel-in, the fist that turns the view — and ANY
+of them being low SHALL release it. The primary hand SHALL NOT be used for this:
+the primary is chosen with a preference for pointing hands, no camera drive has
+one, and the fallback is whichever hand was primary before. Deciding a drive's
+fate on that makes the same gesture live or die according to history the user
+cannot see, and an intermittent release reads as roughness rather than as a
+release.
+
 Mid-air gesture control is physically tiring, so a user resting their arm is a
 routine event rather than an edge case — and the pose a hand falls into while being
 lowered is not chosen deliberately. Without this, lowering a tired arm drags the
@@ -390,6 +399,11 @@ the hand to be held at a target, and a lowered hand simply will not be at one.
 
 - **WHEN** a camera drive is released because the hand was lowered
 - **THEN** mouse drag and zoom work immediately afterwards, exactly as after any other release
+
+#### Scenario: A low holding fist releases the reel-in
+
+- **WHEN** the user reels in with a fist held low in the frame and an open palm held high
+- **THEN** the drive is released, whichever hand the app last treated as primary
 
 ### Requirement: A note is reachable by stepping through its neighbours
 
