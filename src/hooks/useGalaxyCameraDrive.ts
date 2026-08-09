@@ -393,10 +393,15 @@ export function useGalaxyCameraDrive({
         acquireProgressRef.current = lock.progress;
         pivotPickRef.current = lock.lockedId === null ? null : { kind: "node", id: lock.lockedId };
 
-        // Read AFTER the lock step, and from this frame's lock: both fist
-        // drives are defined in terms of the locked note, so whether one
-        // exists at all is not a property of the hands alone.
-        const drive = driveFor(hand, lock.lockedId !== null);
+        // Read AFTER the lock step, and from THE PIVOT rather than from the
+        // lock id — deliberately the same ref the drives pivot around, so that
+        // "a fist drive exists" and "there is something for it to work around"
+        // cannot drift apart. Asking `lock.lockedId !== null` here would say
+        // the same thing today by coincidence of two expressions agreeing;
+        // this says it by construction. There is no test over this hook (it
+        // needs a live force-graph and a camera), so the invariant has to hold
+        // structurally or not at all.
+        const drive = driveFor(hand, pivotPickRef.current !== null);
         // A lowered hand drives nothing (design.md D6). Collapsing the drive to
         // null here routes it through the existing "drive went null" path, so
         // the reference release, the control restore and the highlight clearing
