@@ -16,6 +16,8 @@ import {
   preferredHand,
   reelsToLock,
   zoomSpan,
+  zoomKind,
+  engagementKey,
   type DwellState,
   type GalaxyNavNode,
 } from "./galaxy-nav";
@@ -253,6 +255,65 @@ describe("driveFor", () => {
     const b = makeTrackedHand({ id: "r", openPalm: true, point: { x: 700, y: 200 }, wristPoint: { x: 9999, y: 0 } });
 
     expect(zoomSpan({ hands: [a, b] })).toBe(300);
+  });
+
+  // The two zoom pose pairs measure from different landmarks, so a drive that
+  // changes from one to the other has changed what "distance" means. Both are
+  // "zoom" in the drive partition — correctly, they do the same job — which is
+  // exactly why the drive identity alone cannot carry this: closing one of two
+  // open palms into a fist would otherwise keep a reference measured
+  // fingertip-to-fingertip and compare it against a wrist-to-fingertip span.
+  it("names which zoom this is, so a change of basis can re-seed", () => {
+    const twoPalms = [makeTrackedHand({ id: "l", openPalm: true }), makeTrackedHand({ id: "r", openPalm: true })];
+    expect(zoomKind({ hands: twoPalms })).toBe("spread");
+
+    const fistAndPalm = [makeTrackedHand({ id: "l", fist: true }), makeTrackedHand({ id: "r", openPalm: true })];
+    expect(zoomKind({ hands: fistAndPalm })).toBe("reel");
+
+    expect(zoomKind({ hands: [makeTrackedHand({ id: "l", fist: true })] })).toBeNull();
+    expect(zoomKind({ hands: [makeTrackedHand({ id: "l", openPalm: true })] })).toBeNull();
+  });
+
+  it("the two zoom kinds never share a span basis", () => {
+    // The concrete discontinuity: same hands in the same places, one pose
+    // apart, and the measured span differs — which is only safe if the kind
+    // change is observable.
+    const palmL = makeTrackedHand({ id: "l", openPalm: true, point: { x: 400, y: 300 }, wristPoint: { x: 400, y: 420 } });
+    const palmR = makeTrackedHand({ id: "r", openPalm: true, point: { x: 700, y: 300 } });
+    const fistL = { ...palmL, openPalm: false, fist: true };
+
+    expect(zoomSpan({ hands: [palmL, palmR] })).not.toBe(zoomSpan({ hands: [fistL, palmR] }));
+    expect(zoomKind({ hands: [palmL, palmR] })).not.toBe(zoomKind({ hands: [fistL, palmR] }));
+  });
+
+  // The reference is seeded per KEY, not per drive. These two frames are the
+  // same drive and a different measurement — the case a drive-only comparison
+  // silently gets wrong, and the gesture loop has no test to catch it.
+  it("gives the two zoom pose pairs different engagement keys", () => {
+    const twoPalms = [makeTrackedHand({ id: "l", openPalm: true }), makeTrackedHand({ id: "r", openPalm: true })];
+    const fistAndPalm = [makeTrackedHand({ id: "l", fist: true }), makeTrackedHand({ id: "r", openPalm: true })];
+
+    expect(engagementKey("zoom", { hands: twoPalms })).not.toBe(engagementKey("zoom", { hands: fistAndPalm }));
+  });
+
+  it("keeps one key while the pose pair holds", () => {
+    const fistAndPalm = [makeTrackedHand({ id: "l", fist: true }), makeTrackedHand({ id: "r", openPalm: true })];
+    const moved = [
+      makeTrackedHand({ id: "l", fist: true, point: { x: 50, y: 60 }, wristPoint: { x: 20, y: 30 } }),
+      makeTrackedHand({ id: "r", openPalm: true, point: { x: 900, y: 100 } }),
+    ];
+
+    expect(engagementKey("zoom", { hands: fistAndPalm })).toBe(engagementKey("zoom", { hands: moved }));
+  });
+
+  it("distinguishes orbit from zoom, and drives nothing from either", () => {
+    const fistOnly = [makeTrackedHand({ id: "l", fist: true })];
+
+    expect(engagementKey("orbit", { hands: fistOnly })).toBe("orbit");
+    expect(engagementKey("zoom", { hands: fistOnly })).not.toBe("orbit");
+    expect(engagementKey(null, { hands: fistOnly })).toBeNull();
+    expect(engagementKey("dwell", { hands: fistOnly })).toBeNull();
+    expect(engagementKey("inspect", { hands: fistOnly })).toBeNull();
   });
 
   it("returns null for a single open palm, an unrecognized gesture, and a resting hand", () => {

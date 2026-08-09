@@ -352,6 +352,44 @@ export function reelsToLock(hand: Pick<HandState, "hands">): boolean {
  * measurement for both pose pairs, so they can never disagree about what
  * "distance" means.
  */
+/**
+ * WHICH zoom this frame is — the two pose pairs measure their span from
+ * different landmarks, so a drive that changes from one to the other has
+ * changed what "distance" means and must re-seed its reference.
+ *
+ * Both are `"zoom"` as far as the drive partition is concerned, which is
+ * correct — they do the same job — but it means the drive identity alone
+ * cannot tell the camera that the measurement basis moved underneath it.
+ * Closing one of two open palms into a fist switches the span from
+ * fingertip-to-fingertip to wrist-to-fingertip with the reference still
+ * holding the old basis, and the ratio law turns that discontinuity straight
+ * into a lurch.
+ */
+export function zoomKind(hand: Pick<HandState, "hands">): "spread" | "reel" | null {
+  if (hand.hands.filter((item) => item.openPalm).length >= 2) return "spread";
+  if (reelsToLock(hand)) return "reel";
+  return null;
+}
+
+/**
+ * What a camera drive's seeded reference belongs to — the drive AND, for a
+ * zoom, the pose pair its span was measured with. One value, because these
+ * must never be compared separately: a re-seed decided on the drive alone
+ * misses a change of measurement basis, and there is no test over the gesture
+ * loop to catch that (it needs a live force-graph and a camera). Storing the
+ * key instead of the drive makes the omission unrepresentable rather than
+ * merely discouraged.
+ */
+export type EngagementKey = string & { readonly __engagementKey: unique symbol };
+
+export function engagementKey(drive: GalaxyDrive, hand: Pick<HandState, "hands">): EngagementKey | null {
+  if (drive !== "orbit" && drive !== "zoom") return null;
+  // The brand is what stops a caller storing a bare drive here — assigning
+  // `"zoom"` would then typecheck and silently reintroduce the drive-only
+  // comparison this exists to prevent.
+  return (drive === "zoom" ? `zoom:${zoomKind(hand) ?? "none"}` : "orbit") as EngagementKey;
+}
+
 export function zoomSpan(hand: Pick<HandState, "hands">): number | null {
   const palms = hand.hands.filter((item) => item.openPalm);
   if (palms.length >= 2) return handDistance(palms[0].point, palms[1].point);

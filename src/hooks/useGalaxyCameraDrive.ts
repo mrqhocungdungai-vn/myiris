@@ -11,6 +11,8 @@ import {
   isHandLowered,
   aimPoint,
   orbitStep,
+  engagementKey,
+  type EngagementKey,
   preferredHand,
   reelsToLock,
   zoomSpan,
@@ -112,7 +114,10 @@ export function useGalaxyCameraDrive({
   // lifetime they had as component refs.
   const dwellStateRef = useRef<DwellState>(INITIAL_DWELL_STATE);
   const sphericalRef = useRef<THREE.Spherical | null>(null);
-  const cameraEngagedRef = useRef<"orbit" | "zoom" | null>(null);
+  // What the seeded reference belongs to — see `engagementKey`. Deliberately
+  // NOT the drive: the drive cannot express which pose pair a zoom was
+  // measured with, and storing it would let a re-seed miss that change.
+  const cameraEngagedRef = useRef<EngagementKey | null>(null);
   // The wrist of the hand driving an orbit, from the previous frame. The WRIST,
   // not the fingertip: curling into a fist moves the fingertip a long way on
   // its own, and the orbit's delta would read that curl as hand travel —
@@ -482,7 +487,16 @@ export function useGalaxyCameraDrive({
         // Camera drive: orbit and zoom share one spherical — re-derived from
         // the LIVE camera on every engage (fist<->zoom switch or mouse-drag
         // handoff, design.md M13), never carried over stale.
-        if (activeCameraDrive !== cameraEngagedRef.current) {
+        // Re-seed on a change of MEASUREMENT, not only on a change of drive.
+        // Both zoom pose pairs are `"zoom"`, so switching between them leaves
+        // the drive identity untouched while `zoomSpan` changes which
+        // landmarks it reads — the reference would keep the old basis and the
+        // ratio law would turn that discontinuity into a lurch, at exactly the
+        // moment the user closes a hand to reel in on the note they just
+        // locked. The key carries both, so the two can never be compared
+        // separately.
+        const engageKey = engagementKey(activeCameraDrive, hand);
+        if (engageKey !== cameraEngagedRef.current) {
           if (activeCameraDrive) {
             // Where the aim starts from, captured BEFORE the anchor moves, so
             // the displayed anchor has somewhere to ease from.
@@ -556,7 +570,7 @@ export function useGalaxyCameraDrive({
             zoomReferenceRef.current = null;
             prevOrbitPointRef.current = null;
           }
-          cameraEngagedRef.current = activeCameraDrive;
+          cameraEngagedRef.current = engageKey;
         } else if (activeCameraDrive) {
           const origin = anchor.resolveCurrent();
           anchor.displayedAnchorRef.current = easeAnchor(anchor.displayedAnchorRef.current, origin, dt);
