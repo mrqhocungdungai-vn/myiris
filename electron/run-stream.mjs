@@ -15,6 +15,7 @@ import { nameSession } from "./run-sessions.mjs";
 import { poQuestionTimeoutMs } from "./po-session.mjs";
 import { RUN_STATUS, toUpdateEvent } from "./run-queue.mjs";
 import { createTrailingThrottle } from "./coalesce.mjs";
+import { isVerb, resolveVerb } from "./verbs.mjs";
 import { activityEmitIntervalMs } from "./user-config.mjs";
 
 /**
@@ -240,6 +241,10 @@ export function createRunStream({
     }
     activityThrottles.get(run.run_id)?.cancel();
     activityThrottles.delete(run.run_id);
+    // A narration still pending when the turn ends would be spoken after the
+    // result it was describing — an aside about work already reported.
+    narrationThrottles.get(run.run_id)?.cancel();
+    narrationThrottles.delete(run.run_id);
   }
 
   function pushActivity(run, line) {
@@ -255,6 +260,32 @@ export function createRunStream({
   // projection (no new event type), keyed by Claude's own tool_use id so
   // start/end pairing survives duplicate tool names within one run. See
   // openspec/changes/two-hand-gestures-and-orb design.md D2.
+  // How often an act may be spoken during one turn. Slower than the deck's
+  // activity updates on purpose: the deck is glanced at, speech is listened to,
+  // and a voice reporting every tool call talks over the work it is narrating.
+  const ACT_NARRATION_INTERVAL_MS = 3000;
+  const narrationThrottles = new Map(); // run_id -> throttle
+
+  function narrateAct(run, toolName, detail) {
+    if (!isVerb(run.verb) || !resolveVerb(run.verb).narrateActs) return;
+    let throttle = narrationThrottles.get(run.run_id);
+    if (!throttle) {
+      throttle = createTrailingThrottle((act) => {
+        notifyIris([
+          "SYSTEM_EVENT_WORK_IN_PROGRESS",
+          `tool: ${act.tool}`,
+          ...(act.detail ? [`detail: ${act.detail}`] : []),
+          "instructions_to_iris:",
+          "- Say in a few words what is happening right now, as an aside, then stop.",
+          "- Report only this act. Do not guess what comes next, do not summarize the work so far, and do not describe the canvas — you cannot see it.",
+          "- If you are mid-sentence, finish it first. This is an aside, not an interruption.",
+        ]);
+      }, ACT_NARRATION_INTERVAL_MS);
+      narrationThrottles.set(run.run_id, throttle);
+    }
+    throttle.schedule({ tool: toolName, detail });
+  }
+
   function pushToolStart(run, toolId, toolName, detail) {
     if (!toolId) return;
     if (!run.toolStartedAt) run.toolStartedAt = new Map();
@@ -262,6 +293,8 @@ export function createRunStream({
     emitEvent(
       toUpdateEvent(run, RUN_STATUS.RUNNING, { phase: "tool_start", tool: toolName, tool_id: toolId, detail }),
     );
+    // Only where the verb declares the user is watching this happen.
+    narrateAct(run, toolName, detail);
     runQueue.heartbeat(run.run_id);
   }
 

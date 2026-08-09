@@ -195,6 +195,11 @@ const VERBS = Object.freeze({
     // A brainstorm at a canvas: the user is mid-thought, and the half-finished
     // sentence they actually said carries more than a tidied restatement of it.
     wordsLead: true,
+    // The user is looking at the board while this runs. Silence until the turn
+    // ends makes a drawing appear out of nowhere and a pause look like a
+    // failure; saying what is being added, as it is added, is what makes it a
+    // conversation rather than a request and a wait.
+    narrateActs: true,
     structuredOutput: true,
     disallowedTools: ASKS_FREELY,
     params: THIN_PARAMS,
@@ -542,7 +547,7 @@ function resolveField(value, state) {
  *   structuredOutput: boolean, disallowedTools: string[], params: object,
  *   basePersona: string, clause: string, guardOpenNoteWrites: boolean,
  *   spokenResult: "summary"|"verbatim", wordsLead: boolean,
- *   projectState: ProjectState,
+ *   narrateActs: boolean, projectState: ProjectState,
  * }}
  */
 export function resolveVerb(name, state = NO_PROJECT_STATE) {
@@ -596,6 +601,12 @@ export function resolveVerb(name, state = NO_PROJECT_STATE) {
     // on purpose: one governs what reaches the run, the other what reaches the
     // user, and a verb could reasonably want either without the other.
     wordsLead: Boolean(record.wordsLead),
+    // Whether the user hears what this verb is DOING while it does it, rather
+    // than only what it concluded. True for work the user is watching happen
+    // in front of them — a shape appearing on a canvas they are looking at —
+    // and false for everything else, where narrating tool calls would be
+    // noise about machinery nobody asked to hear.
+    narrateActs: Boolean(record.narrateActs),
     // Declared on the verb and resolved against project state like every other
     // field — never a verb-name conditional here (ask-when-unspecified D1).
     // What this list bounds is what the run may DO; who decides is not

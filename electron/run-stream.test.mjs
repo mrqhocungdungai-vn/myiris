@@ -425,3 +425,89 @@ describe("run-stream: activity throttling with two runs in flight", () => {
     }
   });
 });
+
+// the-canvas-becomes-a-conversation task 4.1: while the user is looking at the
+// board, silence until the turn ends makes a drawing appear out of nowhere and
+// a pause look like a failure.
+describe("run-stream: narrating acts while the user watches", () => {
+  function canvasRun(id = "turn") {
+    return { run_id: id, workstream_id: "ws-1", verb: "shape_on_canvas", task: "t", activity: [], toolStartedAt: new Map() };
+  }
+
+  it("speaks what is happening during a canvas turn", () => {
+    vi.useFakeTimers();
+    try {
+      const notifyIris = vi.fn();
+      const stream = make({ notifyIris });
+
+      stream.pushToolStart(canvasRun(), "tool-1", "add_elements", "3 boxes");
+      vi.advanceTimersByTime(5000);
+
+      expect(notifyIris).toHaveBeenCalledTimes(1);
+      const spoken = notifyIris.mock.calls[0][0].join("\n");
+      expect(spoken).toContain("SYSTEM_EVENT_WORK_IN_PROGRESS");
+      expect(spoken).toContain("add_elements");
+      expect(spoken).toContain("3 boxes");
+      // It must not invite her to describe a canvas she cannot see.
+      expect(spoken).toMatch(/cannot see it/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("says nothing for work the user is not watching", () => {
+    vi.useFakeTimers();
+    try {
+      const notifyIris = vi.fn();
+      const stream = make({ notifyIris });
+      const run = { run_id: "job", workstream_id: "ws-1", verb: "execute", task: "t", activity: [], toolStartedAt: new Map() };
+
+      stream.pushToolStart(run, "tool-1", "Bash", "npm test");
+      vi.advanceTimersByTime(5000);
+
+      expect(notifyIris).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not talk over its own work during a burst", () => {
+    // A voice reporting every tool call talks over the work it is narrating.
+    vi.useFakeTimers();
+    try {
+      const notifyIris = vi.fn();
+      const stream = make({ notifyIris });
+      const run = canvasRun();
+
+      stream.pushToolStart(run, "t1", "add_elements", "a box");
+      stream.pushToolStart(run, "t2", "add_elements", "another box");
+      stream.pushToolStart(run, "t3", "update_elements", "an arrow");
+      vi.advanceTimersByTime(5000);
+
+      expect(notifyIris).toHaveBeenCalledTimes(1);
+      // The trailing edge: the most recent act, not the stalest one.
+      expect(notifyIris.mock.calls[0][0].join("\n")).toContain("an arrow");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("drops a pending narration when the turn ends", () => {
+    // Otherwise it is spoken after the result it was describing — an aside
+    // about work already reported.
+    vi.useFakeTimers();
+    try {
+      const notifyIris = vi.fn();
+      const stream = make({ notifyIris });
+      const run = canvasRun();
+
+      stream.pushToolStart(run, "t1", "add_elements", "a box");
+      stream.cancelActivityThrottle(run);
+      vi.advanceTimersByTime(5000);
+
+      expect(notifyIris).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

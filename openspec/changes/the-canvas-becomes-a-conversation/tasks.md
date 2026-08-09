@@ -39,11 +39,11 @@
 
 ## 4. The user hears the work as it happens
 
-- [ ] 4.1 `electron/run-stream.mjs` — put acts (tool start/end) on a spoken path for this mode, as short acts rather than tool names
+- [x] 4.1 `run-stream.mjs` — acts reach the voice during the turn, gated by a registry field (`narrateActs`) so only work the user is WATCHING is narrated. Throttled at 3s, slower than the deck's updates: the deck is glanced at, speech is listened to, and a voice reporting every tool call talks over the work it describes. A pending narration is dropped when the turn ends rather than spoken after the result
 - [ ] 4.2 Enable `includePartialMessages` for resident canvas turns only; speak sentence-completed partials. Add the option to `electron/sdk-options.test.mjs` (it asserts each run shape's complete option key set — a field added without it is silently dropped)
 - [x] 4.3 Relay verbatim — generalized out of `work_on_note`'s hardcoded verb-name check into a registry field (`spokenResult`), so the announcement path can no longer disagree with the verb about how its own result is spoken
 - [ ] 4.4 Degrade to acts-only when speech falls behind; drop stale narration rather than queueing it
-- [ ] 4.5 Tests: acts are spoken during the turn; partial text is spoken as it forms; falling behind drops rather than lags
+- [~] 4.5 PARTIAL — 4 tests for acts (`run-stream.test.mjs`): spoken during the turn, silent for unwatched work, coalesced during a burst to the most recent act, dropped when the turn ends. Partial-text tests wait on 4.2
 
 ## 4bis. Iris's own skill for being the conduit
 
