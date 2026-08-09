@@ -93,6 +93,10 @@ vi.mock("./announcements.mjs", () => ({
     announceWorkspaceUpdate: vi.fn(),
     userDisplayName: vi.fn(() => "Alex"),
     announceClaudeCompletion: vi.fn(),
+    // The verbatim read-back path. Absent from this mock until now, which is
+    // itself the finding: no test here had ever finalized a verb that takes it,
+    // so the branch choosing between the two was never exercised.
+    announceVerbatimResult: vi.fn(),
     sendContextSupplement: vi.fn(),
     __deps: deps,
   })),
@@ -164,6 +168,7 @@ vi.mock("./wiring-live.mjs", () => ({
 }));
 
 import { createRunQueue as createRunQueueReal } from "./run-queue.mjs";
+import { createAnnouncements as createAnnouncementsReal } from "./announcements.mjs";
 import { createWiring } from "./wiring.mjs";
 import { createCapabilitiesWiring as createCapabilitiesWiringReal } from "./wiring-capabilities.mjs";
 import { createLiveWiring as createLiveWiringReal } from "./wiring-live.mjs";
@@ -263,5 +268,70 @@ describe("wiring: createWiring", () => {
     const result = createWiring(makeDeps());
     expect(typeof result.runQueue.list).toBe("function");
     expect(result.killChild).toBeUndefined();
+  });
+});
+
+// How a result is SPOKEN is declared by the verb (`spokenResult`), and this is
+// where that declaration is honoured or quietly ignored. The user asked for
+// the canvas conversation's answers to be read out in full — "so both they and
+// Claude understand" — and a summary here would be a different product.
+describe("wiring: which announcement path a finished run takes", () => {
+  function finalize(run) {
+    createWiring(makeDeps());
+    const announcements = /** @type {any} */ (createAnnouncementsReal).mock.results.at(-1).value;
+    announcements.announceVerbatimResult.mockClear();
+    announcements.announceClaudeCompletion.mockClear();
+    const queueDeps = /** @type {any} */ (createRunQueueReal).mock.calls.at(-1)[0];
+    queueDeps.onFinalized(run);
+    return announcements;
+  }
+
+  it("reads a canvas result out in full, never as a summary", () => {
+    const announcements = finalize({
+      run_id: "r1",
+      verb: "shape_on_canvas",
+      status: "completed",
+      started_at: 1,
+      output: "Those two boxes are doing the same job; I merged them.",
+    });
+
+    expect(announcements.announceVerbatimResult).toHaveBeenCalledTimes(1);
+    expect(announcements.announceClaudeCompletion).not.toHaveBeenCalled();
+    expect(announcements.announceVerbatimResult.mock.calls[0][0].output).toContain("I merged them.");
+  });
+
+  it("reads a note back in full too — the other verb that declares it", () => {
+    const announcements = finalize({
+      run_id: "r1",
+      verb: "work_on_note",
+      status: "completed",
+      started_at: 1,
+      output: "Paragraph one is about the deadline.",
+    });
+
+    expect(announcements.announceVerbatimResult).toHaveBeenCalledTimes(1);
+    expect(announcements.announceClaudeCompletion).not.toHaveBeenCalled();
+  });
+
+  it("still summarizes unattended work", () => {
+    // The user did not watch this happen, so a precis is the right shape. This
+    // is what keeps the change from being a general "stop summarizing" switch.
+    const announcements = finalize({
+      run_id: "r1",
+      verb: "execute",
+      status: "completed",
+      started_at: 1,
+      output: "Refactored the parser.",
+    });
+
+    expect(announcements.announceClaudeCompletion).toHaveBeenCalledTimes(1);
+    expect(announcements.announceVerbatimResult).not.toHaveBeenCalled();
+  });
+
+  it("announces nothing at all for a run that never started", () => {
+    const announcements = finalize({ run_id: "r1", verb: "shape_on_canvas", status: "failed", output: "x" });
+
+    expect(announcements.announceVerbatimResult).not.toHaveBeenCalled();
+    expect(announcements.announceClaudeCompletion).not.toHaveBeenCalled();
   });
 });
