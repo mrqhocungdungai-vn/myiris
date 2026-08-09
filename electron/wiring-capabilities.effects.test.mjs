@@ -148,3 +148,55 @@ describe("opening the canvas, through the real wiring", () => {
     expect(wiring.canvasCapability.promptFragment()).toContain("CANVAS MODE IS OPEN");
   });
 });
+
+// The common startup order, and the hole it used to fall through: the user
+// opens the board while the Claude probe is still running, so the warm is
+// skipped for want of a pipeline. The probe finishes moments later and brings
+// the MCP up — and nothing ever went back for the conversation, so the first
+// sentence paid the whole cost the warm exists to remove.
+describe("the canvas opened before Claude was reachable", () => {
+  beforeEach(() => {
+    poSession.getOrCreatePoSession.mockClear();
+    poSession.getPoSessionState.mockReturnValue(null);
+  });
+
+  it("warms when the pipeline arrives later", async () => {
+    let available = false;
+    const { wiring, activate } = buildWiring({ getPipelineAvailable: vi.fn(() => available) });
+
+    activate.fn();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(poSession.getOrCreatePoSession).not.toHaveBeenCalled();
+
+    // Claude becomes reachable; this is the signal the pipeline probe sends.
+    available = true;
+    wiring.canvasCapability.maybeStartCanvasMcp();
+    await vi.waitFor(() => expect(poSession.getOrCreatePoSession).toHaveBeenCalledTimes(1));
+
+    expect(poSession.getOrCreatePoSession.mock.calls[0][1].warm).toBe(true);
+  });
+
+  it("does not warm a second time when one is already open", async () => {
+    const { wiring, activate } = buildWiring();
+
+    activate.fn();
+    await vi.waitFor(() => expect(poSession.getOrCreatePoSession).toHaveBeenCalledTimes(1));
+
+    // A later probe tick must not open a second conversation, which would be a
+    // handoff closing the one it means to have ready.
+    poSession.getPoSessionState.mockReturnValue({ ended: false });
+    wiring.canvasCapability.maybeStartCanvasMcp();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    expect(poSession.getOrCreatePoSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("does nothing at all while the canvas has never been opened", async () => {
+    const { wiring } = buildWiring();
+
+    wiring.canvasCapability.maybeStartCanvasMcp();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    expect(poSession.getOrCreatePoSession).not.toHaveBeenCalled();
+  });
+});

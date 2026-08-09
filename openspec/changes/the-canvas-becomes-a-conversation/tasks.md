@@ -5,6 +5,7 @@
 
 ## 2. The open canvas warms the conversation, and Iris says so
 
+- [x] 2.1c The warm follows BOTH gates, not just the panel. Opening the board while the Claude probe is still running skipped the warm for want of a pipeline; the probe then finished, brought the MCP up, and nothing went back for the conversation. One function now does what "the canvas became usable" means — tools and conversation — whichever gate flipped last
 - [x] 2.1b The warm looked its workstream up with `findWorkstream(null)`, which matches no session — so every warm answered "no-workstream" and nothing was ever opened ahead of the first sentence. It takes the ACTIVE workstream now, and the test drives the real function rather than the mocked call site
 - [x] 2.1 `canvas:activate` warms the shaping conversation. The session-config assembly was extracted out of `startStatefulRun` into `statefulSessionOptions` first — it could only be built as a side effect of somebody talking, so a session could only exist that way too
 - [~] 2.2 DROPPED. Nothing consumes it. The requirement it was meant to serve — "closing the surface does not end the conversation" — is satisfied by residency having no idle teardown, i.e. by doing nothing. An IPC channel with no consumer is a seam that has to be maintained and can drift out of true, in exchange for nothing

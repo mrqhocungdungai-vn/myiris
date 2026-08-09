@@ -23,6 +23,11 @@ The review gate SHALL be asked once, when the conversation opens, and SHALL NOT 
 - **WHEN** the drawing surface is opened while the pipeline is unavailable
 - **THEN** no session is opened and no review is requested
 
+#### Scenario: A pipeline that arrives late still gets the conversation ready
+
+- **WHEN** the drawing surface is opened before Claude is reachable, and Claude becomes reachable while it is still open
+- **THEN** the conversation is prepared then, rather than the first sentence paying for it
+
 ### Requirement: The user hears the work as it happens
 
 While the canvas conversation is live, what Iris is doing SHALL reach the user **as it happens**, not only when a turn ends. Both what she draws (her acts on the canvas) and what she says (her answer as it forms) SHALL be spoken during the turn.

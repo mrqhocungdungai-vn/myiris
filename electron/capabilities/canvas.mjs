@@ -108,14 +108,24 @@ export function createCanvasCapability({
     canvasEngaged = true;
   }
 
-  // Idempotent no-op unless BOTH gates hold; safe to call from any signal that
-  // might have just flipped one of them (probePipelineAvailability, and the
-  // drawing panel's first canvas:activate).
-  function maybeStartCanvasMcp() {
+  // Everything that has to happen once the canvas is usable — both gates hold —
+  // whichever of them flipped last. Idempotent, so it is safe to call from any
+  // signal: the drawing panel's `canvas:activate`, and
+  // `probePipelineAvailability` when Claude becomes reachable mid-session.
+  //
+  // It brings up BOTH the tools and the conversation. Starting only the server
+  // here was a hole in exactly one scenario, and a common one: the user opens
+  // the board while the Claude probe is still running, the warm is skipped for
+  // want of a pipeline, the probe finishes moments later and brings the MCP up
+  // — and nothing ever goes back for the conversation, so the first sentence
+  // pays the full cost the warm exists to remove.
+  function onCanvasBecameUsable() {
     if (!getPipelineAvailable() || !canvasEngaged) return;
     canvasMcp.start().catch((error) => {
       emitEvent({ type: "log", level: "warn", message: `Canvas MCP server failed to start: ${error.message}` });
     });
+    // Already-open is the ordinary answer here, and it is a no-op.
+    void warmConversation();
   }
 
   // Awaited by both run paths right before wiring a Claude run — ensures the
@@ -209,7 +219,6 @@ export function createCanvasCapability({
         // First-open signal for canvas-claude-mcp's sticky canvasEngaged gate
         // (design.md D6) — a no-op on every subsequent open/close of the panel.
         markCanvasEngaged();
-        maybeStartCanvasMcp();
         announceCanvasMode();
         // The conversation, not just the tools. Opening the board used to
         // start an MCP server and nothing to talk to: the first sentence paid
@@ -217,7 +226,7 @@ export function createCanvasCapability({
         // before anyone answered it. Fire-and-forget — a warm that cannot
         // happen changes nothing, because the first spoken turn still opens
         // the session exactly as it always did.
-        if (getPipelineAvailable()) void warmConversation();
+        onCanvasBecameUsable();
       },
     },
     // Reply half of the main→renderer image-export request (design.md D3);
@@ -356,7 +365,10 @@ export function createCanvasCapability({
     // case. `get_canvas` remains a Claude-facing MCP tool, never a Gemini one.
     toolDeclarations: [],
     ensureCanvasMcpForRun,
-    maybeStartCanvasMcp,
+    // Exported under the name its callers use for "the canvas may have just
+    // become usable" — the pipeline probe and the drawing panel both mean
+    // that, and both want the tools AND the conversation.
+    maybeStartCanvasMcp: onCanvasBecameUsable,
     promptFragment,
     ipcHandlers,
     teardown,
