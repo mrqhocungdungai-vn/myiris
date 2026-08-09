@@ -34,6 +34,11 @@ Speech in this mode SHALL relay Iris's own words rather than a re-summarization 
 - **WHEN** Iris adds elements to the canvas during a turn
 - **THEN** the user hears what she is adding while she adds it, rather than a summary afterwards
 
+#### Scenario: The same moment is not narrated twice
+
+- **WHEN** the worker says what it is about to do and then does it
+- **THEN** the user hears the worker's own sentence, and not a second, poorer restatement of it
+
 #### Scenario: A short turn is narrated too
 
 - **WHEN** a turn begins and ends faster than the interval that paces the narration

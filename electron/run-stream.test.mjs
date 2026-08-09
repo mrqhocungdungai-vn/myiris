@@ -640,3 +640,99 @@ describe("run-stream: in-progress speech is never delivered late", () => {
     }
   });
 });
+
+// An assistant message can carry prose AND a tool call together — "let me add
+// three boxes" immediately followed by add_elements. Narrating both means the
+// user hears the same thing twice, back to back, the second time in worse
+// words. Acts exist to cover silence; when the worker has just spoken there is
+// none to cover.
+describe("run-stream: the worker's own sentence wins over a narrated act", () => {
+  function canvasRun(id = "turn") {
+    return { run_id: id, workstream_id: "ws-1", verb: "shape_on_canvas", task: "t", activity: [], toolStartedAt: new Map() };
+  }
+
+  it("says nothing extra when the act follows prose that just described it", () => {
+    vi.useFakeTimers();
+    try {
+      const notifyIris = vi.fn();
+      const stream = make({ notifyIris });
+      const run = canvasRun();
+
+      stream.handleClaudeStreamMessage(run, {
+        type: "assistant",
+        message: {
+          content: [
+            { type: "text", text: "Let me add three boxes for the stages." },
+            { type: "tool_use", id: "t1", name: "add_elements", input: {} },
+          ],
+        },
+      });
+      vi.advanceTimersByTime(5000);
+
+      expect(notifyIris).toHaveBeenCalledTimes(1);
+      expect(notifyIris.mock.calls[0][0].join("\n")).toContain("Let me add three boxes");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("still covers silence when the worker draws without saying anything", () => {
+    vi.useFakeTimers();
+    try {
+      const notifyIris = vi.fn();
+      const stream = make({ notifyIris });
+
+      stream.handleClaudeStreamMessage(canvasRun(), {
+        type: "assistant",
+        message: { content: [{ type: "tool_use", id: "t1", name: "add_elements", input: {} }] },
+      });
+
+      expect(notifyIris).toHaveBeenCalledTimes(1);
+      expect(notifyIris.mock.calls[0][0].join("\n")).toContain("add_elements");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("narrates again once the worker has been quiet for a while", () => {
+    vi.useFakeTimers();
+    try {
+      const notifyIris = vi.fn();
+      const stream = make({ notifyIris });
+      const run = canvasRun();
+
+      stream.handleClaudeStreamMessage(run, {
+        type: "assistant",
+        message: { content: [{ type: "text", text: "Looking at what is there." }] },
+      });
+      notifyIris.mockClear();
+      vi.advanceTimersByTime(5000);
+      stream.pushToolStart(run, "t1", "add_elements", "a box");
+
+      expect(notifyIris).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the suppression per run, not across the app", () => {
+    // Two conversations can be live at once now; one talking must not silence
+    // the other's narration.
+    vi.useFakeTimers();
+    try {
+      const notifyIris = vi.fn();
+      const stream = make({ notifyIris });
+
+      stream.handleClaudeStreamMessage(canvasRun("turn-A"), {
+        type: "assistant",
+        message: { content: [{ type: "text", text: "thinking" }] },
+      });
+      notifyIris.mockClear();
+      stream.pushToolStart(canvasRun("turn-B"), "t1", "add_elements", "a box");
+
+      expect(notifyIris).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

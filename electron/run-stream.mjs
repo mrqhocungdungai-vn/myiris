@@ -246,6 +246,7 @@ export function createRunStream({
     // result it was describing — an aside about work already reported.
     narrationThrottles.get(run.run_id)?.cancel();
     narrationThrottles.delete(run.run_id);
+    lastProseAt.delete(run.run_id);
   }
 
   function pushActivity(run, line) {
@@ -266,6 +267,11 @@ export function createRunStream({
   // and a voice reporting every tool call talks over the work it is narrating.
   const ACT_NARRATION_INTERVAL_MS = 3000;
   const narrationThrottles = new Map(); // run_id -> throttle
+  // When the WORKER last spoke for this run. Only prose sets it: an act is a
+  // fallback for silence, and the thing it must not duplicate is a sentence
+  // the worker already said. Act-versus-act pacing is the throttle's job, and
+  // its trailing edge — report the most recent act of a burst — is wanted.
+  const lastProseAt = new Map(); // run_id -> ms
 
   // Whether the user is watching this run happen, and so should hear it as it
   // goes rather than only when it lands.
@@ -293,6 +299,7 @@ export function createRunStream({
     if (!speaksWhileWorking(run)) return;
     const clean = String(text || "").trim();
     if (!clean) return;
+    lastProseAt.set(run.run_id, Date.now());
     notifyIris(
       [
         "SYSTEM_EVENT_WORK_IN_PROGRESS",
@@ -330,6 +337,12 @@ export function createRunStream({
 
   function narrateAct(run, toolName, detail) {
     if (!speaksWhileWorking(run)) return;
+    // The worker's own sentence wins. An assistant message can carry prose and
+    // a tool call together — "let me add three boxes" immediately followed by
+    // add_elements — and narrating both means the user hears the same thing
+    // twice, back to back, the second time in worse words. Acts exist to cover
+    // SILENCE; when the worker has just spoken, there is none to cover.
+    if (Date.now() - (lastProseAt.get(run.run_id) ?? -Infinity) < ACT_NARRATION_INTERVAL_MS) return;
     let throttle = narrationThrottles.get(run.run_id);
     if (!throttle) {
       // The FIRST act of a turn is spoken at once, and only the ones after it
