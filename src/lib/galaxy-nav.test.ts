@@ -418,6 +418,54 @@ describe("driveFor", () => {
     expect(pulled).toBeLessThan(1000); // spreading pulls the camera IN
   });
 
+  // The whole reported flow, step by step, over the real functions. Five
+  // separate fixes meet here, and each was verified alone; this is the guard
+  // on them composing — the step that broke every time was the one where the
+  // hand count changes.
+  it("aim to lock, close a fist, reel in — the flow the report described", () => {
+    const H = 1000;
+    const palm = (x: number) => makeTrackedHand({ id: "hand:Right", openPalm: true, point: { x, y: 300 } });
+    const fist = makeTrackedHand({
+      id: "hand:Left",
+      fist: true,
+      point: { x: 400, y: 300 },
+      wristPoint: { x: 400, y: 400 },
+    });
+
+    // 1. One open palm aims. It drives no camera, and it can aim because no
+    //    fist is in frame.
+    const aiming = { hands: [palm(600)], point: { x: 600, y: 300 }, fist: false, pointing: false };
+    expect(driveFor(aiming, false)).toBeNull();
+    expect(aimPoint(aiming)).not.toBeNull();
+
+    // 2. A fist BEFORE anything is locked drives nothing — the reported bug.
+    const fistUnlocked = { hands: [fist], point: { x: 400, y: 300 }, fist: true, pointing: false };
+    expect(driveFor(fistUnlocked, false)).toBeNull();
+
+    // 3. With a note locked, the fist alone turns the view.
+    expect(driveFor(fistUnlocked, true)).toBe("orbit");
+
+    // 4. Adding the open palm reels in, and nothing aims while a fist is up.
+    const reeling = { hands: [fist, palm(800)], point: { x: 800, y: 300 }, fist: true, pointing: false };
+    expect(driveFor(reeling, true)).toBe("zoom");
+    expect(aimPoint(reeling)).toBeNull();
+
+    // 5. Turning and reeling are different engagements, so the reference is
+    //    re-seeded between them rather than carried across a change of basis.
+    expect(engagementKey("orbit", fistUnlocked)).not.toBe(engagementKey("zoom", reeling));
+
+    // 6. Both hands decide the release, and both are up.
+    expect(driveIsLowered("zoom", reeling, H)).toBe(false);
+
+    // 7. Pulling the palm away pulls the camera in, measured from the fist's
+    //    wrist, and the grip does not change so the reference is kept.
+    const pulled = { ...reeling, hands: [fist, palm(1200)] };
+    expect(engagementKey("zoom", pulled)).toBe(engagementKey("zoom", reeling));
+    const refDist = zoomSpan(reeling)!;
+    const radius = zoomRadius({ refRadius: 900, refDist, curDist: zoomSpan(pulled)!, min: 1, max: 100000 });
+    expect(radius).toBeLessThan(900);
+  });
+
   it("returns null for a single open palm, an unrecognized gesture, and a resting hand", () => {
     expect(driveFor(makeHand({ openPalm: true, hands: [makeTrackedHand({ openPalm: true })] }), true)).toBeNull();
     expect(driveFor(makeHand(), true)).toBeNull(); // "None" gesture, resting/unrecognized
