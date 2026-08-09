@@ -43,6 +43,7 @@ function make(overrides = {}) {
     canvasStoreFile: "/fake/canvas.json",
     emitToRenderer: vi.fn(),
     emitEvent: vi.fn(),
+    notifyIris: vi.fn(),
     getMainWindow: vi.fn(() => null),
     getPipelineAvailable: vi.fn(() => true),
     userDisplayName: vi.fn(() => "Alex"),
@@ -220,5 +221,70 @@ describe("canvas capability: teardown", () => {
     await expect(cap.teardown()).resolves.toBeUndefined();
     expect(storeInstance.flush).toHaveBeenCalled();
     expect(mcpInstance.stop).toHaveBeenCalled();
+  });
+});
+
+// the-canvas-becomes-a-conversation: opening the canvas is a mode the user is
+// told they are in, and while it is open Iris carries rather than compresses.
+describe("canvas capability: canvas mode is announced, and changes Iris's job", () => {
+  it("announces canvas mode when the panel opens", () => {
+    const notifyIris = vi.fn();
+    const capability = make({ notifyIris });
+    const activate = capability.ipcHandlers.find((handler) => handler.channel === "canvas:activate");
+
+    activate.fn();
+
+    expect(notifyIris).toHaveBeenCalledTimes(1);
+    const spoken = notifyIris.mock.calls[0][0].join("\n");
+    expect(spoken).toContain("SYSTEM_EVENT_CANVAS_MODE_OPEN");
+    expect(spoken).toMatch(/canvas mode is open/i);
+    // Once per opening — not narrated again on every later turn.
+    expect(spoken).toMatch(/ONCE/);
+  });
+
+  it("says nothing when there is no pipeline to have a conversation with", () => {
+    // Announcing a mode the app cannot actually enter is a promise it cannot keep.
+    const notifyIris = vi.fn();
+    const capability = make({ notifyIris, getPipelineAvailable: vi.fn(() => false) });
+
+    capability.ipcHandlers.find((handler) => handler.channel === "canvas:activate").fn();
+
+    expect(notifyIris).not.toHaveBeenCalled();
+  });
+
+  it("announces again when the panel is reopened", () => {
+    // Closing and reopening the surface IS entering the mode again.
+    const notifyIris = vi.fn();
+    const capability = make({ notifyIris });
+    const activate = capability.ipcHandlers.find((handler) => handler.channel === "canvas:activate");
+
+    activate.fn();
+    activate.fn();
+
+    expect(notifyIris).toHaveBeenCalledTimes(2);
+  });
+
+  it("gives Iris her conduit instructions only once the canvas is engaged", () => {
+    const capability = make({});
+
+    // Before opening: only the routing prose, which is all that applies.
+    const before = capability.promptFragment();
+    expect(before).toContain("CANVAS —");
+    expect(before).not.toContain("CANVAS MODE IS OPEN");
+
+    capability.ipcHandlers.find((handler) => handler.channel === "canvas:activate").fn();
+    const after = capability.promptFragment();
+
+    expect(after).toContain("CANVAS MODE IS OPEN");
+    // The three rules that make her a conduit rather than a router.
+    expect(after).toMatch(/UNCHANGED/);
+    expect(after).toMatch(/READ THE ANSWER OUT IN FULL/);
+    expect(after).toMatch(/cannot see the canvas/i);
+  });
+
+  it("keeps the prompt empty when the pipeline is unavailable, engaged or not", () => {
+    const capability = make({ getPipelineAvailable: vi.fn(() => false) });
+    capability.ipcHandlers.find((handler) => handler.channel === "canvas:activate").fn();
+    expect(capability.promptFragment()).toBe("");
   });
 });

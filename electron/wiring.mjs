@@ -11,7 +11,7 @@
 // import Electron directly, like any other domain module.
 import { createRunQueue, RUN_STATUS } from "./run-queue.mjs";
 import { getPoSessionState } from "./po-session.mjs";
-import { projectState } from "./verbs.mjs";
+import { isVerb, projectState, resolveVerb } from "./verbs.mjs";
 import { createPipelineProbes } from "./pipeline-probes.mjs";
 import { createPipelineInstall } from "./pipeline-install.mjs";
 import { createUserConfig } from "./user-config.mjs";
@@ -137,11 +137,13 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
       // beyond the rejection, and the announcement gate above already filters
       // those out for exactly that reason.
       secondBrainCapability?.captureRunOutcome?.(run);
-      // open-note-session 5.1: work_on_note's result is read back AS WRITTEN,
-      // never through announceClaudeCompletion's 1-3 sentence summary
-      // instruction — scoped to this one verb, not a general switch.
-      if (run.verb === "work_on_note") {
-        announceNoteWorkingResult({
+      // How a result is spoken is declared by the verb, not decided here. This
+      // was `run.verb === "work_on_note"` — a verb defined in a second place,
+      // which is the duplication the registry exists to prevent, and which is
+      // exactly what would have gone wrong when the canvas conversation needed
+      // the same treatment for its own reasons.
+      if (isVerb(run.verb) && resolveVerb(run.verb).spokenResult === "verbatim") {
+        announceVerbatimResult({
           runId: run.run_id,
           task: run.task,
           status: run.status,
@@ -212,7 +214,7 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     announceWorkspaceUpdate,
     userDisplayName,
     announceClaudeCompletion,
-    announceNoteWorkingResult,
+    announceVerbatimResult,
     sendContextSupplement,
   } = announcements;
 

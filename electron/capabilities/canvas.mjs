@@ -31,6 +31,7 @@ const CANVAS_IMAGE_GRACE_MS = 500;
  *   canvasStoreFile: string,
  *   emitToRenderer: (channel: string, payload: any) => void,
  *   emitEvent: (event: any) => void,
+ *   notifyIris: (lines: string | string[], opts?: { bufferIfOffline?: boolean }) => void,
  *   getMainWindow: () => any,
  *   getPipelineAvailable: () => boolean,
  *   userDisplayName: () => string,
@@ -41,6 +42,7 @@ export function createCanvasCapability({
   canvasStoreFile,
   emitToRenderer,
   emitEvent,
+  notifyIris = () => {},
   getMainWindow,
   getPipelineAvailable,
   userDisplayName,
@@ -129,6 +131,29 @@ export function createCanvasCapability({
     return buildMcpServerRecord(canvasMcp.getInfo());
   }
 
+  // Canvas mode is a state the user is TOLD they are in, not one they deduce
+  // from a panel having appeared (the-canvas-becomes-a-conversation, D1). It
+  // is also what makes warming the conversation on open honest: a session
+  // opening in the background is a hidden cost, whereas an announced mode is a
+  // state the user can hear and can close.
+  //
+  // Announced once per opening, not once per app run: closing the surface and
+  // reopening it is entering the mode again, and saying so is correct. It is
+  // deliberately silent when the pipeline is unavailable — there is no canvas
+  // conversation to enter, and announcing one would be a promise of a
+  // capability the app does not have right now.
+  function announceCanvasMode() {
+    if (!getPipelineAvailable()) return;
+    notifyIris([
+      "SYSTEM_EVENT_CANVAS_MODE_OPEN",
+      `${userDisplayName()} just opened the drawing canvas.`,
+      "instructions_to_iris:",
+      "- Say, briefly and in your own voice, that canvas mode is open and you are ready to work on the drawing together.",
+      "- Say it ONCE. Do not repeat it on later turns, and do not narrate the panel itself.",
+      "- From now until the canvas closes, you are the CONDUIT between them and the canvas worker, not a summarizer of it.",
+    ]);
+  }
+
   function promptFragment() {
     // Gated on pipelineAvailable, same as the rest of the pipeline-only prose
     // in gemini-prompts.mjs — the verb this points at is only declared then.
@@ -141,7 +166,31 @@ export function createCanvasCapability({
     // seven things. `shape_on_canvas` is that way, so this fragment now says
     // only what a schema cannot: that Iris cannot see the canvas.
     if (!getPipelineAvailable()) return "";
-    return `CANVAS — ${userDisplayName()} has a drawing canvas/whiteboard in the app that YOU cannot see. When they ask something like "what should I add to my diagram", "what do you think of my drawing", "connect these two boxes", or anything else about the canvas/diagram/whiteboard, call shape_on_canvas — it CAN read and draw on it, and it continues whatever was already being discussed. Never guess at what is drawn yourself.`;
+    const base = `CANVAS — ${userDisplayName()} has a drawing canvas/whiteboard in the app that YOU cannot see. When they ask something like "what should I add to my diagram", "what do you think of my drawing", "connect these two boxes", or anything else about the canvas/diagram/whiteboard, call shape_on_canvas — it CAN read and draw on it, and it continues whatever was already being discussed. Never guess at what is drawn yourself.`;
+    if (!canvasEngaged) return base;
+    // Iris's own skill for this role (the-canvas-becomes-a-conversation, D8).
+    // Everywhere else in this app her job is to ROUTE: decide which verb fits
+    // and write a brief for it, with editorial license over the user's words.
+    // With the canvas open her job is the opposite one — to CARRY. The value
+    // is in how faithfully both directions travel through her, not in how well
+    // she compresses either.
+    //
+    // It is a voice instruction rather than a Claude skill on purpose: this
+    // describes how the VOICE layer behaves, and the voice layer is configured
+    // by its system instruction. Claude's side already has its own skills;
+    // putting these rules there would be describing one agent's job in another
+    // agent's briefing.
+    return [
+      base,
+      "",
+      `CANVAS MODE IS OPEN — you are the conduit between ${userDisplayName()} and the canvas worker. While it is open:`,
+      "- Their words go through you UNCHANGED. Put what they actually said into `said` — their phrasing, their hedges, their half-finished sentence. Do not tidy it into a specification; turning speech into a brief is the worker's job, not yours.",
+      "- Their words also go through you PROMPTLY. In a brainstorm a reply that arrives after the thought has passed is not a slow reply, it is the wrong one. Do not gather several ideas into one call.",
+      "- When the worker answers, READ THE ANSWER OUT IN FULL. Do not summarize it, do not shorten it, do not replace it with your own version of the point. Both they and you need the actual answer: what you speak is also what you will be reasoning from on the next turn, so a summary here compounds into you answering against a paraphrase of a paraphrase.",
+      "- While the worker is drawing, say what is being drawn as it happens. Report acts you are actually told about; never invent progress to fill a silence.",
+      "- You still cannot see the canvas. Never describe what is on it from memory or from what you assume was drawn — ask the worker, which is what it is for.",
+      "- If they interrupt you, stop talking immediately. The conversation stays open; only the turn ends.",
+    ].join("\n");
   }
 
   /** @type {Array<{ channel: string, kind: "handle"|"on", fn: Function }>} */
@@ -159,6 +208,7 @@ export function createCanvasCapability({
         // (design.md D6) — a no-op on every subsequent open/close of the panel.
         markCanvasEngaged();
         maybeStartCanvasMcp();
+        announceCanvasMode();
       },
     },
     // Reply half of the main→renderer image-export request (design.md D3);

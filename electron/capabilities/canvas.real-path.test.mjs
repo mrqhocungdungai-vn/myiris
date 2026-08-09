@@ -35,6 +35,7 @@ function makeCapability() {
       if (typeof payload.revision === "number") renderer.revision = payload.revision;
     },
     emitEvent: () => {},
+    notifyIris: () => {},
     getMainWindow: () => null,
     getPipelineAvailable: () => true,
     userDisplayName: () => "Alex",

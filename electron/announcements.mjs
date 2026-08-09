@@ -233,15 +233,24 @@ export function createAnnouncements({
     notifyIris(eventText);
   }
 
-  // open-note-session design D3/5.1: work_on_note's own announcement path,
-  // spoken AS WRITTEN — never the 1-3 sentence summary announceClaudeCompletion
-  // asks for above. Scoped to this one verb rather than a general "don't
-  // summarize" switch (design.md Risks): every other verb keeps the summary
-  // instruction untouched.
+  // The announcement path for a result that is spoken AS WRITTEN — never the
+  // 1-3 sentence summary announceClaudeCompletion asks for above.
+  //
+  // Which verbs take this path is declared by the registry
+  // (`spokenResult: "verbatim"`), not decided here and not by a verb-name
+  // check at the call site. It began as work_on_note's own path
+  // (open-note-session D3/5.1) for one reason — a note read back in précis is
+  // not the note — and the canvas conversation needs it for a different one:
+  // the user is IN that conversation, watching the drawing happen, so a
+  // summary of the answer is a worse answer. Two reasons, one behaviour; the
+  // wording below therefore says nothing about notes specifically.
+  //
+  // It is deliberately NOT a general "stop summarizing" switch. A long
+  // unattended run still earns a précis, because the user did not watch it.
   /**
    * @param {{ runId: string, task: string, status: string, output: string, usage?: { cost_usd: number|null, num_turns: number|null }|null }} params
    */
-  function announceNoteWorkingResult({ runId, task, status, output, usage = null }) {
+  function announceVerbatimResult({ runId, task, status, output, usage = null }) {
     // Same UI card path as announceClaudeCompletion — the card is correct for
     // any terminal status regardless of how the voice layer reads it.
     emitEvent({
@@ -264,14 +273,14 @@ export function createAnnouncements({
       `status: ${status}`,
       `original_task: ${task}`,
       "instructions_to_iris:",
-      `- The note-working session has a result for ${userDisplayName()}. Speak the text below EXACTLY AS WRITTEN — do NOT summarize, condense, or re-render it. This is a note reading or a report of an edit, and shortening it defeats the point of asking for it.`,
-      "- If another conversation is in progress, pause it briefly first with something like: One moment, here's your note.",
+      `- There is a result for ${userDisplayName()}. Speak the text below EXACTLY AS WRITTEN — do NOT summarize, condense, or re-render it. It was asked for in these words and shortening it defeats the point of asking.`,
+      "- If another conversation is in progress, pause it briefly first with a short bridge.",
       ...(status === runStatus.LIMITED
         ? [
             "- This run did NOT fail: it reached the turn or spend ceiling Iris puts on every run. Say so plainly before reading what it produced, and that the work it did complete still stands.",
           ]
         : []),
-      fenceUntrustedText(output || "(The note-working session returned no text.)", "the note-working session's result, to be read aloud verbatim"),
+      fenceUntrustedText(output || "(The session returned no text.)", "the session's result, to be read aloud verbatim"),
     ].join("\n");
 
     notifyIris(eventText);
@@ -286,7 +295,7 @@ export function createAnnouncements({
     announceWorkspaceUpdate,
     userDisplayName,
     announceClaudeCompletion,
-    announceNoteWorkingResult,
+    announceVerbatimResult,
     sendContextSupplement,
   };
 }

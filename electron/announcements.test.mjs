@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { createAnnouncements } from "./announcements.mjs";
+import { resolveAllVerbs, resolveVerb } from "./verbs.mjs";
 import { neutraliseUntrustedMarkers } from "./untrusted-text.mjs";
 
 function makeLiveSession() {
@@ -234,11 +235,11 @@ describe("announcements: workspace info and completion", () => {
 // open-note-session design D3/5.1: a verbatim read-back path, scoped to
 // work_on_note, that is read AS WRITTEN rather than through the 1-3 sentence
 // summary instruction announceClaudeCompletion carries.
-describe("announcements: the note-working verbatim read-back path", () => {
+describe("announcements: the verbatim read-back path", () => {
   it("emits the UI event unconditionally and skips voice for a cancelled run", () => {
     const emitEvent = vi.fn();
     const announcements = make({ emitEvent });
-    announcements.announceNoteWorkingResult({ runId: "r1", task: "read it", status: "cancelled", output: "" });
+    announcements.announceVerbatimResult({ runId: "r1", task: "read it", status: "cancelled", output: "" });
     expect(emitEvent).toHaveBeenCalledWith(expect.objectContaining({ type: "claude_completion", status: "cancelled" }));
   });
 
@@ -246,7 +247,7 @@ describe("announcements: the note-working verbatim read-back path", () => {
     const session = makeLiveSession();
     const announcements = make({ getLiveSession: () => session });
     const reading = "Paragraph one is about the deadline.\n\nParagraph two is about the budget.";
-    announcements.announceNoteWorkingResult({ runId: "r1", task: "read it", status: "completed", output: reading });
+    announcements.announceVerbatimResult({ runId: "r1", task: "read it", status: "completed", output: reading });
 
     const [{ text }] = session.sendRealtimeInput.mock.calls[0];
     expect(text).toContain("SYSTEM_EVENT_CLAUDE_COMPLETE");
@@ -259,7 +260,7 @@ describe("announcements: the note-working verbatim read-back path", () => {
   it("carries no decisions payload — this verb never defers a decision through the summary schema", () => {
     const emitEvent = vi.fn();
     const announcements = make({ emitEvent });
-    announcements.announceNoteWorkingResult({ runId: "r1", task: "read it", status: "completed", output: "text" });
+    announcements.announceVerbatimResult({ runId: "r1", task: "read it", status: "completed", output: "text" });
     const [event] = emitEvent.mock.calls[0];
     expect(event.decisions).toBeNull();
   });
@@ -267,8 +268,33 @@ describe("announcements: the note-working verbatim read-back path", () => {
   it("says plainly when a ceiling, not a failure, cut the run short", () => {
     const session = makeLiveSession();
     const announcements = make({ getLiveSession: () => session });
-    announcements.announceNoteWorkingResult({ runId: "r1", task: "read it", status: "limited", output: "partial reading" });
+    announcements.announceVerbatimResult({ runId: "r1", task: "read it", status: "limited", output: "partial reading" });
     const [{ text }] = session.sendRealtimeInput.mock.calls[0];
     expect(text).toContain("did NOT fail");
+  });
+});
+
+// the-canvas-becomes-a-conversation: which verbs are read out in full is
+// declared by the registry, so the announcement path can never disagree with
+// the verb about how its own result is spoken.
+describe("verbs: spokenResult is where 'read this out in full' is declared", () => {
+  it("declares verbatim for the two conversations the user is inside", () => {
+    // A note read back in précis is not the note; an answer summarized in a
+    // brainstorm the user is watching is a worse answer. Two reasons, one flag.
+    expect(resolveVerb("work_on_note").spokenResult).toBe("verbatim");
+    expect(resolveVerb("shape_on_canvas").spokenResult).toBe("verbatim");
+  });
+
+  it("leaves unattended work on the summary path", () => {
+    // The user did not watch these happen, so a précis is the right shape.
+    for (const verb of ["execute", "investigate"]) {
+      expect(resolveVerb(verb).spokenResult).toBe("summary");
+    }
+  });
+
+  it("defaults to summary, so a verb that declares nothing does not become loud", () => {
+    for (const verb of resolveAllVerbs()) {
+      expect(["summary", "verbatim"]).toContain(verb.spokenResult);
+    }
   });
 });

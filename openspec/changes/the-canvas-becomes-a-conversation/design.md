@@ -17,11 +17,16 @@ later should not cost a cold start or a second review park.
 cold start from "when I opened the board" to "when I said my first sentence",
 which is exactly the moment the latency is most visible.
 
-**Cost, stated:** warming on open spends a session (and the review park) for a
-user who opens the canvas and draws in silence. Mitigation: warm on open only
-when the pipeline is available and a Claude credential exists — the same gate
-the MCP server already passes (`canvas.mjs:110`) — and treat the warm session
-as ordinary residency, so the existing close reasons still apply.
+**Decided by the user (2026-08-09):** warming on open is wanted, and it comes
+with an obligation — **Iris says out loud that canvas mode has begun.** That
+turns the cost into the feature: the session opening is not a hidden expense
+the user never asked for, it is an announced state change they can hear and
+act on. A user who opens the board to draw in silence is told a conversation is
+open, and can close it.
+
+Still gated on the pipeline being available and a credential existing — the
+same gate the MCP server already passes (`canvas.mjs:110`) — and still ordinary
+residency, so the existing close reasons apply.
 
 ## D2. A resident turn is not a queued run
 
@@ -65,9 +70,22 @@ on top of paraphrase. This mode therefore uses the **verbatim relay** path that
 already exists for `work_on_note` ("EXACTLY AS WRITTEN", `announcements.mjs:267`)
 rather than the summarizing one.
 
-**Cost:** more tokens into Gemini, more speech. Bounded by speaking only
-sentence-completed partials and by dropping to acts-only when speech falls
-behind the stream.
+**Decided by the user (2026-08-09):** Iris reads Claude's result **in full**,
+not a précis of it — "để cả người và claude hiểu". Two consequences, and the
+second is the one that is easy to miss:
+
+1. The summarizing path (`announcements.mjs:188`, "1-3 sentences") is wrong for
+   this mode. The verbatim path is the one to use.
+2. What Iris speaks is also what re-enters Gemini's own context. Speaking the
+   result in full is therefore not only for the user's ears — it is how the
+   voice layer itself stays in step with what Claude actually said, rather than
+   navigating by its own summary of it. A summary here would compound: Gemini
+   would answer the next question against its paraphrase of an answer it
+   already paraphrased.
+
+**Cost, accepted:** more tokens into Gemini and more speech. Bounded only by
+dropping stale narration when speech falls behind the stream — never by
+shortening the result itself.
 
 ## D4. Verbatim in: fix the ordering, then change the standing
 
@@ -98,9 +116,17 @@ ends residency, and when it does, Iris says so and asks — never a silent
 re-open under the same name, which is today's behaviour
 (`po-session.mjs:178` → next turn opens a new session).
 
-**Open question for the user:** what the session ceiling should be in money.
-$6 is the current whole-session figure and was set for a working session, not a
-conversation.
+**Decided by the user (2026-08-09):** there is no spend ceiling to design
+around — Gemini Live is free at this tier and Claude runs on a subscription.
+So the per-conversation *money* ceiling is removed as a residency-ending
+condition: a conversation does not end because it was long.
+
+What remains, and is kept deliberately, is the **per-turn** ceiling. It is not
+a cost control; it is a runaway guard. A single turn that stops making progress
+should end as `limited` and hand the floor back to the user, and that is true
+whether or not anyone is paying per token. A subscription still has rate
+limits, and a wedged turn with no ceiling is a conversation that has silently
+stopped answering.
 
 ## D6. Barge-in
 
@@ -119,3 +145,34 @@ MCP as it happened).
 - It does not touch the other verbs' latency, park policy, or ceilings.
 - It does not address the Gemini Live reconnect gap
   (`.audit/realtime-audit.md` section B), which is a separate change.
+
+## D8. Iris has her own skill for this role
+
+**Decided by the user (2026-08-09):** *"iris là trung gian từ lời nói con người
+sang claude agent sdk thực hiện nên nó phải có kỹ năng riêng của nó."*
+
+The voice layer's job in canvas mode is not the job it does elsewhere. Normally
+Iris decides *which* verb to call and writes a brief for it — she is a router
+with editorial license. In a live drawing conversation she is a **conduit**:
+the user's words go through her to Claude, and Claude's words come back through
+her to the user, and her value is in how faithfully she carries both, not in
+how well she compresses either.
+
+Those are different skills, and the app currently only describes the first
+(`gemini-prompts.mjs`, plus the canvas capability's prose at
+`canvas.mjs:143-144`). This change gives the canvas conversation its own voice
+instruction, carried by the same capability `promptFragment` seam that already
+exists, covering:
+
+- announcing the mode when it opens, and that it is open
+- passing the user's words through as spoken, not as a specification
+- reading Claude's result in full rather than summarizing it
+- staying out of the way while Claude works — narrating acts, not inventing
+  progress
+- never claiming to see the canvas herself (she cannot; the tools can)
+
+**Why a prompt fragment rather than a Claude skill:** this is a description of
+how the *voice layer* should behave, and the voice layer is configured by its
+system instruction. Claude's side already has `SHAPING_SKILLS`. Putting Iris's
+conduit instructions into a Claude skill would be describing one agent's job in
+another agent's briefing.

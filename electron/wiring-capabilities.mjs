@@ -94,6 +94,9 @@ export function createCapabilitiesWiring({
     canvasStoreFile,
     emitToRenderer,
     emitEvent,
+    // Canvas mode is a state the user is told about, not one they infer from a
+    // panel appearing — so the capability needs the voice, not only the UI.
+    notifyIris,
     getMainWindow,
     getPipelineAvailable,
     userDisplayName,

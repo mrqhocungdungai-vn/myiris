@@ -185,6 +185,13 @@ const VERBS = Object.freeze({
     // from a worker for reasons unrelated to drawing.
     mcpServers: ["iris-canvas"],
     vault: false,
+    // Read out in full, never summarized (the-canvas-becomes-a-conversation
+    // D3). This is a conversation the user is IN: they watched the drawing
+    // happen and asked a question about it, so a précis of the answer is a
+    // worse answer. It also matters for Iris herself — what she speaks is what
+    // she reasons from next turn, and summarizing here would compound into
+    // answering against a paraphrase of a paraphrase.
+    spokenResult: "verbatim",
     structuredOutput: true,
     disallowedTools: ASKS_FREELY,
     params: THIN_PARAMS,
@@ -221,6 +228,10 @@ const VERBS = Object.freeze({
     // exactly the condensing the verbatim read-back requirement forbids (see
     // announcements.mjs's note-reading path).
     structuredOutput: false,
+    // open-note-session 5.1: read back AS WRITTEN. This used to be a verb-name
+    // check in the announcement path; it is declared here now, with the rest
+    // of what this verb is.
+    spokenResult: "verbatim",
     disallowedTools: ASKS_FREELY,
     // open-note-session D6: the main-process write guard (po-session.mjs's
     // canUseTool seam, wired in run-exec.mjs) applies only to this verb.
@@ -524,7 +535,7 @@ function resolveField(value, state) {
  *   skills: string[], mcpServers: string[], vault: boolean,
  *   structuredOutput: boolean, disallowedTools: string[], params: object,
  *   basePersona: string, clause: string, guardOpenNoteWrites: boolean,
- *   projectState: ProjectState,
+ *   spokenResult: "summary"|"verbatim", projectState: ProjectState,
  * }}
  */
 export function resolveVerb(name, state = NO_PROJECT_STATE) {
@@ -563,6 +574,14 @@ export function resolveVerb(name, state = NO_PROJECT_STATE) {
     // whether to wire the destructive-write confirmation seam — never a
     // hardcoded verb-name check outside the registry.
     guardOpenNoteWrites: Boolean(record.guardOpenNoteWrites),
+    // How the voice layer is told to SPEAK this verb's result: "summary" (the
+    // 1-3 sentence précis that suits a long piece of work the user did not
+    // watch happen) or "verbatim" (read out as written). Declared here rather
+    // than as a verb-name check in the announcement path, which is where it
+    // used to live for `work_on_note` — a second place a verb was defined.
+    // Defaults to "summary", so a verb that says nothing keeps today's
+    // behaviour instead of silently becoming loud.
+    spokenResult: record.spokenResult === "verbatim" ? "verbatim" : "summary",
     // Declared on the verb and resolved against project state like every other
     // field — never a verb-name conditional here (ask-when-unspecified D1).
     // What this list bounds is what the run may DO; who decides is not

@@ -368,3 +368,74 @@ describe("live-messages: tool calls are refused while the mode is engaged", () =
     await vi.waitFor(() => expect(executeClaudeTool).toHaveBeenCalledWith("execute", toolCall.functionCalls[0].args));
   });
 });
+
+// the-canvas-becomes-a-conversation, task 1: the sentence that causes a turn
+// must be in the transcript before the turn is dispatched, because the run's
+// prompt is composed from that transcript at dispatch time. Transcription
+// fragments only reach the ring on a turn boundary, and a tool call arrives
+// before `turnComplete` — so the one utterance the turn most needed was the
+// one it could not see.
+describe("live-messages: a tool call flushes the words that caused it", () => {
+  it("flushes the transcript before dispatching the tool", async () => {
+    const order = [];
+    const flushTranscripts = vi.fn(() => order.push("flush"));
+    const executeClaudeTool = vi.fn(async () => {
+      order.push("dispatch");
+      return { status: "ok" };
+    });
+    const messages = make({ flushTranscripts, executeClaudeTool });
+
+    messages.handleLiveMessage({ toolCall: { functionCalls: [{ id: "1", name: "shape_on_canvas", args: {} }] } });
+    await vi.waitFor(() => expect(executeClaudeTool).toHaveBeenCalled());
+
+    expect(order).toEqual(["flush", "dispatch"]);
+  });
+
+  it("appends a transcription fragment carried in the same message, before flushing", async () => {
+    const order = [];
+    const appendUserTranscript = vi.fn((text) => order.push(`append:${text}`));
+    const flushTranscripts = vi.fn(() => order.push("flush"));
+    const messages = make({ appendUserTranscript, flushTranscripts });
+
+    messages.handleLiveMessage({
+      toolCall: { functionCalls: [{ id: "1", name: "shape_on_canvas", args: {} }] },
+      serverContent: { inputTranscription: { text: "connect those two boxes" } },
+    });
+
+    expect(order).toEqual(["append:connect those two boxes", "flush"]);
+  });
+
+  it("does not append that same fragment twice", () => {
+    const appendUserTranscript = vi.fn();
+    const onInputTranscription = vi.fn();
+    const messages = make({ appendUserTranscript, onInputTranscription });
+
+    messages.handleLiveMessage({
+      toolCall: { functionCalls: [{ id: "1", name: "shape_on_canvas", args: {} }] },
+      serverContent: { inputTranscription: { text: "make it blue" } },
+    });
+
+    expect(appendUserTranscript).toHaveBeenCalledTimes(1);
+    expect(onInputTranscription).toHaveBeenCalledTimes(1);
+  });
+
+  it("still appends a fragment that arrives with no tool call", () => {
+    const appendUserTranscript = vi.fn();
+    const messages = make({ appendUserTranscript });
+
+    messages.handleLiveMessage({ serverContent: { inputTranscription: { text: "just thinking aloud" } } });
+
+    expect(appendUserTranscript).toHaveBeenCalledWith("just thinking aloud");
+  });
+
+  it("flushes even when the tool call is refused by listen-only mode", () => {
+    // The refusal is still a turn boundary for the record: what was said is
+    // what fills the meeting transcript, and it must not sit in a buffer.
+    const flushTranscripts = vi.fn();
+    const messages = make({ flushTranscripts, isListenOnlyEngaged: () => true });
+
+    messages.handleLiveMessage({ toolCall: { functionCalls: [{ id: "1", name: "execute", args: {} }] } });
+
+    expect(flushTranscripts).toHaveBeenCalled();
+  });
+});

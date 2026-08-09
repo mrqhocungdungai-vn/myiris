@@ -178,6 +178,10 @@ export function createLiveMessages({
   }
 
   function handleLiveMessage(message) {
+    // Set when a tool call in THIS message forced an early transcription
+    // append, so the serverContent branch below does not append it twice.
+    let transcriptionAppliedThisMessage = false;
+
     if (message.sessionResumptionUpdate) {
       const { resumable, newHandle } = message.sessionResumptionUpdate;
       if (resumable && newHandle) {
@@ -195,6 +199,28 @@ export function createLiveMessages({
     }
 
     if (message.toolCall) {
+      // The sentence that CAUSED this tool call has to be in the transcript
+      // before the tool is dispatched, because the run's prompt is composed
+      // from that transcript (run-context.mjs) the moment dispatch happens.
+      //
+      // Transcription fragments accumulate in a buffer and only reach the ring
+      // on a turn boundary — and a tool call arrives BEFORE `turnComplete`.
+      // So the one utterance a turn most needs was the one it could not see:
+      // Claude was handed the previous few sentences and the voice layer's
+      // paraphrase of the current one, with the words themselves still sitting
+      // in a buffer. Flushing here closes that hole. A fragment carried in
+      // this very message is appended first, so it is flushed too rather than
+      // missing the boundary by one message.
+      if (message.serverContent?.inputTranscription?.text) {
+        appendUserTranscript(message.serverContent.inputTranscription.text);
+        onInputTranscription(message.serverContent.inputTranscription.text);
+        transcriptionAppliedThisMessage = true;
+      }
+      // flushTranscripts, not closeUtterance: this is not a turn boundary, and
+      // running the retention hook here would record an utterance the speaker
+      // has not finished.
+      flushTranscripts();
+
       // Checked BEFORE dispatch, never inside the tool: by the time a verb is
       // running it has already cost money and may already have written.
       if (isListenOnlyEngaged()) {
@@ -219,8 +245,11 @@ export function createLiveMessages({
     }
 
     if (content.inputTranscription?.text) {
-      appendUserTranscript(content.inputTranscription.text);
-      onInputTranscription(content.inputTranscription.text);
+      // Already applied above when this same message also carried a tool call.
+      if (!transcriptionAppliedThisMessage) {
+        appendUserTranscript(content.inputTranscription.text);
+        onInputTranscription(content.inputTranscription.text);
+      }
       noteTranscriptionFragment();
     }
 
