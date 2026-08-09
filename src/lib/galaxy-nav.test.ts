@@ -371,6 +371,53 @@ describe("driveFor", () => {
     expect(driveIsLowered("zoom", { hands: [high, low], point: { x: 300, y: 100 } }, H)).toBe(true);
   });
 
+  // How BIG the basis change is, in the units the camera actually moves in.
+  // The fix (re-seeding when the grip changes) is only worth its complexity if
+  // the discontinuity it removes is visible, so this measures it rather than
+  // asserting it exists. Geometry is illustrative, not sampled: a wrist a
+  // little below the fingertip, which is the direction it always lies in.
+  it("closing a palm into a fist would jump the camera if the reference were kept", () => {
+    const WRIST_DROP = 120;
+    const palmL = {
+      ...makeTrackedHand({ id: "l", openPalm: true }),
+      point: { x: 400, y: 300 },
+      wristPoint: { x: 400, y: 300 + WRIST_DROP },
+    };
+    const palmR = { ...makeTrackedHand({ id: "r", openPalm: true }), point: { x: 700, y: 300 } };
+    const fistL = { ...palmL, openPalm: false, fist: true };
+
+    const spreadSpan = zoomSpan({ hands: [palmL, palmR] })!;
+    const reelSpan = zoomSpan({ hands: [fistL, palmR] })!;
+
+    // Same hands, same places, one pose apart — and the measurement moves.
+    const refRadius = 1000;
+    const kept = zoomRadius({ refRadius, refDist: spreadSpan, curDist: reelSpan, min: 1, max: 100000 });
+    const jump = Math.abs(kept - refRadius) / refRadius;
+    expect(jump).toBeGreaterThan(0.05); // >5% of the camera's distance, in ONE frame
+
+    // Re-seeding is what removes it, and the key is what tells the loop to.
+    expect(engagementKey("zoom", { hands: [palmL, palmR] })).not.toBe(
+      engagementKey("zoom", { hands: [fistL, palmR] }),
+    );
+    const reseeded = zoomRadius({ refRadius, refDist: reelSpan, curDist: reelSpan, min: 1, max: 100000 });
+    expect(reseeded).toBe(refRadius);
+  });
+
+  // The other half of the same guarantee: re-seeding must not cost the travel
+  // already spent. Within one grip the reference is kept, so spreading further
+  // keeps moving the camera rather than restarting from wherever it is now.
+  it("holding one grip keeps the reference, so spread already spent still counts", () => {
+    const fist = { ...makeTrackedHand({ id: "l", fist: true }), wristPoint: { x: 300, y: 300 } };
+    const near = { ...makeTrackedHand({ id: "r", openPalm: true }), point: { x: 500, y: 300 } };
+    const far = { ...makeTrackedHand({ id: "r", openPalm: true }), point: { x: 900, y: 300 } };
+
+    expect(engagementKey("zoom", { hands: [fist, near] })).toBe(engagementKey("zoom", { hands: [fist, far] }));
+
+    const refDist = zoomSpan({ hands: [fist, near] })!;
+    const pulled = zoomRadius({ refRadius: 1000, refDist, curDist: zoomSpan({ hands: [fist, far] })!, min: 1, max: 100000 });
+    expect(pulled).toBeLessThan(1000); // spreading pulls the camera IN
+  });
+
   it("returns null for a single open palm, an unrecognized gesture, and a resting hand", () => {
     expect(driveFor(makeHand({ openPalm: true, hands: [makeTrackedHand({ openPalm: true })] }), true)).toBeNull();
     expect(driveFor(makeHand(), true)).toBeNull(); // "None" gesture, resting/unrecognized
