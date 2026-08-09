@@ -315,6 +315,29 @@ re-aim re-seeds the spherical so the view does not jump — and deliberately doe
 discard the spread already made and stall the remaining travel (D21). It keeps
 the reference distance and rescales instead.
 
+### Reading the gesture debug readout
+
+The galaxy carries a live readout, off by default. Turn it on from the app's
+devtools console and reload:
+
+```js
+localStorage.setItem("iris.galaxyGestureDebug", "on")
+```
+
+Four of its lines answer the questions that a "still not smooth" report cannot
+answer on its own, because each names a different mechanism:
+
+| Line | What a bad value means |
+| --- | --- |
+| `locked` | `—` while you expect a fist to work: the fist is inert **by design** until a note is locked. Aim a single open palm at one first |
+| `engaged` | flipping between `zoom:spread` and `zoom:reel` while your hands hold still means a pose is being misread; every flip re-seeds the reference deliberately, so the camera should still not jump |
+| `lowered` | `YES` mid-gesture is the drive being released because a **driving** hand dropped below the bottom third — raise the holding hand |
+| `curDist` / `refDist` | `curDist` jumping while your hands are still is tracking noise reaching the camera; a `refDist` near 80 means you engaged with the hands almost touching, where the ratio law is at its most sensitive |
+
+`ratio` is what the zoom law actually acts on, and `radius` versus `target` is
+the gap `easeRadius` is closing — if `target` is steady while `radius` crawls,
+the ease is the thing to tune, not the input.
+
 Both fist drives are defined in terms of the locked note — one turns around it,
 the other reels in on it — so **neither exists until something is locked**. A
 fist used to fall back to the point at the centre of the view, which is the

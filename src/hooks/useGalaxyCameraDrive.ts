@@ -225,7 +225,17 @@ export function useGalaxyCameraDrive({
     // number nobody could see — this makes them observable while tuning.
     // Direct DOM write, not React state (design.md D7/M-A1): an enabled
     // readout must not turn a 60fps loop into 60 re-renders.
-    function updateDebugReadout(hand: HandState, drive: GalaxyDrive, dt: number) {
+    function updateDebugReadout(
+      hand: HandState,
+      drive: GalaxyDrive,
+      dt: number,
+      // The three facts that separate the four causes of a rough reel-in:
+      // whether a fist has anything to work around, whether the reference was
+      // re-seeded because the grip changed, and whether a hand dipping low is
+      // releasing the drive. Without them a user reporting "still not smooth"
+      // and a developer reading the code are guessing at the same question.
+      state: { lockedId: string | null; engageKey: string | null; lowered: boolean },
+    ) {
       const el = debugRef.current;
       if (!el) return;
       const fps = dt > 0 ? 1000 / dt : 0;
@@ -255,6 +265,9 @@ export function useGalaxyCameraDrive({
         `anchor: ${live.kind === "node" ? `node ${live.id}` : live.kind}`,
         `candidate: ${candidateIdRef.current ?? "—"}`,
         `drive: ${drive ?? "none"}`,
+        `locked: ${state.lockedId ?? "—"}`,
+        `engaged: ${state.engageKey ?? "—"}`,
+        `lowered: ${state.lowered ? "YES (drive released)" : "no"}`,
         `fps: ${fps.toFixed(0)}`,
       ];
       el.textContent = lines.join("\n");
@@ -659,7 +672,13 @@ export function useGalaxyCameraDrive({
           restoreControlsIfNeeded(fg);
         }
 
-        if (debugEnabled) updateDebugReadout(hand, drive, dt);
+        if (debugEnabled) {
+          updateDebugReadout(hand, drive, dt, {
+            lockedId: lock.lockedId,
+            engageKey: cameraEngagedRef.current,
+            lowered,
+          });
+        }
       } catch (err) {
         // The error boundary does NOT catch rAF throws (design.md R6) — a
         // per-frame throw must force-close instead of throwing into the void
