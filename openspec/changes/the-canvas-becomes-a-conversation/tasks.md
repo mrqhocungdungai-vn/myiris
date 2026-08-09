@@ -6,8 +6,8 @@
 ## 2. The open canvas warms the conversation, and Iris says so
 
 - [x] 2.1 `canvas:activate` warms the shaping conversation. The session-config assembly was extracted out of `startStatefulRun` into `statefulSessionOptions` first — it could only be built as a side effect of somebody talking, so a session could only exist that way too
-- [ ] 2.2 New `canvas:deactivate` from the renderer: marks the conversation idle; does NOT close it
-- [ ] 2.3 `src/components/DrawingCanvas.tsx` — emit deactivate on unmount alongside the existing activate on mount
+- [~] 2.2 DROPPED. Nothing consumes it. The requirement it was meant to serve — "closing the surface does not end the conversation" — is satisfied by residency having no idle teardown, i.e. by doing nothing. An IPC channel with no consumer is a seam that has to be maintained and can drift out of true, in exchange for nothing
+- [~] 2.3 DROPPED with 2.2
 - [x] 2.4 The review gate is NOT bypassed, which needed the trap fixing rather than the gate moving: `shouldPark` asks whether a live session exists, so a warmed transport would have answered yes and sent the first sentence through unreviewed. `po-session` now distinguishes a warmed transport from a conversation that has happened (`warm`, cleared by the first turn), and `hasLiveStatefulSession` reads the latter
 - [x] 2.5 Iris announces canvas mode when it opens — the announcement is what makes warming honest rather than a hidden cost (Q2)
 - [~] 2.6 PARTIAL — announcement tests done (silent with no pipeline, once per opening, again on reopen). Session-warming tests wait on 2.1. Originally: warm with pipeline unavailable opens nothing AND says nothing; close/reopen resumes the same session; a declined park is not re-asked per utterance; the announcement fires once per opening, not per utterance
@@ -66,17 +66,17 @@
 ## 7. Ceilings: the turn ends, the conversation continues
 
 - [x] 7.1 Delivered as the resident lane's per-turn watchdog rather than as a second budget: the runaway guard a turn needed was a silence bound of its own, and `run-budget`'s ceilings are cumulative over a `query()` lifetime by design. Bundled with task 3 because a lane without it trades one failure for a worse one
-- [ ] 7.2 Per-turn exhaustion finalizes that turn `limited` and leaves residency intact
-- [ ] 7.3 A conversation does not end for being long. Where residency does end for one of its real reasons, that is said out loud and not silently re-opened under the same name by the next utterance (today: `po-session.mjs:178` ends the stream and the next turn opens a new session)
-- [ ] 7.4 Tests for the per-turn ceiling and for the announcement
+- [x] 7.2 Holds, by two existing mechanisms rather than a new one: a ceiling already finalizes its run as `limited` (`run-exec.mjs`), and the resident lane's own watchdog finalizes a wedged turn without touching the conversation. Residency is intact either way
+- [~] 7.3 SCOPED OUT, with the reasoning rather than by silence. Re-reading the path: when a stream ends, the next turn opens a session that RESUMES the stored id, so the context carries and the conversation is continuous in the way that matters. The turn that was cut is already reported as `limited`. What remains unsaid is only that a ceiling was reached at all — worth fixing, but it is a truthfulness improvement to the ceiling story rather than part of making the canvas a conversation, and the user has said no spend ceiling is in play. Left for a separate change so it is decided on its own merits
+- [x] 7.4 Tests for the per-turn watchdog are in `run-queue.test.mjs` (fires, says the conversation survives, resets only its own, cannot be held open by a chatty neighbour). No announcement test, because 7.3 is scoped out
 
 ## 8. Gates
 
-- [ ] 8.1 `npm run build`
-- [ ] 8.2 `npm test`
-- [ ] 8.3 `npm run lint`
-- [ ] 8.4 `npm run scan:secrets`
-- [ ] 8.5 `npm run spec:check`
+- [x] 8.1 `npm run build` — green
+- [x] 8.2 `npm test` — green, 1692 tests (was 1568 at the start of this work)
+- [x] 8.3 `npm run lint` — green, 0 warnings
+- [x] 8.4 `npm run scan:secrets` — green (and `gitleaks` run over each pushed range, since the staged-only gate is vacuous after a commit)
+- [x] 8.5 `npm run spec:check` — green
 
 ## Answered by the user (2026-08-09) — no longer open
 
