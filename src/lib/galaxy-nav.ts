@@ -239,15 +239,26 @@ export function inspectingHand(hand: Pick<HandState, "hands">): TrackedHand | nu
  * Stateless (design.md D5): no drive needs to remember anything across frames
  * — a hand cannot be two poses at once, so each frame's poses alone decide.
  */
-export function driveFor(hand: DriveHand): GalaxyDrive {
+export function driveFor(hand: DriveHand, locked: boolean): GalaxyDrive {
   if (hand.hands.filter((h) => h.openPalm).length >= 2) return "zoom";
   // A fist holding while the other palm moves reels in on the locked note
   // (D26). Tested BEFORE the fist-alone orbit, since it is the more specific
   // pose pair — a fist with no palm beside it still turns the view.
-  if (reelsToLock(hand)) return "zoom";
+  if (locked && reelsToLock(hand)) return "zoom";
   if (inspectingHand(hand)) return "inspect";
   if (hand.pointing) return "dwell";
-  if (hand.fist) return "orbit";
+  // A fist is only a camera drive once the user has chosen what it turns
+  // around. Both fist drives name the lock in what they do — one turns around
+  // the locked note, the other reels in on it — so with nothing locked there
+  // is no such thing as either gesture, and the pose drives nothing.
+  //
+  // It used to fall back to the point at the centre of the view. That reads as
+  // the app picking an axis on the user's behalf: closing a hand swung the
+  // whole graph around a pivot they never chose and could not see. The
+  // fallback is right for the two-palm zoom, which only moves in and out along
+  // an axis already on screen, and wrong for a turn, which is entirely about
+  // which axis it is.
+  if (locked && hand.fist) return "orbit";
   return null;
 }
 
@@ -345,7 +356,15 @@ export function zoomSpan(hand: Pick<HandState, "hands">): number | null {
   const palms = hand.hands.filter((item) => item.openPalm);
   if (palms.length >= 2) return handDistance(palms[0].point, palms[1].point);
   const fist = hand.hands.find((item) => item.fist);
-  if (fist && palms.length === 1) return handDistance(fist.point, palms[0].point);
+  // The fist is measured at the WRIST. `point` is the tracked fingertip, and
+  // curling into a fist — or merely tightening one that is already closed —
+  // travels it a long way on its own, with none of that motion being the hand
+  // moving through space. The orbit already refuses to read a fist's fingertip
+  // for exactly this reason; the reel-in was reading it, and since the zoom law
+  // maps the span straight to an absolute radius, every knuckle twitch became
+  // camera distance. That is the "not smooth" the two-palm zoom never had: two
+  // open palms have no curl to leak.
+  if (fist && palms.length === 1) return handDistance(fist.wristPoint, palms[0].point);
   return null;
 }
 

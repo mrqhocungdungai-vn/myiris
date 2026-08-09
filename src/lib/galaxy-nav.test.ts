@@ -175,11 +175,16 @@ describe("driveFor", () => {
 
   it("returns zoom for two open palms", () => {
     const hands = [makeTrackedHand({ id: "left", openPalm: true }), makeTrackedHand({ id: "right", openPalm: true })];
-    expect(driveFor(makeHand({ openPalm: true, hands }))).toBe("zoom");
+    expect(driveFor(makeHand({ openPalm: true, hands }), false)).toBe("zoom");
+  });
+
+  it("two open palms zoom even with nothing locked — the free zoom is not gated", () => {
+    const hands = [makeTrackedHand({ id: "left", openPalm: true }), makeTrackedHand({ id: "right", openPalm: true })];
+    expect(driveFor(makeHand({ openPalm: true, hands }), false)).toBe("zoom");
   });
 
   it("returns dwell for Pointing_Up", () => {
-    expect(driveFor(makeHand({ pointing: true, hands: [makeTrackedHand({ pointing: true })] }))).toBe("dwell");
+    expect(driveFor(makeHand({ pointing: true, hands: [makeTrackedHand({ pointing: true })] }), false)).toBe("dwell");
   });
 
   // D20 removed the fist orbit; D25 restored it, now turning around the LOCKED
@@ -188,23 +193,71 @@ describe("driveFor", () => {
   // Tested before the fist-alone orbit because it is the more specific pair.
   it("returns zoom for a fist plus an open palm — reeling in on the locked note", () => {
     const hands = [makeTrackedHand({ id: "l", fist: true }), makeTrackedHand({ id: "r", openPalm: true })];
-    expect(driveFor(makeHand({ fist: true, hands }))).toBe("zoom");
+    expect(driveFor(makeHand({ fist: true, hands }), true)).toBe("zoom");
     expect(reelsToLock({ hands })).toBe(true);
   });
 
   it("a fist with no palm beside it still turns the view", () => {
     const hands = [makeTrackedHand({ id: "l", fist: true })];
-    expect(driveFor(makeHand({ fist: true, hands }))).toBe("orbit");
+    expect(driveFor(makeHand({ fist: true, hands }), true)).toBe("orbit");
     expect(reelsToLock({ hands })).toBe(false);
   });
 
   it("returns orbit for Closed_Fist", () => {
-    expect(driveFor(makeHand({ fist: true, hands: [makeTrackedHand({ fist: true })] }))).toBe("orbit");
+    expect(driveFor(makeHand({ fist: true, hands: [makeTrackedHand({ fist: true })] }), true)).toBe("orbit");
+  });
+
+  // Both fist drives are defined in terms of the locked note — one turns
+  // around it, the other reels in on it — so with nothing locked neither
+  // gesture exists. It used to fall back to the point at the centre of the
+  // view, which reads as the app choosing an axis for the user: closing a hand
+  // swung the graph around a pivot they never picked and could not see.
+  it("a fist drives nothing while no note is locked", () => {
+    expect(driveFor(makeHand({ fist: true, hands: [makeTrackedHand({ fist: true })] }), false)).toBeNull();
+  });
+
+  it("a fist and a palm drive nothing while no note is locked", () => {
+    const hands = [makeTrackedHand({ id: "l", fist: true }), makeTrackedHand({ id: "r", openPalm: true })];
+    expect(driveFor(makeHand({ fist: true, hands }), false)).toBeNull();
+  });
+
+  // Measured complaint: reeling in was "chưa mượt" while two-palm zoom was
+  // fine. The span was reading the fist's tracked FINGERTIP, which travels a
+  // long way as the hand curls or merely tightens — motion that is not the
+  // hand moving through space. The zoom law maps the span straight to an
+  // absolute radius, so that curl arrived as camera distance. The orbit
+  // already refuses to read a fist's fingertip for the same reason.
+  it("measures the reel-in from the fist's wrist, not its curled fingertip", () => {
+    const fist = makeTrackedHand({
+      id: "l",
+      fist: true,
+      point: { x: 900, y: 300 },
+      wristPoint: { x: 500, y: 300 },
+    });
+    const palm = makeTrackedHand({ id: "r", openPalm: true, point: { x: 700, y: 300 } });
+
+    expect(zoomSpan({ hands: [fist, palm] })).toBe(200);
+  });
+
+  it("a tightening fist does not move the span while the hand holds still", () => {
+    const palm = makeTrackedHand({ id: "r", openPalm: true, point: { x: 700, y: 300 } });
+    const wrist = { x: 500, y: 300 };
+    const loose = makeTrackedHand({ id: "l", fist: true, point: { x: 560, y: 300 }, wristPoint: wrist });
+    const tight = makeTrackedHand({ id: "l", fist: true, point: { x: 520, y: 300 }, wristPoint: wrist });
+
+    expect(zoomSpan({ hands: [loose, palm] })).toBe(zoomSpan({ hands: [tight, palm] }));
+  });
+
+  it("two open palms are still measured fingertip to fingertip", () => {
+    const a = makeTrackedHand({ id: "l", openPalm: true, point: { x: 400, y: 200 }, wristPoint: { x: 0, y: 0 } });
+    const b = makeTrackedHand({ id: "r", openPalm: true, point: { x: 700, y: 200 }, wristPoint: { x: 9999, y: 0 } });
+
+    expect(zoomSpan({ hands: [a, b] })).toBe(300);
   });
 
   it("returns null for a single open palm, an unrecognized gesture, and a resting hand", () => {
-    expect(driveFor(makeHand({ openPalm: true, hands: [makeTrackedHand({ openPalm: true })] }))).toBeNull();
-    expect(driveFor(makeHand())).toBeNull(); // "None" gesture, resting/unrecognized
+    expect(driveFor(makeHand({ openPalm: true, hands: [makeTrackedHand({ openPalm: true })] }), true)).toBeNull();
+    expect(driveFor(makeHand(), true)).toBeNull(); // "None" gesture, resting/unrecognized
   });
 
   // The pinch has no meaning in the galaxy at all (proposal.md "What
@@ -214,10 +267,10 @@ describe("driveFor", () => {
   // zoom, at any thumb-index distance.
   it("a pinch drives whatever its canned class says, never a zoom", () => {
     const pinchedFist = makeTrackedHand({ fist: true, pinchDistance: 0.02 });
-    expect(driveFor(makeHand({ fist: true, hands: [pinchedFist] }))).toBe("orbit");
+    expect(driveFor(makeHand({ fist: true, hands: [pinchedFist] }), true)).toBe("orbit");
 
     const pinchedRest = makeTrackedHand({ pinchDistance: 0.02 });
-    expect(driveFor(makeHand({ hands: [pinchedRest] }))).toBeNull();
+    expect(driveFor(makeHand({ hands: [pinchedRest] }), true)).toBeNull();
 
     const looselyPinchedRest = makeTrackedHand({ pinchDistance: 0.15 });
     expect(driveFor(makeHand({ hands: [looselyPinchedRest] }))).toBeNull();

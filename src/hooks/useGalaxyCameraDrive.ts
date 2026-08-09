@@ -393,7 +393,10 @@ export function useGalaxyCameraDrive({
         acquireProgressRef.current = lock.progress;
         pivotPickRef.current = lock.lockedId === null ? null : { kind: "node", id: lock.lockedId };
 
-        const drive = driveFor(hand);
+        // Read AFTER the lock step, and from this frame's lock: both fist
+        // drives are defined in terms of the locked note, so whether one
+        // exists at all is not a property of the hands alone.
+        const drive = driveFor(hand, lock.lockedId !== null);
         // A lowered hand drives nothing (design.md D6). Collapsing the drive to
         // null here routes it through the existing "drive went null" path, so
         // the reference release, the control restore and the highlight clearing

@@ -223,11 +223,11 @@ The galaxy gesture bindings (node-dwell, camera nav, and the note reader's gestu
 
 When hand control is enabled and the galaxy is active with no reader open, two open palms SHALL be the galaxy's **only** camera drive, and spreading or closing them SHALL move the camera toward or away from **a note** — never toward an arbitrary point in space. Zooming is not a galaxy-specific binding: it is the two-open-palms rule that scales whatever layer owns the gesture surface (see `two-hand-gestures`), and it applies here because the galaxy is such a layer.
 
-**`Closed_Fist` SHALL turn the camera around the locked note**, by the hand's movement delta. Together with the two-palm travel this is what makes the galaxy navigable in three dimensions: an open palm chooses where to go, a fist chooses the angle to see it from, and two palms cover the distance. Turning around a note the user deliberately chose is navigation; turning around whatever the anchor happened to be — which is what an earlier revision did — was drift, and is why the pose was briefly given no job at all.
+**`Closed_Fist` SHALL turn the camera around the locked note**, by the hand's movement delta, and SHALL drive nothing at all while no note is locked (see "A fist drives the camera only around a note the user chose"). Together with the two-palm travel this is what makes the galaxy navigable in three dimensions: an open palm chooses where to go, a fist chooses the angle to see it from, and two palms cover the distance. Turning around a note the user deliberately chose is navigation; turning around whatever the anchor happened to be — which is what an earlier revision did — was drift, and is why the pose was briefly given no job at all.
 
 **A pose that drives the camera SHALL NOT also aim it.** Only the open palm aims. A fist that also aimed would re-target on the very movement that is turning the view, which is the same defect as a two-palm midpoint carrying the aim while the palms part.
 
-The galaxy drives SHALL be partitioned by hand pose so they never act at once on the same hand: a single `Open_Palm` **aims** (choosing the note to lock, committing nothing), `Pointing_Up` targets a node dwell, `Victory` **inspects** a node (no camera motion, and nothing selected or opened — see "A held two-finger pose reveals a node's link cluster"), `Closed_Fist` alone turns the camera, **a fist together with an open palm reels the camera in on the locked note**, two open palms zoom the middle of the view, and **any other pose — an unrecognized gesture, or a hand merely resting in frame — SHALL drive nothing**.
+The galaxy drives SHALL be partitioned by hand pose so they never act at once on the same hand: a single `Open_Palm` **aims** (choosing the note to lock, committing nothing), `Pointing_Up` targets a node dwell, `Victory` **inspects** a node (no camera motion, and nothing selected or opened — see "A held two-finger pose reveals a node's link cluster"), `Closed_Fist` alone turns the camera around the locked note, **a fist together with an open palm reels the camera in on the locked note** — both inert while nothing is locked —, two open palms zoom the middle of the view, and **any other pose — an unrecognized gesture, or a hand merely resting in frame — SHALL drive nothing**.
 
 **Which zoom is running SHALL be carried by the hands, not by hidden state.** A fist holding while the other palm moves SHALL travel toward the locked note; two open palms SHALL zoom along the axis the camera is already looking down. The user SHALL be able to tell which they are getting from their own hands rather than from remembering whether something is locked. This also removes a failure the hidden-state form could not avoid: with two open palms, one hand's pose dropping out for a few frames leaves a single palm in frame, which reads as aiming — and with the hands already spread apart, that could re-lock onto a different note in the middle of a zoom.
 
@@ -239,7 +239,7 @@ The camera SHALL look at the galaxy's **anchor** (see `second-brain-galaxy-view`
 
 **Aiming and zooming SHALL be carried by different numbers of hands.** A SINGLE open palm SHALL aim, and while two open palms are up there SHALL be no aim point at all, so a zoom cannot re-target however unevenly the hands move. Aiming SHALL commit to nothing, and where more than one hand could aim, the one furthest RIGHT on screen SHALL win — the preview is mirrored, so that is the user's right hand. The sight mark SHALL be shown only while the user is actually aiming, and SHALL be hidden while two palms are zooming, since a mark shown then would claim the zoom is going where it is not.
 
-When a note is locked, the drive SHALL travel toward it. When NO note is locked, the drive SHALL move in and out along the axis the camera is already looking down — the point at the centre of the view, at the distance the camera is currently working at — rather than toward the graph's centroid, which after any travel is usually off-centre and would drift the view sideways.
+When a note is locked, the drive SHALL travel toward it. When NO note is locked, the **two-palm** drive SHALL move in and out along the axis the camera is already looking down — the point at the centre of the view, at the distance the camera is currently working at — rather than toward the graph's centroid, which after any travel is usually off-centre and would drift the view sideways.
 
 Bringing up a second palm SHALL NOT drop the note already chosen: ceasing to aim keeps the lock rather than clearing it. A change of target SHALL NOT move the camera, and SHALL NOT alter how far the hands must spread to cover the remaining distance: the reference the spread is measured against SHALL be preserved across a re-target rather than re-read from the hands' current separation, or the spread already spent would stop counting and the travel remaining would collapse mid-gesture.
 
@@ -643,4 +643,65 @@ found it.
 
 - **WHEN** the user asks Iris to open or close the galaxy itself, naming no note
 - **THEN** she has no such control — activating the layer is a consequence of opening a named note, not an action of its own
+
+### Requirement: A fist drives the camera only around a note the user chose
+
+**A `Closed_Fist` SHALL drive nothing while no note is locked.** Both fist
+drives are defined in terms of the locked note — a fist alone turns around it,
+and a fist with an open palm beside it reels the camera in on it — so with
+nothing locked neither gesture exists, and the pose SHALL be inert rather than
+falling back to some other pivot.
+
+Falling back to the point at the centre of the view SHALL NOT be done for a
+turn. That fallback is correct for the two-palm zoom, which only moves in and
+out along an axis already on screen, and wrong for a turn, which is entirely
+about which axis it is: it reads as the app choosing an axis on the user's
+behalf, swinging the whole graph around a pivot they never picked and cannot
+see.
+
+**Two open palms SHALL remain ungated.** Free zoom is not defined in terms of a
+target, so it works with nothing locked, and requiring a lock for it would make
+the galaxy unusable before the user has aimed at anything.
+
+#### Scenario: A fist does nothing until a note is chosen
+
+- **WHEN** the galaxy is active with no note locked and the user makes a `Closed_Fist` and moves it
+- **THEN** the camera does not turn, and no pivot is chosen on the user's behalf
+
+#### Scenario: A fist and a palm do nothing until a note is chosen
+
+- **WHEN** no note is locked and the user holds a fist while moving the other open palm
+- **THEN** the camera neither turns nor travels
+
+#### Scenario: Free zoom works before anything is locked
+
+- **WHEN** no note is locked and the user spreads two open palms
+- **THEN** the camera zooms along the axis it is already looking down
+
+#### Scenario: Choosing a note gives the fist its job back
+
+- **WHEN** the user aims an open palm at a note to lock it and then makes a fist and moves it
+- **THEN** the camera turns around that note
+
+### Requirement: A held fist is measured where the hand is, not where the fingers are
+
+The distance the reel-in reads SHALL be measured from the fist's **wrist**, not
+from its tracked fingertip. Curling into a fist, or tightening one already
+closed, travels the fingertip a long way while the hand itself has not moved,
+and the zoom law maps that distance straight to an absolute camera radius — so
+finger movement would arrive as camera travel. The turn drive already measures a
+fist at the wrist for the same reason, and the two SHALL agree.
+
+Open palms SHALL continue to be measured at their fingertips: an open hand has
+no curl to leak, and the two-palm zoom is steady as it stands.
+
+#### Scenario: A held fist holds the camera still
+
+- **WHEN** the user holds a fist in place while their fingers tighten, with the other palm not moving
+- **THEN** the camera distance does not change
+
+#### Scenario: The reel-in follows the hand that is moving
+
+- **WHEN** the user holds a fist and moves the other open palm away from it
+- **THEN** the camera travels toward the locked note by that hand's movement
 

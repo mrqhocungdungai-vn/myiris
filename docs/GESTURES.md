@@ -134,9 +134,9 @@ chrome above it:
 | `Pointing_Up` | Node dwell — hold over a node 300 ms to **open** it (same dwell mechanic as the deck) |
 | `Victory` (two fingers) | **Inspect** — hold near a node to light up its link cluster while held. Selects nothing, opens nothing, leaves nothing behind |
 | A single `Open_Palm` | **Aims** — the sight follows it and chooses the note to lock (D24/D25). Commits nothing. With both hands up, the one further RIGHT on screen wins, which the mirrored preview makes the user's right hand |
-| `Closed_Fist` | **Turns the camera** around the locked note (D25). A fist does not aim — one job per pose, or the turn would re-target on its own movement |
+| `Closed_Fist` | **Turns the camera** around the locked note (D25) — and does **nothing at all until a note is locked**. A fist does not aim — one job per pose, or the turn would re-target on its own movement |
 | Two open palms | Zoom **the middle of the view** — along the axis the camera already looks down |
-| `Closed_Fist` + an open palm | **Reels in** on the locked note: the fist holds it while the other hand pulls you toward it (D26). Which zoom you get is carried by the hands, not by whether something happens to be locked |
+| `Closed_Fist` + an open palm | **Reels in** on the locked note: the fist holds it while the other hand pulls you toward it (D26), and like the turn it is inert until something is locked. Which *kind* of zoom you get is still carried by the hands rather than by hidden state. The fist is measured at the **wrist**: a fingertip travels a long way just from curling, and this law maps distance straight to camera radius, so reading the fingertip turned knuckle movement into camera travel |
 | Anything else (a single open palm, unrecognized, resting) | Drives nothing |
 | A hand in the **bottom third of the frame**, whatever it is doing | Drives nothing, and releases a drive in progress |
 
@@ -314,6 +314,14 @@ re-aim re-seeds the spherical so the view does not jump — and deliberately doe
 **not** re-read the hands' separation as the new reference, which would silently
 discard the spread already made and stall the remaining travel (D21). It keeps
 the reference distance and rescales instead.
+
+Both fist drives are defined in terms of the locked note — one turns around it,
+the other reels in on it — so **neither exists until something is locked**. A
+fist used to fall back to the point at the centre of the view, which is the
+right fallback for the two-palm zoom (it only moves along an axis already on
+screen) and the wrong one for a turn, which is entirely about *which* axis:
+closing a hand swung the graph around a pivot the user never chose. Two open
+palms stay ungated, since free zoom names no target.
 
 While ANY hand is a fist the camera is being driven, so **nothing aims** — that
 is what stops a hand's pose dropping out mid-zoom from leaving one palm in
