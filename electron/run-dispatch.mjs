@@ -39,6 +39,7 @@ const DEPRECATED_TASK_TOOL = "submit_claude_task";
  *   workspaceInfo: () => any,
  *   projectStateFor: (workstream: any) => { hasOpenChange: boolean, changes: string[] },
  *   hasLiveStatefulSession: (workstreamId: string) => boolean,
+ *   hasResidentSession?: (workstreamId: string) => boolean,
  *   getUiContextSnapshot: () => any,
  *   resolvePendingPoQuestion: (answers: any) => any,
  *   captureNote: (args: any) => Promise<any>,
@@ -62,6 +63,9 @@ export function createRunDispatch({
   workspaceInfo,
   projectStateFor,
   hasLiveStatefulSession,
+  // Defaults to the consent predicate, which is the conservative reading: a
+  // caller that does not distinguish the two keeps today's queueing.
+  hasResidentSession = hasLiveStatefulSession,
   getUiContextSnapshot,
   resolvePendingPoQuestion,
   captureNote,
@@ -191,13 +195,21 @@ export function createRunDispatch({
 
     // Which lane. A turn into a conversation that is ALREADY open is the next
     // thing said in it, not the start of a new job, so it does not contend for
-    // the single execution slot — see run-queue's `submitResident`. The same
-    // predicate the review gate uses decides it, and it is the honest one:
-    // `hasLiveStatefulSession` reports a conversation the user has taken part
-    // in, not merely a warmed transport, so the FIRST turn of a conversation
-    // still goes through the slot and the review gate exactly as before.
+    // the single execution slot — see run-queue's `submitResident`.
+    //
+    // Deliberately NOT the review gate's predicate, which is a different
+    // question wearing a similar name. The gate asks "has the user taken part
+    // in this conversation" — consent. The lane asks "is there a live session
+    // to push a turn into" — mechanics, which a warmed session satisfies.
+    // Conflating them meant the first sentence after opening the canvas still
+    // queued behind an unrelated twenty-minute run: the warm had removed the
+    // cost of STARTING a session and left the cost of WAITING for the slot,
+    // which is the more visible half.
+    //
+    // Consent is unaffected: a turn that must be reviewed never reaches this
+    // line until it has been.
     const verb = resolveVerb(run.verb);
-    const resident = verb.stateful && hasLiveStatefulSession(run.workstream_id);
+    const resident = verb.stateful && hasResidentSession(run.workstream_id);
     const outcome = resident ? runQueue.submitResident(run) : runQueue.submit(run);
     if (outcome.status === "queued") {
       if (resident) {

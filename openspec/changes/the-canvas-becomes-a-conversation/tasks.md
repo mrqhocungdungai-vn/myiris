@@ -26,6 +26,7 @@
 > unconditionally, so per-conversation serialization has to be enforced before two
 > utterances can ever be in flight.
 
+- [x] 3.1a `run-dispatch` asks TWO predicates, not one: `hasLiveStatefulSession` (consent — has the user taken part?) for the review gate, `hasResidentSession` (mechanics — is there a session to deliver into?) for the lane. Conflating them left the first sentence after opening the canvas queueing behind unrelated work, which is the half of the cost warming does not remove
 - [x] 3.1 `electron/run-queue.mjs` — `submitResident`: registers and starts without taking the slot. Safe against the slot by construction, not convention — `finalize` already guards every slot side-effect behind `active === runId`
 - [x] 3.2 Serialized per conversation (`residentActive` / `residentQueues`). Not merely stated: `deliverPoTurn` overwrites the in-flight turn's handle unconditionally, so two turns of one conversation genuinely must not overlap
 - [x] 3.3 Confined at the registry: `shape_on_canvas` withholds Write/Edit/NotebookEdit/Bash. It withheld NOTHING before — which never mattered while one slot made overlap impossible, and became the lane's hazard the moment it did. AskUserQuestion stays available; the conversation still asks freely

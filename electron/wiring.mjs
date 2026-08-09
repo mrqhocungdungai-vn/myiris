@@ -10,7 +10,7 @@
 // received injected from main.mjs, one of the four modules allowed to
 // import Electron directly, like any other domain module.
 import { createRunQueue, RUN_STATUS } from "./run-queue.mjs";
-import { hasUsedPoSession } from "./po-session.mjs";
+import { getPoSessionState, hasUsedPoSession } from "./po-session.mjs";
 import { isVerb, projectState, resolveVerb } from "./verbs.mjs";
 import { createPipelineProbes } from "./pipeline-probes.mjs";
 import { createPipelineInstall } from "./pipeline-install.mjs";
@@ -311,6 +311,9 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     // the voice layer must not be told a shaping conversation is under way
     // before one is.
     hasLiveStatefulSession: (workstreamId) => hasUsedPoSession(workstreamId),
+    // Mechanics, not consent: a warmed session counts here, because a turn can
+    // be delivered into it without starting a job.
+    hasResidentSession: (workstreamId) => Boolean(getPoSessionState(workstreamId)),
     getUiContextSnapshot,
     resolvePendingPoQuestion,
     // secondBrainCapability is constructed further down (see the forward

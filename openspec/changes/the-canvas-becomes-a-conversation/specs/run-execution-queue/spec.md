@@ -3,7 +3,7 @@
 ### Requirement: Single execution slot
 The system SHALL allow at most one Claude **job** to be mid-execution at any time, system-wide, where a job is the start of new work: a stateless run, a plain task, or the opening of a resident conversation. A job submitted while the slot is free SHALL start immediately; one submitted while the slot is held SHALL be queued FIFO. Starting a run SHALL be able to fail synchronously (for example, a run rejected at a start-time gate or a transport that fails to launch); when it does, the submitter SHALL receive the run's terminal status rather than a `started` acknowledgement, so the submitter is never told a run started when it did not.
 
-A **turn delivered into a conversation that is already resident** is not a job and SHALL NOT contend for that slot. Such a turn shares an open context window, cannot begin a second worker, and SHALL be serialized per conversation instead: one turn at a time within a conversation, with the next turn waiting for that conversation, not for the system.
+A **turn delivered into a conversation that is already resident** is not a job and SHALL NOT contend for that slot. "Already resident" means a live session exists to deliver into — including one opened in anticipation of use — and SHALL NOT be conflated with whether the user has yet taken part in that conversation, which is the separate question the review gate asks. Such a turn shares an open context window, cannot begin a second worker, and SHALL be serialized per conversation instead: one turn at a time within a conversation, with the next turn waiting for that conversation, not for the system.
 
 A resident turn running beside a job SHALL be bounded by what it is allowed to do rather than by when it may run: it SHALL be confined to the tools and skills its conversation declares, and a turn that would begin repository work SHALL be refused rather than run alongside an unrelated job.
 
@@ -25,6 +25,11 @@ A resident turn SHALL carry its own silence watchdog. The slot's watchdog belong
 
 - **WHEN** the user speaks to an already-resident canvas conversation while a long unrelated run holds the execution slot
 - **THEN** the turn is delivered and answered without waiting for that run to finish
+
+#### Scenario: The first thing said to a warmed conversation does not wait either
+
+- **WHEN** the canvas has been opened, its conversation warmed, and the user says the first thing to it while an unrelated run holds the slot
+- **THEN** that turn is delivered without waiting, and is still subject to review on the same terms as before
 
 #### Scenario: Two turns of one conversation still serialize
 

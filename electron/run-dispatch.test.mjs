@@ -399,3 +399,72 @@ describe("run-dispatch: which lane a turn takes", () => {
     expect(result.message).not.toMatch(/still finishing the current task/i);
   });
 });
+
+// Consent and mechanics are two questions, and giving them one predicate cost
+// exactly the thing warming was meant to buy: the first sentence after opening
+// the canvas still queued behind an unrelated long run, because the warm had
+// removed the cost of STARTING a session and left the cost of WAITING for the
+// slot — the more visible half.
+describe("run-dispatch: the review gate and the lane ask different questions", () => {
+  it("sends the FIRST turn into a warmed session down the resident lane", () => {
+    const runQueue = makeRunQueue();
+    const dispatch = make({
+      runQueue,
+      // Nobody has spoken yet: no conversation has happened...
+      hasLiveStatefulSession: () => false,
+      // ...but a session is up and waiting, because the canvas was opened.
+      hasResidentSession: () => true,
+      getPromptReviewMode: () => "never",
+    });
+
+    dispatch.submitVerb("shape_on_canvas", { said: "what do you make of this?", reading: "review the board" });
+
+    expect(runQueue.submitResident).toHaveBeenCalledTimes(1);
+    expect(runQueue.submit).not.toHaveBeenCalled();
+  });
+
+  it("still reviews that first turn, because consent is the other question", () => {
+    // The warm must not buy consent. On `verb` mode with no conversation yet,
+    // the opening turn is parked exactly as before.
+    const runQueue = makeRunQueue();
+    const dispatch = make({
+      runQueue,
+      hasLiveStatefulSession: () => false,
+      hasResidentSession: () => true,
+      getPromptReviewMode: () => "verb",
+    });
+
+    const result = dispatch.submitVerb("shape_on_canvas", { said: "draw it", reading: "diagram" });
+
+    expect(result.status).toBe("parked_for_review");
+    expect(runQueue.submitResident).not.toHaveBeenCalled();
+    expect(runQueue.submit).not.toHaveBeenCalled();
+  });
+
+  it("takes the slot when there is no session at all", () => {
+    // Nothing to push a turn into: opening one IS a job.
+    const runQueue = makeRunQueue();
+    const dispatch = make({
+      runQueue,
+      hasLiveStatefulSession: () => false,
+      hasResidentSession: () => false,
+      getPromptReviewMode: () => "never",
+    });
+
+    dispatch.submitVerb("shape_on_canvas", { said: "let's start", reading: "open" });
+
+    expect(runQueue.submit).toHaveBeenCalledTimes(1);
+    expect(runQueue.submitResident).not.toHaveBeenCalled();
+  });
+
+  it("defaults the lane to the consent predicate when a caller supplies only one", () => {
+    // The conservative reading: a caller that does not distinguish them keeps
+    // the old queueing rather than silently gaining a lane.
+    const runQueue = makeRunQueue();
+    const dispatch = make({ runQueue, hasLiveStatefulSession: () => false, getPromptReviewMode: () => "never" });
+
+    dispatch.submitVerb("shape_on_canvas", { said: "x", reading: "y" });
+
+    expect(runQueue.submit).toHaveBeenCalledTimes(1);
+  });
+});
