@@ -95,7 +95,15 @@ export function createRunStream({
       });
     },
 
-    settle(status, resolvedValue) {
+    // `outcome` names WHICH settlement ran, because `status` alone cannot:
+    // both expiry policies settle as "timed_out", and the renderer was
+    // announcing the ALLOW branch's wording ("applied its recommended
+    // option") for the DENY branch too — a run that deliberately supplied no
+    // answer was reported as a decision the user never made, which
+    // voice-decision-relay ("The unanswered outcome is never presented as a
+    // decision") forbids. Emitted from the one funnel every path goes
+    // through, so no future settlement path can omit it.
+    settle(status, resolvedValue, outcome = status) {
       if (!this.current) return;
       const { workstreamId, questions, resolve, timer } = this.current;
       clearTimeout(timer);
@@ -104,7 +112,7 @@ export function createRunStream({
       // abandon) goes through — not at the individual call sites — so no
       // future settlement path can miss it (design D3).
       runQueue.resume();
-      emitPoQuestionEvent(workstreamId, questions, status);
+      emitPoQuestionEvent(workstreamId, questions, status, outcome);
       resolve(resolvedValue);
     },
 
@@ -128,11 +136,15 @@ export function createRunStream({
             "A question from a run that writes went unanswered — supplying no answer, so the run stops " +
             "instead of proceeding on a default.",
         });
-        this.settle("timed_out", {
-          behavior: "deny",
-          reason: "unanswered",
-          message: unansweredDenialMessage(questions),
-        });
+        this.settle(
+          "timed_out",
+          {
+            behavior: "deny",
+            reason: "unanswered",
+            message: unansweredDenialMessage(questions),
+          },
+          "unanswered",
+        );
         return;
       }
       emitEvent({
@@ -140,7 +152,7 @@ export function createRunStream({
         level: "warn",
         message: "The question went unanswered — applying the recommended option for each.",
       });
-      this.settle("timed_out", { behavior: "allow", answers: defaultPoAnswers(questions) });
+      this.settle("timed_out", { behavior: "allow", answers: defaultPoAnswers(questions) }, "defaulted");
     },
 
     // A deliberate reset denies the question rather than answering it with a
@@ -307,8 +319,8 @@ export function createRunStream({
   }
 
   // The event type stays `po_question` for renderer/IPC back-compat.
-  function emitPoQuestionEvent(workstreamId, questions, status) {
-    emitEvent({ type: "po_question", workstream_id: workstreamId, status, questions });
+  function emitPoQuestionEvent(workstreamId, questions, status, outcome = status) {
+    emitEvent({ type: "po_question", workstream_id: workstreamId, status, outcome, questions });
   }
 
   // canUseTool's onAskUserQuestion callback: pauses the asking run, relays the

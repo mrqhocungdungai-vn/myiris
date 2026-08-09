@@ -22,7 +22,11 @@ contextBridge.exposeInMainWorld("iris", {
   toggleHud: () => ipcRenderer.invoke("hud:toggle"),
   setHudInteractive: (on) => ipcRenderer.send("hud:interactive", Boolean(on)),
   activateDrawingCanvas: () => ipcRenderer.send("canvas:activate"),
-  saveCanvasScene: (scene) => ipcRenderer.send("canvas:scene", scene),
+  // The push is an exchange, not a fire-and-forget: it declares the revision
+  // it was derived from (so main reconciles per element instead of letting a
+  // stale push delete a newer write) and is acked with { revision, persisted }
+  // — the revision the next push must declare.
+  saveCanvasScene: (push) => ipcRenderer.invoke("canvas:scene", push),
   getCanvasScene: () => ipcRenderer.invoke("canvas:get-scene"),
   // canvas-claude-mcp (design.md D3/4.1): main→renderer apply of an
   // externally-originated (Claude) write, and the image-export request/reply

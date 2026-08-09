@@ -137,6 +137,47 @@ describe("run-stream: the caller-supplied expiry policy", () => {
     expect(settled.message).toMatch(/no option was chosen on the user's behalf/i);
   });
 
+  // voice-decision-relay, "The unanswered outcome is never presented as a
+  // decision": both expiry policies settle as status "timed_out", so status
+  // alone cannot tell a consumer which branch ran — and the renderer was
+  // announcing the ALLOW wording for both. `outcome` is what carries the
+  // distinction; these two cases are what stop it being dropped again.
+  it("names the branch that ran on the settlement event, not just the status", async () => {
+    for (const [onExpiry, outcome] of [
+      [QUESTION_EXPIRY.RECOMMENDED_OPTION, "defaulted"],
+      [QUESTION_EXPIRY.DENY, "unanswered"],
+    ]) {
+      const emitEvent = vi.fn();
+      const stream = make({ emitEvent });
+      const pending = stream.askUserQuestionViaVoice("ws1", questions, { onExpiry });
+      stream.PendingQuestion.expire();
+      await pending;
+
+      const settlement = emitEvent.mock.calls
+        .map(([event]) => event)
+        .filter((event) => event.type === "po_question" && event.status !== "pending");
+      expect(settlement).toHaveLength(1);
+      expect(settlement[0].status).toBe("timed_out");
+      expect(settlement[0].outcome).toBe(outcome);
+    }
+  });
+
+  it("reports an answered question as answered, not as a timeout branch", async () => {
+    const emitEvent = vi.fn();
+    const stream = make({ emitEvent });
+    const pending = stream.askUserQuestionViaVoice("ws1", questions, {
+      onExpiry: QUESTION_EXPIRY.DENY,
+    });
+    stream.PendingQuestion.answer({ "Which database?": "Postgres" });
+    await pending;
+
+    const settlement = emitEvent.mock.calls
+      .map(([event]) => event)
+      .find((event) => event.type === "po_question" && event.status !== "pending");
+    expect(settlement.status).toBe("answered");
+    expect(settlement.outcome).toBe("answered");
+  });
+
   // 4.6: both branches funnel through the single settle(), so neither can miss
   // runQueue.resume() — and the idle bound is suspended for a headless run on
   // exactly the same terms as for a resident turn.

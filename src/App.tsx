@@ -13,6 +13,7 @@ import {
 import { isVerb, modelLabel, verbLabel } from "./lib/verbs";
 import { resolveGestureContext, orbGestureEngaged } from "./lib/gestureContext";
 import { isHudChrome } from "./lib/hudChrome";
+import { isHudInteractiveTarget, resolveHudInteractive } from "./lib/hud-interactivity";
 import { readWebglHighFidelity, deriveWebglSettings, WEBGL_QUALITY_STORAGE_KEY } from "./lib/webgl-quality";
 import { uiSounds } from "./lib/sounds";
 import { useAudioPipeline } from "./hooks/useAudioPipeline";
@@ -771,17 +772,31 @@ export default function App() {
   // when the pointer is over a `.hud-hit` element. elementFromPoint respects
   // pointer-events, so it only returns elements that opted in.
   //
-  // While the drawing panel (or the second-brain galaxy, second-brain-galaxy-
-  // view design.md D5/4.3) is active, interactivity is latched on for the
-  // whole duration instead of being re-decided per pointermove (hud-drawing-
-  // canvas design.md D3) — per-move flipping races with excalidraw/orbit-
-  // control gestures, so a fast drag/marquee/wheel-zoom/orbit-drag crossing
-  // the panel edge could otherwise drop the pointer stream mid-gesture.
+  // An exclusive fullscreen layer — the drawing surface or the second-brain
+  // galaxy — holds interactivity for as long as it is open, because it covers
+  // the display and "is the pointer over it" has the same answer everywhere.
+  // The cost of that is worth stating plainly: while such a layer is up, this
+  // window is display-sized and above the menu bar, so nothing else on the
+  // machine can be clicked. That is what makes each layer's way out load-
+  // bearing — Esc, the visible Close button excalidraw renders for the drawing
+  // surface, the orb cluster's toggle, and — if the renderer itself is gone —
+  // the OS-level HUD hotkey, which is the ONE route that does not need the
+  // renderer alive. Not the tray: this window sits above the menu bar and
+  // swallows clicks aimed at it, so while a layer is open the tray icon is
+  // painted over and unreachable. Main also releases the mouse by itself if
+  // the renderer stops responding (`window.mjs`, the `unresponsive` handler).
+  //
+  // The decision itself lives in `src/lib/hud-interactivity.ts` and is tested
+  // there.
   useEffect(() => {
     if (!hasBridge || uiMode !== "hud") return;
-    if (drawingActive || secondBrainActive) {
+    const exclusiveLayerActive = secondBrainActive || drawingActive;
+    if (exclusiveLayerActive) {
       window.iris.setHudInteractive(true);
-      return;
+      // Restoring click-through on the way out belongs here, not only in the
+      // cleanup below: leaving HUD or closing the layer must not depend on the
+      // next pointermove arriving to release the whole desktop.
+      return () => window.iris.setHudInteractive(false);
     }
     let interactive = false;
     let raf = 0;
@@ -789,14 +804,13 @@ export default function App() {
 
     const onMove = (event: MouseEvent) => {
       if (raf) return;
+      const { clientX, clientY } = event;
       raf = requestAnimationFrame(() => {
         raf = 0;
-        const el = document.elementFromPoint(event.clientX, event.clientY);
-        const next = Boolean(
-          el?.closest?.(
-            ".hud-hit, .reader-backdrop, .history-backdrop, .match-backdrop, .setup-backdrop, .boot, .excalidraw-modal-container",
-          ),
-        );
+        const next = resolveHudInteractive({
+          exclusiveLayerActive: false,
+          overInteractiveTarget: isHudInteractiveTarget(document.elementFromPoint(clientX, clientY)),
+        });
         if (next !== interactive) {
           interactive = next;
           window.iris.setHudInteractive(next);
@@ -810,7 +824,7 @@ export default function App() {
       if (raf) cancelAnimationFrame(raf);
       window.iris.setHudInteractive(false);
     };
-  }, [hasBridge, uiMode, drawingActive, secondBrainActive]);
+  }, [hasBridge, uiMode, secondBrainActive, drawingActive]);
 
   // Esc force-closes the galaxy regardless of its internal state (design.md
   // D9/L3 of second-brain-galaxy-view) — a crashed WebGL layer (caught by
@@ -824,6 +838,29 @@ export default function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [secondBrainActive]);
+
+  // The same escape hatch for the drawing surface (the-canvas-stops-fighting-
+  // back, task 3.4). Mirrors the galaxy above, with two deliberate differences.
+  //
+  // First, CAPTURE phase. Excalidraw handles keys on its own container and can
+  // stop an event before it ever bubbles to `window`; a listener that only
+  // sees what excalidraw lets past is an escape hatch that works until the day
+  // it matters. Capture runs on the way down, so this decision is ours first.
+  //
+  // Second, excalidraw's own dialogs and command palette take Escape to close
+  // THEMSELVES, so while one is open (its portalled `.excalidraw-modal-
+  // container` is in the document) Escape belongs to it and we stand down. A
+  // second Escape, with no dialog left, closes the surface.
+  useEffect(() => {
+    if (!drawingActive) return;
+    function onKey(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      if (document.querySelector(".excalidraw-modal-container")) return;
+      setDrawingActive(false);
+    }
+    window.addEventListener("keydown", onKey, { capture: true });
+    return () => window.removeEventListener("keydown", onKey, { capture: true });
+  }, [drawingActive]);
 
   // The note reader's existence is derived from secondBrainActive at the
   // render call site below (`secondBrainActive && openNote`), which closes
@@ -1286,7 +1323,23 @@ export default function App() {
         setPendingPoQuestion(null);
         setPoAnswers({});
         if (status === "timed_out") {
-          pushLog("warn", "The PO's question went unanswered — applied its recommended option.", eventTime(event));
+          // Which branch actually ran — main tells us (run-stream.mjs's
+          // settle `outcome`), we do not infer it. "timed_out" covers both
+          // expiry policies, and announcing the ALLOW wording for a DENY
+          // settlement reports a decision the user never made
+          // (voice-decision-relay: "The unanswered outcome is never presented
+          // as a decision"). An older main that sends no `outcome` falls back
+          // to the neutral wording rather than to the wrong one.
+          const outcome = readString(event.outcome, "timed_out");
+          pushLog(
+            "warn",
+            outcome === "defaulted"
+              ? "The PO's question went unanswered — applied its recommended option."
+              : outcome === "unanswered"
+                ? "The PO's question went unanswered — no answer was supplied and the run stopped."
+                : "The PO's question went unanswered.",
+            eventTime(event),
+          );
         }
       }
       return;

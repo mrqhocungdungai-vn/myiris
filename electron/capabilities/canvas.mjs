@@ -7,7 +7,7 @@
 // pattern as any other Electron capability reaching a domain module.
 import crypto from "node:crypto";
 import fs from "node:fs";
-import { createCanvasStore } from "../canvas-store.mjs";
+import { createCanvasStore, reconcileSceneElements } from "../canvas-store.mjs";
 import { createCanvasMcp, buildMcpServerRecord } from "../canvas-mcp.mjs";
 
 // canvas-claude-mcp: main→renderer image-export request/response. Keyed by a
@@ -17,7 +17,14 @@ import { createCanvasMcp, buildMcpServerRecord } from "../canvas-mcp.mjs";
 // reply (panel unmounted mid-flight) can't leak the map entry. canvas-mcp.mjs
 // itself owns the hard timeout the get_canvas tool actually blocks on
 // (DEFAULT_IMAGE_TIMEOUT_MS) — this cleanup timer is just a longer backstop.
-const CANVAS_IMAGE_CLEANUP_MS = 8000;
+// canvas-claude-mcp design.md D3 / this change's "A degraded read says so":
+// the image budget belongs to the *caller* — canvas-mcp's get_canvas declares
+// how long it is prepared to block — and this side only adds a small grace so
+// a reply that arrives just after the tool gave up still clears its map entry.
+// The old fixed 8 s backstop meant a slow export always lost the race and then
+// kept a dead promise alive for another 4 s.
+const CANVAS_IMAGE_DEFAULT_BUDGET_MS = 4000;
+const CANVAS_IMAGE_GRACE_MS = 500;
 
 /**
  * @param {{
@@ -46,16 +53,19 @@ export function createCanvasCapability({
 
   const pendingCanvasImageRequests = new Map(); // id -> resolve
 
-  function requestCanvasImage() {
+  // Resolves { image, reason }: never a bare null, because "no image" has to
+  // be explainable to Claude (panel closed vs. export too slow) rather than
+  // degrading silently into JSON-only.
+  function requestCanvasImage({ timeoutMs = CANVAS_IMAGE_DEFAULT_BUDGET_MS } = {}) {
     const win = getMainWindow();
-    if (!win || win.isDestroyed()) return Promise.resolve(null);
+    if (!win || win.isDestroyed()) return Promise.resolve({ image: null, reason: "panel-closed" });
     const id = crypto.randomUUID();
     return new Promise((resolve) => {
       pendingCanvasImageRequests.set(id, resolve);
       emitToRenderer("canvas:request-image", { id });
       const timer = setTimeout(() => {
-        if (pendingCanvasImageRequests.delete(id)) resolve(null);
-      }, CANVAS_IMAGE_CLEANUP_MS);
+        if (pendingCanvasImageRequests.delete(id)) resolve({ image: null, reason: "export-timeout" });
+      }, timeoutMs + CANVAS_IMAGE_GRACE_MS);
       timer.unref?.();
     });
   }
@@ -66,10 +76,18 @@ export function createCanvasCapability({
   // drawing panel.
   const canvasMcp = createCanvasMcp({
     getScene: () => canvasStore.getScene(),
-    setScene: (scene) => canvasStore.setScene(scene),
+    setScene: (scene, meta) => canvasStore.setScene(scene, meta),
     flush: () => canvasStore.flush(),
-    broadcastApply: (elements) => emitToRenderer("canvas:apply", { elements }),
-    requestImage: () => requestCanvasImage(),
+    // The apply carries the revision it produced and the ids it touched, so
+    // the renderer can reconcile per element and push back from a base the
+    // main cache recognises instead of from a revision it never saw.
+    broadcastApply: (elements, meta) =>
+      emitToRenderer("canvas:apply", {
+        elements,
+        revision: meta?.revision ?? null,
+        changedIds: meta?.changedIds ?? [],
+      }),
+    requestImage: (options) => requestCanvasImage(options),
     log: (event, detail) => {
       emitEvent({ type: "log", level: "info", message: `[canvas-mcp] ${event} ${JSON.stringify(detail || {})}` });
     },
@@ -153,20 +171,64 @@ export function createCanvasCapability({
         const resolve = pendingCanvasImageRequests.get(payload?.id);
         if (!resolve) return;
         pendingCanvasImageRequests.delete(payload.id);
-        resolve(payload?.image ?? null);
+        resolve({ image: payload?.image ?? null, reason: payload?.image ? null : "export-failed" });
       },
     },
     // Scene-access seam (design.md D5): the in-memory cache updates
     // immediately on every push so `canvas:get-scene` is never behind the
     // debounced disk write; that debounced write is the only async part.
+    // It is a `handle`, not an `on`, because the push is now half of an
+    // exchange: the renderer has to learn the revision its push produced to
+    // use as the base of the next one.
     {
       channel: "canvas:scene",
-      kind: "on",
-      fn: (_event, scene) => {
-        if (scene && typeof scene === "object") canvasStore.setScene(scene);
+      kind: "handle",
+      fn: (_event, payload) => {
+        // Accept both the wrapped seam payload and a bare scene, so a push in
+        // flight across a reload is not dropped on the floor.
+        const scene =
+          payload && typeof payload === "object" && payload.scene && typeof payload.scene === "object"
+            ? payload.scene
+            : payload && typeof payload === "object" && Array.isArray(payload.elements)
+              ? payload
+              : null;
+        if (!scene) return { revision: canvasStore.getRevision(), persisted: false, reason: "invalid-payload" };
+
+        const baseRevision =
+          typeof payload?.baseRevision === "number" && Number.isFinite(payload.baseRevision)
+            ? payload.baseRevision
+            : null;
+        const current = canvasStore.getRevision();
+        // Stale (or unattributed) push: reconcile per element rather than
+        // letting it replace a write it never saw. A push at the current
+        // revision is the fast path and replaces as before.
+        const stale = baseRevision === null ? current > 0 : baseRevision < current;
+        const next = stale
+          ? reconcileSceneElements(canvasStore.getScene(), scene, canvasStore.changedIdsSince(baseRevision))
+          : scene;
+        const outcome = canvasStore.setScene(next);
+        if (!outcome.persisted) {
+          emitEvent({
+            type: "log",
+            level: "warn",
+            message: `[canvas] scene not persisted (${outcome.reason}) at revision ${outcome.revision}`,
+          });
+        }
+        return { revision: outcome.revision, persisted: outcome.persisted, reason: outcome.reason };
       },
     },
-    { channel: "canvas:get-scene", kind: "handle", fn: () => canvasStore.getScene() },
+    // The revision rides inside the scene object (`irisRevision`) rather than
+    // wrapping it, so the renderer can keep handing the result straight to
+    // excalidraw's restore after stripping the one field.
+    {
+      channel: "canvas:get-scene",
+      kind: "handle",
+      fn: () => {
+        const { scene, revision } = canvasStore.getSceneWithRevision();
+        if (!scene || typeof scene !== "object") return scene ?? null;
+        return { ...scene, irisRevision: revision };
+      },
+    },
     // Native file-dialog fallback (design.md D5a) for when the renderer's File
     // System Access path is unavailable under file:// — feeds excalidraw's
     // own loadFromBlob / serializeAsJSON / exportToBlob on the renderer side.

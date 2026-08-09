@@ -183,6 +183,16 @@ export function createWindowModule({
     });
     mainWindow.webContents.on("unresponsive", () => {
       recordLog({ level: "warn", src: "renderer", msg: "render process became unresponsive" });
+      // Give the mouse back. In HUD mode the renderer decides whether this
+      // window accepts the pointer, and while a fullscreen layer (the drawing
+      // surface, the galaxy) is open it holds that decision at "yes" — on a
+      // display-sized window above the menu bar. A renderer that has stopped
+      // responding will never send the release, so the user is left unable to
+      // click anything on their machine by a window that is no longer running
+      // anything. Releasing here costs a hung renderer nothing: it cannot be
+      // taking input either way, and the `hud:interactive` it sends when it
+      // recovers takes precedence again immediately.
+      if (uiMode === "hud") mainWindow?.setIgnoreMouseEvents(true, { forward: true });
     });
     mainWindow.webContents.on("preload-error", (_event, preloadPath, error) => {
       recordLog({

@@ -14,6 +14,12 @@ import {
   applyDeleteElements,
   createCanvasMcp,
   buildMcpServerRecord,
+  describePersist,
+  persistNote,
+  annotateResults,
+  changedIdsFrom,
+  normalizeImageResult,
+  imageUnavailableText,
   DEFAULT_IMAGE_TIMEOUT_MS,
 } from "./canvas-mcp.mjs";
 
@@ -222,14 +228,16 @@ describe("canvas MCP live server", () => {
     expect(scene.elements).toHaveLength(1);
   });
 
-  it("get_canvas({ includeImage: true }) degrades to JSON-only when the image request never resolves (timeout)", async () => {
+  it("get_canvas({ includeImage: true }) degrades within its budget and states the timeout", async () => {
     ({ mcp } = makeMcp({ requestImage: () => new Promise(() => {}) }));
     const info = await mcp.start();
     const client = await connectClient(info, { Authorization: `Bearer ${info.token}` });
     const start = Date.now();
     const result = await client.callTool({ name: "get_canvas", arguments: { includeImage: true } });
     expect(Date.now() - start).toBeLessThan(DEFAULT_IMAGE_TIMEOUT_MS + 2000);
-    expect(result.content).toHaveLength(1); // JSON only, no image block, no throw
+    // JSON plus an explanation, never an image block and never a silent omission
+    expect(result.content).toHaveLength(2);
+    expect(result.content[1].text).toMatch(/budget/);
     expect(result.isError).not.toBe(true);
     await client.close();
   }, 10000);
@@ -252,5 +260,128 @@ describe("canvas MCP live server", () => {
     } finally {
       await new Promise((resolve) => blocker.close(resolve));
     }
+  });
+});
+
+
+// ===== Persist reporting and degraded reads (the-canvas-stops-fighting-back) =====
+
+describe("describePersist / annotateResults", () => {
+  it("is persisted when neither the write nor the flush objected", () => {
+    expect(describePersist({ revision: 2, persisted: true, reason: null }, { persisted: true })).toEqual({
+      persisted: true,
+      reason: null,
+    });
+  });
+
+  it("treats a dependency that reports nothing as persisted (older injected shapes)", () => {
+    expect(describePersist(undefined, undefined).persisted).toBe(true);
+  });
+
+  it("reports the size guard rather than success", () => {
+    const persist = describePersist({ revision: 2, persisted: false, reason: "oversized" }, { persisted: false, reason: "oversized" });
+    expect(persist).toEqual({ persisted: false, reason: "oversized" });
+    expect(persistNote(persist)).toMatch(/size guard/);
+  });
+
+  it("stops calling an unpersisted write applied", () => {
+    const results = [{ id: "a", status: "applied" }, { id: "b", status: "skipped: unknown-id" }];
+    const annotated = annotateResults(results, { persisted: false, reason: "oversized" });
+    expect(annotated[0].status).toBe("applied in memory only, not persisted: oversized");
+    expect(annotated[1].status).toBe("skipped: unknown-id"); // untouched
+    expect(annotateResults(results, { persisted: true, reason: null })).toBe(results);
+  });
+});
+
+describe("changedIdsFrom", () => {
+  it("names only the ids a write actually touched", () => {
+    expect(
+      changedIdsFrom([
+        { id: "a", status: "applied" },
+        { id: "b", status: "rebound: dropped-binding" },
+        { id: "c", status: "skipped: unknown-id" },
+      ]),
+    ).toEqual(["a", "b"]);
+  });
+});
+
+describe("normalizeImageResult / imageUnavailableText", () => {
+  it("reads a bare image, a { image, reason } pair, and a hard timeout alike", () => {
+    expect(normalizeImageResult({ data: "x", mimeType: "image/png" }).image).toEqual({ data: "x", mimeType: "image/png" });
+    expect(normalizeImageResult({ image: null, reason: "panel-closed" })).toEqual({ image: null, reason: "panel-closed" });
+    expect(normalizeImageResult(null)).toEqual({ image: null, reason: "export-timeout" });
+  });
+
+  it("explains every reason in words Claude can repeat, and warns it off claiming it looked", () => {
+    expect(imageUnavailableText("panel-closed")).toMatch(/panel is not open/);
+    expect(imageUnavailableText("export-timeout")).toMatch(/budget/);
+    expect(imageUnavailableText("weird")).toMatch(/weird/);
+    expect(imageUnavailableText("panel-closed")).toMatch(/do not claim/);
+  });
+});
+
+describe("canvas MCP write tools over the live server", () => {
+  let mcp;
+
+  afterEach(async () => {
+    await mcp?.stop();
+  });
+
+  it("broadcasts the apply with the revision and the ids it changed", async () => {
+    const applies = [];
+    const { mcp: server } = makeMcp({
+      setScene: () => ({ revision: 9, persisted: true, reason: null }),
+      flush: async () => ({ persisted: true, reason: null }),
+      broadcastApply: (elements, meta) => applies.push({ count: elements.length, meta }),
+    });
+    mcp = server;
+    const info = await mcp.start();
+    const client = await connectClient(info, { Authorization: `Bearer ${info.token}` });
+
+    const result = await client.callTool({
+      name: "add_elements",
+      arguments: { elements: [{ id: "r1", type: "rectangle", x: 0, y: 0, width: 10, height: 10 }] },
+    });
+
+    const payload = JSON.parse(result.content[0].text);
+    expect(payload.persisted).toBe(true);
+    expect(payload.revision).toBe(9);
+    expect(applies).toHaveLength(1);
+    expect(applies[0].meta).toEqual({ revision: 9, changedIds: ["r1"] });
+    await client.close();
+  });
+
+  it("does not report applied for a scene the size guard refused to write", async () => {
+    const { mcp: server } = makeMcp({
+      setScene: () => ({ revision: 4, persisted: false, reason: "oversized" }),
+      flush: async () => ({ persisted: false, reason: "oversized" }),
+    });
+    mcp = server;
+    const info = await mcp.start();
+    const client = await connectClient(info, { Authorization: `Bearer ${info.token}` });
+
+    const result = await client.callTool({
+      name: "add_elements",
+      arguments: { elements: [{ type: "rectangle", x: 0, y: 0, width: 10, height: 10 }] },
+    });
+
+    const payload = JSON.parse(result.content[0].text);
+    expect(payload.persisted).toBe(false);
+    expect(payload.persistError).toMatch(/size guard/);
+    expect(payload.results[0].status).not.toBe("applied");
+    await client.close();
+  });
+
+  it("get_canvas({ includeImage: true }) says why the image is missing instead of omitting it", async () => {
+    ({ mcp } = makeMcp({ requestImage: async () => ({ image: null, reason: "panel-closed" }) }));
+    const info = await mcp.start();
+    const client = await connectClient(info, { Authorization: `Bearer ${info.token}` });
+
+    const result = await client.callTool({ name: "get_canvas", arguments: { includeImage: true } });
+
+    expect(result.content).toHaveLength(2);
+    expect(result.content[1].type).toBe("text");
+    expect(result.content[1].text).toMatch(/panel is not open/);
+    await client.close();
   });
 });

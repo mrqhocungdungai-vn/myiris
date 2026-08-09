@@ -335,6 +335,69 @@ const ELEMENT_SCHEMA = z
   })
   .passthrough();
 
+// ===== Persist / image outcome reporting (pure) =====
+
+// A write is only "applied" once it is somewhere it can be read back from.
+// canvas-store keeps an oversized scene in memory but never writes it, so the
+// tool result has to distinguish the two rather than report `applied` for a
+// scene that was never written (hud-drawing-canvas: "An unpersisted oversized
+// scene is not reported as persisted").
+export function describePersist(setResult, flushResult) {
+  if (setResult && setResult.persisted === false) {
+    return { persisted: false, reason: setResult.reason || "not-persisted" };
+  }
+  if (flushResult && flushResult.persisted === false) {
+    return { persisted: false, reason: flushResult.reason || "not-persisted" };
+  }
+  return { persisted: true, reason: null };
+}
+
+const PERSIST_REASON_TEXT = {
+  oversized: "the scene exceeds the persistence size guard, so it lives only in memory until it shrinks",
+};
+
+export function persistNote(persist) {
+  if (persist.persisted) return null;
+  return PERSIST_REASON_TEXT[persist.reason] || `not persisted (${persist.reason})`;
+}
+
+// Rewrites per-element statuses when the scene never reached disk — the
+// elements are on the live canvas, but calling that "applied" full stop would
+// be the silent lie this change exists to remove.
+export function annotateResults(results, persist) {
+  if (persist.persisted) return results;
+  return results.map((r) =>
+    r.status === "applied" ? { ...r, status: `applied in memory only, not persisted: ${persist.reason}` } : r,
+  );
+}
+
+// The ids a write touched, for the renderer's per-element reconciliation —
+// a skipped id was never written and must not be claimed as changed.
+export function changedIdsFrom(results) {
+  return (results || []).filter((r) => r && r.id && !String(r.status).startsWith("skipped")).map((r) => r.id);
+}
+
+const IMAGE_REASON_TEXT = {
+  "panel-closed": "the drawing panel is not open, so there is nothing rendered to capture",
+  "export-timeout": "the export exceeded its budget",
+  "export-failed": "the panel replied without an image",
+};
+
+// requestImage may resolve an image, or { image, reason }, or null (its own
+// hard timeout). Normalizes all three into one shape so get_canvas always has
+// something to say about a missing image.
+export function normalizeImageResult(raw) {
+  if (!raw) return { image: null, reason: "export-timeout" };
+  if (typeof raw === "object" && "image" in raw) {
+    return { image: raw.image || null, reason: raw.image ? null : raw.reason || "export-failed" };
+  }
+  return { image: raw, reason: null };
+}
+
+export function imageUnavailableText(reason) {
+  return `No canvas image is attached: ${IMAGE_REASON_TEXT[reason] || `the export failed (${reason})`}. The scene JSON above is the canvas as it currently stands — do not claim to have looked at a picture of it.`;
+}
+
 // Hard cap owned by the tool itself, not just whatever the injected
 // requestImage does internally — a bug or slow path in the real
 // (main.mjs) implementation must never hang get_canvas; it always degrades
@@ -358,6 +421,30 @@ function withTimeout(promise, ms) {
 function registerTools(server, deps) {
   const { getScene, setScene, flush, broadcastApply, requestImage, log } = deps;
 
+  // One commit path for all three write tools: stamp the write with the ids
+  // it touched (so the renderer reconciles per element), learn whether it was
+  // actually persisted, and broadcast the resulting revision.
+  async function commitWrite(scene, results) {
+    const changedIds = changedIdsFrom(results);
+    const setResult = setScene(scene, { changedIds });
+    let flushResult;
+    try {
+      flushResult = await flush();
+    } catch (error) {
+      flushResult = { persisted: false, reason: `write-failed: ${error?.message || "unknown"}` };
+    }
+    const persist = describePersist(setResult, flushResult);
+    const revision = setResult && typeof setResult.revision === "number" ? setResult.revision : null;
+    broadcastApply(scene.elements, { revision, changedIds });
+    const payload = { results: annotateResults(results, persist), persisted: persist.persisted, revision };
+    const note = persistNote(persist);
+    if (note) {
+      payload.persistError = note;
+      log?.("persist_failed", { reason: persist.reason });
+    }
+    return { content: [{ type: "text", text: JSON.stringify(payload) }] };
+  }
+
   server.registerTool(
     "get_canvas",
     {
@@ -371,8 +458,16 @@ function registerTools(server, deps) {
       /** @type {Array<{ type: string, text: string } | { type: string, data: string, mimeType: string }>} */
       const content = [{ type: "text", text: JSON.stringify(scene) }];
       if (includeImage) {
-        const image = await withTimeout(requestImage({ timeoutMs: DEFAULT_IMAGE_TIMEOUT_MS }), DEFAULT_IMAGE_TIMEOUT_MS);
-        if (image) content.push({ type: "image", data: image.data, mimeType: image.mimeType });
+        const raw = await withTimeout(requestImage({ timeoutMs: DEFAULT_IMAGE_TIMEOUT_MS }), DEFAULT_IMAGE_TIMEOUT_MS);
+        const { image, reason } = normalizeImageResult(raw);
+        if (image?.data) {
+          content.push({ type: "image", data: image.data, mimeType: image.mimeType });
+        } else {
+          // Say why, and log the degrade: a missing image that reads as
+          // "canvas is empty" is how Claude ends up claiming it looked.
+          content.push({ type: "text", text: imageUnavailableText(reason) });
+          log?.("image_degraded", { reason });
+        }
       }
       return { content };
     },
@@ -387,11 +482,8 @@ function registerTools(server, deps) {
     },
     async ({ elements }) => {
       const { scene, results } = applyAddElements(getScene(), elements);
-      setScene(scene);
-      await flush();
-      broadcastApply(scene.elements);
       log?.("tool_call", { tool: "add_elements", elements: elements.length });
-      return { content: [{ type: "text", text: JSON.stringify({ results }) }] };
+      return commitWrite(scene, results);
     },
   );
 
@@ -404,11 +496,8 @@ function registerTools(server, deps) {
     },
     async ({ elements }) => {
       const { scene, results } = applyUpdateElements(getScene(), elements);
-      setScene(scene);
-      await flush();
-      broadcastApply(scene.elements);
       log?.("tool_call", { tool: "update_elements", elements: elements.length });
-      return { content: [{ type: "text", text: JSON.stringify({ results }) }] };
+      return commitWrite(scene, results);
     },
   );
 
@@ -421,11 +510,8 @@ function registerTools(server, deps) {
     },
     async ({ ids }) => {
       const { scene, results } = applyDeleteElements(getScene(), ids);
-      setScene(scene);
-      await flush();
-      broadcastApply(scene.elements);
       log?.("tool_call", { tool: "delete_elements", elements: ids.length });
-      return { content: [{ type: "text", text: JSON.stringify({ results }) }] };
+      return commitWrite(scene, results);
     },
   );
 }
@@ -436,12 +522,14 @@ function registerTools(server, deps) {
 // dependencies are injected so tool logic stays testable in isolation
 // (design.md D8): getScene/setScene mirror canvas-store.mjs's
 // getScene/setScene, flush forces a durable persist per write (Claude writes
-// carry a higher durability bar than user strokes), broadcastApply is called
-// with the full post-write element set after every successful write
-// (main wires it to emitToRenderer("canvas:apply", ...), which is naturally
-// a no-op with no window and the renderer only listens while the panel is
-// mounted), and requestImage resolves { mimeType, data } or null (timeout /
-// panel unmounted) for get_canvas's optional image.
+// carry a higher durability bar than user strokes) and both report their
+// outcome so an unpersisted scene is never announced as applied,
+// broadcastApply is called with the full post-write element set plus
+// { revision, changedIds } after every write (main wires it to
+// emitToRenderer("canvas:apply", ...), which is naturally a no-op with no
+// window and the renderer only listens while the panel is mounted), and
+// requestImage resolves { image, reason } (or a bare image) for get_canvas's
+// optional image — the reason is what a degraded read reports.
 /**
  * @param {{
  *   getScene: Function,

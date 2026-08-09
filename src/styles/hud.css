@@ -14,12 +14,23 @@ html.hud-mode body {
   pointer-events: none;
 }
 
+/* Kept in step with HUD_INTERACTIVE_SELECTOR in `src/lib/hud-interactivity.ts`
+   — that hit-test decides whether the WINDOW takes the mouse, and it works by
+   `elementFromPoint`, which only ever returns what this rule let through. The
+   two lists disagreeing is how a surface renders and cannot be clicked.
+   The two excalidraw entries are its own UI portalled OUT of the drawing
+   panel's subtree into `document.body` (modals, the export dialog, the command
+   palette, colour pickers, the eye-dropper backdrop): they are not inside
+   `.hud-hit`, so without naming them here they inherit `pointer-events: none`
+   from body and are dead on arrival. */
 .hud-mode .hud-hit,
 .hud-mode .reader-backdrop,
 .hud-mode .history-backdrop,
 .hud-mode .match-backdrop,
 .hud-mode .setup-backdrop,
-.hud-mode .boot {
+.hud-mode .boot,
+.hud-mode .excalidraw-modal-container,
+.hud-mode .excalidraw-eye-dropper-backdrop {
   pointer-events: auto;
 }
 
@@ -612,26 +623,67 @@ html:not(.hud-mode) .setup-backdrop {
   width: 100%;
 }
 
-/* ===== Drawing panel (toggleable, hud-drawing-canvas) ===== */
+/* ===== Drawing surface (toggleable, hud-drawing-canvas) =====
+   A FULLSCREEN layer, on the galaxy's terms: `inset: 0` and z-index 1, which
+   puts it UNDER `.hud-chrome` (z-index 2) on purpose. Chrome staying on top is
+   not a cosmetic choice here — the orb cluster holds the drawing toggle, and
+   over a layer that covers the whole display that toggle is the escape hatch
+   a mouse can reach. A fullscreen surface above the chrome would be a room
+   with the door painted over.
+
+   It was bounded (84vw x 84vh) until the user asked for the galaxy's
+   footprint. The bounded version needed z-index 3, because chrome islands
+   overlapping a small panel eat strokes aimed at the canvas; fullscreen
+   inverts that reasoning, so the inversion goes away with it. What chrome
+   covers is handled below by insetting excalidraw's own UI out from under it,
+   not by stacking over it. */
 .hud-drawing-panel {
   position: absolute;
-  top: 8vh;
-  left: 8vw;
-  width: 84vw;
-  height: 84vh;
-  border-radius: var(--r-card);
+  z-index: 1;
+  inset: 0;
   overflow: hidden;
   background: rgba(12, 17, 28, 0.94);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.1),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.14),
-    0 24px 70px rgba(0, 0, 0, 0.55);
-  animation: hud-rise 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+  animation: hud-fade 0.3s ease;
 }
 
 .hud-drawing-panel .excalidraw {
   width: 100%;
   height: 100%;
+}
+
+/* Excalidraw's own footers sit in the two bottom corners — exactly where the
+   HUD keeps `.hud-left` (comms/camera, ~300px wide) and `.hud-orb-cluster`
+   (the orb, ~190px). Chrome is above the surface, so without this the zoom /
+   undo controls and the scene stats would render underneath an island and be
+   unclickable. Insetting excalidraw's UI is the fix that keeps BOTH reachable;
+   raising the canvas over the chrome would trade one unreachable control set
+   for another. */
+.hud-drawing-panel .layer-ui__wrapper__footer-left {
+  margin-bottom: 150px;
+}
+
+.hud-drawing-panel .layer-ui__wrapper__footer-right {
+  margin-bottom: 190px;
+}
+
+/* Sits in excalidraw's own top-right row, so it is styled to belong to that
+   row rather than to float over it. */
+.hud-drawing-close {
+  padding: 0 12px;
+  height: 36px;
+  border-radius: 10px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #dbe6f5;
+  background: rgba(22, 30, 47, 0.92);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
+}
+
+.hud-drawing-close:hover {
+  color: var(--cyan-bright);
+  box-shadow: inset 0 0 0 1px rgba(var(--cyan-rgb), 0.45);
 }
 
 .hud-drawing-loading {
@@ -644,6 +696,29 @@ html:not(.hud-mode) .setup-backdrop {
   font-size: 12px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
+}
+
+/* "Iris just drew" — the acknowledgement half of an apply (task 3.2). A write
+   from Claude that lands off-screen is scrolled into view; without this chip
+   the user still cannot tell the movement apart from their own. Non-interactive
+   and self-dismissing: it is a statement, not a control. */
+.hud-drawing-iris-chip {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 6px 12px;
+  border-radius: 999px;
+  color: var(--cyan-bright);
+  background: rgba(12, 22, 38, 0.92);
+  box-shadow: inset 0 0 0 1px rgba(var(--cyan-rgb), 0.4);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  pointer-events: none;
+  z-index: 2;
+  animation: hud-rise 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 .hud-drawing-native-fallback {
@@ -677,9 +752,16 @@ html:not(.hud-mode) .setup-backdrop {
   to { opacity: 1; transform: none; }
 }
 
+/* A fullscreen layer has nowhere to rise from — it fades, or it lurches. */
+@keyframes hud-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
 /* ===== Second-brain galaxy (toggleable, second-brain-galaxy-view) =====
-   Fullscreen (unlike the bounded drawing panel) — an immersive "fly through
-   your vault" backdrop — but z-index 1 keeps it beneath `.hud-chrome` (above),
+   Fullscreen — an immersive "fly through your vault" backdrop, and since the
+   drawing surface became fullscreen too, the two exclusive HUD layers now
+   share these terms exactly — but z-index 1 keeps it beneath `.hud-chrome` (above),
    so every HUD island stays visible, clickable and dwell-reachable over it
    rather than only the toggle that closes it. */
 .hud-galaxy,

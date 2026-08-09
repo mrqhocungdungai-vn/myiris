@@ -1,7 +1,5 @@
-## Purpose
+## MODIFIED Requirements
 
-A toggleable excalidraw-based drawing panel available only in Glass HUD mode, so the user can sketch directly on top of the desktop overlay — click-through glass everywhere else, pointer-interactive and keyboard-focused only within the panel's bounded region — with its scene persisted across toggles, HUD/deck switches, and app restarts, plus local file open/save/export and an IPC seam so other parts of Iris (and future capabilities) can read the current scene.
-## Requirements
 ### Requirement: Toggleable excalidraw drawing panel in Glass HUD
 
 The app SHALL render an excalidraw-based drawing surface, available **only in Glass HUD mode**, controlled by a visibility toggle in the bottom-right orb control cluster. The surface SHALL be **hidden by default**, and when hidden the HUD's click-through behavior SHALL be unchanged. In deck mode the drawing surface SHALL NOT be present.
@@ -30,15 +28,6 @@ The drawing surface and the second-brain galaxy are **mutually-exclusive HUD lay
 - **WHEN** the drawing surface is active and the user activates the second-brain galaxy view
 - **THEN** the drawing surface is deactivated (its scene persisted) and the galaxy becomes the single active HUD layer
 
-### Requirement: Keyboard input reaches the canvas in the overlay
-
-When the drawing panel activates, the HUD overlay window SHALL take keyboard focus so excalidraw receives keyboard events (text tool, Delete, and tool shortcuts), despite the window being transparent, frameless, and always-on-top.
-
-#### Scenario: Typing and shortcuts edit the canvas
-
-- **WHEN** the drawing panel is active and the user selects the text tool and types, or presses Delete / a tool shortcut
-- **THEN** the keystrokes edit the canvas (text is entered, selection deleted, tool switched)
-
 ### Requirement: Scene persists across toggles, modes, and restart
 
 The drawing scene SHALL be serialized with excalidraw's official serializer and persisted so its content survives hiding/showing the panel, switching between HUD and deck, and restarting the app. Reactivating the panel SHALL restore the last scene via excalidraw's official restore path rather than starting blank.
@@ -66,25 +55,6 @@ Pending unsaved changes SHALL be flushed when the panel unmounts, when the docum
 
 - **WHEN** the user exits HUD, quits, or reloads while the panel is active with recent unsaved strokes
 - **THEN** the pending scene is flushed and is present when the panel is next opened
-
-### Requirement: Local file open, save, and image export
-
-Beyond the single auto-persisted working board, the drawing panel SHALL let the user open a local `.excalidraw` file into the canvas, save the canvas out to a named local file, and export the canvas as an image (PNG/SVG) — the same open/save/export affordances the excalidraw web app provides. These SHALL work while Iris runs from `file://` (offline, packaged). If the browser File System Access path is unavailable in that context, the app SHALL fall back to a native file dialog so open/save/export still function.
-
-#### Scenario: Open a local drawing file
-
-- **WHEN** the user opens a local `.excalidraw` file via the panel
-- **THEN** its contents load into the canvas, replacing the current scene, and the loaded scene is auto-persisted like any other edit
-
-#### Scenario: Save the canvas to a named local file
-
-- **WHEN** the user saves the canvas to a local file
-- **THEN** a `.excalidraw` file is written to the chosen location
-
-#### Scenario: Export the canvas as an image
-
-- **WHEN** the user exports the canvas as PNG or SVG
-- **THEN** an image file of the canvas is produced
 
 ### Requirement: Main caches the scene and serves it over an IPC seam
 
@@ -118,6 +88,8 @@ Persisting the cache to disk SHALL use an asynchronous atomic write, MAY be debo
 
 - **WHEN** a write leaves the scene larger than the persistence guard allows
 - **THEN** the writer is told the scene was not persisted
+
+## ADDED Requirements
 
 ### Requirement: The drawing surface is a fullscreen HUD layer
 
@@ -178,3 +150,8 @@ The drawing surface SHALL therefore present a **visible close control** within i
 - **WHEN** the canvas fails to load or throws while rendering
 - **THEN** the layer force-closes and click-through is restored
 
+## REMOVED Requirements
+
+### Requirement: Drawing panel is pointer-interactive with latched interactivity
+
+**Reason**: Replaced by "The drawing surface is a fullscreen HUD layer". The requirement was written for a bounded 84vw x 84vh panel and promised two things that cannot both hold on a display-sized window: that glass outside the panel stays click-through, and that the window stays interactive for the panel's whole lifetime. The surface is fullscreen now, so there is no "outside the panel" left to keep click-through, and the scenario "Glass stays click-through when hidden" — true only of the bounded panel while open — has no meaning here. What replaces it states the cost plainly and pairs it with a required way out.

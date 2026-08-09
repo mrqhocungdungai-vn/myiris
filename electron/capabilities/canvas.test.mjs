@@ -1,12 +1,22 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-vi.mock("../canvas-store.mjs", () => ({
-  createCanvasStore: vi.fn(() => ({
-    getScene: vi.fn(() => ({ elements: [] })),
-    setScene: vi.fn(),
-    flush: vi.fn(() => Promise.resolve()),
-  })),
-}));
+vi.mock("../canvas-store.mjs", async () => {
+  // reconcileSceneElements is pure and covered in canvas-store.test.mjs — the
+  // capability's job is to decide *when* to reconcile, so the real function
+  // stays wired here and only the store instance is faked.
+  const actual = await vi.importActual("../canvas-store.mjs");
+  return {
+    ...actual,
+    createCanvasStore: vi.fn(() => ({
+      getScene: vi.fn(() => ({ elements: [] })),
+      getRevision: vi.fn(() => 0),
+      getSceneWithRevision: vi.fn(() => ({ scene: { elements: [] }, revision: 0 })),
+      changedIdsSince: vi.fn(() => []),
+      setScene: vi.fn(() => ({ revision: 1, persisted: true, reason: null })),
+      flush: vi.fn(() => Promise.resolve({ persisted: true, reason: null })),
+    })),
+  };
+});
 
 vi.mock("../canvas-mcp.mjs", () => ({
   createCanvasMcp: vi.fn(() => ({
@@ -109,7 +119,7 @@ describe("canvas capability: ipcHandlers", () => {
     expect(byChannel).toEqual({
       "canvas:activate": "on",
       "canvas:image-result": "on",
-      "canvas:scene": "on",
+      "canvas:scene": "handle",
       "canvas:get-scene": "handle",
       "canvas:native-open-file": "handle",
       "canvas:native-save-file": "handle",
@@ -117,23 +127,68 @@ describe("canvas capability: ipcHandlers", () => {
     });
   });
 
-  it("canvas:scene writes an object payload to the store but ignores a non-object one", () => {
+  it("canvas:scene writes a wrapped payload to the store and acks the revision", () => {
+    const cap = make();
+    const storeInstance = createCanvasStore.mock.results[0].value;
+    const sceneHandler = cap.ipcHandlers.find((h) => h.channel === "canvas:scene").fn;
+    const ack = sceneHandler(null, { scene: { elements: [] }, baseRevision: 0 });
+    expect(storeInstance.setScene).toHaveBeenCalledWith({ elements: [] });
+    expect(ack).toEqual({ revision: 1, persisted: true, reason: null });
+  });
+
+  it("canvas:scene still accepts a bare scene, and refuses a non-object", () => {
     const cap = make();
     const storeInstance = createCanvasStore.mock.results[0].value;
     const sceneHandler = cap.ipcHandlers.find((h) => h.channel === "canvas:scene").fn;
     sceneHandler(null, { elements: [] });
     expect(storeInstance.setScene).toHaveBeenCalledWith({ elements: [] });
     storeInstance.setScene.mockClear();
-    sceneHandler(null, "not-an-object");
+    expect(sceneHandler(null, "not-an-object")).toEqual({ revision: 0, persisted: false, reason: "invalid-payload" });
     expect(storeInstance.setScene).not.toHaveBeenCalled();
   });
 
-  it("canvas:get-scene reads through to the store", () => {
+  it("canvas:scene reconciles a stale push instead of replacing the cache", () => {
     const cap = make();
     const storeInstance = createCanvasStore.mock.results[0].value;
+    storeInstance.getRevision.mockReturnValue(7);
+    storeInstance.getScene.mockReturnValue({ elements: [{ id: "user" }, { id: "claude" }], files: {} });
+    storeInstance.changedIdsSince.mockReturnValue(["claude"]);
+
+    const sceneHandler = cap.ipcHandlers.find((h) => h.channel === "canvas:scene").fn;
+    sceneHandler(null, { scene: { elements: [{ id: "user" }], files: {} }, baseRevision: 6 });
+
+    const written = storeInstance.setScene.mock.calls[0][0];
+    expect(written.elements.map((e) => e.id)).toEqual(["user", "claude"]);
+  });
+
+  it("canvas:scene reports an unpersisted (oversized) push rather than acking success", () => {
+    const emitEvent = vi.fn();
+    const cap = make({ emitEvent });
+    const storeInstance = createCanvasStore.mock.results[0].value;
+    storeInstance.setScene.mockReturnValue({ revision: 3, persisted: false, reason: "oversized" });
+
+    const ack = cap.ipcHandlers.find((h) => h.channel === "canvas:scene").fn(null, {
+      scene: { elements: [] },
+      baseRevision: 0,
+    });
+
+    expect(ack).toEqual({ revision: 3, persisted: false, reason: "oversized" });
+    expect(emitEvent).toHaveBeenCalledWith(expect.objectContaining({ level: "warn" }));
+  });
+
+  it("canvas:get-scene reads through to the store and stamps the revision on the scene", () => {
+    const cap = make();
+    const storeInstance = createCanvasStore.mock.results[0].value;
+    storeInstance.getSceneWithRevision.mockReturnValue({ scene: { elements: [] }, revision: 4 });
     const getSceneHandler = cap.ipcHandlers.find((h) => h.channel === "canvas:get-scene").fn;
-    expect(getSceneHandler()).toEqual({ elements: [] });
-    expect(storeInstance.getScene).toHaveBeenCalled();
+    expect(getSceneHandler()).toEqual({ elements: [], irisRevision: 4 });
+  });
+
+  it("canvas:get-scene returns null before anything has ever been cached", () => {
+    const cap = make();
+    const storeInstance = createCanvasStore.mock.results[0].value;
+    storeInstance.getSceneWithRevision.mockReturnValue({ scene: null, revision: 0 });
+    expect(cap.ipcHandlers.find((h) => h.channel === "canvas:get-scene").fn()).toBeNull();
   });
 
   it("canvas:image-result is a safe no-op for an id with no pending resolver", () => {

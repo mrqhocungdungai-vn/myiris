@@ -234,7 +234,18 @@ type CanvasScene = {
   elements: unknown[];
   appState: Record<string, unknown>;
   files: Record<string, unknown>;
+  // The cache's monotonic revision, stamped onto the served scene by main
+  // (the-canvas-stops-fighting-back). It rides INSIDE the scene object rather
+  // than beside it so `canvas:get-scene` keeps its shape and excalidraw's
+  // `restore()` keeps receiving the object it already understood; the renderer
+  // reads it and strips it before restoring.
+  irisRevision?: number;
 };
+
+// What the renderer pushes over `canvas:scene`: the scene plus the revision it
+// was derived from, so main can tell a fresh write from one that raced a write
+// it has already accepted (null = the renderer has not seen a revision yet).
+type CanvasScenePush = { scene: CanvasScene; baseRevision: number | null };
 
 type NativeFileResult = { canceled: true } | { canceled: false; filePath: string };
 
@@ -329,7 +340,18 @@ type SecondBrainToggleFocusResult = { ok: false } | ({ ok: true } & SecondBrainF
 // element set (updateScene replaces the whole array — see DrawingCanvas.tsx).
 type CanvasApplyPayload = {
   elements: unknown[];
+  // The cache revision this apply produced, and the ids Claude actually
+  // added/changed/deleted. `changedIds` is what makes an apply a MERGE rather
+  // than a whole-scene replace: every other element on the live canvas is the
+  // user's and is left exactly as it is. Both optional so a renderer built
+  // against the older payload still applies.
+  revision?: number;
+  changedIds?: string[];
 };
+
+// The reply to a `canvas:scene` push: the revision the cache now holds, and
+// whether it reached disk (the size guard may drop it).
+type CanvasSceneAck = { revision: number; persisted: boolean };
 
 type CanvasImageRequestPayload = {
   id: string;
@@ -388,7 +410,11 @@ type IrisApi = {
   toggleHud: () => Promise<{ mode: UiMode }>;
   setHudInteractive: (on: boolean) => void;
   activateDrawingCanvas: () => void;
-  saveCanvasScene: (scene: CanvasScene) => void;
+  // Fire-and-forget today (`ipcRenderer.send`), so the return is `undefined`.
+  // Typed as optionally-a-promise because the main-side seam acknowledges a
+  // push with the revision it produced; the renderer consumes the ack when one
+  // is there and carries on when it is not.
+  saveCanvasScene: (push: CanvasScenePush) => Promise<CanvasSceneAck> | undefined;
   getCanvasScene: () => Promise<CanvasScene | null>;
   nativeOpenCanvasFile: () => Promise<{ canceled: true } | { canceled: false; content: string }>;
   nativeSaveCanvasFile: (content: string, suggestedName?: string) => Promise<NativeFileResult>;

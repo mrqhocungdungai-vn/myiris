@@ -604,7 +604,13 @@ export default function HudShell({
         ) : null}
       </div>
 
-      {drawingActive ? <DrawingCanvas /> : null}
+      {/* onForceClose is the panel's escape hatch, not a second toggle: its
+          error boundary calls it when the canvas crashes, so a dead panel
+          cannot keep owning its region of the screen (the-canvas-stops-
+          fighting-back 3.4, mirroring VaultGalaxy's onForceClose below).
+          `onToggleDrawing` is safe here because it is only ever reached with
+          the panel open, where toggling means closing. */}
+      {drawingActive ? <DrawingCanvas onForceClose={onToggleDrawing} /> : null}
       {secondBrainActive ? (
         <VaultGalaxy
           focus={secondBrainFocus}

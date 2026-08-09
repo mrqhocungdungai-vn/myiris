@@ -144,6 +144,36 @@ describe("window: createWindow", () => {
     expect(stopVaultGraphWatch).toHaveBeenCalled();
   });
 
+  // The mouse is held by the RENDERER's decision while a fullscreen HUD layer
+  // is open, on a display-sized window above the menu bar. A renderer that
+  // stops responding never sends the release, and the user cannot click
+  // anything on their machine.
+  it("gives the mouse back when the renderer stops responding in HUD mode", () => {
+    const win = make();
+    win.createWindow();
+    win.enterHud();
+    vi.advanceTimersByTime(170);
+    lastFakeWindow.setIgnoreMouseEvents.mockClear();
+
+    const unresponsive = lastFakeWindow.webContents.on.mock.calls.find(([event]) => event === "unresponsive")[1];
+    unresponsive();
+
+    expect(lastFakeWindow.setIgnoreMouseEvents).toHaveBeenCalledWith(true, { forward: true });
+  });
+
+  it("does not touch mouse capture when the renderer stops responding in deck mode", () => {
+    // In deck mode the window is an ordinary one and click-through was never
+    // taken, so there is nothing to release and nothing to second-guess.
+    const win = make();
+    win.createWindow();
+    lastFakeWindow.setIgnoreMouseEvents.mockClear();
+
+    const unresponsive = lastFakeWindow.webContents.on.mock.calls.find(([event]) => event === "unresponsive")[1];
+    unresponsive();
+
+    expect(lastFakeWindow.setIgnoreMouseEvents).not.toHaveBeenCalled();
+  });
+
   it("resets to deck mode when the window closes", () => {
     const win = make();
     win.createWindow();
