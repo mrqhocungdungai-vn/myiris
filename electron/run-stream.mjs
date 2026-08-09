@@ -15,6 +15,7 @@ import { nameSession } from "./run-sessions.mjs";
 import { poQuestionTimeoutMs } from "./po-session.mjs";
 import { RUN_STATUS, toUpdateEvent } from "./run-queue.mjs";
 import { createTrailingThrottle } from "./coalesce.mjs";
+import { fenceUntrustedText } from "./untrusted-text.mjs";
 import { isVerb, resolveVerb } from "./verbs.mjs";
 import { activityEmitIntervalMs } from "./user-config.mjs";
 
@@ -266,8 +267,44 @@ export function createRunStream({
   const ACT_NARRATION_INTERVAL_MS = 3000;
   const narrationThrottles = new Map(); // run_id -> throttle
 
+  // Whether the user is watching this run happen, and so should hear it as it
+  // goes rather than only when it lands.
+  function speaksWhileWorking(run) {
+    return isVerb(run.verb) && resolveVerb(run.verb).speakWhileWorking;
+  }
+
+  // The assistant's own prose, spoken as each block of it lands rather than
+  // held until the run ends (the-canvas-becomes-a-conversation 4.2).
+  //
+  // Deliberately NOT `includePartialMessages`. That option was declined in the
+  // SDK audit because "the voice layer speaks once at run end" — a premise this
+  // change removed, so the reason had to be re-examined rather than inherited.
+  // It stays declined for a different one: an assistant message already
+  // arrives complete, several times within a turn, which delivers the same
+  // property — hearing the answer form — at the granularity of a thought
+  // instead of a token. Token-level partials would add sentence-boundary
+  // buffering, and the option can only be set when a session is created, which
+  // for a SHARED session means whichever verb opened it decides for the other.
+  //
+  // Not throttled, unlike act narration: an act is a status line and the most
+  // recent one supersedes the rest, whereas dropping a block of prose drops
+  // something the user was told and will not hear again.
+  function speakWorkingText(run, text) {
+    if (!speaksWhileWorking(run)) return;
+    const clean = String(text || "").trim();
+    if (!clean) return;
+    notifyIris([
+      "SYSTEM_EVENT_WORK_IN_PROGRESS",
+      "instructions_to_iris:",
+      "- Read the text below out as it stands, in your own voice, then stop.",
+      "- This is them thinking out loud mid-turn, not a final answer: do not wrap it up, do not add a conclusion, and do not ask whether they want you to continue.",
+      "- If you are mid-sentence, finish it first.",
+      fenceUntrustedText(clean, "what the canvas worker just said, to be read aloud"),
+    ]);
+  }
+
   function narrateAct(run, toolName, detail) {
-    if (!isVerb(run.verb) || !resolveVerb(run.verb).narrateActs) return;
+    if (!speaksWhileWorking(run)) return;
     let throttle = narrationThrottles.get(run.run_id);
     if (!throttle) {
       throttle = createTrailingThrottle((act) => {
@@ -321,6 +358,7 @@ export function createRunStream({
     parseClaudeStreamMessage(event, {
       onSessionId: (sessionId) => rememberClaudeSessionId(run, sessionId),
       onActivity: (text) => pushActivity(run, text),
+      onAssistantText: (text) => speakWorkingText(run, text),
       onToolStart: (toolId, toolName, detail) => pushToolStart(run, toolId, toolName, detail),
       onToolEnd: (toolId, isError) => pushToolEnd(run, toolId, isError),
       onResult: (result) => {

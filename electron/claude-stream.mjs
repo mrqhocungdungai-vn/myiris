@@ -28,6 +28,7 @@ export function summarizeToolInput(input = {}) {
  * @param {{
  *   onSessionId?: (sessionId: string) => void,
  *   onActivity?: (text: string) => void,
+ *   onAssistantText?: (text: string) => void,
  *   onToolStart?: (toolId: string, toolName: string, detail: string) => void,
  *   onToolEnd?: (toolId: string, isError: boolean) => void,
  *   onResult?: (message: any) => void,
@@ -35,7 +36,7 @@ export function summarizeToolInput(input = {}) {
  */
 export function parseClaudeStreamMessage(
   message,
-  { onSessionId, onActivity, onToolStart, onToolEnd, onResult } = {},
+  { onSessionId, onActivity, onAssistantText, onToolStart, onToolEnd, onResult } = {},
 ) {
   if (message.type === "system" && message.subtype === "init" && message.session_id) {
     onSessionId?.(message.session_id);
@@ -43,7 +44,16 @@ export function parseClaudeStreamMessage(
   }
   if (message.type === "assistant") {
     for (const part of message.message?.content || []) {
-      if (part.type === "text" && part.text?.trim()) onActivity?.(part.text);
+      if (part.type === "text" && part.text?.trim()) {
+        onActivity?.(part.text);
+        // Separately from the activity log, because the two have different
+        // consumers and only one of them is a person listening: `onActivity`
+        // also carries `[Tool] input` lines, and reading those aloud would be
+        // narrating machinery. This is the assistant's own prose, complete as
+        // of this message — which is what makes it speakable without waiting
+        // for the run to end.
+        onAssistantText?.(part.text);
+      }
       if (part.type === "tool_use") {
         onActivity?.(`[${part.name}] ${summarizeToolInput(part.input)}`);
         onToolStart?.(part.id, part.name, summarizeToolInput(part.input));

@@ -40,10 +40,10 @@
 ## 4. The user hears the work as it happens
 
 - [x] 4.1 `run-stream.mjs` — acts reach the voice during the turn, gated by a registry field (`narrateActs`) so only work the user is WATCHING is narrated. Throttled at 3s, slower than the deck's updates: the deck is glanced at, speech is listened to, and a voice reporting every tool call talks over the work it describes. A pending narration is dropped when the turn ends rather than spoken after the result
-- [ ] 4.2 Enable `includePartialMessages` for resident canvas turns only; speak sentence-completed partials. Add the option to `electron/sdk-options.test.mjs` (it asserts each run shape's complete option key set — a field added without it is silently dropped)
+- [x] 4.2 Done WITHOUT `includePartialMessages`, so no SDK option was added and `sdk-options.test.mjs` needs no entry. An `assistant` message already arrives complete several times within a turn, which delivers the same property at the granularity of a thought rather than a token; the option is also settable only at session creation, which for a SHARED session means whichever verb opened it decides for the other. `docs/REFERENCE.md`'s audit row is rewritten, because its stated reason ("the voice layer speaks once at run end") is the premise this change removed
 - [x] 4.3 Relay verbatim — generalized out of `work_on_note`'s hardcoded verb-name check into a registry field (`spokenResult`), so the announcement path can no longer disagree with the verb about how its own result is spoken
-- [ ] 4.4 Degrade to acts-only when speech falls behind; drop stale narration rather than queueing it
-- [~] 4.5 PARTIAL — 4 tests for acts (`run-stream.test.mjs`): spoken during the turn, silent for unwatched work, coalesced during a burst to the most recent act, dropped when the turn ends. Partial-text tests wait on 4.2
+- [x] 4.4 Acts coalesce on a trailing throttle, so a burst is reported by its most recent act and the stale ones are dropped rather than queued. Prose is deliberately NOT throttled: an act is a status line the next one supersedes, whereas dropping a block of prose drops something the user was told and will not hear again
+- [x] 4.5 Tests (8 in `run-stream.test.mjs`): acts spoken during the turn, silent for unwatched work, coalesced to the most recent act during a burst, dropped when the turn ends; prose spoken per block as it arrives, tool lines never read aloud, silent for unwatched work, and the worker's words fenced rather than passed as instructions
 
 ## 4bis. Iris's own skill for being the conduit
 
