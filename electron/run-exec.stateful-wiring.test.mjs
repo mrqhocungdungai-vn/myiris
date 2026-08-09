@@ -176,3 +176,59 @@ describe("run-exec: warming a conversation before the first sentence", () => {
     });
   });
 });
+
+// The objective's second requirement, checked where it actually lands: not
+// "does buildRunPrompt order the blocks correctly" (that is unit-tested in
+// run-context) but "does the turn Claude is handed contain the user's own
+// words, ahead of the voice layer's reading of them". Composition is where
+// that promise has broken twice before.
+describe("run-exec: what a resident turn is told the user said", () => {
+  beforeEach(() => {
+    delivered.calls = [];
+    poSession.getPoSessionState.mockReturnValue(null);
+  });
+
+  it("puts the user's verbatim words ahead of the brief", async () => {
+    const exec = makeExec({
+      recentUtterances: () => [
+        { text: "no wait, not the blue one", at: 1 },
+        { text: "the box on the left, move it under the arrow", at: 2 },
+      ],
+    });
+    const run = makeRun("shape_on_canvas");
+    run.task = "Move the blue box.";
+
+    await exec.startStatefulRun(run, resolveVerb("shape_on_canvas"));
+    await vi.waitFor(() => expect(delivered.calls).toHaveLength(1));
+
+    const { task } = delivered.calls[0];
+    const wordsAt = task.indexOf("the box on the left");
+    const briefAt = task.indexOf("Move the blue box.");
+    expect(wordsAt).toBeGreaterThanOrEqual(0);
+    expect(wordsAt).toBeLessThan(briefAt);
+    expect(task).toMatch(/This is your instruction/);
+  });
+
+  it("still carries the verb's own clause, since the session is shared", async () => {
+    // A session opened by the voice verb has that verb's clause baked into its
+    // system prompt, so each turn has to say which kind of turn it is.
+    const exec = makeExec({ recentUtterances: () => [{ text: "draw it", at: 1 }] });
+
+    await exec.startStatefulRun(makeRun("shape_on_canvas"), resolveVerb("shape_on_canvas"));
+    await vi.waitFor(() => expect(delivered.calls).toHaveLength(1));
+
+    expect(delivered.calls[0].task).toContain("Work on the drawing canvas with the user.");
+  });
+
+  it("falls back to the brief alone when nothing was heard", async () => {
+    const exec = makeExec({ recentUtterances: () => [] });
+    const run = makeRun("shape_on_canvas");
+    run.task = "Add a box.";
+
+    await exec.startStatefulRun(run, resolveVerb("shape_on_canvas"));
+    await vi.waitFor(() => expect(delivered.calls).toHaveLength(1));
+
+    expect(delivered.calls[0].task).toContain("Add a box.");
+    expect(delivered.calls[0].task).not.toMatch(/This is your instruction/);
+  });
+});
