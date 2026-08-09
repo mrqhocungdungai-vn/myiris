@@ -471,8 +471,10 @@ describe("run-stream: speaking while the user watches", () => {
     }
   });
 
-  it("does not talk over its own work during a burst", () => {
-    // A voice reporting every tool call talks over the work it is narrating.
+  it("speaks the first act at once, and does not talk over itself after that", () => {
+    // Two rules in one: the opening act is the one that most needs to be
+    // immediate ("she has started drawing"), and a voice reporting every
+    // subsequent tool call talks over the work it is narrating.
     vi.useFakeTimers();
     try {
       const notifyIris = vi.fn();
@@ -480,21 +482,25 @@ describe("run-stream: speaking while the user watches", () => {
       const run = canvasRun();
 
       stream.pushToolStart(run, "t1", "add_elements", "a box");
+      expect(notifyIris).toHaveBeenCalledTimes(1);
+      expect(notifyIris.mock.calls[0][0].join("\n")).toContain("a box");
+
       stream.pushToolStart(run, "t2", "add_elements", "another box");
       stream.pushToolStart(run, "t3", "update_elements", "an arrow");
       vi.advanceTimersByTime(5000);
 
-      expect(notifyIris).toHaveBeenCalledTimes(1);
-      // The trailing edge: the most recent act, not the stalest one.
-      expect(notifyIris.mock.calls[0][0].join("\n")).toContain("an arrow");
+      expect(notifyIris).toHaveBeenCalledTimes(2);
+      // The trailing edge for the rest: the most recent act, not the stalest.
+      expect(notifyIris.mock.calls[1][0].join("\n")).toContain("an arrow");
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("drops a pending narration when the turn ends", () => {
-    // Otherwise it is spoken after the result it was describing — an aside
-    // about work already reported.
+  it("still says something when the turn is shorter than the interval", () => {
+    // The regression a purely trailing throttle caused: finalize cancels the
+    // pending narration, so a turn that finished inside the window narrated
+    // nothing at all — and short turns are most of a brainstorm.
     vi.useFakeTimers();
     try {
       const notifyIris = vi.fn();
@@ -502,6 +508,28 @@ describe("run-stream: speaking while the user watches", () => {
       const run = canvasRun();
 
       stream.pushToolStart(run, "t1", "add_elements", "a box");
+      stream.cancelActivityThrottle(run);
+      vi.advanceTimersByTime(5000);
+
+      expect(notifyIris).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("drops a QUEUED narration when the turn ends", () => {
+    // A narration still waiting when the turn ends would be spoken after the
+    // result it was describing — an aside about work already reported. The
+    // first act is already out by then and is not recalled.
+    vi.useFakeTimers();
+    try {
+      const notifyIris = vi.fn();
+      const stream = make({ notifyIris });
+      const run = canvasRun();
+
+      stream.pushToolStart(run, "t1", "add_elements", "a box");
+      stream.pushToolStart(run, "t2", "update_elements", "an arrow");
+      notifyIris.mockClear();
       stream.cancelActivityThrottle(run);
       vi.advanceTimersByTime(5000);
 

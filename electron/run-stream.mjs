@@ -311,27 +311,38 @@ export function createRunStream({
     );
   }
 
+  function speakAct(act) {
+    notifyIris(
+      [
+        "SYSTEM_EVENT_WORK_IN_PROGRESS",
+        `tool: ${act.tool}`,
+        ...(act.detail ? [`detail: ${act.detail}`] : []),
+        "instructions_to_iris:",
+        "- Say in a few words what is happening right now, as an aside, then stop.",
+        "- Report only this act. Do not guess what comes next, do not summarize the work so far, and do not describe the canvas — you cannot see it.",
+        "- If you are mid-sentence, finish it first. This is an aside, not an interruption.",
+      ],
+      // "what is happening right now" stops being true the moment it is
+      // held. See speakWorkingText.
+      { bufferIfOffline: false },
+    );
+  }
+
   function narrateAct(run, toolName, detail) {
     if (!speaksWhileWorking(run)) return;
     let throttle = narrationThrottles.get(run.run_id);
     if (!throttle) {
-      throttle = createTrailingThrottle((act) => {
-        notifyIris(
-          [
-            "SYSTEM_EVENT_WORK_IN_PROGRESS",
-            `tool: ${act.tool}`,
-            ...(act.detail ? [`detail: ${act.detail}`] : []),
-            "instructions_to_iris:",
-            "- Say in a few words what is happening right now, as an aside, then stop.",
-            "- Report only this act. Do not guess what comes next, do not summarize the work so far, and do not describe the canvas — you cannot see it.",
-            "- If you are mid-sentence, finish it first. This is an aside, not an interruption.",
-          ],
-          // "what is happening right now" stops being true the moment it is
-          // held. See speakWorkingText.
-          { bufferIfOffline: false },
-        );
-      }, ACT_NARRATION_INTERVAL_MS);
+      // The FIRST act of a turn is spoken at once, and only the ones after it
+      // are throttled. A purely trailing throttle got this backwards in the
+      // one case that matters most: it held the opening act for the full
+      // interval, so "she has started drawing" arrived three seconds after she
+      // had — and a turn shorter than the interval said nothing at all,
+      // because finalize cancels the pending narration. Short turns are most
+      // of a brainstorm.
+      throttle = createTrailingThrottle(speakAct, ACT_NARRATION_INTERVAL_MS);
       narrationThrottles.set(run.run_id, throttle);
+      speakAct({ tool: toolName, detail });
+      return;
     }
     throttle.schedule({ tool: toolName, detail });
   }

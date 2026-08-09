@@ -34,6 +34,11 @@ Speech in this mode SHALL relay Iris's own words rather than a re-summarization 
 - **WHEN** Iris adds elements to the canvas during a turn
 - **THEN** the user hears what she is adding while she adds it, rather than a summary afterwards
 
+#### Scenario: A short turn is narrated too
+
+- **WHEN** a turn begins and ends faster than the interval that paces the narration
+- **THEN** the user still hears what was being done, rather than silence
+
 #### Scenario: The answer is spoken as it forms
 
 - **WHEN** Iris composes an answer during a canvas turn
