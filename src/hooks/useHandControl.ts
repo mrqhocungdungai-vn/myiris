@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { FilesetResolver, GestureRecognizer } from "@mediapipe/tasks-vision";
-import { semanticEquals, smoothPoint } from "../lib/hand";
+import { handIdentity, semanticEquals, smoothPoint } from "../lib/hand";
 import { resolveVendoredAssetUrl } from "../lib/asset-url";
 
 export type HandPoint = { x: number; y: number };
@@ -251,6 +251,11 @@ export function useHandControl(enabled: boolean, deviceId: string = SYSTEM_DEFAU
         const result = recognizer.recognizeForVideo(video, now);
         const landmarks = result.landmarks ?? [];
         const gestures = result.gestures ?? [];
+        // Which physical hand this is. Every per-hand memory — the point EMA,
+        // the wrist EMA, the 3-frame gesture stabilizer — is keyed by it, so
+        // an identity that changes for any reason other than the hand changing
+        // makes one hand inherit another's past.
+        const handedness = result.handedness ?? [];
 
         if (landmarks.length > 0) {
           const detected = landmarks.slice(0, 2).map((hand, index) => {
@@ -273,7 +278,12 @@ export function useHandControl(enabled: boolean, deviceId: string = SYSTEM_DEFAU
               y: remapToScreen(wrist.y, INPUT_RANGE.yMin, INPUT_RANGE.yMax, window.innerHeight),
             };
             const pinchDistance = Math.hypot(indexTip.x - thumbTip.x, indexTip.y - thumbTip.y);
+            // MediaPipe's own per-hand label, which does not change when the
+            // number of hands does. Prefixed so it can never collide with the
+            // positional fallback used when the model gives no label.
+            const label = handedness[index]?.[0]?.categoryName;
             return {
+              handLabel: label ? `hand:${label}` : null,
               rawGesture,
               score,
               point,
@@ -284,8 +294,33 @@ export function useHandControl(enabled: boolean, deviceId: string = SYSTEM_DEFAU
           });
 
           const byX = [...detected].sort((a, b) => a.point.x - b.point.x);
+          // Drop the memory of hands that are not in frame. Stable identities
+          // fix the renaming, but not a hand that leaves, moves, and returns
+          // under the same true name — its stored point would be wherever it
+          // was seconds ago, and the EMA would drag the camera there. A hand
+          // that reappears is treated exactly like one that appears.
+          const liveIds = new Set(
+            detected.map((hand) => handIdentity(hand.handLabel, hand === byX[0])),
+          );
+          for (const memory of [smoothById, smoothWristById, stableGestureById, candidateGestureById, candidateFramesById]) {
+            for (const key of [...memory.keys()]) if (!liveIds.has(key)) memory.delete(key);
+          }
           const hands: TrackedHand[] = detected.map((hand) => {
-            const id = detected.length === 1 ? "single" : hand === byX[0] ? "left" : "right";
+            // Keyed on HANDEDNESS, not on how many hands are in frame.
+            //
+            // It used to be `"single"` for one hand and `"left"`/`"right"` for
+            // two. So raising a second hand renamed the first one, and every
+            // memory keyed to it was looked up under the new name — where a
+            // PREVIOUS two-hand session's values were still sitting, since
+            // nothing pruned them. The point jumped to wherever that hand had
+            // been the last time two were up, and the gesture stabilizer
+            // returned that session's pose until three frames corrected it.
+            //
+            // That transition is intrinsic to reeling in: you must aim with
+            // ONE open palm to lock a note, then add the second hand. It is
+            // only incidental to the two-palm zoom, which is usually raised
+            // from nothing — which is why that one was reported as fine.
+            const id = handIdentity(hand.handLabel, hand === byX[0]);
             const gesture = stabilizeGesture(id, hand.rawGesture);
             const smoothed = smoothPoint(smoothById.get(id) ?? null, hand.point, SMOOTHING_ALPHA);
             smoothById.set(id, smoothed);

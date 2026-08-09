@@ -39,3 +39,23 @@ export function semanticEquals(a: HandState, b: HandState): boolean {
     a.hands.every((hand, index) => sameHand(hand, b.hands[index]))
   );
 }
+
+/**
+ * The key every per-hand memory is stored under — the point EMA, the wrist
+ * EMA, and the 3-frame gesture stabilizer.
+ *
+ * It MUST NOT depend on how many hands are in frame. The previous scheme named
+ * a lone hand `"single"` and a pair `"left"`/`"right"`, so raising a second
+ * hand renamed the first, and its memories were then read under a name a
+ * PREVIOUS two-hand session had already written to. The hand's smoothed point
+ * jumped to wherever it had been then, and the stabilizer replayed that
+ * session's pose until three frames corrected it.
+ *
+ * `label` is the model's own handedness, which follows the physical hand.
+ * The positional fallback is for frames that carry no label, and is still
+ * count-independent: with one hand in frame it is leftmost, and so `x0`, which
+ * is what it will also be when a hand joins on its right.
+ */
+export function handIdentity(label: string | null | undefined, isLeftmost: boolean): string {
+  return label ? `hand:${label}` : isLeftmost ? "x0" : "x1";
+}

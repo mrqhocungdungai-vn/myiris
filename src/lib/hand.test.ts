@@ -2,7 +2,7 @@
 // changed — semanticEquals is the pure gate extracted from useHandControl.ts,
 // see openspec/changes/bound-hand-and-orb-render-cost/design.md D1.
 import { describe, it, expect } from "vitest";
-import { semanticEquals, smoothPoint } from "./hand";
+import { handIdentity, semanticEquals, smoothPoint } from "./hand";
 import type { HandState } from "../hooks/useHandControl";
 
 function makeState(overrides: Partial<HandState> = {}): HandState {
@@ -100,5 +100,38 @@ describe("smoothPoint", () => {
     // raw target, not an ease-in from wherever it was last seen.
     const next = smoothPoint(null, { x: 500, y: 500 }, 0.5);
     expect(next).toEqual({ x: 500, y: 500 });
+  });
+});
+
+// The bug this replaced: identity changed when the NUMBER of hands changed, so
+// raising a second hand renamed the first and handed it a previous session's
+// smoothing history and stabilized pose. That transition is intrinsic to
+// reeling in — you aim with one open palm to lock a note, then add the second
+// hand — and only incidental to the two-palm zoom, which is raised from
+// nothing. Which is exactly the asymmetry that was reported.
+describe("handIdentity", () => {
+  it("does not rename a hand when another joins", () => {
+    const alone = handIdentity("Right", true);
+    const withCompanionOnItsLeft = handIdentity("Right", false);
+
+    expect(alone).toBe(withCompanionOnItsLeft);
+  });
+
+  it("keeps two hands apart", () => {
+    expect(handIdentity("Left", true)).not.toBe(handIdentity("Right", false));
+  });
+
+  it("stays count-independent without a label", () => {
+    // A lone hand is leftmost, so it is `x0` — the same name it keeps when a
+    // hand joins on its right. The old scheme called it `"single"` and then
+    // renamed it.
+    expect(handIdentity(null, true)).toBe("x0");
+    expect(handIdentity(undefined, true)).toBe("x0");
+    expect(handIdentity(null, false)).toBe("x1");
+    expect(handIdentity(null, true)).not.toBe(handIdentity(null, false));
+  });
+
+  it("never collides a label with a positional fallback", () => {
+    expect(handIdentity("x0", true)).not.toBe(handIdentity(null, true));
   });
 });
