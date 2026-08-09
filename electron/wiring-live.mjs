@@ -30,6 +30,7 @@ import { systemAudioEnabled, systemAudioGain } from "./user-config.mjs";
  *   userDisplayName: () => string,
  *   executeClaudeTool: (call: any) => any,
  *   submitClaudeTask: (args: any) => any,
+ *   interruptResidentTurns?: () => string[],
  *   geminiTools: { buildLiveTools: () => any[] },
  *   geminiPrompts: { buildSystemInstructionText: () => string },
  *   secondBrainCapability: {
@@ -64,6 +65,7 @@ export function createLiveWiring({
   userDisplayName,
   executeClaudeTool,
   submitClaudeTask,
+  interruptResidentTurns = () => [],
   geminiTools,
   geminiPrompts,
   secondBrainCapability,
@@ -97,6 +99,11 @@ export function createLiveWiring({
     // decides; nothing here needs to know the mode.
     onInputTranscription: (text) => secondBrainCapability.appendMeetingFragment(text),
     onUtteranceBoundary: () => secondBrainCapability.closeMeetingUtterance(),
+    // Barge-in reaches the run layer here (the-canvas-becomes-a-conversation
+    // D6). Scoped to resident turns by run-queue itself: interrupting Iris
+    // mid-sentence says something about the conversation the user is in, not
+    // about an unrelated job that happens to be running.
+    onUserInterrupted: () => interruptResidentTurns(),
   });
   const { handleLiveMessage, sendAudioChunk, sendCommand } = liveMessages;
 

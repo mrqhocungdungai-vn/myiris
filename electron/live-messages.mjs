@@ -51,6 +51,7 @@ export function utteranceBoundaryDelayMs({
  *   submitClaudeTask: (params: any) => any,
  *   isListenOnlyEngaged: () => boolean,
  *   onInputTranscription?: (text: string) => void,
+ *   onUserInterrupted?: () => void,
  *   onUtteranceBoundary?: () => void,
  * }} deps
  */
@@ -72,6 +73,10 @@ export function createLiveMessages({
   // between two flushes. Those bounds are a stated privacy property and are not
   // raisable, so meeting retention gets its own source instead.
   onInputTranscription = () => {},
+  // The user talking over Iris. Defaulted to a no-op so a caller that has no
+  // conversation to interrupt (a test, a build without the pipeline) needs to
+  // say nothing.
+  onUserInterrupted = () => {},
   onUtteranceBoundary = () => {},
 }) {
   // The open utterance's own clock, used ONLY while the mode is engaged (see
@@ -239,6 +244,12 @@ export function createLiveMessages({
       // A real turn boundary still wins: it flushes, and it cancels whatever
       // the idle timer had pending so the same utterance is not closed twice.
       closeUtterance();
+      // The user spoke over Iris. In a live drawing conversation that is not
+      // impatience with the app, it is the ordinary way a person redirects
+      // another mid-sentence — so the turn that is talking ends, and the
+      // conversation it belongs to does not. Everything already drawn stays:
+      // it reached the canvas through MCP as it happened, not at the end.
+      onUserInterrupted();
       emitToRenderer("live:interrupt", {});
       emitEvent({ type: "audio_state", state: "listening" });
       return;

@@ -439,3 +439,39 @@ describe("live-messages: a tool call flushes the words that caused it", () => {
     expect(flushTranscripts).toHaveBeenCalled();
   });
 });
+
+// the-canvas-becomes-a-conversation D6: the user speaking over Iris is how a
+// person redirects another mid-sentence, not a complaint about the app.
+describe("live-messages: barge-in ends the turn, not the conversation", () => {
+  it("reports the interruption to the run layer", () => {
+    const onUserInterrupted = vi.fn();
+    const messages = make({ onUserInterrupted });
+
+    messages.handleLiveMessage({ serverContent: { interrupted: true } });
+
+    expect(onUserInterrupted).toHaveBeenCalledTimes(1);
+  });
+
+  it("still flushes the record and returns the app to listening", () => {
+    const flushTranscripts = vi.fn();
+    const emitEvent = vi.fn();
+    const emitToRenderer = vi.fn();
+    const messages = make({ flushTranscripts, emitEvent, emitToRenderer, onUserInterrupted: vi.fn() });
+
+    messages.handleLiveMessage({ serverContent: { interrupted: true } });
+
+    expect(flushTranscripts).toHaveBeenCalled();
+    expect(emitToRenderer).toHaveBeenCalledWith("live:interrupt", {});
+    expect(emitEvent).toHaveBeenCalledWith({ type: "audio_state", state: "listening" });
+  });
+
+  it("does not report an interruption on an ordinary turn boundary", () => {
+    // turnComplete is Iris finishing normally; nothing is being interrupted.
+    const onUserInterrupted = vi.fn();
+    const messages = make({ onUserInterrupted });
+
+    messages.handleLiveMessage({ serverContent: { turnComplete: true } });
+
+    expect(onUserInterrupted).not.toHaveBeenCalled();
+  });
+});

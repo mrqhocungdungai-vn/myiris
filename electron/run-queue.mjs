@@ -388,7 +388,15 @@ export function createRunQueue({
   function stop(runId) {
     const run = runs.get(runId);
     if (!run) return null;
-    if (run.status === RUN_STATUS.QUEUED) {
+    // "Waiting" is decided by lane membership, not by status alone. A run that
+    // has been started still reads QUEUED until its transport says otherwise,
+    // and `startRun` reaches an `await` before it does — so there is a real
+    // window where a started run looks queued. Taking the waiting branch for
+    // one of those would mark it cancelled without ending its transport and
+    // without releasing what it holds, stranding the slot or the conversation
+    // lane permanently. Barge-in lands inside exactly that window.
+    const holdsSomething = active === runId || residentActive.get(run.workstream_id) === runId;
+    if (run.status === RUN_STATUS.QUEUED && !holdsSomething) {
       const index = queue.indexOf(runId);
       if (index !== -1) queue.splice(index, 1);
       // A turn waiting behind its own conversation is queued in the resident
@@ -486,5 +494,45 @@ export function createRunQueue({
     for (const runId of residentActive.values()) armResidentTimer(runId);
   }
 
-  return { submit, submitResident, finalize, stop, status, get, serialize, list, heartbeat, suspend, resume };
+  /**
+   * The user spoke over Iris. End whichever turn is currently talking, and
+   * leave the conversation open.
+   *
+   * Scoped to the resident lane on purpose. Barge-in is a signal about the
+   * conversation the user is having, not a general stop button: an unrelated
+   * job holding the slot has nothing to do with them interrupting, and
+   * cancelling it because they started a new sentence would be a destructive
+   * reading of an ordinary act.
+   *
+   * Routed through `stop`, so the turn ends the way every other cancellation
+   * does — `cancelRun` for a resident turn interrupts it rather than aborting
+   * it, which is what keeps the context window and everything already drawn.
+   *
+   * @returns {string[]} the run ids that were interrupted
+   */
+  function interruptResidentTurns() {
+    const interrupted = [];
+    for (const runId of residentActive.values()) {
+      const run = runs.get(runId);
+      if (!run || run.finalized) continue;
+      interrupted.push(runId);
+    }
+    for (const runId of interrupted) stop(runId);
+    return interrupted;
+  }
+
+  return {
+    submit,
+    submitResident,
+    finalize,
+    stop,
+    interruptResidentTurns,
+    status,
+    get,
+    serialize,
+    list,
+    heartbeat,
+    suspend,
+    resume,
+  };
 }

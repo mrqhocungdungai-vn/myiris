@@ -758,3 +758,84 @@ describe("run-queue: the resident lane", () => {
     expect(invoked).toEqual(["turn-1"]);
   });
 });
+
+describe("run-queue: barge-in", () => {
+  it("interrupts the resident turn that is talking", () => {
+    const cancelRun = vi.fn();
+    const queue = createRunQueue({ startRun: () => {}, cancelRun, emit: vi.fn() });
+    queue.submitResident(makeRun({ run_id: "talking-turn" }));
+
+    expect(queue.interruptResidentTurns()).toEqual(["talking-turn"]);
+    expect(cancelRun).toHaveBeenCalled();
+    expect(queue.status("talking-turn")).toBe(RUN_STATUS.CANCELLED);
+  });
+
+  it("leaves an unrelated job alone", () => {
+    // Barge-in says something about the conversation the user is in. A job
+    // holding the slot has nothing to do with them starting a new sentence,
+    // and stopping it would be a destructive reading of an ordinary act.
+    const queue = createRunQueue({ startRun: () => {}, cancelRun: vi.fn(), emit: vi.fn() });
+    queue.submit(makeRun({ run_id: "long-job" }));
+
+    expect(queue.interruptResidentTurns()).toEqual([]);
+    expect(queue.status("long-job")).not.toBe(RUN_STATUS.CANCELLED);
+  });
+
+  it("is a no-op when nobody is talking", () => {
+    const queue = createRunQueue({ startRun: () => {}, cancelRun: vi.fn(), emit: vi.fn() });
+    expect(queue.interruptResidentTurns()).toEqual([]);
+  });
+});
+
+// Found by the barge-in tests: a started run still reads QUEUED until its
+// transport flips it, and startRun reaches an await before that happens. Stop
+// called inside that window used to take the "waiting" branch — marking the
+// run cancelled without ending its transport and without releasing what it
+// held, stranding the slot or the conversation lane for good.
+describe("run-queue: stopping a run that has started but not yet reported RUNNING", () => {
+  it("ends the transport of a resident turn in that window", () => {
+    const cancelRun = vi.fn();
+    const queue = createRunQueue({ startRun: () => {}, cancelRun, emit: vi.fn() });
+    queue.submitResident(makeRun({ run_id: "just-started", status: RUN_STATUS.QUEUED }));
+
+    queue.stop("just-started");
+
+    expect(cancelRun).toHaveBeenCalled();
+  });
+
+  it("frees the conversation lane afterwards", () => {
+    const { startRun, invoked } = makeStartRunFake();
+    const queue = createRunQueue({ startRun, cancelRun: vi.fn(), emit: vi.fn() });
+    queue.submitResident(makeRun({ run_id: "turn-1", workstream_id: "ws-A" }));
+    queue.submitResident(makeRun({ run_id: "turn-2", workstream_id: "ws-A" }));
+
+    queue.stop("turn-1");
+    queue.finalize("turn-1", RUN_STATUS.CANCELLED, "stopped");
+
+    expect(invoked).toEqual(["turn-1", "turn-2"]);
+  });
+
+  it("ends the transport of a slot run in that window too", () => {
+    const cancelRun = vi.fn();
+    const queue = createRunQueue({ startRun: () => {}, cancelRun, emit: vi.fn() });
+    queue.submit(makeRun({ run_id: "slot-run", status: RUN_STATUS.QUEUED }));
+
+    queue.stop("slot-run");
+
+    expect(cancelRun).toHaveBeenCalled();
+  });
+
+  it("still treats a genuinely waiting run as waiting", () => {
+    // The distinction has to keep working in the ordinary case, or cancelling
+    // a queued job would start it.
+    const { startRun, invoked } = makeStartRunFake();
+    const queue = createRunQueue({ startRun, cancelRun: vi.fn(), emit: vi.fn() });
+    queue.submit(makeRun({ run_id: "running-job" }));
+    queue.submit(makeRun({ run_id: "waiting-job" }));
+
+    expect(queue.stop("waiting-job")).toBe(RUN_STATUS.CANCELLED);
+    queue.finalize("running-job", RUN_STATUS.COMPLETED, "done");
+
+    expect(invoked).toEqual(["running-job"]);
+  });
+});

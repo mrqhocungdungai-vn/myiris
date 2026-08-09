@@ -47,9 +47,9 @@
 
 ## 5. Barge-in ends the turn, not the conversation
 
-- [ ] 5.1 Wire Gemini Live's interruption signal to `interrupt()` (never `abort`, which takes the conversation down — `po-session.mjs:434-456`)
-- [ ] 5.2 The interrupted turn settles as interrupted: not completed, not failed
-- [ ] 5.3 Test: barge-in mid-turn leaves the conversation live and what was drawn intact
+- [x] 5.1 `live-messages.mjs` → `onUserInterrupted` → `run-queue.interruptResidentTurns()` → `stop` → `cancelPoTurn`, which already prefers `interrupt()` and keeps the context window. Scoped to the resident lane: an unrelated job has nothing to do with the user starting a sentence
+- [x] 5.2 Settles as `cancelled`, which is neither completed nor failed and which the announcement path already declines to read aloud — the user interrupted precisely because they did not want to hear it
+- [x] 5.3 Tests (3 in `live-messages.test.mjs`, 3 in `run-queue.test.mjs`), plus 4 more for a bug they exposed: a started run still reads QUEUED until its transport flips it, so `stop` inside that window took the "waiting" branch and stranded the slot or the lane. Barge-in lands in exactly that window
 
 ## 6. The user's words lead
 
