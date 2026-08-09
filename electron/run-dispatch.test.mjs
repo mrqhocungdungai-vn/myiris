@@ -6,6 +6,11 @@ function makeRunQueue(overrides = {}) {
     suspend: vi.fn(),
     resume: vi.fn(),
     submit: /** @type {any} */ (vi.fn(() => ({ status: "started" }))),
+    // The resident lane: a turn into a conversation that is already open does
+    // not contend for the execution slot (the-canvas-becomes-a-conversation
+    // D2). Stubbed distinctly from `submit` so a test can assert WHICH lane a
+    // dispatch chose — the two are not interchangeable.
+    submitResident: /** @type {any} */ (vi.fn(() => ({ status: "started" }))),
     serialize: vi.fn(() => ({ status: "started" })),
     stop: vi.fn(() => "cancelled"),
     heartbeat: vi.fn(),
@@ -122,7 +127,13 @@ describe("run-dispatch: the review gate's three settings", () => {
       // The canvas verb steers the SAME conversation, so it is not re-reviewed
       // either — the session is what was approved, not the verb.
       expect(dispatchModule.submitVerb("shape_on_canvas", { said: "draw it", reading: "diagram" }).status).toBe("started");
-      expect(runQueue.submit).toHaveBeenCalledTimes(2);
+      // Both went through WITHOUT parking, which is what this test is about.
+      // They travel the resident lane rather than the slot now (D2): steering
+      // an open conversation is not the start of a job. The count is asserted
+      // on the lane they actually take, so this stays a statement about the
+      // review gate rather than an accidental one about queueing.
+      expect(runQueue.submitResident).toHaveBeenCalledTimes(2);
+      expect(runQueue.submit).not.toHaveBeenCalled();
     });
 
     it("reviews again once the conversation has ended and a new one opens", () => {
@@ -334,5 +345,57 @@ describe("run-dispatch: executeClaudeTool", () => {
     });
     expect(result.message).toContain("shape_on_canvas");
     expect(result.message).toContain("share one live conversation");
+  });
+});
+
+// the-canvas-becomes-a-conversation D2: the slot exists to stop two JOBS
+// running at once. The next turn of an open conversation is not a job — it
+// shares a context window and cannot start a second worker — so making it wait
+// behind unrelated work buys nothing and costs the conversation.
+describe("run-dispatch: which lane a turn takes", () => {
+  it("sends a turn into an open conversation down the resident lane", () => {
+    const runQueue = makeRunQueue();
+    const dispatch = make({ runQueue, hasLiveStatefulSession: () => true, getPromptReviewMode: () => "never" });
+
+    dispatch.submitVerb("shape_on_canvas", { said: "make it blue", reading: "recolour" });
+
+    expect(runQueue.submitResident).toHaveBeenCalledTimes(1);
+    expect(runQueue.submit).not.toHaveBeenCalled();
+  });
+
+  it("sends the turn that OPENS a conversation through the slot", () => {
+    // Opening one is the start of a job: it spawns a process and resumes a
+    // context. That is exactly what the slot is for.
+    const runQueue = makeRunQueue();
+    const dispatch = make({ runQueue, hasLiveStatefulSession: () => false, getPromptReviewMode: () => "never" });
+
+    dispatch.submitVerb("shape_on_canvas", { said: "let's draw", reading: "start" });
+
+    expect(runQueue.submit).toHaveBeenCalledTimes(1);
+    expect(runQueue.submitResident).not.toHaveBeenCalled();
+  });
+
+  it("keeps every stateless verb in the slot regardless of any open conversation", () => {
+    const runQueue = makeRunQueue();
+    const dispatch = make({ runQueue, hasLiveStatefulSession: () => true, getPromptReviewMode: () => "never" });
+
+    dispatch.submitVerb("investigate", { question: "what changed?" });
+
+    expect(runQueue.submit).toHaveBeenCalledTimes(1);
+    expect(runQueue.submitResident).not.toHaveBeenCalled();
+  });
+
+  it("says the turn is behind its own conversation, not behind Claude", () => {
+    // The queued message the user hears has to name what they are actually
+    // waiting for; "Claude is still finishing the current task" would be false
+    // here — Claude may be finishing something else entirely.
+    const runQueue = makeRunQueue({ submitResident: vi.fn(() => ({ status: "queued", position: 1 })) });
+    const dispatch = make({ runQueue, hasLiveStatefulSession: () => true, getPromptReviewMode: () => "never" });
+
+    const result = dispatch.submitVerb("shape_on_canvas", { said: "and one more box", reading: "add" });
+
+    expect(result.status).toBe("queued");
+    expect(result.message).toMatch(/same conversation/i);
+    expect(result.message).not.toMatch(/still finishing the current task/i);
   });
 });

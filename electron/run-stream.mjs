@@ -223,7 +223,7 @@ export function createRunStream({
     run.activity.push(clean.length > 220 ? `${clean.slice(0, 220)}…` : clean);
     if (run.activity.length > 80) run.activity.splice(0, run.activity.length - 80);
     activityThrottle.schedule(run);
-    runQueue.heartbeat();
+    runQueue.heartbeat(run.run_id);
   }
 
   // Live per-task step timeline: additive fields on the SAME claude_task_update
@@ -237,7 +237,7 @@ export function createRunStream({
     emitEvent(
       toUpdateEvent(run, RUN_STATUS.RUNNING, { phase: "tool_start", tool: toolName, tool_id: toolId, detail }),
     );
-    runQueue.heartbeat();
+    runQueue.heartbeat(run.run_id);
   }
 
   function pushToolEnd(run, toolId, isError) {
@@ -252,7 +252,7 @@ export function createRunStream({
     // onActivity — resetting on activity alone would stretch the measured idle
     // window to tool duration *plus* the model's next-message thinking time,
     // instead of the actual silence (design.md D6 / tasks.md 4.1).
-    runQueue.heartbeat();
+    runQueue.heartbeat(run.run_id);
   }
 
   // Takes an already-parsed SDK message. Both transports now deliver objects —

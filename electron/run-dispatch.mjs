@@ -189,8 +189,27 @@ export function createRunDispatch({
       ? `Working in project folder ${projectFolder}.`
       : "No project folder is selected — working in the default workspace.";
 
-    const outcome = runQueue.submit(run);
+    // Which lane. A turn into a conversation that is ALREADY open is the next
+    // thing said in it, not the start of a new job, so it does not contend for
+    // the single execution slot — see run-queue's `submitResident`. The same
+    // predicate the review gate uses decides it, and it is the honest one:
+    // `hasLiveStatefulSession` reports a conversation the user has taken part
+    // in, not merely a warmed transport, so the FIRST turn of a conversation
+    // still goes through the slot and the review gate exactly as before.
+    const verb = resolveVerb(run.verb);
+    const resident = verb.stateful && hasLiveStatefulSession(run.workstream_id);
+    const outcome = resident ? runQueue.submitResident(run) : runQueue.submit(run);
     if (outcome.status === "queued") {
+      if (resident) {
+        return {
+          status: "queued",
+          run_id: run.run_id,
+          verb: run.verb,
+          position: outcome.position,
+          project_folder: projectFolder,
+          message: `Still working on the previous thing they said. This one is next in the same conversation. ${whereNote}`,
+        };
+      }
       return {
         status: "queued",
         run_id: run.run_id,

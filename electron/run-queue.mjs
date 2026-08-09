@@ -148,6 +148,30 @@ export function createRunQueue({
   let idleTimer = null;
   let idleSuspended = false;
 
+  // The resident lane (the-canvas-becomes-a-conversation D2). A turn pushed
+  // into a conversation that is ALREADY open is not the start of a job: it
+  // shares a context window with the previous turn and cannot begin a second
+  // worker. The slot exists to stop two jobs running at once, so making a
+  // five-second "make that box blue" wait behind a twenty-minute `execute`
+  // buys nothing and costs the conversation — in a brainstorm, an answer that
+  // arrives after the thought has passed is not slow, it is wrong.
+  //
+  // Serialized PER CONVERSATION rather than globally: `deliverPoTurn`
+  // overwrites the in-flight turn's handle unconditionally, so two turns of
+  // one conversation must never be in flight together.
+  //
+  // These timers ARE per run, which the slot's watchdog deliberately is not
+  // (see `idleTimer` above). The hazard that ruled a per-run timer out there
+  // was a QUEUED run arming a timer it might never start under; a resident
+  // turn either starts immediately or waits without a timer, so it cannot
+  // reach that state. Without a timer of its own a resident turn would run
+  // with no watchdog at all, since the slot's is keyed to `active` — trading
+  // "your turn waits too long" for "your turn wedges forever unnoticed".
+  const residentTimers = new Map(); // run_id -> timer
+  const residentActive = new Map(); // workstream_id -> run_id
+  const residentQueues = new Map(); // workstream_id -> run_id[]
+  let residentSuspended = false;
+
   function armIdleTimer() {
     if (idleTimer) clearTimeout(idleTimer);
     idleTimer = null;
@@ -161,6 +185,56 @@ export function createRunQueue({
   function clearIdleTimer() {
     if (idleTimer) clearTimeout(idleTimer);
     idleTimer = null;
+  }
+
+  function armResidentTimer(runId) {
+    clearResidentTimer(runId);
+    if (residentSuspended) return;
+    const timer = setTimeout(() => onResidentExpiry(runId), idleTimeoutMs);
+    timer.unref?.();
+    residentTimers.set(runId, timer);
+  }
+
+  function clearResidentTimer(runId) {
+    const timer = residentTimers.get(runId);
+    if (timer) clearTimeout(timer);
+    residentTimers.delete(runId);
+  }
+
+  function onResidentExpiry(runId) {
+    residentTimers.delete(runId);
+    const run = runs.get(runId);
+    if (!run || run.finalized) return;
+    const minutes = Math.round(idleTimeoutMs / 60000);
+    cancelAndFinalize(
+      run,
+      RUN_STATUS.ERROR,
+      `No progress for ${minutes} minutes (IRIS_RUN_IDLE_TIMEOUT_MS) — the turn was terminated automatically. The conversation is still open.`,
+      0,
+    );
+  }
+
+  // A resident turn ending releases its conversation, never the slot — it
+  // never held one. The next turn of the SAME conversation starts here.
+  function releaseResident(run) {
+    const workstreamId = run.workstream_id;
+    clearResidentTimer(run.run_id);
+    if (residentActive.get(workstreamId) !== run.run_id) return;
+    residentActive.delete(workstreamId);
+    const waiting = residentQueues.get(workstreamId);
+    while (waiting && waiting.length > 0) {
+      const next = runs.get(waiting.shift());
+      if (next && next.status === RUN_STATUS.QUEUED) {
+        beginResident(next);
+        return;
+      }
+    }
+  }
+
+  function beginResident(run) {
+    residentActive.set(run.workstream_id, run.run_id);
+    armResidentTimer(run.run_id);
+    startRun(run);
   }
 
   // Ends the run's transport, then finalizes. Both transports are now Agent SDK
@@ -248,6 +322,37 @@ export function createRunQueue({
     return { status: "started", run_id: run.run_id };
   }
 
+  /**
+   * Submit a turn into a conversation that is already open. It does not take
+   * the execution slot and does not wait for it; it waits only for the
+   * previous turn OF ITS OWN CONVERSATION.
+   *
+   * Safe against the slot by construction rather than by convention:
+   * `finalize` already guards every slot side-effect behind
+   * `active === runId`, so a run that never holds the slot cannot disarm the
+   * active run's watchdog or steal its place in the queue.
+   */
+  function submitResident(run) {
+    runs.set(run.run_id, run);
+    if (residentActive.has(run.workstream_id)) {
+      const waiting = residentQueues.get(run.workstream_id) ?? [];
+      waiting.push(run.run_id);
+      residentQueues.set(run.workstream_id, waiting);
+      run.status = RUN_STATUS.QUEUED;
+      emit(toUpdateEvent(run, RUN_STATUS.QUEUED, { position: waiting.length }));
+      return { status: "queued", position: waiting.length };
+    }
+    emit(toUpdateEvent(run, EMIT_STATUS.STARTING, {}));
+    beginResident(run);
+    // Same reason as submit()'s: startRun is synchronous and a start-time gate
+    // can finalize the run before this line, so the status is read back rather
+    // than assumed.
+    if (run.finalized) {
+      return { status: run.status, output: run.output, run_id: run.run_id };
+    }
+    return { status: "started", run_id: run.run_id };
+  }
+
   function finalize(runId, status, output) {
     if (!TERMINAL_STATUSES.includes(status)) {
       throw new Error(`run-queue: finalize() called with non-terminal status "${status}"`);
@@ -274,6 +379,10 @@ export function createRunQueue({
       idleSuspended = false;
       dequeueNext();
     }
+    // The resident lane's equivalent, on the same terms: scoped to the run's
+    // own conversation, so finalizing one conversation's turn can never start
+    // another's.
+    releaseResident(run);
   }
 
   function stop(runId) {
@@ -282,6 +391,12 @@ export function createRunQueue({
     if (run.status === RUN_STATUS.QUEUED) {
       const index = queue.indexOf(runId);
       if (index !== -1) queue.splice(index, 1);
+      // A turn waiting behind its own conversation is queued in the resident
+      // lane instead, and has to be lifted out of there or it would start
+      // after being cancelled.
+      const waiting = residentQueues.get(run.workstream_id);
+      const residentIndex = waiting ? waiting.indexOf(runId) : -1;
+      if (residentIndex !== -1) waiting.splice(residentIndex, 1);
       run.status = RUN_STATUS.CANCELLED;
       run.finished_at = Date.now() / 1000;
       run.finalized = true;
@@ -329,7 +444,16 @@ export function createRunQueue({
   // Resets the idle bound for the active run's progress signal (design D1).
   // A no-op if no run is active, so a stray/late signal can't arm a timer
   // that outlives its run.
-  function heartbeat() {
+  function heartbeat(runId = null) {
+    // A resident turn's progress resets its OWN watchdog, not the slot's: the
+    // two runs are unrelated, and letting a chatty conversation keep an
+    // unrelated long job alive forever is exactly the coupling the separate
+    // lane exists to remove.
+    if (runId && residentTimers.has(runId)) {
+      armResidentTimer(runId);
+      return;
+    }
+    if (runId && residentActive.get(runs.get(runId)?.workstream_id) === runId) return;
     if (!active) return;
     armIdleTimer();
   }
@@ -345,12 +469,22 @@ export function createRunQueue({
   function suspend() {
     idleSuspended = true;
     clearIdleTimer();
+    // Applies to the resident lane too. There is one pending question in the
+    // app at a time, and whichever lane's turn is waiting on it is blocked on
+    // a human for exactly the reason the watchdog must not count — the same
+    // rule, not a second policy.
+    residentSuspended = true;
+    // Deleting the entry currently being visited is well-defined for a Map,
+    // so this iterates the live keys rather than a copy of them.
+    for (const runId of residentTimers.keys()) clearResidentTimer(runId);
   }
 
   function resume() {
     idleSuspended = false;
     if (active) armIdleTimer();
+    residentSuspended = false;
+    for (const runId of residentActive.values()) armResidentTimer(runId);
   }
 
-  return { submit, finalize, stop, status, get, serialize, list, heartbeat, suspend, resume };
+  return { submit, submitResident, finalize, stop, status, get, serialize, list, heartbeat, suspend, resume };
 }

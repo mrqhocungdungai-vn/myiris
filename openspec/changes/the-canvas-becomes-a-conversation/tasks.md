@@ -26,10 +26,10 @@
 > unconditionally, so per-conversation serialization has to be enforced before two
 > utterances can ever be in flight.
 
-- [ ] 3.1 `electron/run-queue.mjs` — the slot governs jobs (stateless run, plain task, conversation OPEN); a turn into a live conversation is not a job
-- [ ] 3.2 Serialize turns per conversation (the message channel already does this — make it the stated rule, and make a second utterance mid-turn wait for the conversation rather than the system)
+- [x] 3.1 `electron/run-queue.mjs` — `submitResident`: registers and starts without taking the slot. Safe against the slot by construction, not convention — `finalize` already guards every slot side-effect behind `active === runId`
+- [x] 3.2 Serialized per conversation (`residentActive` / `residentQueues`). Not merely stated: `deliverPoTurn` overwrites the in-flight turn's handle unconditionally, so two turns of one conversation genuinely must not overlap
 - [ ] 3.3 Confine a resident turn to its declared tools/skills, and refuse a turn that would begin repository work (D2's hazard — this is the mitigation the spec promises)
-- [ ] 3.4 Tests: a canvas turn answered while a long run holds the slot; two utterances serialize within the conversation; a turn attempting out-of-scope work is refused and reported
+- [x] 3.4 Tests (8 in `run-queue.test.mjs`, 4 in `run-dispatch.test.mjs`): answered beside a long job; the slot is not released by a resident finalize; same-conversation turns serialize; different conversations do not; the watchdog fires and says the conversation survives; a turn resets only its own watchdog; a chatty turn cannot keep a silent job alive; a queued turn cancelled while waiting does not start later. 3.3 (tool confinement) still open
 
 ## 4. The user hears the work as it happens
 
@@ -59,7 +59,7 @@
 
 ## 7. Ceilings: the turn ends, the conversation continues
 
-- [ ] 7.1 `electron/run-budget.mjs` + `po-session.mjs` — a per-turn ceiling distinct from the conversation's lifetime; a runaway guard, not a cost control (Q1)
+- [x] 7.1 Delivered as the resident lane's per-turn watchdog rather than as a second budget: the runaway guard a turn needed was a silence bound of its own, and `run-budget`'s ceilings are cumulative over a `query()` lifetime by design. Bundled with task 3 because a lane without it trades one failure for a worse one
 - [ ] 7.2 Per-turn exhaustion finalizes that turn `limited` and leaves residency intact
 - [ ] 7.3 A conversation does not end for being long. Where residency does end for one of its real reasons, that is said out loud and not silently re-opened under the same name by the next utterance (today: `po-session.mjs:178` ends the stream and the next turn opens a new session)
 - [ ] 7.4 Tests for the per-turn ceiling and for the announcement

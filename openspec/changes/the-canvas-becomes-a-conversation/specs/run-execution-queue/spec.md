@@ -7,6 +7,8 @@ A **turn delivered into a conversation that is already resident** is not a job a
 
 A resident turn running beside a job SHALL be bounded by what it is allowed to do rather than by when it may run: it SHALL be confined to the tools and skills its conversation declares, and a turn that would begin repository work SHALL be refused rather than run alongside an unrelated job.
 
+A resident turn SHALL carry its own silence watchdog. The slot's watchdog belongs to the run holding the slot, so a turn outside the slot would otherwise run unwatched — which would trade waiting too long for wedging unnoticed. A turn's own progress SHALL reset only its own watchdog, and SHALL NOT keep an unrelated run alive.
+
 #### Scenario: Submit while idle
 - **WHEN** a task is submitted, no run holds the execution slot, and the run begins running
 - **THEN** the run acquires the slot and starts, and the submitter receives `status: "started"` with the `run_id`
@@ -28,6 +30,16 @@ A resident turn running beside a job SHALL be bounded by what it is allowed to d
 
 - **WHEN** a second utterance arrives while the same conversation is mid-turn
 - **THEN** it is handled after the current turn of that conversation, not concurrently with it
+
+#### Scenario: A wedged conversation turn is stopped, and the conversation survives
+
+- **WHEN** a resident turn makes no progress for the configured idle bound
+- **THEN** that turn is terminated and reported as such, and the conversation remains open
+
+#### Scenario: A talkative conversation does not keep a silent job alive
+
+- **WHEN** a resident turn reports progress while an unrelated run holds the slot in silence
+- **THEN** the silent run still reaches its own idle bound
 
 #### Scenario: A conversation turn cannot start repository work
 

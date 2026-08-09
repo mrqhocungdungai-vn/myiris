@@ -632,3 +632,129 @@ describe("run-queue idle watchdog", () => {
     }
   });
 });
+
+// the-canvas-becomes-a-conversation D2: the slot stops two JOBS running at
+// once. The next turn of an already-open conversation is not a job.
+describe("run-queue: the resident lane", () => {
+  it("starts a resident turn while a long job holds the slot", () => {
+    // The behaviour the whole lane exists for: a five-second "make that box
+    // blue" must not wait behind a twenty-minute execute.
+    const { startRun, invoked } = makeStartRunFake();
+    const queue = createRunQueue({ startRun, emit: vi.fn() });
+    const job = makeRun({ run_id: "long-job" });
+    queue.submit(job);
+
+    const turn = queue.submitResident(makeRun({ run_id: "canvas-turn" }));
+
+    expect(turn.status).toBe("started");
+    expect(invoked).toEqual(["long-job", "canvas-turn"]);
+  });
+
+  it("does not release the slot when a resident turn finishes", () => {
+    // A run that never held the slot must not hand it to the next queued job.
+    const { startRun, invoked } = makeStartRunFake();
+    const queue = createRunQueue({ startRun, emit: vi.fn() });
+    queue.submit(makeRun({ run_id: "long-job" }));
+    queue.submit(makeRun({ run_id: "waiting-job" }));
+    queue.submitResident(makeRun({ run_id: "canvas-turn" }));
+
+    queue.finalize("canvas-turn", RUN_STATUS.COMPLETED, "done");
+
+    expect(invoked).toEqual(["long-job", "canvas-turn"]);
+    expect(queue.status("waiting-job")).toBe(RUN_STATUS.QUEUED);
+  });
+
+  it("serializes two turns of the SAME conversation", () => {
+    // deliverPoTurn overwrites the in-flight turn's handle, so two turns of one
+    // conversation must never be in flight together.
+    const { startRun, invoked } = makeStartRunFake();
+    const queue = createRunQueue({ startRun, emit: vi.fn() });
+    queue.submitResident(makeRun({ run_id: "turn-1", workstream_id: "ws-A" }));
+
+    const second = queue.submitResident(makeRun({ run_id: "turn-2", workstream_id: "ws-A" }));
+
+    expect(second).toEqual({ status: "queued", position: 1 });
+    expect(invoked).toEqual(["turn-1"]);
+
+    queue.finalize("turn-1", RUN_STATUS.COMPLETED, "done");
+    expect(invoked).toEqual(["turn-1", "turn-2"]);
+  });
+
+  it("does not serialize turns of DIFFERENT conversations against each other", () => {
+    const { startRun, invoked } = makeStartRunFake();
+    const queue = createRunQueue({ startRun, emit: vi.fn() });
+
+    queue.submitResident(makeRun({ run_id: "turn-A", workstream_id: "ws-A" }));
+    queue.submitResident(makeRun({ run_id: "turn-B", workstream_id: "ws-B" }));
+
+    expect(invoked).toEqual(["turn-A", "turn-B"]);
+  });
+
+  it("watches a resident turn for silence, and says the conversation survives", () => {
+    // The gap this closes: the slot's watchdog is keyed to the active run, so
+    // a resident turn would otherwise run with no watchdog at all — trading
+    // "your turn waits too long" for "your turn wedges forever unnoticed".
+    vi.useFakeTimers();
+    try {
+      const cancelRun = vi.fn();
+      const queue = createRunQueue({ startRun: () => {}, cancelRun, emit: vi.fn(), idleTimeoutMs: 60_000 });
+      queue.submitResident(makeRun({ run_id: "wedged-turn" }));
+
+      vi.advanceTimersByTime(60_001);
+
+      expect(cancelRun).toHaveBeenCalled();
+      expect(queue.status("wedged-turn")).toBe(RUN_STATUS.ERROR);
+      expect(queue.get("wedged-turn").output).toMatch(/conversation is still open/i);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets a resident turn's own progress reset only its own watchdog", () => {
+    vi.useFakeTimers();
+    try {
+      const queue = createRunQueue({ startRun: () => {}, cancelRun: vi.fn(), emit: vi.fn(), idleTimeoutMs: 60_000 });
+      queue.submitResident(makeRun({ run_id: "chatty-turn" }));
+
+      vi.advanceTimersByTime(40_000);
+      queue.heartbeat("chatty-turn");
+      vi.advanceTimersByTime(40_000);
+
+      expect(queue.status("chatty-turn")).toBe(RUN_STATUS.QUEUED);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not let a resident turn's progress keep an unrelated job alive", () => {
+    // The coupling the separate lane exists to remove: a chatty conversation
+    // must not be able to hold a silent, wedged job open forever.
+    vi.useFakeTimers();
+    try {
+      const queue = createRunQueue({ startRun: () => {}, cancelRun: vi.fn(), emit: vi.fn(), idleTimeoutMs: 60_000 });
+      queue.submit(makeRun({ run_id: "silent-job" }));
+      queue.submitResident(makeRun({ run_id: "chatty-turn", workstream_id: "ws-B" }));
+
+      vi.advanceTimersByTime(40_000);
+      queue.heartbeat("chatty-turn");
+      vi.advanceTimersByTime(40_000);
+
+      expect(queue.status("silent-job")).toBe(RUN_STATUS.ERROR);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops a resident turn queued behind its own conversation", () => {
+    const { startRun, invoked } = makeStartRunFake();
+    const queue = createRunQueue({ startRun, emit: vi.fn() });
+    queue.submitResident(makeRun({ run_id: "turn-1", workstream_id: "ws-A" }));
+    queue.submitResident(makeRun({ run_id: "turn-2", workstream_id: "ws-A" }));
+
+    expect(queue.stop("turn-2")).toBe(RUN_STATUS.CANCELLED);
+    queue.finalize("turn-1", RUN_STATUS.COMPLETED, "done");
+
+    // Cancelled while waiting: it must not start afterwards.
+    expect(invoked).toEqual(["turn-1"]);
+  });
+});
