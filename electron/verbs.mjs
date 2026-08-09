@@ -201,11 +201,23 @@ const VERBS = Object.freeze({
     // conversation rather than a request and a wait.
     narrateActs: true,
     structuredOutput: true,
-    disallowedTools: ASKS_FREELY,
+    // Not ASKS_FREELY, unlike its sibling shaping verb. It still asks freely —
+    // AskUserQuestion is absent from this list — but it does not mutate the
+    // project, and that had to become explicit rather than remain incidental.
+    //
+    // While every run went through one execution slot, a canvas turn could
+    // never overlap with anything, so what it was permitted to do never had to
+    // be examined. The resident lane removed that accident: a drawing
+    // conversation now runs beside an unrelated job, and two writers touching
+    // one working tree is the hazard the slot existed to prevent. A
+    // conversation about a whiteboard has no business editing files or running
+    // commands, so it is confined to reading, asking, and the canvas tools it
+    // declares — enforced by configuration, never promised in a prompt.
+    disallowedTools: ["Write", "Edit", "NotebookEdit", "Bash"],
     params: THIN_PARAMS,
     basePersona: STATEFUL,
     clause:
-      "Work on the drawing canvas with the user. Read the canvas before answering about it, and draw on it rather than describing what you would draw.",
+      "Work on the drawing canvas with the user. Read the canvas before answering about it, and draw on it rather than describing what you would draw. You cannot edit files or run commands from here — if something needs building or written down, say so and let them start that work.",
   },
 
   work_on_note: {

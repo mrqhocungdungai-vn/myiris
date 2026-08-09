@@ -28,7 +28,7 @@
 
 - [x] 3.1 `electron/run-queue.mjs` — `submitResident`: registers and starts without taking the slot. Safe against the slot by construction, not convention — `finalize` already guards every slot side-effect behind `active === runId`
 - [x] 3.2 Serialized per conversation (`residentActive` / `residentQueues`). Not merely stated: `deliverPoTurn` overwrites the in-flight turn's handle unconditionally, so two turns of one conversation genuinely must not overlap
-- [ ] 3.3 Confine a resident turn to its declared tools/skills, and refuse a turn that would begin repository work (D2's hazard — this is the mitigation the spec promises)
+- [x] 3.3 Confined at the registry: `shape_on_canvas` withholds Write/Edit/NotebookEdit/Bash. It withheld NOTHING before — which never mattered while one slot made overlap impossible, and became the lane's hazard the moment it did. AskUserQuestion stays available; the conversation still asks freely
 - [x] 3.4 Tests (8 in `run-queue.test.mjs`, 4 in `run-dispatch.test.mjs`): answered beside a long job; the slot is not released by a resident finalize; same-conversation turns serialize; different conversations do not; the watchdog fires and says the conversation survives; a turn resets only its own watchdog; a chatty turn cannot keep a silent job alive; a queued turn cancelled while waiting does not start later. 3.3 (tool confinement) still open
 
 ## 3bis. Consequences of the lane, found by following it

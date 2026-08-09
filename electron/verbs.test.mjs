@@ -147,13 +147,22 @@ describe("the verb registry", () => {
   // nothing drifts silently and re-introducing a resolver-side verb-name
   // conditional fails here rather than passing unnoticed.
   it("resolves every verb's disallowedTools to exactly this, and only `execute` forks", () => {
+    // Whatever else moves here, the shaping conversation must keep the tool
+    // its whole purpose is: pausing to ask.
+    expect(resolveVerb("shape_on_canvas").disallowedTools).not.toContain("AskUserQuestion");
     const resolvedFor = (changes) =>
       Object.fromEntries(VERB_NAMES.map((name) => [name, resolveVerb(name, changes).disallowedTools]));
 
     // Unchanged from before this change, for every verb but `execute`.
     const UNCHANGED = {
       shape_requirements: [],
-      shape_on_canvas: [],
+      // Confined when the resident lane let a canvas turn run beside an
+      // unrelated job (the-canvas-becomes-a-conversation D2). Two writers in
+      // one working tree is the hazard the single slot used to make impossible
+      // by accident; a conversation about a whiteboard has no business editing
+      // files or running commands. AskUserQuestion is deliberately absent from
+      // the list — it still asks freely.
+      shape_on_canvas: ["Write", "Edit", "NotebookEdit", "Bash"],
       work_on_note: [],
       finish: ["AskUserQuestion"],
       investigate: ["AskUserQuestion", "Write", "Edit", "NotebookEdit"],
