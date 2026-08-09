@@ -30,14 +30,21 @@ The live session's **conversation** SHALL persist until an explicit user-control
 
 Losing residency is therefore NOT a reset, and SHALL NOT be described or implemented as one. A reset discards a conversation; a handoff only stops holding a subprocess open for a conversation nothing is currently talking to. The two are distinguished by what happens to the stored session id: a reset clears it, a handoff leaves it alone.
 
-A conversation SHALL NOT be torn down automatically **as a way of ending it**. It MAY lose residency automatically, on a request for a different conversation — and this SHALL be the only automatic cause. Time passing, unrelated activity, and a stateless run executing in between SHALL NOT end residency.
+A conversation SHALL NOT be torn down automatically **as a way of ending it**. It MAY lose residency automatically, on a request for a different conversation — and this SHALL be the only automatic cause. Time passing, unrelated activity, a stateless run executing in between, and **the closing of a surface the conversation is about** SHALL NOT end residency.
 
 A resident conversation SHALL NEVER be delivered a turn belonging to a different conversation. Reusing whichever session happens to be resident, without checking that it is the conversation being addressed, would run that turn with the wrong context, the wrong model, and the wrong scoped skills, and would record it against the wrong stored conversation. Which conversation a resident session belongs to SHALL be checked before a turn is delivered into it, not assumed from the fact that a session exists.
+
+A conversation MAY be opened **in anticipation of use** — warmed when the surface it serves becomes usable — provided the gates that govern any session opening are satisfied. A warmed conversation is an ordinary resident one in every respect except that no turn has been delivered into it, and that distinction SHALL be observable: a warmed transport SHALL NOT be reported as a conversation the user has taken part in, because the review gate decides whether to ask for consent by that question, and a warm that answered it wrongly would send the user's first sentence into a conversation they were never asked about.
 
 #### Scenario: Session survives across unrelated activity
 
 - **WHEN** other activity occurs between two stateful turns (e.g. a stateless run executes, or time passes)
 - **THEN** the live session remains resident and the next stateful turn continues the same conversation
+
+#### Scenario: Residency survives the surface closing
+
+- **WHEN** the surface a conversation is about is closed and later reopened
+- **THEN** the same conversation continues, with its context intact
 
 #### Scenario: User resets the session
 
@@ -68,6 +75,11 @@ A resident conversation SHALL NEVER be delivered a turn belonging to a different
 
 - **WHEN** a conversation loses residency to another
 - **THEN** nothing reports it as reset, ended, or lost, because its conversation was not
+
+#### Scenario: A warmed conversation is not yet a conversation that has happened
+
+- **WHEN** a conversation is opened in anticipation of use and the user then speaks to it for the first time
+- **THEN** that first turn is reviewed on the same terms as one that opened the conversation itself
 
 ### Requirement: Verbs that continue one conversation share one live session
 
@@ -157,6 +169,7 @@ The stateful Agent SDK session SHALL enable skills explicitly, as a caller-suppl
 
 - **WHEN** a live session is created on a machine with its own Claude Code install
 - **THEN** the session loads no settings from the user scope, and behaves identically on a machine that has never had Claude Code installed
+
 ### Requirement: Stateful turns are voice control prompts
 
 Each stateful turn SHALL be a short control intent from the voice layer, not a written specification — the voice layer steers, the verb does the analysis.
@@ -211,3 +224,4 @@ When an in-flight stateful turn settles because its session ended rather than be
 
 - **WHEN** a stateful turn settles because its stream ended or died without a user-initiated teardown and without producing a result
 - **THEN** the run is finalized as `error`
+
