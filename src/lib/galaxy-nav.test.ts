@@ -466,6 +466,32 @@ describe("driveFor", () => {
     expect(radius).toBeLessThan(900);
   });
 
+  // Why no hysteresis was added for a flickering pose, though the reel-in
+  // needs TWO poses recognized at once and a fist is the harder one.
+  //
+  // The fragility is SYMMETRIC: losing one palm of a spread releases the drive
+  // exactly as losing the fist of a reel-in does. The two-palm zoom was
+  // reported as fine, so a lost classification cannot be what makes only the
+  // reel-in rough — and adding remembered state with a made-up tolerance
+  // window would contradict "a pose that is not recognized drives nothing".
+  //
+  // If a real session shows the drive flickering, that is evidence and this
+  // test is where the decision gets revisited.
+  it("loses either drive the same way when a hand's pose is lost", () => {
+    const lost = makeTrackedHand({ id: "hand:Left" }); // "None"
+    const palm = makeTrackedHand({ id: "hand:Right", openPalm: true });
+
+    const spreadLostOne = { hands: [lost, palm], point: { x: 0, y: 0 }, fist: false, pointing: false };
+    expect(driveFor(spreadLostOne, true)).toBeNull();
+
+    const reelLostFist = { hands: [lost, palm], point: { x: 0, y: 0 }, fist: false, pointing: false };
+    expect(driveFor(reelLostFist, true)).toBeNull();
+
+    // And both come straight back once the pose is read again.
+    const fist = makeTrackedHand({ id: "hand:Left", fist: true });
+    expect(driveFor({ hands: [fist, palm], point: { x: 0, y: 0 }, fist: true, pointing: false }, true)).toBe("zoom");
+  });
+
   it("returns null for a single open palm, an unrecognized gesture, and a resting hand", () => {
     expect(driveFor(makeHand({ openPalm: true, hands: [makeTrackedHand({ openPalm: true })] }), true)).toBeNull();
     expect(driveFor(makeHand(), true)).toBeNull(); // "None" gesture, resting/unrecognized
