@@ -123,7 +123,7 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
       // Deferred through runStream (constructed further down this wiring
       // block) rather than a direct reference — same late-binding reason as
       // startRun/emit above.
-      runStream.cancelActivityThrottle();
+      runStream.cancelActivityThrottle(run);
       // A run that never started (rejected at a gate before dispatch, e.g. a
       // missing agent) has no result worth speaking — the exact rule
       // run-queue.mjs's queued-cancel path already applies ("a queued run

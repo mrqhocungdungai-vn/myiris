@@ -200,21 +200,46 @@ export function createRunStream({
     }
   }
 
-  // Single global slot (see runQueue) ⇒ at most one run's activity
-  // throttle is ever live, so one module-level throttle handle suffices
-  // (design.md D3 of coalesce-activity-updates). Only the renderer emit is
-  // throttled; the buffer push, cap, and heartbeat below stay per-line (D2).
-  const activityThrottle = createTrailingThrottle(
-    (run) => emitEvent(toUpdateEvent(run, RUN_STATUS.RUNNING, { output: run.activity.join("\n") })),
-    activityEmitIntervalMs(),
-  );
+  // One throttle PER RUN. It used to be a single module-level handle, on the
+  // stated grounds that the single execution slot meant at most one run's
+  // activity could ever be live — true when it was written, and no longer
+  // true: a resident conversation turn now runs beside a slot job
+  // (the-canvas-becomes-a-conversation D2).
+  //
+  // A shared trailing throttle keeps only the LATEST scheduled args, so two
+  // interleaved runs would have silently swallowed each other's updates, and
+  // `cancel()` on either one finalizing would have discarded a pending emit
+  // belonging to the other. Only the renderer emit is throttled; the buffer
+  // push, cap, and heartbeat below stay per-line (D2 of
+  // coalesce-activity-updates).
+  const activityThrottles = new Map(); // run_id -> throttle
+
+  function activityThrottleFor(run) {
+    let throttle = activityThrottles.get(run.run_id);
+    if (!throttle) {
+      throttle = createTrailingThrottle(
+        (pending) => emitEvent(toUpdateEvent(pending, RUN_STATUS.RUNNING, { output: pending.activity.join("\n") })),
+        activityEmitIntervalMs(),
+      );
+      activityThrottles.set(run.run_id, throttle);
+    }
+    return throttle;
+  }
 
   // Discard any pending trailing activity emit so it cannot fire after
   // finalize's terminal update (the real result) and overwrite it with the
   // activity log (design.md D3 of coalesce-activity-updates). Called from
-  // main.mjs's runQueue.onFinalized.
-  function cancelActivityThrottle() {
-    activityThrottle.cancel();
+  // main.mjs's runQueue.onFinalized, with the run that finalized — cancelling
+  // every run's would now take an unrelated conversation's pending update with
+  // it.
+  function cancelActivityThrottle(run = null) {
+    if (!run) {
+      for (const throttle of activityThrottles.values()) throttle.cancel();
+      activityThrottles.clear();
+      return;
+    }
+    activityThrottles.get(run.run_id)?.cancel();
+    activityThrottles.delete(run.run_id);
   }
 
   function pushActivity(run, line) {
@@ -222,7 +247,7 @@ export function createRunStream({
     if (!clean) return;
     run.activity.push(clean.length > 220 ? `${clean.slice(0, 220)}…` : clean);
     if (run.activity.length > 80) run.activity.splice(0, run.activity.length - 80);
-    activityThrottle.schedule(run);
+    activityThrottleFor(run).schedule(run);
     runQueue.heartbeat(run.run_id);
   }
 

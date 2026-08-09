@@ -372,3 +372,56 @@ describe("AskUserQuestion survives the relay with its shape intact", () => {
     expect(delivered.answers[single.question]).toBe("npm");
   });
 });
+
+// The resident lane (the-canvas-becomes-a-conversation D2) retired the
+// assumption this throttle was built on: "the single execution slot means at
+// most one run's activity is ever live". Two runs can now interleave, and a
+// shared trailing throttle keeps only the LATEST scheduled args.
+describe("run-stream: activity throttling with two runs in flight", () => {
+  function makeRun(id) {
+    return { run_id: id, workstream_id: `ws-${id}`, task: "t", activity: [], toolStartedAt: new Map() };
+  }
+
+  it("does not let one run's activity swallow another's", async () => {
+    vi.useFakeTimers();
+    try {
+      const emitEvent = vi.fn();
+      const stream = make({ emitEvent });
+      const job = makeRun("job");
+      const turn = makeRun("turn");
+
+      stream.pushActivity(job, "reading the repository");
+      stream.pushActivity(turn, "drawing three boxes");
+      vi.advanceTimersByTime(5000);
+
+      const updates = emitEvent.mock.calls
+        .map(([event]) => event)
+        .filter((event) => event.status === "running" && event.output);
+      expect(updates.map((event) => event.run_id).sort()).toEqual(["job", "turn"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancelling one run's pending emit leaves the other's alone", async () => {
+    vi.useFakeTimers();
+    try {
+      const emitEvent = vi.fn();
+      const stream = make({ emitEvent });
+      const job = makeRun("job");
+      const turn = makeRun("turn");
+
+      stream.pushActivity(job, "still reading");
+      stream.pushActivity(turn, "still drawing");
+      stream.cancelActivityThrottle(job);
+      vi.advanceTimersByTime(5000);
+
+      const updates = emitEvent.mock.calls
+        .map(([event]) => event)
+        .filter((event) => event.status === "running" && event.output);
+      expect(updates.map((event) => event.run_id)).toEqual(["turn"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

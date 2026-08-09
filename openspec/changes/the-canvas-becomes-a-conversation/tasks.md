@@ -31,6 +31,12 @@
 - [ ] 3.3 Confine a resident turn to its declared tools/skills, and refuse a turn that would begin repository work (D2's hazard — this is the mitigation the spec promises)
 - [x] 3.4 Tests (8 in `run-queue.test.mjs`, 4 in `run-dispatch.test.mjs`): answered beside a long job; the slot is not released by a resident finalize; same-conversation turns serialize; different conversations do not; the watchdog fires and says the conversation survives; a turn resets only its own watchdog; a chatty turn cannot keep a silent job alive; a queued turn cancelled while waiting does not start later. 3.3 (tool confinement) still open
 
+## 3bis. Consequences of the lane, found by following it
+
+- [x] 3b.1 `run-stream.mjs` — the activity throttle was a single module-level handle, justified in its own comment by "the single execution slot means at most one run's activity is ever live". The lane retired that premise: a trailing throttle keeps only the LATEST args, so two interleaved runs swallowed each other's updates, and `cancel()` on either finalizing discarded the other's pending emit. Now one throttle per run, cancelled by run
+- [x] 3b.2 `run-queue.mjs` — `stop()` decided "is this waiting?" from status alone, but a started run reads QUEUED until its transport flips it and `startRun` awaits before that. Stopping in that window marked the run cancelled without ending its transport or releasing what it held. Now decided by lane membership
+- [x] 3b.3 Tests for both (2 in `run-stream.test.mjs`, 4 in `run-queue.test.mjs`)
+
 ## 4. The user hears the work as it happens
 
 - [ ] 4.1 `electron/run-stream.mjs` — put acts (tool start/end) on a spoken path for this mode, as short acts rather than tool names
