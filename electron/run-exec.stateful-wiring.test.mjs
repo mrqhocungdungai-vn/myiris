@@ -232,3 +232,30 @@ describe("run-exec: what a resident turn is told the user said", () => {
     expect(delivered.calls[0].task).not.toMatch(/This is your instruction/);
   });
 });
+
+describe("run-exec: the warm is on the record", () => {
+  beforeEach(() => {
+    poSession.getPoSessionState.mockReturnValue(null);
+  });
+
+  it("says a conversation was standing ready before the first turn", async () => {
+    const emitEvent = vi.fn();
+    const exec = makeExec({ emitEvent, activeWorkstream: () => ({ id: "ws1", cwd: "/tmp", agent_sessions: {} }) });
+
+    await exec.warmStatefulConversation("shape_on_canvas");
+
+    const lines = emitEvent.mock.calls.map(([e]) => e).filter((e) => e?.type === "log");
+    expect(lines.map((e) => e.message)).toEqual([expect.stringMatching(/warmed for shape_on_canvas/)]);
+  });
+
+  it("says nothing when there was nothing to warm", async () => {
+    // A warm that could not happen is not a failure worth reporting — the
+    // first spoken turn opens the session exactly as it always did.
+    const emitEvent = vi.fn();
+    const exec = makeExec({ emitEvent, activeWorkstream: () => null });
+
+    await exec.warmStatefulConversation("shape_on_canvas");
+
+    expect(emitEvent.mock.calls.filter(([e]) => e?.type === "log")).toHaveLength(0);
+  });
+});

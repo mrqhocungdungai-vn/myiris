@@ -95,3 +95,9 @@
 - [x] 9.2c Barge-in checked through the REAL message handler (`wiring-live.effects.test.mjs`), since `wiring-live.test.mjs` mocks live-messages and can only prove construction order. Verified by cutting the chain at both ends — `wiring-live`'s hookup and `live-messages`' call — and watching each fail
 - [x] 9.2d "Read the result out in full" checked at the composition root (`wiring.test.mjs`). The announcements mock there had no `announceVerbatimResult` at all, which was itself the finding: no test had ever finalized a verb that takes that path, so the branch between summary and verbatim was never exercised. Verified by removing `spokenResult` from the verb, and separately by cutting the branch in wiring
 - [x] 9.3 The pattern named, so it is not repeated: `wiring-capabilities.test.mjs` mocks both run-exec and the canvas capability, so it can only assert that things were constructed and called. Every one of the three bugs was a call that happened and an effect that did not
+
+## 10. Making the claims checkable without a stopwatch
+
+- [x] 10.1 `run-exec` records when a conversation was warmed and ready before the first turn; `run-dispatch` records which lane a stateful turn took. Both are facts the user cannot see from outside the process, and both are the difference between "it feels slow" having an explanation in the record or not — which is exactly how a warm that warmed nothing went unnoticed for a release
+- [x] 10.2 Deliberately two lines, not a trace: each answers a "why did it do that" question the diagnostic log exists for. A failed warm still says nothing, because it is an optimisation nobody asked for by name and the first spoken turn opens the session as it always did
+- [x] 10.3 Tests for both, including the silences

@@ -210,6 +210,17 @@ export function createRunDispatch({
     // line until it has been.
     const verb = resolveVerb(run.verb);
     const resident = verb.stateful && hasResidentSession(run.workstream_id);
+    // Which lane a turn took is the difference between answering now and
+    // waiting behind unrelated work, and it is invisible from the outside.
+    if (verb.stateful) {
+      emitEvent({
+        type: "log",
+        level: "info",
+        message: resident
+          ? `[dispatch] ${run.verb} delivered into the open conversation — not queued behind other work`
+          : `[dispatch] ${run.verb} opens a conversation — taking the execution slot`,
+      });
+    }
     const outcome = resident ? runQueue.submitResident(run) : runQueue.submit(run);
     if (outcome.status === "queued") {
       if (resident) {

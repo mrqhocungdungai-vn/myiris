@@ -468,3 +468,55 @@ describe("run-dispatch: the review gate and the lane ask different questions", (
     expect(runQueue.submit).toHaveBeenCalledTimes(1);
   });
 });
+
+// Which lane a turn took decides whether it answers now or waits behind
+// unrelated work, and nothing about it is visible from outside the process.
+// The record is how the user checks the claim, and how a future regression is
+// diagnosed rather than argued about.
+describe("run-dispatch: the lane it took is on the record", () => {
+  function laneLines(emitEvent) {
+    return emitEvent.mock.calls
+      .map(([event]) => event)
+      .filter((event) => event?.type === "log" && String(event.message).startsWith("[dispatch]"))
+      .map((event) => event.message);
+  }
+
+  it("says when a turn went into the open conversation", () => {
+    const emitEvent = vi.fn();
+    const dispatch = make({
+      emitEvent,
+      hasResidentSession: () => true,
+      hasLiveStatefulSession: () => true,
+      getPromptReviewMode: () => "never",
+    });
+
+    dispatch.submitVerb("shape_on_canvas", { said: "make it blue", reading: "recolour" });
+
+    expect(laneLines(emitEvent)).toEqual([
+      expect.stringMatching(/delivered into the open conversation/),
+    ]);
+  });
+
+  it("says when a turn opened one and took the slot", () => {
+    const emitEvent = vi.fn();
+    const dispatch = make({
+      emitEvent,
+      hasResidentSession: () => false,
+      hasLiveStatefulSession: () => false,
+      getPromptReviewMode: () => "never",
+    });
+
+    dispatch.submitVerb("shape_on_canvas", { said: "let's start", reading: "open" });
+
+    expect(laneLines(emitEvent)).toEqual([expect.stringMatching(/taking the execution slot/)]);
+  });
+
+  it("says nothing for a stateless verb, which has no lane to choose", () => {
+    const emitEvent = vi.fn();
+    const dispatch = make({ emitEvent, getPromptReviewMode: () => "never" });
+
+    dispatch.submitVerb("investigate", { question: "what changed?" });
+
+    expect(laneLines(emitEvent)).toEqual([]);
+  });
+});

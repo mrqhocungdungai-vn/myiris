@@ -1004,6 +1004,16 @@ export function createRunExec({
           warm: true,
         }),
       );
+      // Two facts the user cannot see from the outside and will want when the
+      // canvas feels slow: whether a conversation was standing ready before
+      // they spoke, and whether it was reused. Without it, "the first sentence
+      // was slow" has no explanation in the record — which is how a warm that
+      // never warmed anything went unnoticed.
+      emitEvent({
+        type: "log",
+        level: "info",
+        message: `[canvas] shaping conversation warmed for ${verbName} — ready before the first turn`,
+      });
       return { warmed: true, reason: null };
     } catch (error) {
       emitEvent({
