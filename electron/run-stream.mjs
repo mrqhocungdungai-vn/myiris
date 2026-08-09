@@ -293,14 +293,22 @@ export function createRunStream({
     if (!speaksWhileWorking(run)) return;
     const clean = String(text || "").trim();
     if (!clean) return;
-    notifyIris([
-      "SYSTEM_EVENT_WORK_IN_PROGRESS",
-      "instructions_to_iris:",
-      "- Read the text below out as it stands, in your own voice, then stop.",
-      "- This is them thinking out loud mid-turn, not a final answer: do not wrap it up, do not add a conclusion, and do not ask whether they want you to continue.",
-      "- If you are mid-sentence, finish it first.",
-      fenceUntrustedText(clean, "what the canvas worker just said, to be read aloud"),
-    ]);
+    notifyIris(
+      [
+        "SYSTEM_EVENT_WORK_IN_PROGRESS",
+        "instructions_to_iris:",
+        "- Read the text below out as it stands, in your own voice, then stop.",
+        "- This is them thinking out loud mid-turn, not a final answer: do not wrap it up, do not add a conclusion, and do not ask whether they want you to continue.",
+        "- If you are mid-sentence, finish it first.",
+        fenceUntrustedText(clean, "what the canvas worker just said, to be read aloud"),
+      ],
+      // Never buffered. Every other SYSTEM_EVENT_* is a state change worth
+      // delivering late — this is a running commentary, and delivering it late
+      // means the user hears a burst of remarks about work that finished
+      // minutes ago, narrated as though it were happening now. If the voice
+      // was not there to hear it, it did not need saying.
+      { bufferIfOffline: false },
+    );
   }
 
   function narrateAct(run, toolName, detail) {
@@ -308,15 +316,20 @@ export function createRunStream({
     let throttle = narrationThrottles.get(run.run_id);
     if (!throttle) {
       throttle = createTrailingThrottle((act) => {
-        notifyIris([
-          "SYSTEM_EVENT_WORK_IN_PROGRESS",
-          `tool: ${act.tool}`,
-          ...(act.detail ? [`detail: ${act.detail}`] : []),
-          "instructions_to_iris:",
-          "- Say in a few words what is happening right now, as an aside, then stop.",
-          "- Report only this act. Do not guess what comes next, do not summarize the work so far, and do not describe the canvas — you cannot see it.",
-          "- If you are mid-sentence, finish it first. This is an aside, not an interruption.",
-        ]);
+        notifyIris(
+          [
+            "SYSTEM_EVENT_WORK_IN_PROGRESS",
+            `tool: ${act.tool}`,
+            ...(act.detail ? [`detail: ${act.detail}`] : []),
+            "instructions_to_iris:",
+            "- Say in a few words what is happening right now, as an aside, then stop.",
+            "- Report only this act. Do not guess what comes next, do not summarize the work so far, and do not describe the canvas — you cannot see it.",
+            "- If you are mid-sentence, finish it first. This is an aside, not an interruption.",
+          ],
+          // "what is happening right now" stops being true the moment it is
+          // held. See speakWorkingText.
+          { bufferIfOffline: false },
+        );
       }, ACT_NARRATION_INTERVAL_MS);
       narrationThrottles.set(run.run_id, throttle);
     }

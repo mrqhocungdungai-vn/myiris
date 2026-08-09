@@ -574,3 +574,41 @@ describe("run-stream: the answer is heard as it forms", () => {
     expect(notifyIris.mock.calls[0][0].join("\n")).toContain("to be read aloud");
   });
 });
+
+// Every other SYSTEM_EVENT_* is a state change worth delivering late. Running
+// commentary is not: held and replayed on reconnect, it becomes a burst of
+// remarks about work that finished minutes ago, narrated as though it were
+// happening now — which is the "do not queue stale speech" rule the change
+// states, arriving through the delivery layer rather than the throttle.
+describe("run-stream: in-progress speech is never delivered late", () => {
+  function canvasRun() {
+    return { run_id: "turn", workstream_id: "ws-1", verb: "shape_on_canvas", task: "t", activity: [], toolStartedAt: new Map() };
+  }
+
+  it("does not buffer the worker's prose when the voice is offline", () => {
+    const notifyIris = vi.fn();
+    const stream = make({ notifyIris });
+
+    stream.handleClaudeStreamMessage(canvasRun(), {
+      type: "assistant",
+      message: { content: [{ type: "text", text: "Those two do the same job." }] },
+    });
+
+    expect(notifyIris.mock.calls[0][1]).toEqual({ bufferIfOffline: false });
+  });
+
+  it("does not buffer an act either", () => {
+    vi.useFakeTimers();
+    try {
+      const notifyIris = vi.fn();
+      const stream = make({ notifyIris });
+
+      stream.pushToolStart(canvasRun(), "t1", "add_elements", "a box");
+      vi.advanceTimersByTime(5000);
+
+      expect(notifyIris.mock.calls[0][1]).toEqual({ bufferIfOffline: false });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
