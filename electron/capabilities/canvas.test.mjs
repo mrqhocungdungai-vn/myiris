@@ -322,3 +322,32 @@ describe("canvas capability: opening the board warms the conversation", () => {
     expect(() => capability.ipcHandlers.find((handler) => handler.channel === "canvas:activate").fn()).not.toThrow();
   });
 });
+
+// The board Claude reads has to be the board the user is looking at. The
+// renderer batches scene pushes on a debounce, so without this the cache can
+// be a window behind — and the case where that bites is the ordinary one:
+// drawing a line while saying "and this arrow here", where the stroke being
+// asked about is exactly the one still pending.
+describe("canvas capability: a run reads the board on screen", () => {
+  it("asks the panel to flush before wiring a run", async () => {
+    const emitToRenderer = vi.fn();
+    const capability = make({ emitToRenderer });
+    capability.ipcHandlers.find((handler) => handler.channel === "canvas:activate").fn();
+    emitToRenderer.mockClear();
+
+    await capability.ensureCanvasMcpForRun();
+
+    expect(emitToRenderer).toHaveBeenCalledWith("canvas:flush-scene", {});
+  });
+
+  it("asks for nothing when the canvas does not apply to this run", async () => {
+    // Never engaged: there is no panel holding anything, and a run that does
+    // not touch the canvas should not be poking at it.
+    const emitToRenderer = vi.fn();
+    const capability = make({ emitToRenderer });
+
+    await capability.ensureCanvasMcpForRun();
+
+    expect(emitToRenderer).not.toHaveBeenCalledWith("canvas:flush-scene", {});
+  });
+});

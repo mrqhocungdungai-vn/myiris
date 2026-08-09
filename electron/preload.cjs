@@ -43,6 +43,13 @@ contextBridge.exposeInMainWorld("iris", {
     ipcRenderer.on("canvas:request-image", handler);
     return () => ipcRenderer.removeListener("canvas:request-image", handler);
   },
+  // Main asking the panel to push whatever it is still holding, so a run reads
+  // the board the user is looking at rather than the one from a debounce ago.
+  onCanvasFlushRequest: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on("canvas:flush-scene", handler);
+    return () => ipcRenderer.removeListener("canvas:flush-scene", handler);
+  },
   replyCanvasImage: (id, image) => ipcRenderer.send("canvas:image-result", { id, image }),
   nativeOpenCanvasFile: () => ipcRenderer.invoke("canvas:native-open-file"),
   nativeSaveCanvasFile: (content, suggestedName) =>

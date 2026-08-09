@@ -85,6 +85,11 @@ Reading the canvas SHALL remain a tool the conversation calls when a turn needs 
 - **WHEN** the read tool is called while the drawing panel is hidden/unmounted
 - **THEN** the last known scene is returned without error
 
+#### Scenario: A turn reads the board on screen, not the one from a debounce ago
+
+- **WHEN** a run that can read the canvas is prepared while the panel is holding scene changes that have not yet been pushed
+- **THEN** the panel is asked to push them, so the run reads what the user is looking at
+
 #### Scenario: Drawing does not itself start a turn
 
 - **WHEN** the user draws on the canvas without saying anything

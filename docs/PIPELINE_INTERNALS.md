@@ -292,11 +292,20 @@ rather than transport. The transport was already right: `po-session.mjs` keeps a
 teardown, and the canvas MCP server survives runs. What was wrong was when a
 session existed, when a turn could run, and what the user heard meanwhile.
 
-**Opening the board opens the conversation.** `canvas:activate` warms the shaping
-session — scaffold, session, canvas tools — so the first sentence is answered by
-an existing conversation instead of paying to create one. Iris says the mode is
-open when it happens, which is what makes warming honest rather than a hidden
-cost: an announced state is one the user can hear and can close.
+**Opening the board opens the conversation.** Once the canvas is engaged *and*
+Claude is reachable, the shaping session is warmed — scaffold, session, canvas
+tools — so the first sentence is answered by an existing conversation instead of
+paying to create one. Iris says the mode is open when it happens, which is what
+makes warming honest rather than a hidden cost: an announced state is one the
+user can hear and can close.
+
+Both gates are re-checked, and the order they flip in is not fixed. Opening the
+board while the Claude probe is still running is the ordinary case at startup,
+and warming only on `canvas:activate` meant the probe finishing moments later
+brought the tools up and left the conversation cold. One function
+(`onCanvasBecameUsable`) does what "the canvas became usable" means — tools and
+conversation — from whichever signal arrives last, and stays idempotent so a
+later probe tick cannot open a second one.
 
 **A warmed session is not a conversation that has happened**, and the difference
 is load-bearing. The review gate parks on the call that *opens* a conversation
@@ -330,10 +339,24 @@ tools at all while one slot made overlap impossible, now **withholds Write, Edit
 NotebookEdit and Bash** — a conversation about a whiteboard has no business
 editing files beside an unrelated build. It still asks freely.
 
-**The user hears the work, not just the result.** Acts reach the voice on a 3 s
-trailing throttle (the deck is glanced at; speech is listened to, and a voice
-reporting every tool call talks over the work it narrates), and the worker's own
-prose is spoken per block as it lands. Neither is buffered when the voice is
+**The user hears the work, not just the result.** The worker's own prose is
+spoken per block as it lands, and acts fill the gaps between. Three rules shape
+the acts, each of them a correction of the obvious implementation:
+
+- The **first** act of a turn is spoken at once; only the ones after it are
+  paced at 3 s. A purely trailing throttle held the opening act — the one that
+  says she has started — for the full interval, and a turn shorter than the
+  interval narrated *nothing*, because finalize cancels what is still pending.
+  Short turns are most of a brainstorm.
+- A burst still reports its **most recent** act rather than its stalest, which
+  is what the trailing edge is for. The deck is glanced at; speech is listened
+  to, and a voice reporting every tool call talks over the work it narrates.
+- An act is **dropped when the worker's prose just covered the same moment**. An
+  assistant message carries prose and a tool call together, so "let me add three
+  boxes" arrives with `add_elements`; narrating both means hearing one thing
+  twice, the second time in worse words. Acts cover silence, and prose means
+  there is none. Scoped per run — two conversations can be live at once, and one
+  talking must not silence the other. Neither is buffered when the voice is
 offline: every other `SYSTEM_EVENT_*` is a state change worth delivering late,
 while running commentary replayed on reconnect becomes remarks about work that
 finished minutes ago. `includePartialMessages` stays declined — an `assistant`

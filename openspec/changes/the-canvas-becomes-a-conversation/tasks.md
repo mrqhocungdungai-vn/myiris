@@ -111,3 +111,9 @@
 - [x] 11.2 "The user's own words reach the run" corrected — it still described the transcript as background only, which stopped being true for `wordsLead` verbs, and a doc that has become false is worse than a missing one
 - [x] 11.3 `CLAUDE.md` gains its router line, since the file is a router and this capability had no entry at all
 - [x] 11.4 The `.audit/` reports stay what they are: investigation snapshots with `file:line` evidence, not documentation
+
+## 12. The board Claude reads is the board on screen
+
+- [x] 12.1 Preparing a canvas run asks the panel to flush what it is still holding. The renderer batches pushes on a debounce, so the cache could be a window behind the board — and the case where that bites is the ordinary one: drawing a line while saying "and this arrow here", where the stroke being asked about is exactly the one still pending
+- [x] 12.2 Fire-and-forget by design: the flush is a message to a renderer that may not be mounted, and a turn must not wait on a closed panel. It lands well before the run's first `get_canvas`, which is a model round-trip away
+- [x] 12.3 Tests, verified by removing the request and watching them fail

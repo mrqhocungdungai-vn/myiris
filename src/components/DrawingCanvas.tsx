@@ -371,6 +371,7 @@ function DrawingCanvasSurface({ onClose }: { onClose?: () => void }) {
   // for the same reason (no listener to answer canvas:request-image).
   useEffect(() => window.iris.onCanvasApply(applyIncoming), [applyIncoming]);
 
+
   // Both halves of "the canvas is usable now": the API handed over by
   // excalidraw, and the stored scene loaded. Whichever lands last runs the
   // queued applies and the viewport restore.
@@ -442,6 +443,13 @@ function DrawingCanvasSurface({ onClose }: { onClose?: () => void }) {
     }
     serializeAndPushRef.current();
   }, []);
+
+// A run is about to read the canvas: push whatever is still sitting in the
+  // debounce window, so it reads the board on screen rather than the one from
+  // half a second ago. The case this exists for is drawing while speaking —
+  // "and this arrow here" — where the stroke being asked about is exactly the
+  // one still pending.
+  useEffect(() => window.iris.onCanvasFlushRequest(() => flushPending()), [flushPending]);
 
   // Flush on unmount (panel toggled off, or the HUD is exited) so a quit or
   // toggle-off right after drawing doesn't lose the last debounce window —

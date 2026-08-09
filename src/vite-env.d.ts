@@ -424,6 +424,8 @@ type IrisApi = {
     suggestedName?: string,
   ) => Promise<NativeFileResult>;
   onCanvasApply: (callback: (payload: CanvasApplyPayload) => void) => () => void;
+  /** Main asking the panel to push what it is still holding, before a run reads it. */
+  onCanvasFlushRequest: (callback: () => void) => () => void;
   onCanvasImageRequest: (callback: (payload: CanvasImageRequestPayload) => void) => () => void;
   replyCanvasImage: (id: string, image: CanvasImagePayload) => void;
   windowControl: (action: "close" | "minimize") => void;

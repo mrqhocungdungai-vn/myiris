@@ -134,6 +134,18 @@ export function createCanvasCapability({
   // record, or null when the canvas MCP does not apply to this run.
   async function ensureCanvasMcpForRun() {
     if (!getPipelineAvailable() || !canvasEngaged) return null;
+    // Ask the panel to push whatever it is still holding. The renderer batches
+    // scene pushes on a debounce, so the cache Claude reads can be up to that
+    // window behind the board the user is looking at — and the case where that
+    // matters is the ordinary one: drawing a line while saying "and this arrow
+    // here". Answering about a board missing the stroke being asked about is
+    // the same failure as answering the paraphrase instead of the person.
+    //
+    // Fire-and-forget, and deliberately not awaited: the flush is a message to
+    // a renderer that may not be mounted, and a turn must not wait on a panel
+    // that is closed. It lands well before the run's first `get_canvas`, which
+    // is a model round-trip away.
+    emitToRenderer("canvas:flush-scene", {});
     try {
       await canvasMcp.start();
     } catch (error) {
