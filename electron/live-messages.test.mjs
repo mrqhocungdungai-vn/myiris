@@ -440,38 +440,42 @@ describe("live-messages: a tool call flushes the words that caused it", () => {
   });
 });
 
-// the-canvas-becomes-a-conversation D6: the user speaking over Iris is how a
-// person redirects another mid-sentence, not a complaint about the app.
-describe("live-messages: barge-in ends the turn, not the conversation", () => {
-  it("reports the interruption to the run layer", () => {
-    const onUserInterrupted = vi.fn();
-    const messages = make({ onUserInterrupted });
-
-    messages.handleLiveMessage({ serverContent: { interrupted: true } });
-
-    expect(onUserInterrupted).toHaveBeenCalledTimes(1);
-  });
-
-  it("still flushes the record and returns the app to listening", () => {
-    const flushTranscripts = vi.fn();
-    const emitEvent = vi.fn();
+// Measured in a live session (2026-08-09): `interrupted` fires whenever Iris's
+// audio turn is pre-empted, which in real conversation is constant — a "ừ", a
+// follow-up, the user thinking aloud over the answer. Cancelling Claude's work
+// on that signal killed a turn three seconds in, and the user asked what the
+// error was, because from where they sat the work had simply stopped.
+describe("live-messages: an interruption stops the speech, not the work", () => {
+  it("tells the renderer and returns to listening", () => {
     const emitToRenderer = vi.fn();
-    const messages = make({ flushTranscripts, emitEvent, emitToRenderer, onUserInterrupted: vi.fn() });
+    const emitEvent = vi.fn();
+    const messages = make({ emitToRenderer, emitEvent });
 
     messages.handleLiveMessage({ serverContent: { interrupted: true } });
 
-    expect(flushTranscripts).toHaveBeenCalled();
     expect(emitToRenderer).toHaveBeenCalledWith("live:interrupt", {});
     expect(emitEvent).toHaveBeenCalledWith({ type: "audio_state", state: "listening" });
   });
 
-  it("does not report an interruption on an ordinary turn boundary", () => {
-    // turnComplete is Iris finishing normally; nothing is being interrupted.
-    const onUserInterrupted = vi.fn();
-    const messages = make({ onUserInterrupted });
+  it("still flushes what was said", () => {
+    const flushTranscripts = vi.fn();
+    const messages = make({ flushTranscripts });
 
-    messages.handleLiveMessage({ serverContent: { turnComplete: true } });
+    messages.handleLiveMessage({ serverContent: { interrupted: true } });
 
-    expect(onUserInterrupted).not.toHaveBeenCalled();
+    expect(flushTranscripts).toHaveBeenCalled();
+  });
+
+  it("does not cancel anything through the tool path", () => {
+    // The regression guard: nothing about an interruption may reach the run
+    // layer as a stop. If a future change wants barge-in to cancel work, it
+    // needs a signal that means "the user redirected me", not one that means
+    // "my sentence was cut off".
+    const executeClaudeTool = vi.fn();
+    const messages = make({ executeClaudeTool });
+
+    messages.handleLiveMessage({ serverContent: { interrupted: true } });
+
+    expect(executeClaudeTool).not.toHaveBeenCalled();
   });
 });

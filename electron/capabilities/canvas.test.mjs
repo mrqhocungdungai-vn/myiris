@@ -252,16 +252,22 @@ describe("canvas capability: canvas mode is announced, and changes Iris's job", 
     expect(notifyIris).not.toHaveBeenCalled();
   });
 
-  it("announces again when the panel is reopened", () => {
-    // Closing and reopening the surface IS entering the mode again.
+  it("says it once, however many times the panel activates", () => {
+    // It used to announce per activation, on the reading that reopening the
+    // surface is entering the mode again. A live session settled that: the
+    // panel re-activates for reasons that have nothing to do with the user
+    // opening it, and Iris announced canvas mode five times in four minutes —
+    // twice over her own answer. A greeting repeated mid-conversation is an
+    // interruption, and the mode had not ended in between.
     const notifyIris = vi.fn();
     const capability = make({ notifyIris });
     const activate = capability.ipcHandlers.find((handler) => handler.channel === "canvas:activate");
 
     activate.fn();
     activate.fn();
+    activate.fn();
 
-    expect(notifyIris).toHaveBeenCalledTimes(2);
+    expect(notifyIris).toHaveBeenCalledTimes(1);
   });
 
   it("gives Iris her conduit instructions only once the canvas is engaged", () => {

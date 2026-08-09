@@ -51,7 +51,6 @@ export function utteranceBoundaryDelayMs({
  *   submitClaudeTask: (params: any) => any,
  *   isListenOnlyEngaged: () => boolean,
  *   onInputTranscription?: (text: string) => void,
- *   onUserInterrupted?: () => void,
  *   onUtteranceBoundary?: () => void,
  * }} deps
  */
@@ -73,10 +72,6 @@ export function createLiveMessages({
   // between two flushes. Those bounds are a stated privacy property and are not
   // raisable, so meeting retention gets its own source instead.
   onInputTranscription = () => {},
-  // The user talking over Iris. Defaulted to a no-op so a caller that has no
-  // conversation to interrupt (a test, a build without the pipeline) needs to
-  // say nothing.
-  onUserInterrupted = () => {},
   onUtteranceBoundary = () => {},
 }) {
   // The open utterance's own clock, used ONLY while the mode is engaged (see
@@ -244,12 +239,19 @@ export function createLiveMessages({
       // A real turn boundary still wins: it flushes, and it cancels whatever
       // the idle timer had pending so the same utterance is not closed twice.
       closeUtterance();
-      // The user spoke over Iris. In a live drawing conversation that is not
-      // impatience with the app, it is the ordinary way a person redirects
-      // another mid-sentence — so the turn that is talking ends, and the
-      // conversation it belongs to does not. Everything already drawn stays:
-      // it reached the canvas through MCP as it happened, not at the end.
-      onUserInterrupted();
+      // Iris's own speech was cut off. This is NOT a signal to stop working,
+      // and treating it as one was destructive: `interrupted` fires whenever
+      // the model's audio turn is pre-empted, which in a real conversation is
+      // constant — a "ừ", a follow-up question, the user thinking aloud over
+      // the answer. Measured in a live session (2026-08-09): the user asked
+      // why the boxes had no text, Claude's turn was three seconds in, the
+      // user kept talking, and the turn was killed. They then asked what the
+      // error was, because from where they sat the work had simply stopped.
+      //
+      // Gemini already stops speaking on its own here. Ending Claude's turn
+      // as well throws away work the user asked for, on the strength of them
+      // making a noise — so nothing is cancelled, and the conversation keeps
+      // both its context and its in-flight turn.
       emitToRenderer("live:interrupt", {});
       emitEvent({ type: "audio_state", state: "listening" });
       return;

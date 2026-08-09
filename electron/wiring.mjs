@@ -425,9 +425,6 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     userDisplayName,
     executeClaudeTool,
     submitClaudeTask,
-    // Barge-in: the user speaking over Iris ends the turn that is talking and
-    // leaves its conversation open.
-    interruptResidentTurns: () => runQueue.interruptResidentTurns(),
     geminiTools,
     geminiPrompts,
     secondBrainCapability,

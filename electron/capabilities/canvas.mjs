@@ -103,6 +103,10 @@ export function createCanvasCapability({
   // whether the canvas MCP is ever wired — a pure-voice session that never
   // opens the canvas starts nothing.
   let canvasEngaged = false;
+  // Whether the user has already been told they are in canvas mode. Sticky for
+  // the same reason `canvasEngaged` is: the mode does not end when the panel
+  // is hidden, so neither does having been told about it.
+  let canvasModeAnnounced = false;
 
   function markCanvasEngaged() {
     canvasEngaged = true;
@@ -168,6 +172,14 @@ export function createCanvasCapability({
   // capability the app does not have right now.
   function announceCanvasMode() {
     if (!getPipelineAvailable()) return;
+    // Once per engagement, not once per mount. The panel re-activates for
+    // reasons that have nothing to do with the user opening it — measured in a
+    // live session (2026-08-09), Iris announced canvas mode five times in four
+    // minutes, twice mid-answer, which is not a greeting any more but an
+    // interruption. Saying "say it ONCE" in the instruction did not help,
+    // because each re-injection is a fresh instruction.
+    if (canvasModeAnnounced) return;
+    canvasModeAnnounced = true;
     notifyIris([
       "SYSTEM_EVENT_CANVAS_MODE_OPEN",
       `${userDisplayName()} just opened the drawing canvas.`,
