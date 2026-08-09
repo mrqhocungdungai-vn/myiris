@@ -72,14 +72,14 @@
 ## 9. Verification
 
 - [x] 9.1 Run all five gates — `/gates`, or `npm run build`, `npm test`, `npm run lint`, `npm run scan:secrets`, `npm run spec:check`
-- [ ] 9.2 Manual: load the processor hard and watch the whole ladder fire at once — token, accent, scan rate, history plateau, dial. Then release it and watch all of it come back down. **This is the change's real test**; nothing in the unit suite can see it
-- [ ] 9.3 Manual: pull a large download and watch a rate cross unit boundaries in both directions, watching the **left edge of the text** rather than the row
-- [ ] 9.4 Manual: shrink the window until the deck's camera dock is at its narrowest and confirm the panel does not clip its own content. The larger HUD frame will look fine and will hide this (D3 risks)
+- [x] 9.2 Manual: load the processor hard and watch the whole ladder fire at once — token, accent, scan rate, history plateau, dial. Then release it and watch all of it come back down. **This is the change's real test**; nothing in the unit suite can see it
+- [x] 9.3 Manual: pull a large download and watch a rate cross unit boundaries in both directions, watching the **left edge of the text** rather than the row
+- [x] 9.4 Manual: shrink the window until the deck's camera dock is at its narrowest and confirm the panel does not clip its own content. The larger HUD frame will look fine and will hide this (D3 risks)
 - [x] 9.5 Manual: turn gesture control off and confirm no measurement subprocess is started; turn it back on and confirm the first moment reads as absence, not as zero
 - [x] 9.6 Manual: quit with the camera on, and confirm nothing is left running
-- [ ] 9.7 Degradation pass: force the graphics probe to return nothing and confirm the row reads absent rather than zero, no error surfaces, and the probe stops being attempted
+- [x] 9.7 Degradation pass: force the graphics probe to return nothing and confirm the row reads absent rather than zero, no error surfaces, and the probe stops being attempted
 - [x] 9.8 Update `docs/GESTURES.md`'s account of what the panel shows; keep `CLAUDE.md` a router
-- [ ] 9.9 Settle the design's open questions from the manual pass — the ladder's levels on a machine that idles hot, and whether the history's span is right
+- [x] 9.9 Settle the design's open questions from the manual pass — the ladder's levels on a machine that idles hot, and whether the history's span is right
 
 ## Deferred — needs the running app with a face in frame
 
@@ -121,3 +121,7 @@ types widened.** A capability contributing neither a tool declaration nor a
 prompt fragment has no property in common with `{ promptFragment?: ... }`, which
 trips TypeScript's weak-type check. The contract already said every field is
 optional; the declarations now say so too.
+
+---
+
+The manual items above were run by the user on 2026-08-09 and reported as passing. Recorded here because a box ticked by someone who could not have performed the check is the one kind of entry this file must never contain — the manual passes are exactly the parts no unit test can stand in for.

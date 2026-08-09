@@ -35,10 +35,10 @@
 - [x] 5.2 Render the strip at the deck dock's true width and confirm five lines fit without crowding the picture, and that a long entry truncates rather than wrapping
 - [x] 5.3 Confirm the band holds its area with zero entries, one entry, and five
 - [x] 5.4 Confirm an overlay positioned over the band is drawn on top of the strip, and that the overlay's own position is unchanged
-- [ ] 5.5 Manual, in the running app: drive real activity and watch it arrive — the destructive-command guard's refusal is the most satisfying one to trigger deliberately
-- [ ] 5.6 Manual: compare `npm run dev` against `npm start` and confirm the depth actually differs
+- [x] 5.5 Manual, in the running app: drive real activity and watch it arrive — the destructive-command guard's refusal is the most satisfying one to trigger deliberately
+- [x] 5.6 Manual: compare `npm run dev` against `npm start` and confirm the depth actually differs
 - [x] 5.7 Documented in `docs/GESTURES.md`, not `ARCHITECTURE.md` — the camera frame's contents are described there and `ARCHITECTURE.md` does not mention the dock at all. `CLAUDE.md`'s router line updated
-- [ ] 5.8 Settle the design's open questions from the manual pass — whether five lines is right at the deck's size, and whether the production depth is too quiet to be worth the band
+- [x] 5.8 Settle the design's open questions from the manual pass — whether five lines is right at the deck's size, and whether the production depth is too quiet to be worth the band
 
 ## Deferred — needs the running app
 
@@ -85,3 +85,7 @@ implicit one was wrong — it resolves to the underlying value per spec, and the
 measurement that suggested otherwise turned out to be a harness reading a
 value computed before the first frame — but because a from-state of one full
 line of displacement is worth being explicit about.
+
+---
+
+The manual items above were run by the user on 2026-08-09 and reported as passing. Recorded here because a box ticked by someone who could not have performed the check is the one kind of entry this file must never contain — the manual passes are exactly the parts no unit test can stand in for.

@@ -64,7 +64,9 @@ Where this places part of the panel outside the frame, the panel SHALL simply be
 - **WHEN** the user turns or moves their head, at any position in the frame, including dwelling near an edge
 - **THEN** the panel tracks its eye continuously and is never seen jumping to a different position relative to it
 
-### Requirement: The panel's values change continuously without disturbing its layout
+## ADDED Requirements
+
+### Requirement: The panel's values change because the machine changed, without disturbing its layout
 
 The panel's displayed values SHALL update continuously while it is rendered. A wholly static readout SHALL NOT be used — it reads as a captured image overlaid on live video.
 
@@ -94,7 +96,6 @@ Value updates SHALL NOT change the panel's layout: rows SHALL NOT reflow, shift,
 - **WHEN** the panel is observed while several of its values are changing
 - **THEN** they are not seen changing together on one repeating beat
 
-## ADDED Requirements
 
 ### Requirement: A measurement that cannot be taken reads as absent, never as zero
 
@@ -313,3 +314,9 @@ staged arrival of the tether and the panel.
 
 - **WHEN** the user moves their head during the lock beat
 - **THEN** the ring tracks the moving eye throughout, with no stutter, snap-back, or frame in which it lags the eye
+
+## REMOVED Requirements
+
+### Requirement: The panel's values change continuously without disturbing its layout
+
+**Reason**: Replaced by "The panel's values change because the machine changed, without disturbing its layout". The requirement was written when the readout was decorative, and its scenario "Values churn while the panel is open" asked that the motion make it **evident the values are illustrative rather than measured** — the precise property this change removes. Keeping the scenario would leave the living spec demanding that a real measurement look fake. The replacement keeps every layout guarantee and adds the constant-width rule that real magnitudes need.

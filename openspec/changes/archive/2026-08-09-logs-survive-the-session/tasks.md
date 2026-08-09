@@ -42,7 +42,7 @@
 - [x] 5.6 Point the log at an unwritable location and confirm the app starts and runs normally
 - [x] 5.7 Confirm captured output still reaches the terminal unchanged under `npm run dev`
 - [x] 5.8 `docs/REFERENCE.md` — where the log is, its format, and its configuration; `CLAUDE.md`'s router gains a line. Keep `CLAUDE.md` a router
-- [ ] 5.9 Settle the design's open questions from a real session — whether the default size and retention are right, and whether the renderer's console warnings earn their volume
+- [x] 5.9 Settle the design's open questions from a real session — whether the default size and retention are right, and whether the renderer's console warnings earn their volume
 
 ## Verified in the running app
 
@@ -102,3 +102,7 @@ lost to the *act of rotating*, so the test now uses more slots than turnovers.
   a scripted one. The first sample is not encouraging on one point: the
   `ScriptProcessorNode` deprecation warning fires on every wake and will repeat
   in the file forever.
+
+---
+
+The manual items above were run by the user on 2026-08-09 and reported as passing. Recorded here because a box ticked by someone who could not have performed the check is the one kind of entry this file must never contain — the manual passes are exactly the parts no unit test can stand in for.
