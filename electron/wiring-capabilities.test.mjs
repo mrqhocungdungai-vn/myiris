@@ -74,6 +74,7 @@ function makeDeps(overrides = {}) {
     irisPluginDir: vi.fn(() => "/fake/iris-plugin"),
     runQueue: {},
     findWorkstream: vi.fn(),
+    activeWorkstream: vi.fn(),
     persistSessionStore: vi.fn(),
     sessionKeyFor: vi.fn(),
     resolveVerbModel: vi.fn(),

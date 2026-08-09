@@ -185,6 +185,7 @@ export function buildNoteWriteGuard({ askUserQuestionViaVoice, workstreamId, not
  *   runQueue: any,
  *   emitEvent: (event: any) => void,
  *   findWorkstream: (id: string | null) => any,
+ *   activeWorkstream: () => any,
  *   persistSessionStore: () => void,
  *   sessionKeyFor: (verb: string, state?: any) => string,
  *   resolveVerbModel: (workstream: any, verb: string) => string | null,
@@ -220,6 +221,7 @@ export function createRunExec({
   runQueue,
   emitEvent,
   findWorkstream,
+  activeWorkstream,
   persistSessionStore,
   sessionKeyFor,
   resolveVerbModel,
@@ -961,7 +963,11 @@ export function createRunExec({
    */
   async function warmStatefulConversation(verbName) {
     try {
-      const workstream = findWorkstream(null);
+      // The ACTIVE workstream, not a lookup by id — a warm has no run to take
+      // an id from. `findWorkstream(null)` matches nothing, which is how this
+      // spent a release silently answering "no-workstream" and never warming
+      // anything at all.
+      const workstream = activeWorkstream();
       if (!workstream) return { warmed: false, reason: "no-workstream" };
       if (!poBillingStatus().ok) return { warmed: false, reason: "no-credential" };
 

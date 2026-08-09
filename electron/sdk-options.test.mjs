@@ -45,6 +45,7 @@ function makeExec(queryImpl, overrides = {}) {
     runQueue: { finalize: vi.fn() },
     emitEvent: vi.fn(),
     findWorkstream: () => workstream,
+    activeWorkstream: () => workstream,
     persistSessionStore: vi.fn(),
     sessionKeyFor: (verb) => resolveVerb(verb).sessionKey,
     resolveVerbModel: () => "claude-sonnet-5",

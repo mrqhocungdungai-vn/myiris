@@ -22,6 +22,11 @@ vi.mock("./po-session.mjs", () => ({
   DEFAULT_PO_QUESTION_TIMEOUT_MS: 300000,
 }));
 
+// Cast to the mock shape: vi.mock above replaces the module at runtime, but
+// the real module's types do not carry `.mock`, exactly as
+// capabilities/canvas.test.mjs already does for its own mocks.
+/** @type {any} */
+const poSession = await import("./po-session.mjs");
 const { createRunExec } = await import("./run-exec.mjs");
 const { resolveVerb } = await import("./verbs.mjs");
 
@@ -31,6 +36,7 @@ function makeExec(overrides = {}) {
     runQueue: { finalize: vi.fn() },
     emitEvent: vi.fn(),
     findWorkstream: () => workstream,
+    activeWorkstream: () => workstream,
     persistSessionStore: vi.fn(),
     sessionKeyFor: (verb) => resolveVerb(verb).sessionKey,
     resolveVerbModel: () => "claude-opus-5",
@@ -101,5 +107,72 @@ describe("run-exec: what a resident turn is actually given", () => {
 
     expect(pushActivity).toHaveBeenCalledWith(run, "[Read] canvas.json");
     expect(pushToolStart).toHaveBeenCalledWith(run, "t1", "add_elements", "3 boxes");
+  });
+});
+
+// The canvas capability's own test asserts that opening the panel CALLS
+// warmConversation, with the function mocked. That is a test of the call site,
+// and it stayed green while the real function did nothing at all: it looked
+// the workstream up with `findWorkstream(null)`, which matches no session, so
+// every warm returned "no-workstream" and no conversation was ever opened
+// ahead of the first sentence. This suite drives the real one.
+describe("run-exec: warming a conversation before the first sentence", () => {
+  beforeEach(() => {
+    delivered.calls = [];
+    poSession.getOrCreatePoSession.mockClear();
+    poSession.getPoSessionState.mockReturnValue(null);
+  });
+
+  it("opens a session against the ACTIVE workstream", async () => {
+    const workstream = { id: "ws1", cwd: "/tmp/project", agent_sessions: {}, label: "Project" };
+    const exec = makeExec({
+      activeWorkstream: () => workstream,
+      // A lookup by id is what a RUN uses; a warm has no run and no id, and
+      // reaching for this is the bug.
+      findWorkstream: () => null,
+    });
+
+    const result = await exec.warmStatefulConversation("shape_on_canvas");
+
+    expect(result).toEqual({ warmed: true, reason: null });
+    expect(poSession.getOrCreatePoSession).toHaveBeenCalledTimes(1);
+    expect(poSession.getOrCreatePoSession.mock.calls[0][0]).toBe(workstream);
+  });
+
+  it("marks the session warm, so the review gate still sees no conversation", async () => {
+    const exec = makeExec({ activeWorkstream: () => ({ id: "ws1", cwd: "/tmp/project", agent_sessions: {} }) });
+
+    await exec.warmStatefulConversation("shape_on_canvas");
+
+    expect(poSession.getOrCreatePoSession.mock.calls[0][1].warm).toBe(true);
+  });
+
+  it("delivers no turn — a warm is a transport, not a conversation", async () => {
+    const exec = makeExec({ activeWorkstream: () => ({ id: "ws1", cwd: "/tmp/project", agent_sessions: {} }) });
+
+    await exec.warmStatefulConversation("shape_on_canvas");
+
+    expect(delivered.calls).toHaveLength(0);
+  });
+
+  it("does nothing when a conversation is already open", async () => {
+    // Warming again would be a handoff, closing the very conversation it means
+    // to have ready.
+    poSession.getPoSessionState.mockReturnValue({ ended: false });
+    const exec = makeExec({ activeWorkstream: () => ({ id: "ws1", cwd: "/tmp/project", agent_sessions: {} }) });
+
+    const result = await exec.warmStatefulConversation("shape_on_canvas");
+
+    expect(result).toEqual({ warmed: false, reason: "already-open" });
+    expect(poSession.getOrCreatePoSession).not.toHaveBeenCalled();
+  });
+
+  it("says why it did not warm when there is no workstream", async () => {
+    const exec = makeExec({ activeWorkstream: () => null });
+
+    expect(await exec.warmStatefulConversation("shape_on_canvas")).toEqual({
+      warmed: false,
+      reason: "no-workstream",
+    });
   });
 });

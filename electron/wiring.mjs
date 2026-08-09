@@ -371,6 +371,7 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     irisPluginDir: () => pipelineInstall.irisPluginDir(),
     runQueue,
     findWorkstream,
+    activeWorkstream,
     persistSessionStore,
     sessionKeyFor,
     resolveVerbModel,
