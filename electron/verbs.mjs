@@ -192,6 +192,9 @@ const VERBS = Object.freeze({
     // she reasons from next turn, and summarizing here would compound into
     // answering against a paraphrase of a paraphrase.
     spokenResult: "verbatim",
+    // A brainstorm at a canvas: the user is mid-thought, and the half-finished
+    // sentence they actually said carries more than a tidied restatement of it.
+    wordsLead: true,
     structuredOutput: true,
     disallowedTools: ASKS_FREELY,
     params: THIN_PARAMS,
@@ -232,6 +235,9 @@ const VERBS = Object.freeze({
     // check in the announcement path; it is declared here now, with the rest
     // of what this verb is.
     spokenResult: "verbatim",
+    // "Take out the bit about the deadline" means the bit they said, not the
+    // bit the voice layer decided they meant.
+    wordsLead: true,
     disallowedTools: ASKS_FREELY,
     // open-note-session D6: the main-process write guard (po-session.mjs's
     // canUseTool seam, wired in run-exec.mjs) applies only to this verb.
@@ -535,7 +541,8 @@ function resolveField(value, state) {
  *   skills: string[], mcpServers: string[], vault: boolean,
  *   structuredOutput: boolean, disallowedTools: string[], params: object,
  *   basePersona: string, clause: string, guardOpenNoteWrites: boolean,
- *   spokenResult: "summary"|"verbatim", projectState: ProjectState,
+ *   spokenResult: "summary"|"verbatim", wordsLead: boolean,
+ *   projectState: ProjectState,
  * }}
  */
 export function resolveVerb(name, state = NO_PROJECT_STATE) {
@@ -582,6 +589,13 @@ export function resolveVerb(name, state = NO_PROJECT_STATE) {
     // Defaults to "summary", so a verb that says nothing keeps today's
     // behaviour instead of silently becoming loud.
     spokenResult: record.spokenResult === "verbatim" ? "verbatim" : "summary",
+    // Whether the user's own words LEAD the run's prompt, with the voice
+    // layer's brief following as a reading of them. True for the conversations
+    // the user is inside in real time, where answering the paraphrase instead
+    // of the person is the failure that matters. Separate from `spokenResult`
+    // on purpose: one governs what reaches the run, the other what reaches the
+    // user, and a verb could reasonably want either without the other.
+    wordsLead: Boolean(record.wordsLead),
     // Declared on the verb and resolved against project state like every other
     // field — never a verb-name conditional here (ask-when-unspecified D1).
     // What this list bounds is what the run may DO; who decides is not

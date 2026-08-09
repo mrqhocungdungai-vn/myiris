@@ -45,6 +45,15 @@ export const TRANSCRIPT_MAX_CHARS = 4000;
 const TRANSCRIPT_LABEL =
   "a recent verbatim transcript of what was said near the user's microphone, as background context only";
 
+// The same block, in the runs where it LEADS. The label is what the fence
+// tells the model the block is, so it cannot keep saying "background context
+// only" while the prompt above it calls it the instruction — the two would
+// contradict each other inside one message. Still a fence, still untrusted:
+// the microphone does not distinguish who is speaking near it, and leading is
+// not trusting.
+const TRANSCRIPT_LEADING_LABEL =
+  "a recent verbatim transcript of what was said near the user's microphone, containing the request to act on";
+
 // A second, independent bound on the focused-notes block (second-brain-focus
 // design D5), mirroring the transcript's own two-bound shape above: the
 // capability that resolves the focus already applies its own tighter bound
@@ -142,12 +151,32 @@ export function boundTranscript(utterances = []) {
  * title may originate from the web (second-brain-focus design D5) — the
  * user's own speech, and a note the user owns, are not exemptions.
  *
- * @param {{ stateful: boolean }} verb - a resolved verb
+ * @param {{ stateful: boolean, wordsLead?: boolean }} verb - a resolved verb
  * @param {{ brief: string, utterances?: Array<{ text: string, at: number }>, focus?: Array<{ id: string, title: string, tags: string[] }> | null, openNote?: { id: string, title: string, tags: string[], relativePath: string } | null }} input
  * @returns {string}
  */
 export function buildRunPrompt(verb, { brief, utterances = [], focus = null, openNote = null }) {
-  const parts = [brief];
+  // In a conversation the user is INSIDE — talking at a canvas, talking about
+  // an open note — their own words are the instruction, and the voice layer's
+  // brief is one party's reading of them. Everywhere else the brief leads,
+  // because the voice layer was asked to turn a request into a task and the
+  // transcript is there to catch a detail it dropped.
+  //
+  // The difference is order and standing, not fencing: both blocks stay fenced
+  // as untrusted on every path. What changes is which one the run is told to
+  // follow when they disagree — and for a live conversation, answering the
+  // paraphrase instead of the person is the whole failure mode.
+  const wordsLead = Boolean(verb?.wordsLead);
+  const leadingTranscript = wordsLead ? boundTranscript(utterances) : [];
+  const parts = leadingTranscript.length
+    ? [
+        "What the user just said, in their own words. This is your instruction — follow it, and prefer it over the reading below wherever the two differ.",
+        fenceUntrustedText(leadingTranscript.map((entry) => entry.text).join("\n"), TRANSCRIPT_LEADING_LABEL),
+        "",
+        "The voice layer's reading of that, which is an interpretation and may have lost or added something:",
+        brief,
+      ]
+    : [brief];
 
   // open-note-session design D4: composed here, at the single composition
   // point, on the same terms as the focus below — never a per-verb schema
@@ -177,7 +206,8 @@ export function buildRunPrompt(verb, { brief, utterances = [], focus = null, ope
     );
   }
 
-  const kept = boundTranscript(utterances);
+  // Already placed above when the words lead.
+  const kept = wordsLead ? [] : boundTranscript(utterances);
   if (kept.length) {
     const body = kept.map((entry) => entry.text).join("\n");
     parts.push(

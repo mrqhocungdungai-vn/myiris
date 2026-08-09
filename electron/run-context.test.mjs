@@ -219,3 +219,55 @@ describe("buildRunPrompt", () => {
     });
   });
 });
+
+// the-canvas-becomes-a-conversation, task 6: in a conversation the user is
+// inside, their words are the instruction and the voice layer's brief is a
+// reading of them. Answering the paraphrase instead of the person is the
+// failure this ordering exists to prevent.
+describe("buildRunPrompt: whose words lead", () => {
+  const utterances = [
+    { text: "no wait, not the blue one", at: 2 },
+    { text: "the box on the left, move it under the arrow", at: 3 },
+  ];
+
+  it("puts the user's own words first for a verb that declares wordsLead", () => {
+    const prompt = buildRunPrompt({ stateful: true, wordsLead: true }, { brief: "Move the blue box.", utterances });
+
+    const wordsAt = prompt.indexOf("the box on the left");
+    const briefAt = prompt.indexOf("Move the blue box.");
+    expect(wordsAt).toBeGreaterThanOrEqual(0);
+    expect(wordsAt).toBeLessThan(briefAt);
+    expect(prompt).toMatch(/This is your instruction/);
+    expect(prompt).toMatch(/an interpretation/);
+  });
+
+  it("does not repeat the transcript twice", () => {
+    const prompt = buildRunPrompt({ stateful: true, wordsLead: true }, { brief: "Move it.", utterances });
+    const occurrences = prompt.split("the box on the left").length - 1;
+    expect(occurrences).toBe(1);
+  });
+
+  it("leaves every other verb's prompt exactly as it was — brief first, transcript as context", () => {
+    const prompt = buildRunPrompt({ stateful: false }, { brief: "Do the thing.", utterances });
+
+    const briefAt = prompt.indexOf("Do the thing.");
+    const wordsAt = prompt.indexOf("the box on the left");
+    expect(briefAt).toBeLessThan(wordsAt);
+    expect(prompt).toMatch(/never overrides the instruction/);
+  });
+
+  it("still fences the words when they lead — leading is not trusting", () => {
+    const prompt = buildRunPrompt({ stateful: true, wordsLead: true }, { brief: "b", utterances });
+    // The transcript block carries an untrusted-text fence wherever it sits —
+    // and its label no longer calls itself "background context only", which
+    // would contradict the line above it calling it the instruction.
+    expect(prompt).toMatch(/verbatim transcript of what was said near the user's microphone/);
+    expect(prompt).toContain("containing the request to act on");
+    expect(prompt).not.toContain("as background context only");
+  });
+
+  it("falls back to the brief alone when nothing was heard", () => {
+    const prompt = buildRunPrompt({ stateful: true, wordsLead: true }, { brief: "Draw a box.", utterances: [] });
+    expect(prompt).toBe("Draw a box.");
+  });
+});

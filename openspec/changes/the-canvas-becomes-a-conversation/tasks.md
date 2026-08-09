@@ -41,9 +41,9 @@
 
 ## 6. The user's words lead
 
-- [ ] 6.1 `electron/run-context.mjs` — for resident canvas turns, the verbatim utterance is the instruction and Gemini's reading is labelled as a reading (today: transcript is background that "never overrides the instruction", `:187`)
-- [ ] 6.2 Fencing unchanged — assert it stays
-- [ ] 6.3 Tests: a reading that contradicts the utterance does not replace it
+- [x] 6.1 `electron/run-context.mjs` — registry field `wordsLead`; — for resident canvas turns, the verbatim utterance is the instruction and Gemini's reading is labelled as a reading (today: transcript is background that "never overrides the instruction", `:187`)
+- [x] 6.2 Fencing unchanged and asserted. The transcript's fence LABEL had to change though: it said "as background context only", which would have contradicted the line above it calling the same block the instruction
+- [x] 6.3 Tests (5, `run-context.test.mjs`): the words lead, are not repeated twice, every other verb's prompt is byte-for-byte as it was, leading is still fenced, and no transcript falls back to the brief alone
 
 ## 7. Ceilings: the turn ends, the conversation continues
 
