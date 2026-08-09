@@ -86,3 +86,9 @@
 - [x] Q1 No spend ceiling to design around (Gemini Live free, Claude on subscription). The per-conversation MONEY ceiling is dropped as a residency-ending condition; the per-turn ceiling stays as a runaway guard, not as a cost control (D5)
 - [x] Q2 Warm on canvas open — and Iris announces that canvas mode has begun, which is what makes the warm honest rather than hidden (D1)
 - [x] Q3 Iris reads Claude's result IN FULL, not a summary, "so both the person and Claude understand". Her speech is also her own context, so a summary would compound into answering against a paraphrase of a paraphrase (D3)
+
+## 9. The test that would have caught all three wiring bugs
+
+- [x] 9.1 `electron/wiring-capabilities.effects.test.mjs` — builds the REAL capabilities wiring, the REAL run-exec and the REAL canvas capability, mocking only the process boundaries (the Agent SDK session, the MCP listener). Asks what the user asks: I opened the canvas; did anything actually happen?
+- [x] 9.2 Verified by reintroducing each bug and watching it fail: the warm reaching for a lookup-by-id, the activate handler not warming, the activate handler not announcing. The first attempt did NOT catch the lookup-by-id bug, because the fake answered the same for both accessors — the test had the same blind spot as the code, and was fixed before being kept
+- [x] 9.3 The pattern named, so it is not repeated: `wiring-capabilities.test.mjs` mocks both run-exec and the canvas capability, so it can only assert that things were constructed and called. Every one of the three bugs was a call that happened and an effect that did not
