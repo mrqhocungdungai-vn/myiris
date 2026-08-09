@@ -14,6 +14,18 @@
 
 ## 3. A resident turn stops queueing behind unrelated work
 
+> **Sized, not started.** Two findings from reading `run-queue.mjs` decide the shape:
+> (a) the slot side-effects are ALREADY guarded — `finalize` only disarms the watchdog and
+> dequeues when `active === runId` (`:268-276`), and its comment says this makes the
+> invariant "structural, not conventional". So a run that never takes the slot cannot
+> corrupt the one that has it. The lane is feasible without touching that guarantee.
+> (b) the idle watchdog is keyed to `active` (`:194-205`), so a resident turn would run
+> with NO watchdog at all. That is why this is one unit of work with 7.1: a lane without a
+> per-turn ceiling replaces "your turn waits too long" with "your turn can wedge forever
+> and nothing notices". Additionally `deliverPoTurn` overwrites `state.currentTurn`
+> unconditionally, so per-conversation serialization has to be enforced before two
+> utterances can ever be in flight.
+
 - [ ] 3.1 `electron/run-queue.mjs` — the slot governs jobs (stateless run, plain task, conversation OPEN); a turn into a live conversation is not a job
 - [ ] 3.2 Serialize turns per conversation (the message channel already does this — make it the stated rule, and make a second utterance mid-turn wait for the conversation rather than the system)
 - [ ] 3.3 Confine a resident turn to its declared tools/skills, and refuse a turn that would begin repository work (D2's hazard — this is the mitigation the spec promises)
