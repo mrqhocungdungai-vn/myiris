@@ -219,6 +219,7 @@ async function pump(state) {
  *   systemPrompt?: import("@anthropic-ai/claude-agent-sdk").Options["systemPrompt"],
  *   outputFormat?: import("@anthropic-ai/claude-agent-sdk").Options["outputFormat"] | false,
  *   title?: string,
+ *   warm?: boolean,
  *   buildHooks?: (seams: { costUsd: () => Promise<number|null>, onToolEnd: (toolId: string, isError: boolean) => void, onActivity: (line: string) => void }) => any,
  *   stderr?: (data: string) => void,
  *   query?: typeof query,
@@ -245,6 +246,7 @@ export function getOrCreatePoSession(
     outputFormat,
     buildHooks,
     title,
+    warm = false,
     query: queryFn = query,
   } = {},
 ) {
@@ -288,6 +290,16 @@ export function getOrCreatePoSession(
     // take the whole resident conversation down with it. This is closePoSession's
     // backstop for a subprocess that will not unwind on its own.
     abortController: new AbortController(),
+    // True while this session has been opened but never used: the transport is
+    // up and no turn has been delivered into it. Warming a conversation ahead
+    // of the user's first sentence (the-canvas-becomes-a-conversation D1) is
+    // the only thing that creates one, and the distinction is load-bearing
+    // rather than cosmetic — the review gate parks on the call that OPENS a
+    // conversation, and it decides that by asking whether a live session
+    // exists. Without this flag a warmed transport would answer "yes" and the
+    // user's first sentence would dispatch unreviewed, into a conversation
+    // they were never asked about. Cleared by the first delivered turn.
+    warm: Boolean(warm),
   };
 
   const options = {
@@ -404,6 +416,10 @@ export function deliverPoTurn(state, taskText, { onActivity, onSessionId, onTool
       reject(state.error || new Error("PO session has ended"));
       return;
     }
+    // A warmed session stops being merely warm the moment it is used: from
+    // here on the review gate sees an open conversation, which is correct,
+    // because by now the user has had one.
+    state.warm = false;
     state.currentTurn = {
       resolve,
       reject,
@@ -423,6 +439,18 @@ export function deliverPoTurn(state, taskText, { onActivity, onSessionId, onTool
 export function getPoSessionState(workstreamId) {
   const state = sessions.get(workstreamId);
   return state && !state.ended ? state : null;
+}
+
+/**
+ * Whether a conversation the USER has actually taken part in is open — which
+ * is a different question from whether a transport exists, and it is the one
+ * every caller outside this module is really asking. A session warmed ahead of
+ * the first sentence is live, resumable, and has cost a process; it is not a
+ * conversation that has happened.
+ */
+export function hasUsedPoSession(workstreamId) {
+  const state = getPoSessionState(workstreamId);
+  return Boolean(state) && !state.warm;
 }
 
 // Ends the turn currently in progress on `state`, leaving the session itself

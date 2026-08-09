@@ -19,6 +19,7 @@ import {
   cancelPoTurn,
   setPoSessionModel,
   setPoSessionMcpServers,
+  getPoSessionState,
 } from "./po-session.mjs";
 import { buildSystemPrompt } from "./role-prompt.mjs";
 import { budgetWarnFraction, describeCeiling, isCeilingSubtype, resolveRunBudget } from "./run-budget.mjs";
@@ -712,6 +713,67 @@ export function createRunExec({
   // same conversation in two media, and switching to the canvas happens precisely
   // when talking has stopped working — the moment the accumulated context matters
   // most. Whichever verb is called first is what opens it.
+  /**
+   * Everything a resident shaping session is opened WITH, in one place, so the
+   * two callers cannot drift: the turn that opens a conversation by being
+   * spoken, and the warm that opens one because the canvas appeared. It used
+   * to live only inside `startStatefulRun`, which meant a session could only
+   * come into existence as a side effect of somebody talking.
+   *
+   * `cwd` and `model` are passed in rather than read from a run, because a
+   * warm has no run.
+   *
+   * The return type is taken from `getOrCreatePoSession` itself so the two
+   * cannot disagree: without it the literal `false` in `outputFormat` widens
+   * to `boolean` once it is built here instead of inline at the call.
+   *
+   * @returns {Parameters<typeof getOrCreatePoSession>[1]}
+   */
+  function statefulSessionOptions({ verb, sessionKey, cwd, model, mcpServers, budget, collectStderr, confirmWrite, resumeSessionId, workstreamLabel, warm = false }) {
+    return {
+      agent: `${agentPrefix}${verb.basePersona}`,
+      agentDefinition: resolveAgentDefinition(verb.basePersona, cwd),
+      plugins: irisPluginConfig(),
+      cwd,
+      sessionKey,
+      resumeSessionId,
+      claudeExecutable: claudeBinary(),
+      onAskUserQuestion: (workstreamId, questions) => askUserQuestionViaVoice(workstreamId, questions),
+      confirmWrite,
+      model,
+      mcpServers,
+      budget,
+      stderr: collectStderr,
+      skills: verb.skills,
+      // A spoken reading, not a build report, for the verb that declares so
+      // (open-note-session: the decisions schema's own "keep it to a few
+      // sentences" instruction would condense exactly what must not be
+      // condensed). `false`, never `undefined`, so po-session.mjs's default
+      // does not silently reapply it.
+      outputFormat: verb.structuredOutput ? DECISION_OUTPUT_FORMAT : false,
+      // Set once, when the session opens. Because the session is SHARED, the
+      // clause baked in here is whichever verb opened it — which is why each
+      // turn also carries its own verb's clause in its prompt below. A session
+      // opened by voice must still be told, on the turn that moves to the
+      // canvas, that this turn is canvas work.
+      systemPrompt: buildSystemPrompt(verb),
+      title: [workstreamLabel, verb.label].filter(Boolean).join(" · "),
+      // The session supplies the per-turn seams; the policy (thresholds,
+      // denylist, what a hook does) stays here so both shapes share one. The
+      // seams route through `state.currentTurn`, which is null between turns,
+      // so a hook that fires while nothing is running lands on nothing rather
+      // than on a stale run.
+      buildHooks: (seams) =>
+        buildRunHooks({
+          budget,
+          warnFraction: budgetWarnFraction(),
+          emitEvent,
+          ...seams,
+        }),
+      warm,
+    };
+  }
+
   async function startStatefulRun(run, verb) {
     const workstream = findWorkstream(run.workstream_id);
     if (!workstream) {
@@ -762,47 +824,21 @@ export function createRunExec({
     /** @type {any} */
     let state;
     try {
-      state = getOrCreatePoSession(workstream, {
-        agent: `${agentPrefix}${verb.basePersona}`,
-        agentDefinition: resolveAgentDefinition(verb.basePersona, run.cwd),
-        plugins: irisPluginConfig(),
-        cwd: run.cwd,
-        sessionKey,
-        resumeSessionId: workstream.agent_sessions?.[sessionKey] ?? null,
-        claudeExecutable: claudeBinary(),
-        onAskUserQuestion: (workstreamId, questions) => askUserQuestionViaVoice(workstreamId, questions),
-        confirmWrite,
-        model: run.model,
-        mcpServers,
-        budget,
-        stderr: collectStderr,
-        skills: verb.skills,
-        // A spoken reading, not a build report, for the verb that declares so
-        // (open-note-session: the decisions schema's own "keep it to a few
-        // sentences" instruction would condense exactly what must not be
-        // condensed). `false`, never `undefined`, so po-session.mjs's default
-        // does not silently reapply it.
-        outputFormat: verb.structuredOutput ? DECISION_OUTPUT_FORMAT : false,
-        // Set once, when the session opens. Because the session is SHARED, the
-        // clause baked in here is whichever verb opened it — which is why each
-        // turn also carries its own verb's clause in its prompt below. A session
-        // opened by voice must still be told, on the turn that moves to the
-        // canvas, that this turn is canvas work.
-        systemPrompt: buildSystemPrompt(verb),
-        title: [workstream.label, verb.label].filter(Boolean).join(" · "),
-        // The session supplies the per-turn seams; the policy (thresholds,
-        // denylist, what a hook does) stays here so both shapes share one.
-        // `run` is captured deliberately: hooks that fire between turns route
-        // through `state.currentTurn`, which is null then, so nothing lands on
-        // a stale run.
-        buildHooks: (seams) =>
-          buildRunHooks({
-            budget,
-            warnFraction: budgetWarnFraction(),
-            emitEvent,
-            ...seams,
-          }),
-      });
+      state = getOrCreatePoSession(
+        workstream,
+        statefulSessionOptions({
+          verb,
+          sessionKey,
+          cwd: run.cwd,
+          model: run.model,
+          mcpServers,
+          budget,
+          collectStderr,
+          confirmWrite,
+          resumeSessionId: workstream.agent_sessions?.[sessionKey] ?? null,
+          workstreamLabel: workstream.label,
+        }),
+      );
     } catch (error) {
       runQueue.finalize(run.run_id, RUN_STATUS.ERROR, `Failed to start the live session: ${error.message}`);
       return;
@@ -901,10 +937,76 @@ export function createRunExec({
       });
   }
 
+  /**
+   * Open the shaping conversation ahead of the user's first sentence, because
+   * the surface it serves just appeared (the-canvas-becomes-a-conversation
+   * D1). Nothing is delivered into it: this is the process, the resumed
+   * context and the canvas tools being ready, so the first thing the user says
+   * is answered by a conversation instead of paying to create one.
+   *
+   * It is deliberately quiet about failure. A warm is an optimisation the user
+   * did not ask for by name; if it cannot happen — no credential, no
+   * workstream, a transport that will not start — the first spoken turn opens
+   * the session exactly as it always did. Announcing a failed preparation
+   * would be reporting the absence of something the user was never promised.
+   *
+   * @param {string} verbName - the verb whose conversation to warm
+   */
+  async function warmStatefulConversation(verbName) {
+    try {
+      const workstream = findWorkstream(null);
+      if (!workstream) return { warmed: false, reason: "no-workstream" };
+      if (!poBillingStatus().ok) return { warmed: false, reason: "no-credential" };
+
+      const cwd = runProjectDir({ workstream_id: workstream.id });
+      const verb = resolveVerb(verbName, {
+        changes: openChangesWithTasks(cwd),
+        openNoteId: resolveOpenNoteForRun()?.id ?? null,
+      });
+      if (!verb.stateful) return { warmed: false, reason: "not-a-conversation" };
+
+      const sessionKey = sessionKeyFor(verb.verb, verb.projectState);
+      // Already open — warming again would be a handoff, closing the very
+      // conversation it means to have ready.
+      if (getPoSessionState(workstream.id)) return { warmed: false, reason: "already-open" };
+
+      const mcpRecord = verb.mcpServers.includes("iris-canvas") ? await ensureCanvasMcpForRun() : null;
+      const { collect: collectStderr } = createStderrBuffer();
+
+      getOrCreatePoSession(
+        workstream,
+        statefulSessionOptions({
+          verb,
+          sessionKey,
+          cwd,
+          model: resolveVerbModel(workstream, verb.verb),
+          mcpServers: mcpRecord ? { "iris-canvas": mcpRecord } : undefined,
+          budget: resolveRunBudget(/** @type {any} */ (verb.budget)),
+          collectStderr,
+          confirmWrite: undefined,
+          resumeSessionId: workstream.agent_sessions?.[sessionKey] ?? null,
+          workstreamLabel: workstream.label,
+          // The distinction the review gate depends on: a transport is up, a
+          // conversation has not happened. Cleared by the first turn.
+          warm: true,
+        }),
+      );
+      return { warmed: true, reason: null };
+    } catch (error) {
+      emitEvent({
+        type: "log",
+        level: "warn",
+        message: `Could not warm the shaping conversation: ${error?.message || error}`,
+      });
+      return { warmed: false, reason: "error" };
+    }
+  }
+
   return {
     runProjectDir,
     startClaudeRun,
     startStatelessRun,
     startStatefulRun,
+    warmStatefulConversation,
   };
 }

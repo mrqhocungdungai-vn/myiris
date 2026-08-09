@@ -32,6 +32,7 @@ const CANVAS_IMAGE_GRACE_MS = 500;
  *   emitToRenderer: (channel: string, payload: any) => void,
  *   emitEvent: (event: any) => void,
  *   notifyIris: (lines: string | string[], opts?: { bufferIfOffline?: boolean }) => void,
+ *   warmConversation?: () => Promise<{ warmed: boolean, reason: string|null }>,
  *   getMainWindow: () => any,
  *   getPipelineAvailable: () => boolean,
  *   userDisplayName: () => string,
@@ -43,6 +44,7 @@ export function createCanvasCapability({
   emitToRenderer,
   emitEvent,
   notifyIris = () => {},
+  warmConversation = async () => ({ warmed: false, reason: "not-wired" }),
   getMainWindow,
   getPipelineAvailable,
   userDisplayName,
@@ -209,6 +211,13 @@ export function createCanvasCapability({
         markCanvasEngaged();
         maybeStartCanvasMcp();
         announceCanvasMode();
+        // The conversation, not just the tools. Opening the board used to
+        // start an MCP server and nothing to talk to: the first sentence paid
+        // for a cold session open, a project scaffold and a resumed context
+        // before anyone answered it. Fire-and-forget — a warm that cannot
+        // happen changes nothing, because the first spoken turn still opens
+        // the session exactly as it always did.
+        if (getPipelineAvailable()) void warmConversation();
       },
     },
     // Reply half of the main→renderer image-export request (design.md D3);

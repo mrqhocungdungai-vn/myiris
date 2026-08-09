@@ -288,3 +288,37 @@ describe("canvas capability: canvas mode is announced, and changes Iris's job", 
     expect(capability.promptFragment()).toBe("");
   });
 });
+
+// the-canvas-becomes-a-conversation, task 2: opening the board opens the
+// conversation, not just the tools.
+describe("canvas capability: opening the board warms the conversation", () => {
+  it("warms on activate", () => {
+    const warmConversation = vi.fn(async () => ({ warmed: true, reason: null }));
+    const capability = make({ warmConversation });
+
+    capability.ipcHandlers.find((handler) => handler.channel === "canvas:activate").fn();
+
+    expect(warmConversation).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not warm when there is no pipeline to warm", () => {
+    const warmConversation = vi.fn();
+    const capability = make({ warmConversation, getPipelineAvailable: vi.fn(() => false) });
+
+    capability.ipcHandlers.find((handler) => handler.channel === "canvas:activate").fn();
+
+    expect(warmConversation).not.toHaveBeenCalled();
+  });
+
+  it("does not let a failed warm break opening the panel", () => {
+    // A warm is an optimisation the user never asked for by name. If it cannot
+    // happen, the panel still opens and the first spoken turn opens the
+    // session the way it always did.
+    const warmConversation = vi.fn(async () => {
+      throw new Error("no credential");
+    });
+    const capability = make({ warmConversation });
+
+    expect(() => capability.ipcHandlers.find((handler) => handler.channel === "canvas:activate").fn()).not.toThrow();
+  });
+});

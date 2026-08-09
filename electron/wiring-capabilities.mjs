@@ -97,6 +97,11 @@ export function createCapabilitiesWiring({
     // Canvas mode is a state the user is told about, not one they infer from a
     // panel appearing — so the capability needs the voice, not only the UI.
     notifyIris,
+    // Opening the board opens the conversation. Late-bound because `runExec`
+    // is constructed further down and this is only ever CALLED later, when a
+    // panel actually appears — the same deferral wiring.mjs already uses for
+    // this capability's own methods.
+    warmConversation: () => runExec.warmStatefulConversation("shape_on_canvas"),
     getMainWindow,
     getPipelineAvailable,
     userDisplayName,

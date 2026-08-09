@@ -10,6 +10,7 @@ import {
   cancelPoTurn,
   closePoSession,
   setPoSessionMcpServers,
+  hasUsedPoSession,
 } from "./po-session.mjs";
 import { STATEFULNESS_CLAUSES, buildRunInstructions, buildSystemPrompt } from "./role-prompt.mjs";
 import { resolveVerb } from "./verbs.mjs";
@@ -546,4 +547,52 @@ describe("the PO session's own abort controller", () => {
   function withInterruptNoop(source) {
     source.query.interrupt = async () => ({ still_queued: [] });
   }
+});
+
+// the-canvas-becomes-a-conversation D1: warming opens a transport ahead of the
+// first sentence. The trap it walks into, if the distinction is not kept, is
+// the review gate: it parks on the call that OPENS a conversation and decides
+// that by asking whether a live session exists. A warmed transport answering
+// "yes" would send the user's very first sentence straight through, into a
+// conversation they were never asked about.
+describe("po-session: a warmed session is not yet a conversation", () => {
+  it("reports a warmed session as not-yet-used", () => {
+    const source = createFakeQuerySource();
+    const workstream = makeWorkstream();
+    getOrCreatePoSession(workstream, { warm: true, query: () => source.query });
+
+    expect(hasUsedPoSession(workstream.id)).toBe(false);
+  });
+
+  it("counts as a conversation the moment a turn is delivered into it", () => {
+    const source = createFakeQuerySource();
+    const workstream = makeWorkstream();
+    const state = getOrCreatePoSession(workstream, { warm: true, query: () => source.query });
+
+    // The promise is deliberately not awaited — the assertion is about the
+    // state flipping on delivery, not about the turn's outcome — so its
+    // rejection is absorbed rather than left to surface as an unhandled one.
+    deliverPoTurn(state, "connect those two boxes").catch(() => {});
+
+    expect(hasUsedPoSession(workstream.id)).toBe(true);
+  });
+
+  it("treats an ordinary session as a conversation from the start", () => {
+    // Only a warm creates the in-between state; nothing else changes.
+    const source = createFakeQuerySource();
+    const workstream = makeWorkstream();
+    getOrCreatePoSession(workstream, { query: () => source.query });
+
+    expect(hasUsedPoSession(workstream.id)).toBe(true);
+  });
+
+  it("reports no conversation once the session is closed", () => {
+    const source = createFakeQuerySource();
+    const workstream = makeWorkstream();
+    const state = getOrCreatePoSession(workstream, { query: () => source.query });
+    deliverPoTurn(state, "x").catch(() => {});
+    closePoSession(workstream.id);
+
+    expect(hasUsedPoSession(workstream.id)).toBe(false);
+  });
 });

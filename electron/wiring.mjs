@@ -10,7 +10,7 @@
 // received injected from main.mjs, one of the four modules allowed to
 // import Electron directly, like any other domain module.
 import { createRunQueue, RUN_STATUS } from "./run-queue.mjs";
-import { getPoSessionState } from "./po-session.mjs";
+import { hasUsedPoSession } from "./po-session.mjs";
 import { isVerb, projectState, resolveVerb } from "./verbs.mjs";
 import { createPipelineProbes } from "./pipeline-probes.mjs";
 import { createPipelineInstall } from "./pipeline-install.mjs";
@@ -305,7 +305,12 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     projectStateFor: (workstream) => projectState(workstream?.cwd ? openChangesWithTasks(workstream.cwd) : []),
     // Phase scoping for the review gate (design.md D6): a stateful verb parks
     // only on the call that OPENS its resident session.
-    hasLiveStatefulSession: (workstreamId) => Boolean(getPoSessionState(workstreamId)),
+    // "Has the user got a conversation open", not "does a transport exist".
+    // A session warmed when the canvas opened is live and resumable but has
+    // had no turn: the review gate must still park on the first sentence, and
+    // the voice layer must not be told a shaping conversation is under way
+    // before one is.
+    hasLiveStatefulSession: (workstreamId) => hasUsedPoSession(workstreamId),
     getUiContextSnapshot,
     resolvePendingPoQuestion,
     // secondBrainCapability is constructed further down (see the forward

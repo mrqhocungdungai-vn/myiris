@@ -5,10 +5,10 @@
 
 ## 2. The open canvas warms the conversation, and Iris says so
 
-- [ ] 2.1 `electron/capabilities/canvas.mjs` — `canvas:activate` warms the shaping session (scaffold + session + canvas MCP attached) behind the availability gate it already applies to the MCP server
+- [x] 2.1 `canvas:activate` warms the shaping conversation. The session-config assembly was extracted out of `startStatefulRun` into `statefulSessionOptions` first — it could only be built as a side effect of somebody talking, so a session could only exist that way too
 - [ ] 2.2 New `canvas:deactivate` from the renderer: marks the conversation idle; does NOT close it
 - [ ] 2.3 `src/components/DrawingCanvas.tsx` — emit deactivate on unmount alongside the existing activate on mount
-- [ ] 2.4 Review gate is asked at warm time (`PARK.ON_OPEN` keeps its meaning); a declined warm is not silently retried by the next utterance
+- [x] 2.4 The review gate is NOT bypassed, which needed the trap fixing rather than the gate moving: `shouldPark` asks whether a live session exists, so a warmed transport would have answered yes and sent the first sentence through unreviewed. `po-session` now distinguishes a warmed transport from a conversation that has happened (`warm`, cleared by the first turn), and `hasLiveStatefulSession` reads the latter
 - [x] 2.5 Iris announces canvas mode when it opens — the announcement is what makes warming honest rather than a hidden cost (Q2)
 - [~] 2.6 PARTIAL — announcement tests done (silent with no pipeline, once per opening, again on reopen). Session-warming tests wait on 2.1. Originally: warm with pipeline unavailable opens nothing AND says nothing; close/reopen resumes the same session; a declined park is not re-asked per utterance; the announcement fires once per opening, not per utterance
 
