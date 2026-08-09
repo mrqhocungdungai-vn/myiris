@@ -257,6 +257,24 @@ from what each kind of run can do about a thin brief:
   transcript as background to check against. A run forbidden to ask cannot recover
   from a vague brief.
 
+A third case sits above both. A verb that declares **`wordsLead`** — the
+conversations the user is standing inside, `shape_on_canvas` and `work_on_note` —
+puts the utterance *first* and the brief *after it*, labelled as a reading that
+may have lost or added something. Everywhere else the brief leads, because the
+voice layer was asked to turn a request into a task. In a live conversation that
+is backwards: the user is mid-thought, "no wait, not the blue one" is exactly the
+correction a paraphrase loses, and answering the paraphrase instead of the person
+is the failure that matters. Leading is not trusting — both blocks stay fenced —
+but the fence's *label* changes with its position, because a block cannot
+announce itself as "background context only" while the line above it calls it the
+instruction.
+
+The ordering is only worth anything if the transcript actually contains the
+sentence that caused the turn. It did not: transcription fragments reach the ring
+on a turn boundary, and a tool call arrives *before* `turnComplete`, so the one
+utterance a turn most needed was still sitting in a buffer.
+`live-messages.mjs` flushes before dispatching a tool call for that reason.
+
 The attachment is bounded twice: the ring itself is capped by count and age, and
 `boundTranscript` applies a tighter per-use cap (12 utterances / 4 000 chars,
 dropping the *oldest* first). On a resumed session this block is added every turn,
@@ -264,6 +282,85 @@ so an unbounded one would grow the cost of a long conversation turn after turn.
 
 **This narrows the bottleneck; it does not remove it.** Gemini still picks the
 verb and writes the summary line.
+
+## The canvas is a conversation, not an errand
+
+Drawing with Iris is the one place the pipeline runs as a *dialogue* rather than
+as a request and a wait, and almost everything that makes that work is policy
+rather than transport. The transport was already right: `po-session.mjs` keeps a
+`query()` alive across turns through a pull-based channel, residency has no idle
+teardown, and the canvas MCP server survives runs. What was wrong was when a
+session existed, when a turn could run, and what the user heard meanwhile.
+
+**Opening the board opens the conversation.** `canvas:activate` warms the shaping
+session — scaffold, session, canvas tools — so the first sentence is answered by
+an existing conversation instead of paying to create one. Iris says the mode is
+open when it happens, which is what makes warming honest rather than a hidden
+cost: an announced state is one the user can hear and can close.
+
+**A warmed session is not a conversation that has happened**, and the difference
+is load-bearing. The review gate parks on the call that *opens* a conversation
+and decides that by asking whether a live session exists — so a warmed transport
+answering "yes" would send the user's first sentence through unreviewed, into a
+conversation they were never asked about. `po-session` carries a `warm` flag,
+cleared by the first delivered turn, and two predicates read it:
+
+| Question | Predicate | Used by |
+| --- | --- | --- |
+| Has the user taken part in this conversation? (consent) | `hasUsedPoSession` | the review gate |
+| Is there a live session to deliver into? (mechanics) | `getPoSessionState` | the lane |
+
+Conflating them is not academic: it left the first sentence after opening the
+canvas queueing behind unrelated work, which is the half of the cost warming does
+not remove.
+
+**A turn into an open conversation is not a job.** The execution slot exists to
+stop two *jobs* running at once, because two workers writing a repository is the
+hazard. The next turn of an open conversation shares a context window and cannot
+begin a second worker, so it takes its own lane (`runQueue.submitResident`) and
+waits only for the previous turn *of its own conversation* — `deliverPoTurn`
+overwrites the in-flight turn's handle, so two turns of one conversation genuinely
+must not overlap. This is safe against the slot by construction: `finalize`
+already guards every slot side-effect behind `active === runId`.
+
+Two things follow that are easy to miss. The slot's idle watchdog is keyed to the
+active run, so a resident turn carries **its own**, or the lane would trade
+"waits too long" for "wedges unnoticed". And the canvas verb, which withheld no
+tools at all while one slot made overlap impossible, now **withholds Write, Edit,
+NotebookEdit and Bash** — a conversation about a whiteboard has no business
+editing files beside an unrelated build. It still asks freely.
+
+**The user hears the work, not just the result.** Acts reach the voice on a 3 s
+trailing throttle (the deck is glanced at; speech is listened to, and a voice
+reporting every tool call talks over the work it narrates), and the worker's own
+prose is spoken per block as it lands. Neither is buffered when the voice is
+offline: every other `SYSTEM_EVENT_*` is a state change worth delivering late,
+while running commentary replayed on reconnect becomes remarks about work that
+finished minutes ago. `includePartialMessages` stays declined — an `assistant`
+message already arrives complete several times per turn, which is the same
+property at the granularity of a thought rather than a token.
+
+**The result is read out whole**, not summarized, for verbs declaring
+`spokenResult: "verbatim"`. That began as `work_on_note`'s private path and is a
+registry field now, because the announcement layer had become a second place a
+verb was defined. Two verbs, two reasons: a note in précis is not the note, and a
+summary of an answer in a brainstorm the user watched happen is a worse answer —
+and what Iris speaks is also what she reasons from next turn, so summarizing
+compounds.
+
+**Iris's own job changes while the canvas is open.** Everywhere else she *routes*
+— picks a verb, writes a brief, with editorial licence over what was said. Here
+she *carries*: the words through unchanged and promptly, the answer back in full.
+That is a voice instruction (the canvas capability's `promptFragment`, present
+only while the canvas is engaged), not a Claude skill — describing one agent's job
+in another agent's briefing is the mistake it avoids.
+
+**Speaking over Iris ends the turn, not the conversation** — `interrupt()`, never
+`abort`, so the context window and everything already drawn survive.
+
+Two decisions are on the diagnostic log, because neither is visible from outside
+the process and both decide how the feature feels: whether a conversation was
+warmed before the first turn, and which lane a stateful turn took.
 
 ## The shared focus reaches the run beside the transcript
 

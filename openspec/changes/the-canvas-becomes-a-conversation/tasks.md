@@ -101,3 +101,10 @@
 - [x] 10.1 `run-exec` records when a conversation was warmed and ready before the first turn; `run-dispatch` records which lane a stateful turn took. Both are facts the user cannot see from outside the process, and both are the difference between "it feels slow" having an explanation in the record or not — which is exactly how a warm that warmed nothing went unnoticed for a release
 - [x] 10.2 Deliberately two lines, not a trace: each answers a "why did it do that" question the diagnostic log exists for. A failed warm still says nothing, because it is an optimisation nobody asked for by name and the first spoken turn opens the session as it always did
 - [x] 10.3 Tests for both, including the silences
+
+## 11. The understanding survives the session
+
+- [x] 11.1 `docs/PIPELINE_INTERNALS.md` gains "The canvas is a conversation, not an errand" — the architecture in one place: warm on open, the two predicates and why conflating them costs the first sentence, the resident lane and its own watchdog, the tool confinement the lane made necessary, speaking while working, the verbatim result, Iris's conduit role, barge-in, and the two log lines
+- [x] 11.2 "The user's own words reach the run" corrected — it still described the transcript as background only, which stopped being true for `wordsLead` verbs, and a doc that has become false is worse than a missing one
+- [x] 11.3 `CLAUDE.md` gains its router line, since the file is a router and this capability had no entry at all
+- [x] 11.4 The `.audit/` reports stay what they are: investigation snapshots with `file:line` evidence, not documentation
