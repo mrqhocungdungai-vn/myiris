@@ -65,6 +65,7 @@ function makeExec(queryImpl, overrides = {}) {
       if (message?.type === "result") run.result = message;
     },
     pushActivity: vi.fn(),
+    speakWorkingText: vi.fn(),
     rememberClaudeSessionId: vi.fn(),
     pushToolStart: vi.fn(),
     pushToolEnd: vi.fn(),

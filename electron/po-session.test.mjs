@@ -596,3 +596,56 @@ describe("po-session: a warmed session is not yet a conversation", () => {
     expect(hasUsedPoSession(workstream.id)).toBe(false);
   });
 });
+
+// The false-coverage lesson, in one suite. The prose-narration tests were
+// written against handleClaudeStreamMessage — the STATELESS path — while the
+// canvas conversation is resident and routes through po-session's own parser.
+// They passed while the feature was wired to nothing: the one conversation it
+// exists for was the one that never spoke.
+describe("po-session: a resident turn forwards the assistant's prose", () => {
+  it("hands assistant text to the turn's onAssistantText", async () => {
+    const source = createFakeQuerySource();
+    const workstream = makeWorkstream();
+    const state = getOrCreatePoSession(workstream, { query: () => source.query });
+    const onAssistantText = vi.fn();
+    deliverPoTurn(state, "what do you make of this?", { onAssistantText }).catch(() => {});
+
+    source.pushMessage({
+      type: "assistant",
+      message: { content: [{ type: "text", text: "Those two boxes overlap." }] },
+    });
+
+    await vi.waitFor(() => expect(onAssistantText).toHaveBeenCalledWith("Those two boxes overlap."));
+  });
+
+  it("does not route tool calls through it", async () => {
+    // onActivity carries "[Tool] input" lines; reading those aloud would be
+    // narrating machinery.
+    const source = createFakeQuerySource();
+    const state = getOrCreatePoSession(makeWorkstream(), { query: () => source.query });
+    const onAssistantText = vi.fn();
+    const onActivity = vi.fn();
+    deliverPoTurn(state, "draw it", { onAssistantText, onActivity }).catch(() => {});
+
+    source.pushMessage({
+      type: "assistant",
+      message: { content: [{ type: "tool_use", id: "t1", name: "add_elements", input: {} }] },
+    });
+
+    await vi.waitFor(() => expect(onActivity).toHaveBeenCalled());
+    expect(onAssistantText).not.toHaveBeenCalled();
+  });
+
+  it("survives a caller that supplies no handler", async () => {
+    const source = createFakeQuerySource();
+    const state = getOrCreatePoSession(makeWorkstream(), { query: () => source.query });
+    const onActivity = vi.fn();
+    deliverPoTurn(state, "x", { onActivity }).catch(() => {});
+
+    source.pushMessage({ type: "assistant", message: { content: [{ type: "text", text: "hello" }] } });
+
+    // The pump must not throw on the missing optional handler; the activity
+    // callback still arriving is the proof it got past that line.
+    await vi.waitFor(() => expect(onActivity).toHaveBeenCalledWith("hello"));
+  });
+});

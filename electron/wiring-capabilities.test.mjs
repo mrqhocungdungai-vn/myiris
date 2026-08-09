@@ -86,6 +86,7 @@ function makeDeps(overrides = {}) {
     openChangesWithTasks: vi.fn(),
     handleClaudeStreamMessage: vi.fn(),
     pushActivity: vi.fn(),
+    speakWorkingText: vi.fn(),
     rememberClaudeSessionId: vi.fn(),
     pushToolStart: vi.fn(),
     pushToolEnd: vi.fn(),

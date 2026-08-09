@@ -206,6 +206,7 @@ export function buildNoteWriteGuard({ askUserQuestionViaVoice, workstreamId, not
  *   openNoteWritePath?: () => string | null,
  *   handleClaudeStreamMessage: (run: any, message: any) => void,
  *   pushActivity: (run: any, line: string) => void,
+ *   speakWorkingText: (run: any, text: string) => void,
  *   rememberClaudeSessionId: (run: any, claudeSessionId: string | null) => void,
  *   pushToolStart: (run: any, toolId: string, toolName: string, detail: any) => void,
  *   pushToolEnd: (run: any, toolId: string, isError: boolean) => void,
@@ -245,6 +246,7 @@ export function createRunExec({
   openNoteWritePath = () => null,
   handleClaudeStreamMessage,
   pushActivity,
+  speakWorkingText,
   rememberClaudeSessionId,
   pushToolStart,
   pushToolEnd,
@@ -884,6 +886,11 @@ export function createRunExec({
           }),
           {
             onActivity: (line) => pushActivity(run, line),
+            // The resident path does NOT go through handleClaudeStreamMessage —
+            // po-session parses its own stream — so this has to be wired here
+            // or the conversation the feature exists for is the one that never
+            // speaks while it works.
+            onAssistantText: (text) => speakWorkingText(run, text),
             onSessionId: (sessionId) => rememberClaudeSessionId(run, sessionId),
             onToolStart: (toolId, toolName, detail) => pushToolStart(run, toolId, toolName, detail),
             onToolEnd: (toolId, isError) => pushToolEnd(run, toolId, isError),

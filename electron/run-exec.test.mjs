@@ -75,6 +75,7 @@ function make(overrides = {}) {
     recentUtterances: () => [],
     handleClaudeStreamMessage: recordResult,
     pushActivity: vi.fn(),
+    speakWorkingText: vi.fn(),
     rememberClaudeSessionId: vi.fn(),
     pushToolStart: vi.fn(),
     pushToolEnd: vi.fn(),

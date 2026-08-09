@@ -137,6 +137,10 @@ function routeMessage(state, message) {
       state.currentTurn?.onSessionId?.(sessionId);
     },
     onActivity: (text) => state.currentTurn?.onActivity(text),
+    // The assistant's own prose, kept separate from the activity log because
+    // only one of the two is meant for a person listening. A resident turn is
+    // the case this matters for — it is the conversation the user is in.
+    onAssistantText: (text) => state.currentTurn?.onAssistantText?.(text),
     onToolStart: (toolId, toolName, detail) => state.currentTurn?.onToolStart(toolId, toolName, detail),
     onToolEnd: (toolId, isError) => state.currentTurn?.onToolEnd(toolId, isError),
     onResult: (result) => {
@@ -408,9 +412,13 @@ export async function setPoSessionMcpServers(state, servers) {
 /**
  * @param {any} state
  * @param {string} taskText
- * @param {{ onActivity?: (text: string) => void, onSessionId?: (sessionId: string) => void, onToolStart?: (toolId: string, toolName: string, detail: unknown) => void, onToolEnd?: (toolId: string, isError: boolean) => void }} [callbacks]
+ * @param {{ onActivity?: (text: string) => void, onAssistantText?: (text: string) => void, onSessionId?: (sessionId: string) => void, onToolStart?: (toolId: string, toolName: string, detail: unknown) => void, onToolEnd?: (toolId: string, isError: boolean) => void }} [callbacks]
  */
-export function deliverPoTurn(state, taskText, { onActivity, onSessionId, onToolStart, onToolEnd } = {}) {
+export function deliverPoTurn(
+  state,
+  taskText,
+  { onActivity, onAssistantText, onSessionId, onToolStart, onToolEnd } = {},
+) {
   return new Promise((resolve, reject) => {
     if (state.ended) {
       reject(state.error || new Error("PO session has ended"));
@@ -424,6 +432,7 @@ export function deliverPoTurn(state, taskText, { onActivity, onSessionId, onTool
       resolve,
       reject,
       onActivity: onActivity || (() => {}),
+      onAssistantText: onAssistantText || (() => {}),
       onSessionId: onSessionId || (() => {}),
       onToolStart: onToolStart || (() => {}),
       onToolEnd: onToolEnd || (() => {}),

@@ -503,6 +503,7 @@ export function createRunStream({
     rememberClaudeSessionId,
     cancelActivityThrottle,
     pushActivity,
+    speakWorkingText,
     pushToolStart,
     pushToolEnd,
     handleClaudeStreamMessage,
