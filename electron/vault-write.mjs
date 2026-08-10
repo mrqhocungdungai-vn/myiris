@@ -298,3 +298,81 @@ export async function setNoteTags({ path: notePath, tags }) {
     return { ok: false, error: /** @type {Error} */ (error).message };
   }
 }
+
+// A hard cap on a title taken from speech, so a whole dictated paragraph
+// mistaken for a title cannot become a filename the OS refuses.
+const NOTE_TITLE_MAX = 80;
+
+/**
+ * The filename-safe form of a note title. Not a general slug: the vault is
+ * plain markdown read in Obsidian, where the filename IS the title and spaces
+ * and diacritics are wanted — Vietnamese titles must survive intact. Only the
+ * characters a path cannot carry are replaced.
+ */
+export function noteFileName(title) {
+  const cleaned = String(title)
+    .replace(/[/\\:*?"<>|\n\r\t]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, NOTE_TITLE_MAX)
+    .trim();
+  return cleaned;
+}
+
+/**
+ * The title to file a note under when the caller did not supply one: the first
+ * line of what was said, trimmed to something a title can be.
+ *
+ * A spoken capture often has no title at all — the user said a sentence, not a
+ * heading — and a note with no title is unfindable in a vault whose filenames
+ * are its titles. Deriving one is better than refusing the write or inventing
+ * a timestamp nobody can search for.
+ */
+export function titleFromText(text) {
+  const firstLine = String(text).split(/\n/)[0].trim();
+  const clipped = firstLine.length > NOTE_TITLE_MAX ? `${firstLine.slice(0, NOTE_TITLE_MAX).trim()}…` : firstLine;
+  return clipped || "Untitled note";
+}
+
+/**
+ * Writes ONE note into the vault as a plain markdown file with frontmatter —
+ * the same shape every other note in the vault has, and the same shape the
+ * welcome note is seeded with.
+ *
+ * Never overwrites: a title that already exists gets a numbered suffix. Two
+ * captures that happen to start with the same sentence are two things the user
+ * said, and silently replacing the first with the second would lose one of
+ * them with no way to notice.
+ *
+ * Never throws — resolves `{ ok: false, error }`, matching the spool writers
+ * above, because a full disk must not become an unhandled rejection inside a
+ * voice tool call.
+ *
+ * @param {{ dir: string, title?: string, text: string, tags?: string[]|string, io?: typeof fs, now?: () => Date }} input
+ * @returns {Promise<{ ok: true, file: string, title: string } | { ok: false, error: string }>}
+ */
+export async function writeVaultNote({ dir, title, text, tags, io = fs, now = () => new Date() }) {
+  try {
+    const wanted = noteFileName(title?.trim() ? title : titleFromText(text));
+    if (!wanted) return { ok: false, error: "The note had no usable title." };
+    io.mkdirSync(dir, { recursive: true });
+
+    let finalTitle = wanted;
+    let target = path.join(dir, `${finalTitle}.md`);
+    for (let n = 2; io.existsSync(target); n += 1) {
+      finalTitle = `${wanted} ${n}`;
+      target = path.join(dir, `${finalTitle}.md`);
+    }
+
+    const front = { title: finalTitle, date: now().toISOString() };
+    // Gemini sends tags either as a list or as one comma-separated string,
+    // depending on how the schema's array is filled from speech.
+    const tagList = Array.isArray(tags) ? tags : String(tags ?? "").split(",");
+    const cleanTags = tagList.map((t) => String(t).trim()).filter(Boolean);
+    if (cleanTags.length) front.tags = cleanTags;
+    await writeFileAtomicAsync(target, matter.stringify(text, front));
+    return { ok: true, file: target, title: finalTitle };
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+}

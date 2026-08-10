@@ -257,27 +257,44 @@ describe("second-brain capability: capture_note tool", () => {
     expect(fs.existsSync(NOTES_VAULT_DIR)).toBe(true);
   });
 
-  it("appends the trimmed text to the capture spool, not the run spool", async () => {
-    await make().captureNote({ text: "  remember this  " });
-    expect(appendSpoolRecord).toHaveBeenCalledTimes(1);
-    const call = appendSpoolRecord.mock.calls[0][0];
-    expect(call.dir).toBe(path.join(NOTES_VAULT_DIR, "inbox", "captures"));
-    expect(call.content).toContain("remember this");
+  // A NOTE THE USER ASKED FOR IS A NOTE. This used to append a line to
+  // `inbox/captures` — a queue awaiting a later curation run — and then say
+  // "Saved to your notes." Nothing by that name existed: the user could not
+  // open it, could not find it in the galaxy, and had no way to tell that what
+  // they heard was a promise rather than a fact.
+  it("writes a real note file into the vault, not a line in the capture spool", async () => {
+    const result = await make().captureNote({ text: "  remember this  " });
+    expect(result.status).toBe("ok");
+    expect(result.file).toBe(path.join(NOTES_VAULT_DIR, "remember this.md"));
+    expect(result.file).not.toContain("inbox");
+    expect(fs.readFileSync(result.file, "utf8")).toContain("remember this");
   });
 
-  it("names the saved file on a successful write", async () => {
-    const result = await make().captureNote({ text: "remember this" });
-    expect(result.status).toBe("ok");
-    expect(result.file).toBe("/mock/inbox/captures/x.md");
+  it("titles a spoken capture from its first line when no title was given", async () => {
+    const result = await make().captureNote({ text: "buy oat milk\nand pay the電 bill" });
+    expect(result.title).toBe("buy oat milk");
+  });
+
+  it("keeps a Vietnamese title intact, diacritics and all", async () => {
+    const result = await make().captureNote({ text: "ghi chú", title: "Kiến trúc Phước Ân" });
+    expect(result.title).toBe("Kiến trúc Phước Ân");
+    expect(fs.existsSync(path.join(NOTES_VAULT_DIR, "Kiến trúc Phước Ân.md"))).toBe(true);
+  });
+
+  it("never overwrites an existing note — two captures are two things said", async () => {
+    const cap = make();
+    const first = await cap.captureNote({ text: "same opening line", title: "Ideas" });
+    const second = await cap.captureNote({ text: "a different thought", title: "Ideas" });
+    expect(first.title).toBe("Ideas");
+    expect(second.title).toBe("Ideas 2");
+    expect(fs.readFileSync(first.file, "utf8")).toContain("same opening line");
   });
 
   // spec: "A capture whose write fails is reported as failed, not confirmed."
   it("reports a failure, not a save, when the write fails", async () => {
-    appendSpoolRecord.mockResolvedValueOnce({ ok: false, error: "ENOSPC" });
-    const result = await make().captureNote({ text: "remember this" });
+    const cap = make();
+    const result = await cap.captureNote({ text: "x", title: "\u0000" });
     expect(result.status).toBe("error");
-    expect(result.error).toContain("ENOSPC");
-    expect(result.file).toBeUndefined();
   });
 
   it("rejects an empty capture without touching the filesystem", async () => {

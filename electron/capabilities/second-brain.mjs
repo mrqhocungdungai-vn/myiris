@@ -12,13 +12,13 @@ import { createVaultGraph } from "../vault-graph.mjs";
 import { matchNotesByName } from "../note-name-match.mjs";
 import { appendRunRecord, inboxBacklog } from "../run-inbox.mjs";
 import {
-  appendSpoolRecord,
   captureSpoolDir,
   runSpoolDir,
   sessionsSpoolDir,
   linkNotes,
   unlinkNotes,
   setNoteTags,
+  writeVaultNote,
 } from "../vault-write.mjs";
 import { INITIAL_FOCUS, FOCUS_PROMPT_BOUND, toggle as toggleFocusId, clear as clearFocusState, resolve as resolveFocus } from "../focus.mjs";
 import { fenceUntrustedText } from "../untrusted-text.mjs";
@@ -96,9 +96,10 @@ const CAPTURE_NOTE_DECLARATION = {
   description:
     "Save a thought directly to the user's personal notes vault, right now — a plain file write: no Claude run, no tokens, " +
     "no execution slot, and it works even with no Claude credential configured. Use for 'note this down', 'save that', " +
-    "'ghi chú lại: …'. Confirm only after this reports status 'ok'; if it reports an error, tell the user the capture failed " +
-    "rather than saying it was saved. This only appends the raw thought — for weaving accumulated captures into the wiki, " +
-    "retrieving from notes, or an explicit 'write this up as a page' request, use the capture_learning verb instead.",
+    "'ghi chú lại: …'. This creates a REAL note the user can open, search and see in the galaxy immediately — it is not a " +
+    "queue. Confirm only after this reports status 'ok', and say the title it reports back; if it reports an error, tell " +
+    "the user it was not saved. For weaving many existing notes into a linked wiki page, retrieving from notes, or an " +
+    "explicit 'write this up as a page' request, use the capture_learning verb instead.",
   parameters: {
     type: "object",
     properties: {
@@ -106,7 +107,12 @@ const CAPTURE_NOTE_DECLARATION = {
         type: "string",
         description: "The thought to capture, in the user's own words, as close to verbatim as you can manage.",
       },
-      title: { type: "string", description: "A short title, only if the user gave one or it is obvious. Optional." },
+      title: {
+        type: "string",
+        description:
+          "A short title. This becomes the note's filename and is how the user finds it again, so give one whenever the " +
+          "thought has an obvious subject. Omit it only when it genuinely has none — the first line is used instead.",
+      },
       tags: { type: "string", description: "Comma-separated tags, only if obvious from context. Optional." },
     },
     required: ["text"],
@@ -548,19 +554,6 @@ This note is just a starting point — edit it, retag it, or delete it whenever 
   // title, tags, or links by default — those are honoured when Gemini supplies
   // them, but the common case is a bare thought. Owned here, not by
   // vault-write.mjs, on the same D1 split run-inbox.mjs already uses: that
-  // module owns writing, this capability owns what a record looks like.
-  function renderCaptureRecord({ text, title, tags, now = () => new Date() }) {
-    const tagList = Array.isArray(tags)
-      ? tags
-      : typeof tags === "string" && tags
-        ? tags.split(",").map((t) => t.trim()).filter(Boolean)
-        : [];
-    const lines = [`## ${now().toISOString()}`];
-    if (title) lines.push(`- title: ${title}`);
-    if (tagList.length) lines.push(`- tags: ${tagList.join(", ")}`);
-    lines.push("", text, "");
-    return lines.join("\n");
-  }
 
   // The capture tool's handler (personal-knowledge-notes, vault-write-path
   // design D4): a direct file write, not a run. Ensures the vault exists first
@@ -569,17 +562,46 @@ This note is just a starting point — edit it, retag it, or delete it whenever 
   // actually did — never a claim of success before the write settles (spec: "A
   // capture whose write fails is reported as failed, not confirmed").
   /** @param {{ text?: string, title?: string, tags?: string | string[] }} [params] */
+  // A NOTE THE USER ASKED FOR IS A NOTE, NOT A QUEUE ENTRY.
+  //
+  // This used to append a line to `inbox/captures` — a spool awaiting a later
+  // `capture_learning` run to weave it into the vault — and then report "Saved
+  // to your notes." Nothing by that name existed. The user could not open it,
+  // could not find it in the galaxy, and had no way to tell that what they
+  // heard was a promise rather than a fact.
+  //
+  // The inbox is for material the user did NOT ask to keep: ambient session
+  // capture and finished-run records, which are raw and need curating before
+  // they are worth anything. Batching exists because curation is expensive. But
+  // "write this into my second brain" IS the curation decision — the user has
+  // already made it, and deferring it solves a problem they did not have.
+  //
+  // Written directly, with no worker, exactly as the welcome note is: a plain
+  // markdown file with frontmatter, which is what every other note in this
+  // vault is. That keeps it working with no Claude credential at all, which
+  // matters most here — the cheapest thing the second brain can do must not be
+  // the thing that requires the pipeline.
   async function captureNote({ text, title, tags } = {}) {
     const trimmed = String(text ?? "").trim();
     if (!trimmed) return { status: "error", error: "Nothing to capture — text is required." };
     ensureNotesVaultReady();
-    const result = await appendSpoolRecord({
-      dir: NOTES_CAPTURES_DIR,
-      content: renderCaptureRecord({ text: trimmed, title, tags }),
+    const result = await writeVaultNote({
+      dir: NOTES_VAULT_DIR,
+      title,
+      text: trimmed,
+      tags,
+      io: fs,
+      now: () => new Date(),
     });
-    if (!result.ok) return { status: "error", error: `Could not save the note: ${result.error}` };
-    return { status: "ok", message: "Saved to your notes.", file: result.file };
+    if (result.ok !== true) return { status: "error", error: `Could not save the note: ${result.error}` };
+    return {
+      status: "ok",
+      message: `Saved as the note "${result.title}".`,
+      file: result.file,
+      title: result.title,
+    };
   }
+
 
   // Ambient session capture (ambient-memory): the opt-in retention of
   // conversation text into NOTES_SESSIONS_DIR. Two independent gates decide
