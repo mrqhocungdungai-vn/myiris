@@ -148,9 +148,9 @@ describe("session-store: model resolution", () => {
   it("does not couple a verb that owns its own session", () => {
     const store = make();
     const workstream = store.createWorkstream("Proj");
-    const result = /** @type {any} */ (store.setVerbModel(workstream.id, "review", "claude-sonnet-5"));
+    const result = /** @type {any} */ (store.setVerbModel(workstream.id, "investigate", "claude-sonnet-5"));
     expect(result.shared).toBe(false);
-    expect(result.verbs).toEqual(["review"]);
+    expect(result.verbs).toEqual(["investigate"]);
   });
 
   it("reads a persona-group env override before the verb's default", () => {
@@ -256,7 +256,7 @@ describe("session-store: migrating a pre-verb store", () => {
     for (const verb of ["shape_requirements", "shape_on_canvas"]) {
       expect(store.resolveVerbModel(workstream, verb)).toBe("claude-opus-4-8");
     }
-    for (const verb of ["execute", "finish", "investigate", "review", "capture_learning"]) {
+    for (const verb of ["execute", "finish", "investigate", "capture_learning"]) {
       expect(store.resolveVerbModel(workstream, verb)).toBe("claude-haiku-4-5-20251001");
     }
     expect(workstream.agent_models.po).toBeUndefined();

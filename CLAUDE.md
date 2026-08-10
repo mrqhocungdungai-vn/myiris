@@ -14,7 +14,7 @@ A desktop voice companion (Electron + React + Vite + TypeScript), **macOS only**
 app, and chat needs only `GEMINI_API_KEY`. Iris **ships Claude Code inside the
 app** (the Agent SDK's native binary — nothing to install), so adding a Claude
 credential unlocks the build pipeline: Gemini delegates real work to Claude
-through **eight named verbs**, each with its own parameter schema, scoped skills,
+through **seven named verbs**, each with its own parameter schema, scoped skills,
 model, and ceilings — all declared in one registry, `electron/verbs.mjs`. **Iris
 picks the verb per request**; the user never names a role or operates a control.
 
@@ -108,8 +108,9 @@ tracks *that*, guarded by `scripts/check-types-node.mjs`.
 - **Iris never reads or writes the user's `~/.claude`.** This takes *two* mechanisms — `settingSources` excluding the `user` scope, **and** pinning `CLAUDE_CONFIG_DIR` to `~/.myiris/claude-home`, because transcripts, `.claude.json`, and auto-memory are read/written regardless of `settingSources`. Both live in `worker-env.mjs`; the reasoning and its consequences are in [docs/PIPELINE_INTERNALS.md](docs/PIPELINE_INTERNALS.md).
 - **Configure a run only through options the Agent SDK declares.** An undeclared option is silently dropped — `appendSystemPrompt` was, for months, and the resident session ran with no base prompt while the tests claimed otherwise. `electron/sdk-options.test.mjs` asserts each run shape's complete options key set; add a field ⇒ add it there. Full audit in [docs/REFERENCE.md](docs/REFERENCE.md).
 - **Every run carries a turn and spend ceiling**, and a run that hits one finalizes as `limited` — its own terminal status, never `failed`. Same rule for a run whose question went unanswered: `unanswered`, and nothing downstream may report it as a decision. Cost is recorded from the runtime, never estimated.
+- **Where two verbs overlap, the choice belongs in a schema, not in two descriptions.** `review` was its own verb — the strongest model with review skills — and across every run ever logged it was called **zero** times, while `investigate` (fast) took the traffic: two overlapping descriptions are a routing contest with no error path, so the user asking for a judgement silently got the cheap verb and the configuration they were paying for never applied. It is now `investigate`'s required `depth` enum, and model/skills/clause resolve from it.
 - **A verb is defined in exactly one place.** `gemini-tools.mjs` derives its declarations from the registry, `run-dispatch.mjs` derives the park label, `run-exec.mjs` derives the `query()` options. Adding a verb means adding a record — three hand-wired copies is the mechanism that produced the silently-dropped `appendSystemPrompt`.
-- **`skills` is scoped per verb, and that scoping is the substance.** Without it, eight verbs would be eight names for one agent.
+- **`skills` is scoped per verb, and that scoping is the substance.** Without it, seven verbs would be seven names for one agent.
 - **The review gate reads the verb's declared label, never the brief's text**, and it is enforced in the main process at dispatch — never by asking the voice layer to honour an instruction.
 - `bypassPermissions` is the intentional default for the headless worker. The `PreToolUse` denylist is a **guard against accidents, not a sandbox** — never describe it as containment.
 - Config is env-driven with `IRIS_*` / `GEMINI_*` prefixes; add new options the same way and **document them in `.env.example`**, which is the authoritative list.

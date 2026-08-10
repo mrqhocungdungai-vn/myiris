@@ -310,6 +310,7 @@ export function createRunExec({
       verb = resolveVerb(run.verb, {
         changes: openChangesWithTasks(run.cwd),
         openNoteId: resolveOpenNoteForRun()?.id ?? null,
+        depth: run.depth ?? null,
       });
     } catch (error) {
       runQueue.finalize(run.run_id, RUN_STATUS.FAILED, error.message);

@@ -146,8 +146,8 @@ const THIN_PARAMS = Object.freeze({
  * One record per verb. Every field is either a value or a function of the
  * resolved project state — see `resolveVerb`.
  *
- * @typedef {{ hasOpenChange: boolean, changes: string[], openNoteId: string|null }} ProjectState
- * @typedef {{ changes?: string[], openNoteId?: string|null } | string[] | null | undefined} ProjectStateInput
+ * @typedef {{ hasOpenChange: boolean, changes: string[], openNoteId: string|null, depth: string|null }} ProjectState
+ * @typedef {{ changes?: string[], openNoteId?: string|null, depth?: string|null } | string[] | null | undefined} ProjectStateInput
  * A caller's raw shorthand for a project state — anything `projectState()` can
  * normalize. `openNoteId` is optional here (unlike on the resolved
  * `ProjectState`) because most callers have no note to report at all.
@@ -377,70 +377,74 @@ const VERBS = Object.freeze({
   investigate: {
     label: "Look",
     description:
-      "Read the project and answer a question about it, changing nothing. Use for 'what's left', 'how does X work', 'is that done', 'why is this here'. This verb cannot write or edit — if the user wants something changed, that is execute.",
+      "Read the project and answer a question about it, changing nothing. Two depths, and you MUST pick one: " +
+      "'explain' for 'what's left', 'how does X work', 'is that done', 'why is this here'; 'judge' for 'review that', " +
+      "'is this any good', 'check what it just did' — an assessment of work that already exists. Judge is slower and " +
+      "costs more, so do not reach for it to answer a plain question, and do not settle for explain when the user is " +
+      "asking whether something is GOOD. This verb cannot write or edit — if the user wants something changed, that " +
+      "is execute.",
     stateful: false,
     park: PARK.NEVER,
     sessionKey: "investigate",
-    model: FAST,
+    // MODEL AND SKILLS FOLLOW THE DEPTH, and this is why the two were merged.
+    // `review` was its own verb — the STRONGEST model with review skills — and
+    // across every run ever logged it was called ZERO times, while
+    // `investigate` (FAST) took the traffic. The two descriptions overlapped
+    // ("is that done" against "is this any good"), and a routing contest
+    // between two sentences has no error path: the model always picks
+    // something, so the user asking for a judgement silently got the cheap
+    // verb with the wrong skills, and the configuration they were paying for
+    // never once applied.
+    //
+    // One verb with a declared enum makes the choice STRUCTURAL. The API
+    // constrains the value, so it cannot be fudged, and there is no second
+    // description to lose to.
+    model: (state) => (state.depth === "judge" ? STRONGEST : FAST),
     budget: "light",
-    skills: INVESTIGATION_SKILLS,
+    skills: (state) => (state.depth === "judge" ? REVIEW_SKILLS : INVESTIGATION_SKILLS),
     mcpServers: [],
     vault: false,
-    // A spoken answer, not a build report. Forcing it through a
-    // summary/decisions schema would reshape an answer that has nothing to do
-    // with a pipeline.
-    structuredOutput: false,
-    // Investigating does not modify, and that has to be structural too: a verb
-    // that reads and reports has no business holding an edit tool. Nor does it
-    // ask — it cannot write, so a wrong assumption costs a re-ask rather than a
-    // file, and an ambiguous question is better answered by reporting both
-    // readings than by pausing to pick one (design D4).
+    // A judgement has findings to rank; an explanation is spoken prose that a
+    // summary/decisions schema would only distort.
+    structuredOutput: (state) => state.depth === "judge",
+    // Neither depth modifies, and that has to be structural too: a verb that
+    // reads and reports has no business holding an edit tool. Nor does it ask —
+    // it cannot write, so a wrong assumption costs a re-ask rather than a file,
+    // and an ambiguous question is better answered by reporting both readings
+    // than by pausing to pick one (design D4).
     disallowedTools: ["AskUserQuestion", "Write", "Edit", "NotebookEdit"],
     params: {
       type: "object",
       properties: {
-        question: { type: "string", description: "The question to answer, as concretely as the user put it." },
-        scope: { type: "string", description: "Where to look, if the user narrowed it — a change name, a folder, a feature." },
+        depth: {
+          type: "string",
+          enum: ["explain", "judge"],
+          description:
+            "'explain' to answer a question about how something works or what is left. 'judge' to assess the quality " +
+            "of work that already exists — a diff, a change, a file, the last thing that ran.",
+        },
+        question: {
+          type: "string",
+          description:
+            "What to answer, as concretely as the user put it — or, when judging, what to review: a change name, a " +
+            "path, 'the work that just finished', 'the uncommitted changes'.",
+        },
+        scope: {
+          type: "string",
+          description:
+            "Where to look, if the user narrowed it — a change name, a folder, a feature. When judging, anything the " +
+            "user said they were worried about.",
+        },
       },
-      required: ["question"],
+      required: ["depth", "question"],
     },
     basePersona: STATELESS,
-    clause:
-      "Answer the question by reading the project. You have no ability to write or edit and must not try — report what you found, not what you would change.",
+    clause: (state) =>
+      state.depth === "judge"
+        ? "Review the work you were pointed at and report findings, most serious first. Do not fix what you find."
+        : "Answer the question by reading the project. You have no ability to write or edit and must not try — report what you found, not what you would change.",
   },
 
-  review: {
-    label: "Review",
-    description:
-      "Judge work that already exists — a diff, a change, a file, the last thing that ran. Use for 'review that', 'is this any good', 'check what it just did'. Reports findings; it does not fix them.",
-    stateful: false,
-    park: PARK.NEVER,
-    // The strongest model: a review is worth less than nothing if it misses
-    // things, and it is a short run.
-    model: STRONGEST,
-    sessionKey: "review",
-    budget: "light",
-    skills: REVIEW_SKILLS,
-    mcpServers: [],
-    vault: false,
-    structuredOutput: true,
-    // Reports findings, fixes nothing — so a misread costs a re-ask, not a
-    // file, and both readings can simply be reported (design D4).
-    disallowedTools: SETTLED_WORK_ASKS_NOTHING,
-    params: {
-      type: "object",
-      properties: {
-        target: {
-          type: "string",
-          description: "What to review — a change name, a path, 'the work that just finished', 'the uncommitted changes'.",
-        },
-        concerns: { type: "string", description: "What the user is worried about, if they said." },
-      },
-      required: ["target"],
-    },
-    basePersona: STATELESS,
-    clause: "Review the work you were pointed at and report findings, most serious first. Do not fix what you find.",
-  },
 
   capture_learning: {
     label: "Notes",
@@ -528,13 +532,19 @@ export const NO_PROJECT_STATE = Object.freeze({ hasOpenChange: false, changes: [
  * session design D2) is only ever read from the object form — a caller
  * passing the bare changes array has no note to report, which is what every
  * existing call site does.
- * @param {{ changes?: string[], openNoteId?: string|null } | string[] | null | undefined} input
+ * @param {ProjectStateInput} input
  * @returns {ProjectState}
  */
 export function projectState(input) {
   const changes = Array.isArray(input) ? input : Array.isArray(input?.changes) ? input.changes : [];
   const openNoteId = Array.isArray(input) ? null : input?.openNoteId ?? null;
-  return { hasOpenChange: changes.length > 0, changes: [...changes], openNoteId };
+  // `depth` is not project state — it is a property of the CALL, carried here
+  // because it selects configuration the same way project state does, and a
+  // second resolution mechanism for one field would be a second place a verb
+  // is defined. Absent (an older parked run, or any verb that has no depth) it
+  // is null, and every field that reads it falls to its own default.
+  const depth = Array.isArray(input) ? null : (input?.depth ?? null);
+  return { hasOpenChange: changes.length > 0, changes: [...changes], openNoteId, depth };
 }
 
 // A field may be a function of the project state; everything else passes

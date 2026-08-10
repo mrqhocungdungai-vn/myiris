@@ -15,7 +15,7 @@ import {
   resolveAllVerbs,
   resolveVerb,
 } from "./verbs.mjs";
-import { IMPLEMENTATION_SKILLS, ORDINARY_SKILLS } from "./run-skills.mjs";
+import { IMPLEMENTATION_SKILLS, ORDINARY_SKILLS, INVESTIGATION_SKILLS, REVIEW_SKILLS } from "./run-skills.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const pluginSkillsDir = path.join(repoRoot, "resources", "iris-plugin", "skills");
@@ -27,7 +27,7 @@ const shippedSkills = fs
 const WITH_CHANGE = { hasOpenChange: true, changes: ["add-thing"] };
 
 describe("the verb registry", () => {
-  it("declares exactly the eight verbs the surface offers", () => {
+  it("declares exactly the seven verbs the surface offers", () => {
     expect(VERB_NAMES).toEqual([
       "shape_requirements",
       "shape_on_canvas",
@@ -35,7 +35,6 @@ describe("the verb registry", () => {
       "execute",
       "finish",
       "investigate",
-      "review",
       "capture_learning",
     ]);
   });
@@ -88,8 +87,8 @@ describe("the verb registry", () => {
   it("accepts a raw openChangesWithTasks() array as project state", () => {
     expect(resolveVerb("execute", ["add-thing"]).skills).toEqual(IMPLEMENTATION_SKILLS);
     expect(resolveVerb("execute", []).skills).toEqual(ORDINARY_SKILLS);
-    expect(projectState(["a", "b"])).toEqual({ hasOpenChange: true, changes: ["a", "b"], openNoteId: null });
-    expect(projectState(null)).toEqual({ hasOpenChange: false, changes: [], openNoteId: null });
+    expect(projectState(["a", "b"])).toEqual({ hasOpenChange: true, changes: ["a", "b"], openNoteId: null, depth: null });
+    expect(projectState(null)).toEqual({ hasOpenChange: false, changes: [], openNoteId: null, depth: null });
   });
 
   // D3: the two shaping verbs are the same conversation in two media.
@@ -166,7 +165,6 @@ describe("the verb registry", () => {
       work_on_note: [],
       finish: ["AskUserQuestion"],
       investigate: ["AskUserQuestion", "Write", "Edit", "NotebookEdit"],
-      review: ["AskUserQuestion"],
       capture_learning: ["AskUserQuestion"],
     };
 
@@ -211,7 +209,7 @@ describe("the verb registry", () => {
     expect(resolveVerb("finish").park).toBe(PARK.ALWAYS);
     expect(resolveVerb("shape_requirements").park).toBe(PARK.ON_OPEN);
     expect(resolveVerb("shape_on_canvas").park).toBe(PARK.ON_OPEN);
-    for (const name of ["investigate", "review", "capture_learning"]) {
+    for (const name of ["investigate", "capture_learning"]) {
       expect(resolveVerb(name).park).toBe(PARK.NEVER);
     }
     // park is NOT what makes work_on_note's writes safe (design.md D6) — the
@@ -319,6 +317,45 @@ describe("the verb registry", () => {
         continue;
       }
       expect(verb.params.properties).not.toHaveProperty("focus");
+    }
+  });
+});
+
+describe("investigate: one verb, two depths", () => {
+  // `review` was its own verb — STRONGEST with review skills — and across every
+  // run ever logged it was called ZERO times while `investigate` (FAST) took
+  // the traffic. Two overlapping descriptions ("is that done" against "is this
+  // any good") is a routing contest with no error path: the model always picks
+  // something, so a user asking for a judgement silently got the cheap verb
+  // with the wrong skills. An enum makes the choice structural instead.
+  it("judging gets the strongest model and the review skills", () => {
+    const judge = resolveVerb("investigate", { depth: "judge" });
+    expect(judge.model).toBe("claude-opus-5");
+    expect(judge.skills).toEqual(REVIEW_SKILLS);
+    expect(judge.structuredOutput).toBe(true);
+    expect(judge.clause).toContain("most serious first");
+  });
+
+  it("explaining stays fast and cheap", () => {
+    const explain = resolveVerb("investigate", { depth: "explain" });
+    expect(explain.model).toBe("claude-sonnet-5");
+    expect(explain.skills).toEqual(INVESTIGATION_SKILLS);
+    expect(explain.structuredOutput).toBe(false);
+  });
+
+  it("falls to explaining when no depth was given, never to the expensive one", () => {
+    expect(resolveVerb("investigate").model).toBe("claude-sonnet-5");
+  });
+
+  it("requires the depth in the schema, so it cannot be left to a sentence", () => {
+    const params = resolveVerb("investigate").params;
+    expect(params.required).toContain("depth");
+    expect(params.properties.depth.enum).toEqual(["explain", "judge"]);
+  });
+
+  it("neither depth may write, whatever else changes", () => {
+    for (const depth of ["explain", "judge"]) {
+      expect(resolveVerb("investigate", { depth }).disallowedTools).toContain("Write");
     }
   });
 });

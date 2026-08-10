@@ -64,7 +64,7 @@ describe("run-dispatch: the review gate's three settings", () => {
   it("parks everything on `always`, without dispatching", () => {
     const runQueue = makeRunQueue();
     const dispatchModule = make({ runQueue, getPromptReviewMode: () => "always" });
-    const result = dispatchModule.submitVerb("investigate", { question: "what's left?" });
+    const result = dispatchModule.submitVerb("investigate", { depth: "explain", question: "what's left?" });
     expect(result.status).toBe("parked_for_review");
     expect(runQueue.submit).not.toHaveBeenCalled();
   });
@@ -99,8 +99,7 @@ describe("run-dispatch: the review gate's three settings", () => {
 
     it("never parks a verb that only reads", () => {
       for (const [verb, args] of /** @type {Array<[string, Record<string, string>]>} */ ([
-        ["investigate", { question: "what's left?" }],
-        ["review", { target: "the last run" }],
+        ["investigate", { depth: "explain", question: "what's left?" }],
         ["capture_learning", { focus: "this week" }],
       ])) {
         const runQueue = makeRunQueue();
@@ -153,7 +152,7 @@ describe("run-dispatch: the review gate's three settings", () => {
       expect(dispatchModule.shouldPark("investigate", "ws1")).toBe(false);
       // Wording that screams "dangerous" changes nothing.
       expect(
-        dispatchModule.submitVerb("investigate", { question: "rm -rf everything and delete production" }).status,
+        dispatchModule.submitVerb("investigate", { depth: "explain", question: "rm -rf everything and delete production" }).status,
       ).toBe("started");
     });
   });
@@ -173,6 +172,31 @@ describe("run-dispatch: parking and resolving", () => {
     // second dispatch.
     expect(dispatchModule.approveTaskReview(undefined, { notify: false }).status).toBe("error");
     expect(runQueue.submit).toHaveBeenCalledTimes(1);
+  });
+
+  // The depth is the whole difference between a cheap explanation and an
+  // expensive judgement, so it has to survive every hop between the call and
+  // the run. Dropped anywhere along the way, a user who asked for a review
+  // silently gets the fast model with the wrong skills — which is exactly the
+  // failure that merging the two verbs was meant to end, reappearing as a
+  // plumbing bug instead of a routing one.
+  it("carries the call's depth onto the run", () => {
+    const runQueue = makeRunQueue();
+    make({ runQueue, getPromptReviewMode: () => "never" }).submitVerb("investigate", {
+      depth: "judge",
+      question: "the last run",
+    });
+    expect(runQueue.submit.mock.calls[0][0].depth).toBe("judge");
+  });
+
+  it("keeps the depth across the review gate, so approving does not downgrade the run", () => {
+    const runQueue = makeRunQueue();
+    const dispatchModule = make({ runQueue, getPromptReviewMode: () => "always" });
+    expect(
+      dispatchModule.submitVerb("investigate", { depth: "judge", question: "the last run" }).status,
+    ).toBe("parked_for_review");
+    expect(dispatchModule.approveTaskReview(undefined, { notify: false }).status).toBe("started");
+    expect(runQueue.submit.mock.calls[0][0].depth).toBe("judge");
   });
 
   // The approved run must carry the verb it was parked under, not a default.
@@ -247,9 +271,9 @@ describe("run-dispatch: the verb surface", () => {
 
   it("carries the verb onto the run, with no active-agent fallback to inherit", () => {
     const runQueue = makeRunQueue();
-    make({ runQueue }).submitVerb("review", { target: "the last run" });
+    make({ runQueue }).submitVerb("investigate", { depth: "judge", question: "the last run" });
     const run = runQueue.submit.mock.calls[0][0];
-    expect(run.verb).toBe("review");
+    expect(run.verb).toBe("investigate");
     expect(run.agent).toBeUndefined();
   });
 });
@@ -258,7 +282,7 @@ describe("run-dispatch: executeClaudeTool", () => {
   it("dispatches every verb through one path", async () => {
     const runQueue = makeRunQueue();
     const dispatchModule = make({ runQueue });
-    const result = await dispatchModule.executeClaudeTool("investigate", { question: "what's left?" });
+    const result = await dispatchModule.executeClaudeTool("investigate", { depth: "explain", question: "what's left?" });
     expect(result.status).toBe("started");
     expect(runQueue.submit.mock.calls[0][0].verb).toBe("investigate");
   });
@@ -399,7 +423,7 @@ describe("run-dispatch: which lane a turn takes", () => {
     const runQueue = makeRunQueue();
     const dispatch = make({ runQueue, hasLiveStatefulSession: () => true, getPromptReviewMode: () => "never" });
 
-    dispatch.submitVerb("investigate", { question: "what changed?" });
+    dispatch.submitVerb("investigate", { depth: "explain", question: "what changed?" });
 
     expect(runQueue.submit).toHaveBeenCalledTimes(1);
     expect(runQueue.submitResident).not.toHaveBeenCalled();
@@ -535,7 +559,7 @@ describe("run-dispatch: the lane it took is on the record", () => {
     const emitEvent = vi.fn();
     const dispatch = make({ emitEvent, getPromptReviewMode: () => "never" });
 
-    dispatch.submitVerb("investigate", { question: "what changed?" });
+    dispatch.submitVerb("investigate", { depth: "explain", question: "what changed?" });
 
     expect(laneLines(emitEvent)).toEqual([]);
   });

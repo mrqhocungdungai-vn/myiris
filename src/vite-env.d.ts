@@ -65,7 +65,6 @@ type Verb =
   | "execute"
   | "finish"
   | "investigate"
-  | "review"
   | "capture_learning";
 
 type ClaudeSession = {

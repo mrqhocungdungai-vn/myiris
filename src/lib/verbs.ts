@@ -15,7 +15,6 @@ export const ALL_VERBS: Verb[] = [
   "execute",
   "finish",
   "investigate",
-  "review",
   "capture_learning",
 ];
 
@@ -27,7 +26,6 @@ export const VERB_LABELS: Record<Verb, string> = {
   execute: "Build",
   finish: "Finish",
   investigate: "Look",
-  review: "Review",
   capture_learning: "Notes",
 };
 
@@ -43,7 +41,6 @@ export const VERB_COLORS: Record<Verb, string> = {
   execute: "var(--mint-rgb)",
   finish: "var(--mint-rgb)",
   investigate: "var(--cyan-rgb)",
-  review: "var(--cyan-rgb)",
   capture_learning: "var(--amber-rgb)",
 };
 

@@ -33,8 +33,10 @@ the mechanism that let `appendSystemPrompt` sit unread for months.
 | `shape_on_canvas` | yes *(same session)* | on opening | *(follows the live session)* | `stateful` |
 | `execute` | no | **every call** | Sonnet 5 | `execute` |
 | `finish` | no | **every call** | Sonnet 5 | `finish` |
-| `investigate` | no | no | Sonnet 5 | `investigate` |
-| `review` | no | no | Opus 5 | `review` |
+| `investigate` (`depth: explain`) | no | no | Sonnet 5 | `investigate` |
+| `investigate` (`depth: judge`) | no | no | Opus 5 | `review` |
+
+`investigate` is one verb with two depths, because it used to be two verbs. `review` — the strongest model with the review skills — was called **zero** times across every run ever logged, while `investigate` (fast) took the traffic: their descriptions overlapped ("is that done" against "is this any good"), and a routing contest between two sentences has no error path. The model always picks something, so a user asking for a judgement silently got the cheap verb with the wrong skills and never saw a failure. The choice is now a required `depth` enum the API constrains, and `model`/`skills`/`structuredOutput`/`clause` resolve from it. `depth` is carried on the run — through the review gate too — so a run executes as the call that was made, not as a default.
 | `capture_learning` | no | no | Haiku 4.5 | `capture_learning` |
 
 Resolution is a **pure function of `(verb, project state)`** — `resolveVerb()`

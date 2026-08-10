@@ -177,7 +177,7 @@ export function createRunDispatch({
   // the verb it was dispatched as, chosen per call — there is no current role for
   // it to inherit, and inheriting one was how "Iris, build me X" did the wrong
   // thing whenever the chip happened to be set differently.
-  function buildRun({ task, urgency = "normal", verb, workstream }) {
+  function buildRun({ task, urgency = "normal", verb, workstream, depth = null }) {
     return {
       run_id: crypto.randomUUID(),
       workstream_id: workstream.id,
@@ -185,6 +185,9 @@ export function createRunDispatch({
       task: String(task).trim(),
       urgency,
       verb,
+      // The call's own depth, carried so the run resolves to the same
+      // configuration at execution time that it was routed with.
+      depth,
       status: RUN_STATUS.QUEUED,
       output: "",
       activity: [],
@@ -309,7 +312,8 @@ export function createRunDispatch({
       return { status: "error", error: `Unknown verb: ${verb}. Known verbs: ${VERB_NAMES.join(", ")}.` };
     }
     const workstream = activeWorkstream();
-    const resolved = resolveVerb(verb, projectStateFor(workstream));
+    const depth = typeof args?.depth === "string" ? args.depth : null;
+    const resolved = resolveVerb(verb, { ...projectStateFor(workstream), depth });
     const missing = missingRequired(resolved, args);
     if (missing.length) {
       return { status: "error", error: `${verb} needs ${missing.join(" and ")}.` };
@@ -320,7 +324,7 @@ export function createRunDispatch({
     // Review gate (prompt-review-gate spec): park instead of dispatching. Zero
     // tokens spent — no run, no run_id — until the review is approved.
     if (shouldPark(verb, workstream.id)) {
-      const parked = { workstream_id: workstream.id, task, urgency, verb };
+      const parked = { workstream_id: workstream.id, task, urgency, verb, depth };
       PendingReview.raise(parked, { timeoutMs: promptReviewTimeoutMs() });
       notifyTaskReviewParked(parked);
       return {
@@ -331,7 +335,7 @@ export function createRunDispatch({
       };
     }
 
-    return dispatch(buildRun({ task, urgency, verb, workstream }));
+    return dispatch(buildRun({ task, urgency, verb, workstream, depth }));
   }
 
   // The deprecated alias. A resumed Gemini session may still hold the old
@@ -377,7 +381,11 @@ export function createRunDispatch({
       if (notify) notifyTaskReviewResolved("error", parked, message);
       return { status: "error", error: message };
     }
-    const result = dispatch(buildRun({ task: finalTask, urgency: parked.urgency, verb: parked.verb, workstream }));
+    // `parked.depth` rides through the review gate: a run approved after being
+    // parked must execute as the call that was parked, not as a default one.
+    const result = dispatch(
+      buildRun({ task: finalTask, urgency: parked.urgency, verb: parked.verb, workstream, depth: parked.depth ?? null }),
+    );
     if (notify) notifyTaskReviewResolved(result.status, parked, result.message);
     return result;
   }
