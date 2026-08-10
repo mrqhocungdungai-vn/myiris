@@ -762,6 +762,12 @@ The mark SHALL NOT outlive the lock: whatever clears the lock SHALL clear the ma
 
 **A lock SHALL outrank the zoom.** Backing the camera out SHALL NOT release a lock; the return-to-overview release SHALL apply only while nothing is locked. A zoom that could delete the lock would make the most ordinary navigation gesture destroy the user's choice without being about it, and would leave the drive that is supposed to honour that choice with nothing to honour. The locked note SHALL be changed by aiming at another one.
 
+**A note SHALL NOT take the target from one it cannot be told apart from.** A challenger SHALL be separated from the current target on screen by a clear margin before it may replace it — a margin large enough that the two read as two places rather than one, and separate from any margin allowed for tracking noise.
+
+Screen separation is the measure because it is the question itself: a user cannot be aiming at a particular note when they cannot resolve one from its neighbours, and the sight sweeping across a dozen of them is not a dozen choices. It also scales itself — the same two notes are tens of pixels apart from across the vault and hundreds apart from among them — so approaching a cluster is what makes its notes choosable, and nothing needs to say so.
+
+A note plainly elsewhere on screen SHALL still be taken at once.
+
 **A newly locked note SHALL be brought to the centre of the view**, eased rather than snapped, and SHALL NOT be moved this way while a camera drive is engaged — the drive owns the aim, and a second writer would fight it. A lock the user is not looking at is a poor pivot: every drive works around it, and motion around a point in the corner of the view is hard to steer.
 
 Without a lock, the only gestures that SHALL move the camera are the two-palm zoom on the centre of the view.
@@ -801,4 +807,14 @@ The reveal SHALL take a single `Victory` hand. A second adds nothing to it, and 
 
 - **WHEN** the user locks a note sitting off to one side, with no camera drive engaged
 - **THEN** the view glides until that note is at the centre
+
+#### Scenario: A crowded neighbour cannot steal the target from far away
+
+- **WHEN** the camera is outside a dense cluster and the sight passes over a note close on screen to the current target
+- **THEN** the target does not change
+
+#### Scenario: The same neighbour is choosable from among the cluster
+
+- **WHEN** the camera has moved in until those two notes are plainly apart on screen, and the sight settles on the neighbour
+- **THEN** the neighbour becomes the target
 
