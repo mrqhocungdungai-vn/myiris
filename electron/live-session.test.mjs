@@ -204,6 +204,28 @@ describe("live-session: listen-only mode ownership (design.md D3)", () => {
     expect(live.getListenOnlyEngaged()).toBe(false);
   });
 
+  // The boundary the transcript filter reads. Stamped on the single writer for
+  // the transition, so the user's own toggle and the window expiring set it
+  // identically — and stamped even when the window heard nothing, which is the
+  // case an inferred transcript edge would miss.
+  it("stamps the listening-window boundary on disengage, not on engage", async () => {
+    const markListenWindowEnded = vi.fn();
+    const live = make({ markListenWindowEnded });
+    const GoogleGenAI = await getMockedGoogleGenAI();
+    GoogleGenAI.mockImplementationOnce(
+      fakeGoogleGenAIImpl(async (args) => {
+        args.callbacks.onopen();
+        return { sendRealtimeInput: vi.fn(), sendClientContent: vi.fn() };
+      }),
+    );
+    await live.startLive();
+
+    live.toggleListenOnly();
+    expect(markListenWindowEnded).not.toHaveBeenCalled();
+    live.toggleListenOnly();
+    expect(markListenWindowEnded).toHaveBeenCalledTimes(1);
+  });
+
   it("neither engaging nor disengaging triggers a connect, disconnect, or config rebuild", async () => {
     const live = make();
     const GoogleGenAI = await getMockedGoogleGenAI();

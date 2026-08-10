@@ -224,50 +224,63 @@ describe("buildRunPrompt", () => {
 // inside, their words are the instruction and the voice layer's brief is a
 // reading of them. Answering the paraphrase instead of the person is the
 // failure this ordering exists to prevent.
-describe("buildRunPrompt: whose words lead", () => {
+describe("buildRunPrompt: the tool call is the instruction", () => {
   const utterances = [
     { text: "no wait, not the blue one", at: 2 },
     { text: "the box on the left, move it under the arrow", at: 3 },
   ];
 
-  it("puts the user's own words first for a verb that declares wordsLead", () => {
-    const prompt = buildRunPrompt({ stateful: true, wordsLead: true }, { brief: "Move the blue box.", utterances });
-
-    const wordsAt = prompt.indexOf("the box on the left");
-    const briefAt = prompt.indexOf("Move the blue box.");
-    expect(wordsAt).toBeGreaterThanOrEqual(0);
-    expect(wordsAt).toBeLessThan(briefAt);
-    expect(prompt).toMatch(/This is your instruction/);
-    expect(prompt).toMatch(/an interpretation/);
+  // Gemini Live is a voice-to-voice model with tool use: it hears the audio and
+  // emits the call. `inputAudioTranscription` is a separate recognizer over the
+  // same audio, opted into by one line of config, whose errors are silent. This
+  // used to put that transcript FIRST for canvas and note turns, told to prefer
+  // it "wherever the two differ" — promoting the side channel over the thing
+  // that actually heard the user.
+  it("leads with the brief for every verb, stateful or not", () => {
+    for (const verb of [{ stateful: true }, { stateful: false }]) {
+      const prompt = buildRunPrompt(verb, { brief: "Move the blue box.", utterances });
+      expect(prompt.startsWith("Move the blue box.")).toBe(true);
+      expect(prompt).not.toContain("prefer it over the reading below");
+    }
   });
 
-  it("does not repeat the transcript twice", () => {
-    const prompt = buildRunPrompt({ stateful: true, wordsLead: true }, { brief: "Move it.", utterances });
-    const occurrences = prompt.split("the box on the left").length - 1;
-    expect(occurrences).toBe(1);
+  it("never tells a run to prefer the transcript over its instruction", () => {
+    const prompt = buildRunPrompt({ stateful: true }, { brief: "Move it.", utterances });
+    expect(prompt).not.toContain("This is your instruction");
+    expect(prompt.indexOf("Move it.")).toBeLessThan(prompt.indexOf("no wait, not the blue one"));
   });
 
-  it("leaves every other verb's prompt exactly as it was — brief first, transcript as context", () => {
-    const prompt = buildRunPrompt({ stateful: false }, { brief: "Do the thing.", utterances });
-
-    const briefAt = prompt.indexOf("Do the thing.");
-    const wordsAt = prompt.indexOf("the box on the left");
-    expect(briefAt).toBeLessThan(wordsAt);
-    expect(prompt).toMatch(/never overrides the instruction/);
+  it("labels the transcript as a fallible transcription, not as the request", () => {
+    const prompt = buildRunPrompt({ stateful: true }, { brief: "b", utterances });
+    expect(prompt).toContain("AUTOMATIC TRANSCRIPTION");
+    expect(prompt).toContain("corroboration only, never the request to act on");
+    expect(prompt).not.toContain("containing the request to act on");
   });
 
-  it("still fences the words when they lead — leading is not trusting", () => {
-    const prompt = buildRunPrompt({ stateful: true, wordsLead: true }, { brief: "b", utterances });
-    // The transcript block carries an untrusted-text fence wherever it sits —
-    // and its label no longer calls itself "background context only", which
-    // would contradict the line above it calling it the instruction.
-    expect(prompt).toMatch(/verbatim transcript of what was said near the user's microphone/);
-    expect(prompt).toContain("containing the request to act on");
-    expect(prompt).not.toContain("as background context only");
+  // The reported failure: talk about topic A, engage listen-only, a room
+  // discusses topic B, disengage, ask Iris to draw what was just asked. The
+  // ring holds ten minutes, so A was still attached and read as the
+  // conversation the request came from.
+  it("drops speech from before a listening window", () => {
+    const across = [
+      { text: "so the migration plan is basically done", at: 100 },
+      { text: "and what about the pricing tiers", at: 900 },
+    ];
+    const prompt = buildRunPrompt(
+      { stateful: true },
+      { brief: "Draw what was just asked.", utterances: across, listenWindowEndedAt: 500 },
+    );
+    expect(prompt).toContain("pricing tiers");
+    expect(prompt).not.toContain("migration plan");
   });
 
-  it("falls back to the brief alone when nothing was heard", () => {
-    const prompt = buildRunPrompt({ stateful: true, wordsLead: true }, { brief: "Draw a box.", utterances: [] });
+  it("keeps everything when no listening window has ever ended", () => {
+    const prompt = buildRunPrompt({ stateful: true }, { brief: "b", utterances });
+    expect(prompt).toContain("no wait, not the blue one");
+  });
+
+  it("is just the brief when nothing was transcribed", () => {
+    const prompt = buildRunPrompt({ stateful: true }, { brief: "Draw a box.", utterances: [] });
     expect(prompt).toBe("Draw a box.");
   });
 });

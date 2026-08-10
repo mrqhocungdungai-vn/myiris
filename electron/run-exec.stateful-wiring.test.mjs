@@ -188,7 +188,10 @@ describe("run-exec: what a resident turn is told the user said", () => {
     poSession.getPoSessionState.mockReturnValue(null);
   });
 
-  it("puts the user's verbatim words ahead of the brief", async () => {
+  // The resident-turn path composes through `run-context.mjs` too, but task 1.5
+  // is explicit that both `buildRunPrompt` call sites must be verified rather
+  // than assumed covered by the shared composition point.
+  it("puts the call's own brief ahead of the transcript, on the resident path too", async () => {
     const exec = makeExec({
       recentUtterances: () => [
         { text: "no wait, not the blue one", at: 1 },
@@ -205,8 +208,9 @@ describe("run-exec: what a resident turn is told the user said", () => {
     const wordsAt = task.indexOf("the box on the left");
     const briefAt = task.indexOf("Move the blue box.");
     expect(wordsAt).toBeGreaterThanOrEqual(0);
-    expect(wordsAt).toBeLessThan(briefAt);
-    expect(task).toMatch(/This is your instruction/);
+    expect(briefAt).toBeLessThan(wordsAt);
+    expect(task).not.toMatch(/This is your instruction/);
+    expect(task).toContain("AUTOMATIC TRANSCRIPTION");
   });
 
   it("still carries the verb's own clause, since the session is shared", async () => {

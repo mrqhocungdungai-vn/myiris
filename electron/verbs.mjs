@@ -126,7 +126,13 @@ const THIN_PARAMS = Object.freeze({
     said: {
       type: "string",
       description:
-        "What the user just said, in their own words and as close to verbatim as you can manage. Do not summarize it, do not tidy it, and do not turn it into a specification — that is this verb's job, not yours.",
+        "What was said, as you heard it, verbatim as far as you can manage — whoever said it. Not only the user: if they are asking about something someone else said near them, put those words here. Do not summarize it, do not tidy it, and do not turn it into a specification — that is this verb's job, not yours. This is the instruction the run acts on, so anything you leave out is lost.",
+    },
+    spoken_by: {
+      type: "string",
+      enum: ["user", "someone_else"],
+      description:
+        "Whose words `said` carries — the user's own, or another person's that the user was listening to. Provenance, so a turn after a listening window is unambiguous about whose request it is.",
     },
     reading: {
       type: "string",
@@ -170,7 +176,7 @@ const VERBS = Object.freeze({
   shape_on_canvas: {
     label: "Canvas",
     description:
-      "Shape something on the drawing canvas — read what is on it, add to it, rearrange it, or answer a question about it. Use when the user says anything about the canvas/diagram/whiteboard ('draw it out', 'connect these two boxes', 'what should I add to my diagram'). You cannot see the canvas; this verb can. It continues the SAME conversation as shape_requirements, so it already knows whatever was discussed by voice.",
+      "Shape something on the drawing canvas — read what is on it, add to it, rearrange it, or answer a question about it. Use when the user says anything about the canvas/diagram/whiteboard ('draw it out', 'connect these two boxes', 'what should I add to my diagram'). You cannot see the canvas; this verb can. It continues the SAME conversation as shape_requirements, so it knows what THIS pipeline has already been told — it has no access to your voice conversation with the user, and cannot hear anything you do not pass it. Say what was said.",
     stateful: true,
     park: PARK.ON_OPEN,
     // Shares the resident session, so it also shares its model while that
@@ -192,9 +198,6 @@ const VERBS = Object.freeze({
     // she reasons from next turn, and summarizing here would compound into
     // answering against a paraphrase of a paraphrase.
     spokenResult: "verbatim",
-    // A brainstorm at a canvas: the user is mid-thought, and the half-finished
-    // sentence they actually said carries more than a tidied restatement of it.
-    wordsLead: true,
     // The user is looking at the board while this runs. Silence until the turn
     // ends makes a drawing appear out of nowhere and a pause look like a
     // failure; saying what is being added, as it is added, is what makes it a
@@ -252,9 +255,6 @@ const VERBS = Object.freeze({
     // check in the announcement path; it is declared here now, with the rest
     // of what this verb is.
     spokenResult: "verbatim",
-    // "Take out the bit about the deadline" means the bit they said, not the
-    // bit the voice layer decided they meant.
-    wordsLead: true,
     disallowedTools: ASKS_FREELY,
     // open-note-session D6: the main-process write guard (po-session.mjs's
     // canUseTool seam, wired in run-exec.mjs) applies only to this verb.
@@ -558,7 +558,7 @@ function resolveField(value, state) {
  *   skills: string[], mcpServers: string[], vault: boolean,
  *   structuredOutput: boolean, disallowedTools: string[], params: object,
  *   basePersona: string, clause: string, guardOpenNoteWrites: boolean,
- *   spokenResult: "summary"|"verbatim", wordsLead: boolean,
+ *   spokenResult: "summary"|"verbatim",
  *   speakWhileWorking: boolean, projectState: ProjectState,
  * }}
  */
@@ -606,13 +606,6 @@ export function resolveVerb(name, state = NO_PROJECT_STATE) {
     // Defaults to "summary", so a verb that says nothing keeps today's
     // behaviour instead of silently becoming loud.
     spokenResult: record.spokenResult === "verbatim" ? "verbatim" : "summary",
-    // Whether the user's own words LEAD the run's prompt, with the voice
-    // layer's brief following as a reading of them. True for the conversations
-    // the user is inside in real time, where answering the paraphrase instead
-    // of the person is the failure that matters. Separate from `spokenResult`
-    // on purpose: one governs what reaches the run, the other what reaches the
-    // user, and a verb could reasonably want either without the other.
-    wordsLead: Boolean(record.wordsLead),
     // Whether the user hears this verb WORKING — both what it is doing and
     // what it is saying — rather than only what it concluded. True for work
     // the user is watching happen in front of them, like a shape appearing on

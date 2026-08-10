@@ -202,6 +202,7 @@ export function buildNoteWriteGuard({ askUserQuestionViaVoice, workstreamId, not
  *   notesVaultDir: string,
  *   notesInboxDir: string,
  *   recentUtterances: () => Array<{ text: string, at: number }>,
+ *   listenWindowEndedAt?: () => number,
  *   resolveFocusForPrompt?: () => Array<{ id: string, title: string, tags: string[] }> | null,
  *   resolveOpenNoteForRun?: () => { id: string, title: string, tags: string[], relativePath: string } | null,
  *   openNoteWritePath?: () => string | null,
@@ -238,6 +239,7 @@ export function createRunExec({
   notesVaultDir,
   notesInboxDir,
   recentUtterances,
+  listenWindowEndedAt = () => 0,
   // second-brain-focus D5: no focus means no block at all — a capability that
   // hasn't wired this in (or a test that doesn't care) just sees no notes.
   resolveFocusForPrompt = () => null,
@@ -610,6 +612,7 @@ export function createRunExec({
         prompt: buildRunPrompt(verb, {
           brief: run.task,
           utterances: recentUtterances(),
+          listenWindowEndedAt: listenWindowEndedAt(),
           focus: resolveFocusForPrompt(),
           openNote: resolveOpenNoteForRun(),
         }),
@@ -883,6 +886,7 @@ export function createRunExec({
           buildRunPrompt(verb, {
             brief: `${verb.clause}\n\n${run.task}`,
             utterances: recentUtterances(),
+            listenWindowEndedAt: listenWindowEndedAt(),
             focus: resolveFocusForPrompt(),
             openNote: resolveOpenNoteForRun(),
           }),

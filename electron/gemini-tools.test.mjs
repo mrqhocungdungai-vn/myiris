@@ -65,7 +65,7 @@ describe("gemini-tools", () => {
   it("gives the stateful verbs a thin schema and the stateless ones concrete parameters", () => {
     const declarations = make().buildPipelineToolDeclarations();
     for (const name of ["shape_requirements", "shape_on_canvas"]) {
-      expect(Object.keys(declarations.find((d) => d.name === name).parameters.properties)).toEqual(["said", "reading"]);
+      expect(Object.keys(declarations.find((d) => d.name === name).parameters.properties)).toEqual(["said", "spoken_by", "reading"]);
     }
     const execute = declarations.find((d) => d.name === "execute");
     expect(execute.parameters.required).toEqual(["goal", "details"]);

@@ -70,6 +70,8 @@ export function createRendererBridge({
   // (replace-roles-with-verb-tools).
   /** @type {Array<{ text: string, at: number }>} */
   let recentUtterances = [];
+  // When the most recent listening window ended; 0 until one has.
+  let listenWindowEndedAt = 0;
 
   function pruneUtterances(at) {
     const oldest = at - RECENT_UTTERANCE_MAX_AGE_MS;
@@ -213,6 +215,25 @@ export function createRendererBridge({
     return recentUtterances.map((entry) => ({ ...entry }));
   }
 
+  /**
+   * Stamp the end of a listening window. Speech from before it is not the
+   * conversation a later request came from — the user talked about one thing,
+   * Iris listened to a room discussing another, and the ring holds ten minutes,
+   * so without this the older topic is still attached and reads as context.
+   *
+   * An explicit setter rather than an inferred edge: an engagement during which
+   * NOTHING was heard produces no transcript edge to notice, and that is exactly
+   * the case where the stale block misleads most.
+   */
+  function markListenWindowEnded() {
+    listenWindowEndedAt = now();
+  }
+
+  /** @returns {number} 0 when no listening window has ever ended. */
+  function getListenWindowEndedAt() {
+    return listenWindowEndedAt;
+  }
+
   function getUiContext() {
     return irisUiContext;
   }
@@ -228,6 +249,8 @@ export function createRendererBridge({
     appendUserTranscript,
     appendModelTranscript,
     getRecentUtterances,
+    markListenWindowEnded,
+    getListenWindowEndedAt,
     getUiContext,
     setUiContext,
   };

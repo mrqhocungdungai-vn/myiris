@@ -281,3 +281,33 @@ describe("renderer-bridge: who a flushed line is attributed to", () => {
     expect(texts).toEqual(["now build the thing"]);
   });
 });
+
+describe("renderer-bridge: the listening-window boundary", () => {
+  // The bug this exists for: the user talks about topic A, engages listen-only,
+  // a room discusses topic B, they disengage and ask Iris to draw what was just
+  // asked. The ring holds ten minutes, so A was still attached and read as the
+  // conversation the request came from.
+  it("starts with no boundary, so nothing is excluded before one has ever ended", () => {
+    const bridge = createRendererBridge({ getMainWindow: () => null, now: () => 1000 });
+    expect(bridge.getListenWindowEndedAt()).toBe(0);
+  });
+
+  it("stamps the boundary even when the window heard nothing at all", () => {
+    // The case an inferred transcript edge would miss entirely — and the one
+    // where stale context misleads most, because nothing new arrived to bury it.
+    let clock = 5000;
+    const bridge = createRendererBridge({ getMainWindow: () => null, now: () => clock });
+    clock = 9000;
+    bridge.markListenWindowEnded();
+    expect(bridge.getListenWindowEndedAt()).toBe(9000);
+  });
+
+  it("moves the boundary forward on each window, never back", () => {
+    let clock = 100;
+    const bridge = createRendererBridge({ getMainWindow: () => null, now: () => clock });
+    bridge.markListenWindowEnded();
+    clock = 400;
+    bridge.markListenWindowEnded();
+    expect(bridge.getListenWindowEndedAt()).toBe(400);
+  });
+});

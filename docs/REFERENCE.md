@@ -30,6 +30,17 @@ so future changes don't reintroduce wrong/deprecated names or version drift.
 | Linter | `oxlint` `1.76.0` (exact) | `package.json`, rules in `.oxlintrc.json` | npm |
 | Secret scanner | `gitleaks` `8.30.1` — **not lockfile-pinned** | Homebrew, outside npm | `brew install gitleaks` |
 
+**`inputAudioTranscription` is a side channel, not the model's understanding.**
+Gemini Live is a voice-to-voice model with tool use: audio goes in, and speech
+and function calls come out. The transcription is a separate recognizer over the
+same audio, enabled by one line in `live-config.mjs` — turn it off and
+comprehension is unchanged. **Nothing downstream may treat it as authoritative.**
+The tool call's parameters are the output of the component that actually heard
+the user; the transcript is corroboration whose errors are silent, which is
+exactly why it must never outrank the call. If a call arrives too thin to act
+on, widen the tool schema — the channel the model speaks through — rather than
+promoting a second channel to compensate.
+
 ## The diagnostic log
 
 `~/.myiris/logs/iris.log` — JSONL, one record per line, rotated by size.

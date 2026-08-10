@@ -257,23 +257,24 @@ from what each kind of run can do about a thin brief:
   transcript as background to check against. A run forbidden to ask cannot recover
   from a vague brief.
 
-A third case sits above both. A verb that declares **`wordsLead`** — the
-conversations the user is standing inside, `shape_on_canvas` and `work_on_note` —
-puts the utterance *first* and the brief *after it*, labelled as a reading that
-may have lost or added something. Everywhere else the brief leads, because the
-voice layer was asked to turn a request into a task. In a live conversation that
-is backwards: the user is mid-thought, "no wait, not the blue one" is exactly the
-correction a paraphrase loses, and answering the paraphrase instead of the person
-is the failure that matters. Leading is not trusting — both blocks stay fenced —
-but the fence's *label* changes with its position, because a block cannot
-announce itself as "background context only" while the line above it calls it the
-instruction.
+A third case used to sit above both, and it was wrong. Two verbs
+(`shape_on_canvas` and `work_on_note`) could declare that the user's words
+**led** the prompt: the transcript came *first* and the brief *after it*, under
+"prefer it over the reading below wherever the two differ". The registry field
+that declared it is gone. That inverted the two channels. Gemini Live is a
+**voice-to-voice model with tool use**: it takes the audio in, reasons over it,
+and emits the function call. `inputAudioTranscription` is not how it understood
+anything — it is an optional side channel, opted into by one line in
+`live-config.mjs`, running a separate recognizer over the same audio. Turn it
+off and the model works exactly as before.
 
-The ordering is only worth anything if the transcript actually contains the
-sentence that caused the turn. It did not: transcription fragments reach the ring
-on a turn boundary, and a tool call arrives *before* `turnComplete`, so the one
-utterance a turn most needed was still sitting in a buffer.
-`live-messages.mjs` flushes before dispatching a tool call for that reason.
+So the leading path demoted the component that actually heard the user to "the
+reading", and promoted an ASR pass whose errors are **silent** over a model
+whose errors are not. The call's parameters are the instruction now, for every
+verb, and the transcript follows as corroboration under a label that says what
+it is. Where a brief was too thin, the fix belongs in the **tool schema** — the
+channel the model speaks through — which is why `said` was widened and
+`spoken_by` added, rather than a second channel being told to outrank the first.
 
 The attachment is bounded twice: the ring itself is capped by count and age, and
 `boundTranscript` applies a tighter per-use cap (12 utterances / 4 000 chars,

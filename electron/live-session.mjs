@@ -40,6 +40,7 @@ import { createListenWindow, formatDuration } from "./listen-window.mjs";
  * @param {{
  *   emitEvent: (event: any) => void,
  *   emitToRenderer: (channel: string, payload: any) => void,
+ *   markListenWindowEnded?: () => void,
  *   flushTranscripts: () => void,
  *   drainPendingAnnouncements: () => void,
  *   checkClaudeStatus: () => Promise<any>,
@@ -66,6 +67,7 @@ export function createLiveSession({
   emitEvent,
   emitToRenderer,
   flushTranscripts,
+  markListenWindowEnded = () => {},
   drainPendingAnnouncements,
   checkClaudeStatus,
   probePipelineAvailability,
@@ -228,6 +230,9 @@ export function createLiveSession({
     requestModelSilence(engaged);
     onListenOnlyChange(engaged);
     updateTrayMenu();
+    // Stamp the boundary here, on the single writer for the transition, so
+    // expiry and the user's own toggle set it identically.
+    if (!engaged) markListenWindowEnded();
     if (!engaged) announceListenedFor(listenedMs);
   }
 
