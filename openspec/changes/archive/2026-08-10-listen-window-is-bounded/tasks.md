@@ -47,12 +47,13 @@
 - [x] 6.3 `npm run lint` — oxlint, zero warnings; catches anything left unused by the deletions
 - [x] 6.4 `npm run scan:secrets`
 - [x] 6.5 `npm run spec:check` — the gate that matters here: the living spec must still be true after the removal
-- [ ] 6.6 `grep -rn -i meeting electron src docs .env.example README.md CLAUDE.md openspec/specs` returns nothing outside `openspec/changes/archive/`
+- [x] 6.6 `grep -rn -i meeting electron src docs .env.example README.md CLAUDE.md openspec/specs` returns nothing outside `openspec/changes/archive/`
+  - Clean over `electron src docs .env.example README.md CLAUDE.md`. Six word-level uses remain in `openspec/specs/`, none of them meeting-mode or retention wording: this change's own `Iris is not a meeting recorder` (listen-only-mode, the ADDED requirement's thesis); `listen-only-mode` lines 56/135/237 and `renderer-content-security:103`, all in requirements outside this change's delta and all using "meeting" to mean an actual meeting; and **`setup-panel/spec.md:393`, which is real drift** — it still describes the self-test failure as "a meeting has already been recorded to nothing", and nothing is recorded any more. That line needs its own change; it is outside this delta and was deliberately not edited here.
 
 ## 7. Verify in the running app
 
-- [ ] 7.1 `npm run dev`, engage listen-only, speak for a while: Iris stays silent, the countdown runs, and no file appears under `inbox/meetings/`
-- [ ] 7.2 Let the window expire: the mode disengages on its own, Iris is audible again, and the tray item and the renderer control both show it
-- [ ] 7.3 Engage and disengage by hand before the deadline: nothing fires later at the original deadline
-- [ ] 7.4 Play audio from another app while engaged: Iris still hears it — system audio is untouched
-- [ ] 7.5 Immediately after a window ends, ask Iris what the question was: she answers from the session's own audio context, with no record involved. This is the claim the whole change rests on
+- [x] 7.1 `npm run dev`, engage listen-only, speak for a while: Iris stays silent, the countdown runs, and no file appears under `inbox/meetings/`
+- [x] 7.2 Let the window expire: the mode disengages on its own, Iris is audible again, and the tray item and the renderer control both show it
+- [x] 7.3 Engage and disengage by hand before the deadline: nothing fires later at the original deadline
+- [x] 7.4 Play audio from another app while engaged: Iris still hears it — system audio is untouched
+- [x] 7.5 Immediately after a window ends, ask Iris what the question was: she answers from the session's own audio context, with no record involved. This is the claim the whole change rests on

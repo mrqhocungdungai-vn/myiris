@@ -1,7 +1,6 @@
 ## Purpose
 
 The opt-in retention of what was said in a conversation into the notes vault, so the second brain accumulates from what the user already does all day rather than only from deliberate note-taking — with the consent, visibility, and revocation a microphone transcript written to disk requires.
-
 ## Requirements
 
 ### Requirement: Ambient capture is opt-in, default off, and persisted
@@ -59,7 +58,9 @@ Ambient capture SHALL write only the conversation **text** Iris already holds in
 
 The material this feature captures is material Iris already has. Widening what is retained, or adding a second recording path *under this preference*, would turn an opt-in that a user evaluated on one basis into something larger than what they agreed to.
 
-One other feature does write conversation text to the vault: listen-only mode retains to its own separate area, under its own consent, for as long as the user holds that mode engaged. That is deliberately not this preference and SHALL NOT be governed by it — neither enabling nor disabling ambient capture SHALL start or stop it, and it SHALL write to its own area rather than this one, so that a reader can always tell which consent produced which record. See the `listen-only-mode` capability.
+While listen-only mode is engaged, ambient capture SHALL NOT write what Iris hears. It SHALL advance past that span without retaining it, and SHALL resume retaining when the mode is disengaged.
+
+The reason is the consent, not a competing writer. This preference is consent to retain the user's own conversations with Iris. While that mode is engaged what Iris hears widens to include whatever the machine is playing — remote participants on a call, a video, people who never agreed to anything — and that is outside what this preference was given for. So the span belongs to nobody: no other feature retains it either, and it is simply not written down. See the `listen-only-mode` capability.
 
 #### Scenario: No audio is written
 
@@ -76,24 +77,22 @@ One other feature does write conversation text to the vault: listen-only mode re
 - **WHEN** ambient capture writes a session's text
 - **THEN** it is written to the local vault and sent nowhere
 
-While listen-only mode is engaged, that mode's retention SHALL own what Iris hears, and ambient capture SHALL NOT also write it. Ambient capture SHALL advance past that span without retaining it, and SHALL resume retaining when the mode is disengaged. Writing the same speech to two areas under two different consents would make "delete what was recorded" unanswerable, which is the whole reason the areas are separate.
-
-#### Scenario: The two retentions are independent
-
-- **WHEN** the user disables ambient capture while listen-only mode is engaged
-- **THEN** listen-only mode's own retention continues, to its own area, unaffected
-
-#### Scenario: The mode's retention takes precedence over ambient capture
+#### Scenario: The mode's span is retained by nobody
 
 - **WHEN** ambient capture is enabled and listen-only mode is engaged
-- **THEN** only the mode's own area is written for that span, and the session spool is not
-- **AND** the same speech does not appear in both areas
+- **THEN** the session spool is not written for that span
+- **AND** no other area of the vault is written for it either
 
 #### Scenario: Ambient capture resumes after the mode ends
 
 - **WHEN** the user disengages listen-only mode with ambient capture still enabled
 - **THEN** ambient capture resumes retaining to the session spool
-- **AND** it does not retroactively write the span the mode owned
+- **AND** it does not retroactively write the span the mode covered
+
+#### Scenario: The preference does not govern the mode
+
+- **WHEN** the user enables or disables ambient capture while listen-only mode is engaged
+- **THEN** the mode's own state is unchanged in either direction
 
 ### Requirement: Capture follows the microphone and stops with it
 
@@ -101,7 +100,7 @@ Ambient capture SHALL retain only while Iris is awake and listening. Nothing SHA
 
 What is not being streamed to the voice layer is not being heard, and a capture that continued past sleep would be recording a room whose occupants have every reason to believe the microphone is off.
 
-Sleep is no longer the only boundary. While listen-only mode is engaged, what Iris hears widens to include audio the machine is playing, and that span belongs to the mode's own retention rather than to this one — so ambient capture SHALL also stop at that boundary and resume when the mode ends. The principle is unchanged: ambient capture retains what Iris hears under *this* preference's consent, and nothing else.
+Sleep is not the only boundary. While listen-only mode is engaged, what Iris hears widens to include audio the machine is playing, which is outside this preference's consent — so ambient capture SHALL also stop at that boundary and resume when the mode ends. The principle is unchanged: ambient capture retains what Iris hears under *this* preference's consent, and nothing else.
 
 #### Scenario: Sleep stops retention
 
@@ -117,7 +116,7 @@ Sleep is no longer the only boundary. While listen-only mode is engaged, what Ir
 
 - **WHEN** ambient capture is enabled and the user engages listen-only mode
 - **THEN** ambient capture stops retaining at that point and flushes what had accumulated
-- **AND** the span the mode covers is retained by the mode, not here
+- **AND** the span the mode covers is not retained anywhere
 
 ### Requirement: The session is flushed as it goes, exactly once per utterance
 

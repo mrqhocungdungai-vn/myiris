@@ -5,7 +5,6 @@ Listen-only mode is how Iris takes something in that was not said to her. Engagi
 Nothing is retained. The engagement is bounded to a few minutes, and at that length what Iris heard is still held by the voice session itself, in the audio form it received — which is the form that was accurate all along. So the user asks about it by asking, and no record has to exist for that to work.
 
 The mode is reached and left without ever reconnecting or reconfiguring the voice session, which is what distinguishes it from the retired listening mode it replaces.
-
 ## Requirements
 
 ### Requirement: Listen-only mode suppresses Gemini audio output without reconnecting
@@ -165,21 +164,21 @@ The app SHALL report each refusal, and SHALL answer the refusal back to the sess
 
 While listen-only mode is engaged, transcribed input SHALL NOT be shown in the conversation surface at all — neither as the user's words nor under any other attribution.
 
-Before the mode existed, showing it there was right: Iris heard only the microphone, so everything she heard was the user talking to her. Both halves of that stopped being true. A line may now be the user, another person in the room, a remote participant, or a video, and the sources SHALL NOT be presented as separable because they are not — they are summed into one stream before anything leaves the machine. And a meeting's verbatim is not a conversation between the user and Iris, which is what that surface is for; the conversation is held to a recent window, so a long engagement would evict the real exchange to display a transcript that already exists, in full and unbounded, in the mode's own record.
+Before the mode existed, showing it there was right: Iris heard only the microphone, so everything she heard was the user talking to her. Both halves of that stopped being true. A line may now be the user, another person in the room, a remote participant, or a video, and the sources SHALL NOT be presented as separable because they are not — they are summed into one stream before anything leaves the machine. And what is overheard is not a conversation between the user and Iris, which is what that surface is for; the conversation is held to a recent window, so filling it with overheard speech would evict the real exchange.
 
-Instead, when the mode ends the app SHALL add ONE entry to that surface, naming the record it produced and how long it ran. That entry is the seam between the conversation and the file: it is what the user refers to when asking Iris about the meeting, and what she can hand to a verb.
+Instead, when the mode ends the app SHALL add ONE entry to that surface, stating how long Iris listened. That entry is the mark the engagement leaves on the conversation: it is what the user refers to when asking Iris about what she heard.
 
 While the mode is engaged the app SHALL ALSO show, near the orb, a live readout of what Iris is hearing at that moment. It SHALL update as she hears, SHALL replace itself rather than accumulate, and SHALL NOT be retained anywhere. When the mode is engaged and nothing has been heard, that SHALL be stated rather than left blank.
 
-This is not a smaller version of the transcript; it answers a different question. Retaining silently is the failure mode to avoid: a capture that has died looks exactly like one that is working until the mode ends, and without this the user discovers it only by asking for a summary of a record that turned out to be empty. That is far too late, and it is the state this feature was actually found in during testing. A live readout makes hearing — and not hearing — a fact on screen at the moment it is true.
+This is not a smaller version of the transcript; it answers a different question. Hearing nothing silently is the failure mode to avoid: a capture that has died looks exactly like one that is working until the mode ends, and without this the user discovers it only by asking about something Iris never received. That is far too late, and it is the state this feature was actually found in during testing. A live readout makes hearing — and not hearing — a fact on screen at the moment it is true.
 
-Provenance SHALL be decided when the text ARRIVES, not when it is displayed or retained. The two are different moments — an utterance is closed only after transcription falls quiet, so the end of every engagement is processed after the mode has already been left — and deciding at the later one publishes a video's words as the user's. An utterance spanning the transition SHALL be treated as overheard.
+Provenance SHALL be decided when the text ARRIVES, not when it is displayed, and an utterance spanning the transition SHALL be treated as overheard. The two are different moments — an utterance is closed only after transcription falls quiet, so the end of every engagement is processed after the mode has already been left — and deciding at the later one publishes a video's words as the user's.
 
-The same holds past the screen. Overheard speech SHALL NOT be retained into the recent-conversation memory that feeds a run's context, which every consumer presents to Claude as what the user said recently — carrying it there would repeat the false attribution one layer deeper, where the user cannot see it, and that memory outlives the mode. Fencing it as untrusted is not sufficient: a fence mitigates content that genuinely IS the user's, and is not a licence to mislabel content that is not. Nothing is lost by leaving it out, because the mode's own retention holds all of it.
+The same holds past the screen. Overheard speech SHALL NOT be retained into the recent-conversation memory that feeds a run's context, which every consumer presents to Claude as what the user said recently — carrying it there would repeat the false attribution one layer deeper, where the user cannot see it, and that memory outlives the mode. Fencing it as untrusted is not sufficient: a fence mitigates content that genuinely IS the user's, and is not a licence to mislabel content that is not. Nothing is lost by leaving it out, because the voice session still holds what it heard, and that is what the user asks against.
 
 Any interface affordance that means "the user just spoke" SHALL NOT fire for overheard input.
 
-#### Scenario: A meeting does not flood the conversation
+#### Scenario: Overheard speech does not flood the conversation
 
 - **WHEN** Iris hears a long stretch of speech while the mode is engaged
 - **THEN** none of it appears in the conversation surface
@@ -204,7 +203,7 @@ Any interface affordance that means "the user just spoke" SHALL NOT fire for ove
 #### Scenario: The engagement leaves one entry behind
 
 - **WHEN** the user disengages the mode after Iris heard something
-- **THEN** the conversation surface gains a single entry naming that engagement's record and how long it ran
+- **THEN** the conversation surface gains a single entry stating how long she listened
 
 #### Scenario: The tail of an engagement is not attributed to the user
 
@@ -215,7 +214,11 @@ Any interface affordance that means "the user just spoke" SHALL NOT fire for ove
 
 - **WHEN** a run is started after listen-only mode has been engaged and then disengaged
 - **THEN** the recent-conversation context it receives contains none of what was overheard
-- **AND** what was overheard is still available in the mode's own retained record
+
+#### Scenario: The user can still ask about what was overheard
+
+- **WHEN** the user disengages the mode and asks Iris about what she heard
+- **THEN** she answers from the voice session's own conversation, with no vault record involved
 
 #### Scenario: Ordinary conversation is unchanged
 
@@ -257,92 +260,6 @@ When the capture fails — by delivering silence, by ending, or by failing to ac
 - **WHEN** system-audio capture cannot be acquired at all as the user engages the mode
 - **THEN** the user is told, and Iris's audio output is unaffected
 
-### Requirement: The mode retains what Iris hears to its own vault area
-
-While listen-only mode is engaged, the app SHALL retain the conversation text Iris receives into a dedicated area of the vault, separate from the area the ambient-capture preference writes to. This retention SHALL be governed by the mode alone and SHALL NOT depend on the ambient-capture preference in either direction.
-
-Retention SHALL be driven by the transcription of what Iris hears, and SHALL NOT be bounded by how much recent conversation Iris holds in memory for other purposes. That memory is deliberately small and periodically pruned; a busy meeting can produce more speech between two flushes than it holds, and anything pruned in between would be lost permanently.
-
-The retained record SHALL be distinguishable from the other kinds of spooled vault content, so that whatever reads it later can treat a meeting transcript on its own terms rather than as a deliberate capture or a run outcome.
-
-Each engagement of the mode SHALL produce its own record rather than appending into a shared period file, so that one meeting can be identified, read, or deleted without touching another.
-
-Engaging the mode is the consent point for this retention. The first time the user engages the mode, the app SHALL state that the mode retains what is said in the room and what the machine plays, that this may include other people, and where it is written.
-
-Retention SHALL be flushed progressively rather than only at the end, SHALL write each utterance at most once however many flushes occur, and SHALL report a failed write rather than raising it.
-
-#### Scenario: Engaging the mode starts retention
-
-- **WHEN** listen-only mode is engaged
-- **THEN** what Iris hears is retained to the mode's own vault area
-- **AND** this happens whether or not the ambient-capture preference is enabled
-
-#### Scenario: A busy meeting is retained in full
-
-- **WHEN** more speech occurs between two flushes than Iris holds in recent-conversation memory
-- **THEN** all of it is retained, none of it lost to that memory being pruned
-
-#### Scenario: The record is identifiable as a meeting transcript
-
-- **WHEN** something reads the vault's spooled content
-- **THEN** a meeting record is distinguishable from a deliberate capture and from a run-outcome record
-
-#### Scenario: Each engagement is its own record
-
-- **WHEN** the user engages and disengages the mode twice in one day
-- **THEN** each engagement produced its own record, identifiable and deletable on its own
-
-#### Scenario: Disengaging stops retention
-
-- **WHEN** the user disengages listen-only mode
-- **THEN** retention to that area stops at that point and what accumulated is flushed
-
-#### Scenario: The consent point states what is retained
-
-- **WHEN** the user engages listen-only mode for the first time
-- **THEN** they are told it retains speech in the room and audio the machine plays, that this may include other people, and where it is written
-
-#### Scenario: Retention does not disturb the conversation
-
-- **WHEN** a retention write fails, for example because the disk is full
-- **THEN** the failure is reported and the conversation continues normally
-
-#### Scenario: Repeated flushes do not duplicate
-
-- **WHEN** several flushes occur over one engagement of the mode
-- **THEN** each utterance appears in the retained record exactly once
-
-### Requirement: Iris is told where the record was written
-
-When the mode is disengaged, the app SHALL tell the voice layer, in-band on the existing session, where that engagement's record was written and what span it covers. The location SHALL be given relative to the vault, on the same terms every other note identity is, and SHALL be sent by the call that adds conversation content without requesting a reply — the same one that carries the silence request — so it never provokes a turn.
-
-This exists because the voice layer is what chooses a verb and fills its parameters. Asking about a meeting a moment after it ends is answered from the conversation itself and needs nothing; asking about a long one is not, because context-window compression will have evicted the beginning. At that point the record has to be read, and the only thing standing between "there is a record" and "read THIS record" is knowing which of them was the one just heard.
-
-The app SHALL NOT depend on this holding indefinitely. It lives in the conversation and can be evicted like anything else; it is what makes the ordinary case work directly, not a guarantee. Nothing SHALL be lost when it is gone — the records remain readable, identifiable by their own timestamps.
-
-Nothing SHALL be sent when the system-audio half is disabled, and nothing SHALL be sent for an engagement that produced no record.
-
-#### Scenario: Disengaging tells Iris where the record is
-
-- **WHEN** the user disengages listen-only mode after Iris heard something
-- **THEN** the voice layer is told, in the conversation, where that engagement's record was written and what span it covers
-- **AND** no reply is produced in response
-
-#### Scenario: The user can ask about a meeting too long to remember
-
-- **WHEN** the user asks about a meeting whose beginning has been evicted from the conversation
-- **THEN** the request can be handed to a verb naming that engagement's own record, rather than the whole area
-
-#### Scenario: An engagement that heard nothing announces nothing
-
-- **WHEN** the mode is disengaged having heard nothing at all
-- **THEN** no record location is announced, because none was written
-
-#### Scenario: The escape hatch stays silent
-
-- **WHEN** the system-audio half is disabled and the user disengages the mode
-- **THEN** nothing is sent, exactly as before this feature existed
-
 ### Requirement: The user is advised to wear headphones
 
 When the user engages listen-only mode while audio output is going to speakers rather than headphones, the app SHALL advise wearing headphones, because speaker output re-enters the microphone and reaches Iris a second time, degraded and out of step with the captured copy.
@@ -361,15 +278,20 @@ The app SHALL NOT attempt to cancel, duck, or otherwise process away that second
 
 ### Requirement: System audio can be disabled entirely
 
-The system-audio half of listen-only mode SHALL be disableable by configuration. When disabled, engaging the mode SHALL silence Iris exactly as it did before this change: no capture is opened, no retention area is written, and no advisory is shown.
+The system-audio half of listen-only mode SHALL be disableable by configuration. When disabled, engaging the mode SHALL silence Iris exactly as it did before that half existed: no capture is opened and no advisory is shown. The listening window SHALL still bound the engagement, because the bound is a property of the mode rather than of the capture.
 
-This exists so that the pre-change behaviour remains reachable, and so a user who never needs Iris to hear their machine never triggers a system recording indicator.
+This exists so that the microphone-only behaviour remains reachable, and so a user who never needs Iris to hear their machine never triggers a system recording indicator.
 
 #### Scenario: Disabled means silence only
 
 - **WHEN** the escape hatch is set and the user engages listen-only mode
 - **THEN** Iris falls silent and hears the microphone only
-- **AND** no capture is opened, no session reconfiguration occurs, and nothing is retained to the mode's vault area
+- **AND** no capture is opened and no session reconfiguration occurs
+
+#### Scenario: The bound applies with system audio disabled
+
+- **WHEN** the escape hatch is set and the user engages listen-only mode
+- **THEN** the listening window still opens and still disengages the mode at its deadline
 
 #### Scenario: The default is enabled
 
@@ -397,9 +319,11 @@ This exists because main-process behavior depends on the mode — main decides w
 
 Listen-only mode SHALL reset to disengaged whenever the session ends by explicit user stop. Toggling the mode SHALL be a no-op while the session is asleep (not running), so a wake always starts with Iris audible. The mode SHALL NOT be persisted to configuration; a fresh app launch always starts with Iris audible.
 
-The mode SHALL NOT be disengaged by any transport-level event. A server-initiated teardown, a reconnect, or the exhaustion of reconnect attempts SHALL leave the mode engaged, because disengaging restores Iris's voice — and a network failure is not a reason to make Iris audible in a room where the user engaged the mode so she would not be.
+Exactly two things SHALL disengage the mode: the user, and the listening window reaching its deadline. Both are decisions about how long Iris should stay silent, taken by someone who knows the room.
 
-Everything the mode owns SHALL be released when the session ends: the system-audio capture SHALL be stopped and its retention flushed, so no capture outlives the session that justified it.
+Nothing else SHALL. In particular the mode SHALL NOT be disengaged by any transport-level event: a server-initiated teardown, a reconnect, or the exhaustion of reconnect attempts SHALL leave the mode engaged, because disengaging restores Iris's voice — and a network failure is not a reason to make Iris audible in a room where the user engaged the mode so she would not be. A failed or dead system-audio capture SHALL NOT disengage it either.
+
+Everything the mode owns SHALL be released when the session ends: the system-audio capture SHALL be stopped and the listening window closed, so neither outlives the session that justified it.
 
 #### Scenario: An explicit stop clears the mode
 
@@ -416,7 +340,7 @@ Everything the mode owns SHALL be released when the session ends: the system-aud
 #### Scenario: A session ending stops the system-audio capture
 
 - **WHEN** the session ends while listen-only mode is engaged with system audio being captured
-- **THEN** the capture is stopped and its retention flushed rather than dropped
+- **THEN** the capture is stopped and the listening window is closed
 
 #### Scenario: Toggling while asleep does nothing
 
@@ -505,3 +429,54 @@ This keeps an ephemeral, per-session mode from writing to or shadowing a persist
 
 - **WHEN** the user engages and then disengages listen-only mode
 - **THEN** the persisted interface-sound preference is unchanged
+
+### Requirement: The listening window is bounded
+
+Engaging listen-only mode SHALL open a listening window of a bounded length, and the app SHALL disengage the mode when that window closes. Disengaging on expiry SHALL be indistinguishable from the user disengaging: Iris becomes audible again, the in-band note that ends the silence request is sent, and every control surface reflects the new state.
+
+The deadline SHALL be absolute, measured from the moment the mode was engaged, and SHALL NOT be extended by anything Iris hears. A window that renews itself while someone is still speaking is not a window, and the failure it would reproduce — a mode left engaged for hours — is the one this bound exists to prevent.
+
+The window's length SHALL be configurable, SHALL default to five minutes, and SHALL be clamped to a documented ceiling. There SHALL be no setting that makes the window unbounded.
+
+This length is what the mode is for. Iris is not a meeting recorder; the need is to hear a question being asked — in the room or through a call — and then go and answer it. At this length what was heard is still held by the voice session itself, in the audio form it received, so the user asks about it by asking. Nothing has to be written down for that to work.
+
+Because Iris is silent while the mode is engaged, she SHALL NOT announce the approaching deadline by voice. The app SHALL show the time remaining for as long as the window is open, so the user can see the mode about to end rather than discover it by Iris speaking.
+
+#### Scenario: Engaging opens a bounded window
+
+- **WHEN** the user engages listen-only mode
+- **THEN** a listening window opens with the configured length
+- **AND** the time remaining is shown for as long as the mode is engaged
+
+#### Scenario: Continued speech does not extend the deadline
+
+- **WHEN** Iris hears speech continuously for the whole length of the window
+- **THEN** the deadline is unchanged from the one set when the mode was engaged
+- **AND** the mode still ends at that deadline
+
+#### Scenario: The deadline disengages the mode
+
+- **WHEN** the listening window reaches its deadline with the mode still engaged
+- **THEN** the mode is disengaged, Iris is audible again, and the silence request is ended in-band
+- **AND** every control surface reflects the disengaged state
+
+#### Scenario: Disengaging by hand closes the window
+
+- **WHEN** the user disengages the mode before the deadline
+- **THEN** the window closes with it
+- **AND** no further automatic disengage occurs at the original deadline
+
+#### Scenario: Re-engaging starts a full window
+
+- **WHEN** the user engages the mode again after a window expired
+- **THEN** a new window opens with the full configured length
+
+#### Scenario: The window does not outlive the session
+
+- **WHEN** the session ends or Iris is put to sleep while a window is open
+- **THEN** the window closes with it, and a later wake does not inherit a running deadline
+
+#### Scenario: The configured length is honoured
+
+- **WHEN** the operator sets the listening-window length
+- **THEN** that value bounds the window, the documented default applies when it is unset, and a value beyond the ceiling is clamped to it
