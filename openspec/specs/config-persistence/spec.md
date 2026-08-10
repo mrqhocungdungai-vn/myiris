@@ -74,20 +74,33 @@ Refusal SHALL be explicit: the save SHALL fail with an actionable message naming
 - **WHEN** a config save supplies a value crafted to look like a key/value pair on a second line
 - **THEN** the save is refused and no additional variable exists in the config file after the attempt
 
-### Requirement: A config-sourced executable path is validated before it is spawned
+### Requirement: The executable Iris spawns is validated before the spawn
 
-A path resolved from configuration or environment that will be executed as a subprocess SHALL be validated before the spawn: it SHALL exist, SHALL be a regular file, and SHALL be executable by the current user. A path failing validation SHALL cause the run to fail with a clear error naming the setting, and SHALL NOT fall through to a bare command name or to a different candidate.
+Before Iris spawns the Claude runtime, the resolved executable path SHALL be
+validated: it SHALL exist, SHALL be a regular file, and SHALL be executable by the
+current user. A path failing validation SHALL fail with a clear error naming the
+component being resolved and the condition that failed, and SHALL NOT fall through
+to a bare command name, to a host-installed binary, or to any other candidate.
 
-Validation is required because the executable path is the highest-value sink reachable from configuration — a redirected binary runs with the user's full privileges on the next task.
+The path validated is the one the app ships, because that is the only path there
+is: there SHALL be no setting that points Iris at a host-installed runtime (see
+`pipeline-availability`), so configuration cannot redirect this spawn. Validation
+is still required, and is not a formality — it is the one place a packaging fault,
+such as a missing `asarUnpack` target or an executable bit lost in a copy, becomes
+an error naming its cause instead of a bare `ENOENT` at spawn time against a path
+the user has never heard of.
 
-#### Scenario: A missing configured binary fails loudly
-- **WHEN** the configured binary override points at a path that does not exist
-- **THEN** the run fails with an error naming the setting, and no subprocess is spawned
+#### Scenario: A missing bundled executable fails loudly
 
-#### Scenario: A non-executable path is refused
-- **WHEN** the configured binary override points at a file that is not executable
-- **THEN** the run fails with an error naming the setting, and no subprocess is spawned
+- **WHEN** the bundled runtime cannot be resolved, or resolves to a path that does not exist
+- **THEN** the failure names the bundled component and points at reinstalling, and no subprocess is spawned
 
-#### Scenario: An unset override still probes known locations
-- **WHEN** no binary override is configured
-- **THEN** the existing probe of known install locations is unchanged, and the chosen candidate is validated the same way
+#### Scenario: A non-executable bundled path is refused
+
+- **WHEN** the resolved path exists but is not a regular file, or is not executable by the current user
+- **THEN** the failure names that condition, and no subprocess is spawned
+
+#### Scenario: Validation never falls back to the host
+
+- **WHEN** validation fails for any reason
+- **THEN** Iris does not search `PATH`, does not spawn a host-installed runtime, and does not substitute another candidate

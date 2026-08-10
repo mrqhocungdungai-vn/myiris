@@ -6,9 +6,15 @@ The deck's ambient background: a WebGL particle/node network behind the non-HUD 
 
 ### Requirement: WebGL particle/node network backdrop
 
-The deck (non-HUD) renderer SHALL render a WebGL particle/node network backdrop behind the deck panels **when the WebGL quality preference is on the high-fidelity path** (see `webgl-quality-mode`), layered above the existing Deep Space CSS gradient layers (`hud-nebula`/`hud-glow`/`hud-vignette`) and below all `.deck-panel` content, colored from `tokens.css` CSS variables rather than hardcoded colors, without modifying any upstream-verbatim Deep Space stylesheet.
+The deck (non-HUD) renderer SHALL render a WebGL particle/node network backdrop behind the deck panels **when the WebGL quality preference is on the high-fidelity path** (see `webgl-quality-mode`), layered above the Deep Space CSS gradient layers (`hud-nebula`/`hud-glow`) and below all `.deck-panel` content, colored from `tokens.css` CSS variables rather than hardcoded colors.
 
-On the light path — the default — the backdrop SHALL NOT be created at all: no WebGL rendering context is established for it, so it costs nothing rather than rendering cheaply. The deck's background is then the existing Deep Space CSS gradient layers on their own, which SHALL remain a complete and legible background without it. This is the single largest saving the light path makes on the deck, because the backdrop covers the full viewport.
+The backdrop SHALL live in its own component and its own stylesheet, adding no
+rules to the adopted Deep Space sheets. The constraint is ownership, not
+byte-equality: `deepspace-skin` states what those sheets are and how a change to
+them is handled, and this capability SHALL defer to it rather than asserting a
+verbatim-upstream property that capability has retired.
+
+On the light path — the default — the backdrop SHALL NOT be created at all: no WebGL rendering context is established for it, so it costs nothing rather than rendering cheaply. The deck's background is then the Deep Space CSS gradient layers on their own, which SHALL remain a complete and legible background without it. This is the single largest saving the light path makes on the deck, because the backdrop covers the full viewport.
 
 #### Scenario: Backdrop renders behind panels
 
@@ -30,10 +36,10 @@ On the light path — the default — the backdrop SHALL NOT be created at all: 
 - **WHEN** the user changes the quality preference while the deck is showing
 - **THEN** the backdrop appears or is torn down immediately, and a torn-down backdrop leaves no live WebGL context behind
 
-#### Scenario: Deep Space files stay untouched
+#### Scenario: The backdrop owns its own files
 
-- **WHEN** `tokens.css`, `base.css`, `deck.css`, `fx.css`, `overlays.css`, and `index.css` are compared against their upstream counterparts
-- **THEN** they remain unmodified; the backdrop lives in its own new component and stylesheet
+- **WHEN** the backdrop's implementation is inspected
+- **THEN** it consists of its own component and its own stylesheet, and the adopted Deep Space sheets carry no backdrop rules
 
 #### Scenario: Backdrop follows the token palette
 
