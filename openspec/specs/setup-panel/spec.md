@@ -389,12 +389,14 @@ determine whether audio is arriving, report the verdict, and close the capture.
 It SHALL distinguish four outcomes, because the action that resolves each
 differs: audio heard; capture obtained but silent; capture not obtainable; and
 the operating system being too old to provide system-audio capture at all. The
-second is the observed failure that otherwise looks identical to working until a
-meeting has already been recorded to nothing. The fourth SHALL be reported as
-its own outcome rather than as silence, because the app declares support for
-operating-system versions older than the one this capture requires, and on those
-the capture is not broken but absent — telling that user to check a permission
-would send them after a setting that cannot help.
+second is the observed failure that otherwise looks identical to working until
+Iris is asked about something she was silenced in order to hear and turns out to
+have nothing — which, since nothing is written down, is the first moment anyone
+can find out, and it arrives with the room waiting. The fourth SHALL be
+reported as its own outcome rather than as silence, because the app declares
+support for operating-system versions older than the one this capture requires,
+and on those the capture is not broken but absent — telling that user to check a
+permission would send them after a setting that cannot help.
 
 Because the governing permission is unreadable but not absent, a verdict of
 silence or of not-obtainable SHALL offer the route to the system settings that
