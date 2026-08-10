@@ -334,6 +334,12 @@ answer on its own, because each names a different mechanism:
 | `lowered` | `YES` mid-gesture is the drive being released because a **driving** hand dropped below the bottom third — raise the holding hand |
 | `curDist` / `refDist` | `curDist` jumping while your hands are still is tracking noise reaching the camera; a `refDist` near 80 means you engaged with the hands almost touching, where the ratio law is at its most sensitive |
 
+**A lock outranks the zoom.** Zooming out never releases it — that release only
+exists while nothing is locked. Once you have chosen a note, some note is always
+chosen, and you change it by aiming at another. Locking also glides the note to
+the centre of the view, so the point every drive works around is the point you
+are looking at.
+
 **A locked note wears a red ring.** It is the one chromatic mark in the galaxy,
 and it earns the exception: the lock is no longer just the anchor the camera
 happens to use, it is the basis every hand gesture is addressed to. Without a

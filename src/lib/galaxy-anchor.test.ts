@@ -255,15 +255,24 @@ describe("zoomLockStep", () => {
 });
 
 describe("shouldReleaseAnchor", () => {
+  // The zoom must never take the lock away. Backing out used to drop it, so
+  // spreading the palms to see where a note sits destroyed the choice of that
+  // note — silently, in the middle of a gesture that was not about releasing.
+  it("never releases while a note is locked, however far out the camera goes", () => {
+    expect(shouldReleaseAnchor(EXTENT * RELEASE_EXTENT_MULTIPLE, EXTENT, MAX, true)).toBe(false);
+    expect(shouldReleaseAnchor(MAX, EXTENT, MAX, true)).toBe(false);
+    expect(shouldReleaseAnchor(MAX * 10, 0, MAX, true)).toBe(false);
+  });
+
   const EXTENT = 100;
   const MAX = 2500;
 
   it("holds the anchor while the camera is inside the graph's extent multiple", () => {
-    expect(shouldReleaseAnchor(EXTENT * RELEASE_EXTENT_MULTIPLE - 1, EXTENT, MAX)).toBe(false);
+    expect(shouldReleaseAnchor(EXTENT * RELEASE_EXTENT_MULTIPLE - 1, EXTENT, MAX, false)).toBe(false);
   });
 
   it("releases past the extent multiple", () => {
-    expect(shouldReleaseAnchor(EXTENT * RELEASE_EXTENT_MULTIPLE, EXTENT, MAX)).toBe(true);
+    expect(shouldReleaseAnchor(EXTENT * RELEASE_EXTENT_MULTIPLE, EXTENT, MAX, false)).toBe(true);
   });
 
   it("releases at the dolly clamp even when the extent multiple is unreachable", () => {
@@ -271,13 +280,13 @@ describe("shouldReleaseAnchor", () => {
     // to 2x its extent — without this clause the release would be unreachable
     // on exactly the large vaults that need it most (design.md D5).
     const hugeExtent = MAX;
-    expect(shouldReleaseAnchor(MAX, hugeExtent, MAX)).toBe(true);
-    expect(shouldReleaseAnchor(MAX - 1, hugeExtent, MAX)).toBe(false);
+    expect(shouldReleaseAnchor(MAX, hugeExtent, MAX, false)).toBe(true);
+    expect(shouldReleaseAnchor(MAX - 1, hugeExtent, MAX, false)).toBe(false);
   });
 
   it("falls back to the clamp alone when the graph has no measurable extent", () => {
-    expect(shouldReleaseAnchor(1, 0, MAX)).toBe(false);
-    expect(shouldReleaseAnchor(MAX, 0, MAX)).toBe(true);
+    expect(shouldReleaseAnchor(1, 0, MAX, false)).toBe(false);
+    expect(shouldReleaseAnchor(MAX, 0, MAX, false)).toBe(true);
   });
 });
 

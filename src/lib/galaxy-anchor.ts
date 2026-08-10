@@ -289,7 +289,8 @@ export const RELEASE_EXTENT_MULTIPLE = 2;
 
 /**
  * Whether the camera has backed far enough out that the anchor should return to
- * the centroid, so closing the hands is the way back to the overview.
+ * the centroid, so closing the hands is the way back to the overview — which
+ * only applies while NOTHING is locked.
  *
  * The second clause is load-bearing, not defensive (design.md D5): a vault
  * whose bounding radius exceeds about half `maxRadius` can never dolly out far
@@ -297,7 +298,20 @@ export const RELEASE_EXTENT_MULTIPLE = 2;
  * the large vaults that need it most. Reaching the furthest the camera can go
  * counts as having backed out.
  */
-export function shouldReleaseAnchor(radius: number, graphBoundingRadius: number, maxRadius: number): boolean {
+export function shouldReleaseAnchor(
+  radius: number,
+  graphBoundingRadius: number,
+  maxRadius: number,
+  locked: boolean,
+): boolean {
+  // A LOCK OUTRANKS THE ZOOM, and this is where that is decided rather than at
+  // the call site, so it is a property of the rule instead of a habit of one
+  // caller. Backing out used to drop the lock, which let the most ordinary
+  // navigation gesture destroy the user's choice without being about it: lock a
+  // note, spread the palms to see where it sits, and past twice the graph's
+  // extent the lock, its ring, and the zoom's target all vanished at once.
+  // Changing a choice should take an act of choosing — aiming at another note.
+  if (locked) return false;
   if (graphBoundingRadius > 0 && radius >= graphBoundingRadius * RELEASE_EXTENT_MULTIPLE) return true;
   return radius >= maxRadius;
 }

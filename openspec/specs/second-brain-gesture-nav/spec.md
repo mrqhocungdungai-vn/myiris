@@ -760,6 +760,10 @@ The lock is the basis every hand gesture is addressed to: what a fist turns arou
 
 The mark SHALL NOT outlive the lock: whatever clears the lock SHALL clear the mark.
 
+**A lock SHALL outrank the zoom.** Backing the camera out SHALL NOT release a lock; the return-to-overview release SHALL apply only while nothing is locked. A zoom that could delete the lock would make the most ordinary navigation gesture destroy the user's choice without being about it, and would leave the drive that is supposed to honour that choice with nothing to honour. The locked note SHALL be changed by aiming at another one.
+
+**A newly locked note SHALL be brought to the centre of the view**, eased rather than snapped, and SHALL NOT be moved this way while a camera drive is engaged — the drive owns the aim, and a second writer would fight it. A lock the user is not looking at is a poor pivot: every drive works around it, and motion around a point in the corner of the view is hard to steer.
+
 Without a lock, the only gestures that SHALL move the camera are the two-palm zoom on the centre of the view.
 
 Aiming SHALL remain available without a lock, because gating it is circular: aiming is the only thing that creates a lock, so requiring one in order to aim means none can ever exist.
@@ -787,4 +791,14 @@ The reveal SHALL take a single `Victory` hand. A second adds nothing to it, and 
 
 - **WHEN** the user makes a single `Victory` hand over a node
 - **THEN** its link cluster is revealed, with no second hand required
+
+#### Scenario: Zooming out keeps the lock
+
+- **WHEN** a note is locked and the user spreads two open palms until the camera frames the whole graph
+- **THEN** the note stays locked, keeps its mark, and remains what the zoom travels toward
+
+#### Scenario: Locking brings the note to the centre
+
+- **WHEN** the user locks a note sitting off to one side, with no camera drive engaged
+- **THEN** the view glides until that note is at the centre
 

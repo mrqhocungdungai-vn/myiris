@@ -149,6 +149,9 @@ export function useGalaxyCameraDrive({
   // The locked note, kept for the mark that draws it. Separate from the pivot
   // ref because the pivot is a resolved anchor and this is an identity.
   const lockedIdRef = useRef<string | null>(null);
+  // The lock already brought to the centre, so the glide runs once per choice
+  // rather than every frame it stays chosen.
+  const centredLockRef = useRef<string | null>(null);
   const acquireProgressRef = useRef(0);
 
   // Gesture drive (design.md D4b/D5): a thin driver over the pure policy in
@@ -417,6 +420,19 @@ export function useGalaxyCameraDrive({
         pivotPickRef.current = lock.lockedId === null ? null : { kind: "node", id: lock.lockedId };
         lockedIdRef.current = lock.lockedId;
 
+        // A NEW LOCK PULLS ITS NOTE TO THE CENTRE. Locking used to change
+        // nothing you could see except the ring: the note stayed wherever it
+        // happened to sit, and every drive then worked around a point off in
+        // the corner of the view — which is a hard thing to steer by, because
+        // the pivot of the motion is not where you are looking.
+        //
+        // Eased, and only while no drive is engaged: with a hand on the camera
+        // the drive owns the aim, and a second writer would fight it (D4b).
+        if (lock.lockedId !== null && lock.lockedId !== centredLockRef.current && cameraEngagedRef.current === null) {
+          anchor.setAnchor({ kind: "node", id: lock.lockedId }, { ease: true });
+        }
+        centredLockRef.current = lock.lockedId;
+
         // Read AFTER the lock step, and from THE PIVOT rather than from the
         // lock id — deliberately the same ref the drives pivot around, so that
         // "a fist drive exists" and "there is something for it to work around"
@@ -634,12 +650,7 @@ export function useGalaxyCameraDrive({
             // a note, the very next throttled pick would immediately re-anchor
             // on one and cancel that. The release has to win, or "close your
             // hands to see everything again" silently stops working.
-            const backedOut = shouldReleaseAnchor(
-              sphericalRef.current.radius,
-              anchor.boundingRadiusRef.current,
-              zoomMaxRadius,
-            );
-            if (!backedOut && pivotPickRef.current) reaimZoomFromSight(fg, pivotPickRef.current, curDist);
+if (pivotPickRef.current) reaimZoomFromSight(fg, pivotPickRef.current, curDist);
             const zoomOrigin = anchor.resolveCurrent();
             const target = zoomRadius({
               refRadius: zoomReferenceRef.current.radius,
@@ -772,19 +783,26 @@ export function useGalaxyCameraDrive({
     // back to the centroid and closing the hands is the way back to the
     // overview (design.md D5).
     function releaseAnchorIfBackedOut(fg: Fg, radius: number, curDist: number) {
+      // A LOCK OUTRANKS THE ZOOM. Backing out used to drop it, which made the
+      // most ordinary navigation gesture silently destroy the user's choice:
+      // lock a note, spread the palms to pull back and see where it sits, and
+      // past twice the graph's extent the lock, the red ring, and the target
+      // all vanished — the zoom carried on as an untargeted one and the note
+      // was no longer the basis of anything. The user could not tell they had
+      // crossed a line, because nothing they did was about releasing.
+      //
+      // So the release now exists only while nothing is locked. Zooming out
+      // with a lock held keeps flying away from THAT note, and the way to
+      // change the target is to aim at another one — an act that is about
+      // choosing, which is what changing a choice should take.
       if (anchor.anchorRef.current.kind === "centroid") return;
-      if (!shouldReleaseAnchor(radius, anchor.boundingRadiusRef.current, zoomMaxRadius)) return;
+      if (!shouldReleaseAnchor(radius, anchor.boundingRadiusRef.current, zoomMaxRadius, lockedIdRef.current !== null)) return;
       if (!anchor.setAnchor(CENTROID_ANCHOR, { ease: false })) return;
       // Backing out to the overview drops the lock too, so the next note the
       // sight settles on is acquired instantly rather than charging for the
       // full hold (design.md D23: acquiring is free, only switching is not).
       // Without this, returning to the overview would leave the camera still
       // "locked" to a note it is no longer near.
-      zoomLockRef.current = INITIAL_ZOOM_LOCK;
-      pivotPickRef.current = null;
-      // The mark goes with the lock, in the same statement, so the red ring
-      // can never outlive the thing it means.
-      lockedIdRef.current = null;
       anchor.displayedAnchorRef.current = anchor.resolveCurrent();
       reseedAroundAnchor(fg, curDist);
     }
