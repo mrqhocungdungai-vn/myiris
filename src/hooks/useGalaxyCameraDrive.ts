@@ -11,10 +11,7 @@ import {
   driveIsLowered,
   aimPoint,
   orbitStep,
-  engagementKey,
-  type EngagementKey,
   preferredHand,
-  reelsToLock,
   zoomSpan,
   zoomRadius,
   nearestNodeAt,
@@ -117,7 +114,7 @@ export function useGalaxyCameraDrive({
   // What the seeded reference belongs to — see `engagementKey`. Deliberately
   // NOT the drive: the drive cannot express which pose pair a zoom was
   // measured with, and storing it would let a re-seed miss that change.
-  const cameraEngagedRef = useRef<EngagementKey | null>(null);
+  const cameraEngagedRef = useRef<"orbit" | "zoom" | null>(null);
   // The wrist of the hand driving an orbit, from the previous frame. The WRIST,
   // not the fingertip: curling into a fist moves the fingertip a long way on
   // its own, and the orbit's delta would read that curl as hand travel —
@@ -149,6 +146,9 @@ export function useGalaxyCameraDrive({
   // What the lock is charging toward right now, and how far along — read only
   // by the marks, so the wait is visible rather than dead time.
   const acquiringIdRef = useRef<string | null>(null);
+  // The locked note, kept for the mark that draws it. Separate from the pivot
+  // ref because the pivot is a resolved anchor and this is an identity.
+  const lockedIdRef = useRef<string | null>(null);
   const acquireProgressRef = useRef(0);
 
   // Gesture drive (design.md D4b/D5): a thin driver over the pure policy in
@@ -316,11 +316,16 @@ export function useGalaxyCameraDrive({
         engaged,
         positionOf(acquiringIdRef.current),
         acquireProgressRef.current,
+        // The lock, drawn whether or not a drive is live. Every other mark
+        // answers "what would happen if you moved now"; this one answers "is
+        // there a target at all", which is the question that decides whether
+        // most of the gesture language does anything.
+        positionOf(lockedIdRef.current),
       );
     }
 
     function clearRings() {
-      ringsRef.current?.apply(null, null, false, null, 0);
+      ringsRef.current?.apply(null, null, false, null, 0, null);
       setReticleEngaged(false);
     }
 
@@ -410,6 +415,7 @@ export function useGalaxyCameraDrive({
         acquiringIdRef.current = lock.acquiringId;
         acquireProgressRef.current = lock.progress;
         pivotPickRef.current = lock.lockedId === null ? null : { kind: "node", id: lock.lockedId };
+        lockedIdRef.current = lock.lockedId;
 
         // Read AFTER the lock step, and from THE PIVOT rather than from the
         // lock id — deliberately the same ref the drives pivot around, so that
@@ -505,16 +511,7 @@ export function useGalaxyCameraDrive({
         // Camera drive: orbit and zoom share one spherical — re-derived from
         // the LIVE camera on every engage (fist<->zoom switch or mouse-drag
         // handoff, design.md M13), never carried over stale.
-        // Re-seed on a change of MEASUREMENT, not only on a change of drive.
-        // Both zoom pose pairs are `"zoom"`, so switching between them leaves
-        // the drive identity untouched while `zoomSpan` changes which
-        // landmarks it reads — the reference would keep the old basis and the
-        // ratio law would turn that discontinuity into a lurch, at exactly the
-        // moment the user closes a hand to reel in on the note they just
-        // locked. The key carries both, so the two can never be compared
-        // separately.
-        const engageKey = engagementKey(activeCameraDrive, hand);
-        if (engageKey !== cameraEngagedRef.current) {
+        if (activeCameraDrive !== cameraEngagedRef.current) {
           if (activeCameraDrive) {
             // Where the aim starts from, captured BEFORE the anchor moves, so
             // the displayed anchor has somewhere to ease from.
@@ -544,9 +541,15 @@ export function useGalaxyCameraDrive({
             // open palms zoom the middle of the view. An orbit always turns
             // around the lock too, so the two camera drives never disagree
             // about what they are working around.
-            const useLock = activeCameraDrive === "orbit" || reelsToLock(hand);
+            // The LOCKED note is the basis of every camera gesture, zoom
+            // included. It used to depend on the pose pair: two open palms
+            // zoomed the middle of the view even with a note locked, and only
+            // a fist-and-palm flew toward the note. So "what am I zooming
+            // toward" was answered by which hands were up rather than by what
+            // the user had chosen, and the choice they made visible — the lock
+            // — was ignored by the very drive that should honour it.
             const engageTarget =
-              (useLock ? pivotPickRef.current : null) ??
+              pivotPickRef.current ??
               ({
                 kind: "point",
                 position: viewCentrePoint(
@@ -588,7 +591,7 @@ export function useGalaxyCameraDrive({
             zoomReferenceRef.current = null;
             prevOrbitPointRef.current = null;
           }
-          cameraEngagedRef.current = engageKey;
+          cameraEngagedRef.current = activeCameraDrive;
         } else if (activeCameraDrive) {
           const origin = anchor.resolveCurrent();
           anchor.displayedAnchorRef.current = easeAnchor(anchor.displayedAnchorRef.current, origin, dt);
@@ -779,6 +782,9 @@ export function useGalaxyCameraDrive({
       // "locked" to a note it is no longer near.
       zoomLockRef.current = INITIAL_ZOOM_LOCK;
       pivotPickRef.current = null;
+      // The mark goes with the lock, in the same statement, so the red ring
+      // can never outlive the thing it means.
+      lockedIdRef.current = null;
       anchor.displayedAnchorRef.current = anchor.resolveCurrent();
       reseedAroundAnchor(fg, curDist);
     }

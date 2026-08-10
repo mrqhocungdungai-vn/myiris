@@ -241,10 +241,6 @@ export function inspectingHand(hand: Pick<HandState, "hands">): TrackedHand | nu
  */
 export function driveFor(hand: DriveHand, locked: boolean): GalaxyDrive {
   if (hand.hands.filter((h) => h.openPalm).length >= 2) return "zoom";
-  // A fist holding while the other palm moves reels in on the locked note
-  // (D26). Tested BEFORE the fist-alone orbit, since it is the more specific
-  // pose pair — a fist with no palm beside it still turns the view.
-  if (locked && reelsToLock(hand)) return "zoom";
   if (inspectingHand(hand)) return "inspect";
   if (hand.pointing) return "dwell";
   // A fist is only a camera drive once the user has chosen what it turns
@@ -258,6 +254,14 @@ export function driveFor(hand: DriveHand, locked: boolean): GalaxyDrive {
   // fallback is right for the two-palm zoom, which only moves in and out along
   // an axis already on screen, and wrong for a turn, which is entirely about
   // which axis it is.
+  // A fist turns the view, whatever the other hand is doing. It used to mean
+  // something DIFFERENT with an open palm beside it — the two hands then zoomed
+  // toward the locked note — so the same movement of the same hand turned the
+  // camera or flew it, decided by a hand the user was not thinking about. And
+  // the "holding" fist had full authority over that flight: moving it 100px
+  // changed the camera distance by 23%, exactly as much as moving the palm.
+  // One pose, one job: the fist is the angle, and two open palms are the
+  // distance.
   if (locked && hand.fist) return "orbit";
   return null;
 }
@@ -329,22 +333,6 @@ export function aimPoint(hand: Pick<HandState, "hands">): HandPoint | null {
   return palms[0].point;
 }
 
-/**
- * Whether this frame's pose pair reels in on the LOCKED note rather than
- * zooming the middle of the view (galaxy-note-reachable-by-hand design.md D26).
- *
- * A fist holding while the other palm moves. The metaphor is grabbing the note
- * and pulling yourself toward it, and the reason it is a distinct pose pair
- * rather than "two palms, but targeted when something is locked" is that the
- * user can then SEE which zoom they are getting. Mode carried in the hands is
- * checkable; mode carried in hidden state is not — and the hidden version had a
- * failure the visible one cannot have: with two open palms, one hand's pose
- * flickering off for a few frames left a single palm in frame, which reads as
- * aiming, which could re-lock onto a different note mid-zoom.
- */
-export function reelsToLock(hand: Pick<HandState, "hands">): boolean {
-  return hand.hands.some((item) => item.fist) && hand.hands.some((item) => item.openPalm);
-}
 
 /**
  * The span the zoom drives read, in window pixels — between the two open palms,
@@ -413,11 +401,6 @@ export function driveIsLowered(
   return drivers.some((driver) => isHandLowered(driver.point, viewportHeight));
 }
 
-export function zoomKind(hand: Pick<HandState, "hands">): "spread" | "reel" | null {
-  if (hand.hands.filter((item) => item.openPalm).length >= 2) return "spread";
-  if (reelsToLock(hand)) return "reel";
-  return null;
-}
 
 /**
  * What a camera drive's seeded reference belongs to — the drive AND, for a
@@ -428,31 +411,13 @@ export function zoomKind(hand: Pick<HandState, "hands">): "spread" | "reel" | nu
  * key instead of the drive makes the omission unrepresentable rather than
  * merely discouraged.
  */
-export type EngagementKey = string & { readonly __engagementKey: unique symbol };
-
-export function engagementKey(drive: GalaxyDrive, hand: Pick<HandState, "hands">): EngagementKey | null {
-  if (drive !== "orbit" && drive !== "zoom") return null;
-  // The brand is what stops a caller storing a bare drive here — assigning
-  // `"zoom"` would then typecheck and silently reintroduce the drive-only
-  // comparison this exists to prevent.
-  return (drive === "zoom" ? `zoom:${zoomKind(hand) ?? "none"}` : "orbit") as EngagementKey;
-}
 
 export function zoomSpan(hand: Pick<HandState, "hands">): number | null {
   const palms = hand.hands.filter((item) => item.openPalm);
   if (palms.length >= 2) return handDistance(palms[0].point, palms[1].point);
-  const fist = hand.hands.find((item) => item.fist);
-  // The fist is measured at the WRIST. `point` is the tracked fingertip, and
-  // curling into a fist — or merely tightening one that is already closed —
-  // travels it a long way on its own, with none of that motion being the hand
-  // moving through space. The orbit already refuses to read a fist's fingertip
-  // for exactly this reason; the reel-in was reading it, and since the zoom law
-  // maps the span straight to an absolute radius, every knuckle twitch became
-  // camera distance. That is the "not smooth" the two-palm zoom never had: two
-  // open palms have no curl to leak.
-  if (fist && palms.length === 1) return handDistance(fist.wristPoint, palms[0].point);
   return null;
 }
+
 
 /**
  * The hand a single-hand drive should read, preferring the user's RIGHT hand

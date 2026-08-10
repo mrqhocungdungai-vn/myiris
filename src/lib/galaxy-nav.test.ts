@@ -16,10 +16,8 @@ import {
   preferredHand,
   reelsToLock,
   zoomSpan,
-  zoomKind,
   drivingHands,
   driveIsLowered,
-  engagementKey,
   type DwellState,
   type GalaxyNavNode,
 } from "./galaxy-nav";
@@ -191,21 +189,7 @@ describe("driveFor", () => {
     expect(driveFor(makeHand({ pointing: true, hands: [makeTrackedHand({ pointing: true })] }), false)).toBe("dwell");
   });
 
-  // D20 removed the fist orbit; D25 restored it, now turning around the LOCKED
-  // note rather than around whatever the anchor happened to be.
-  // D26: a fist HOLDING while the other palm moves reels in on the locked note.
-  // Tested before the fist-alone orbit because it is the more specific pair.
-  it("returns zoom for a fist plus an open palm — reeling in on the locked note", () => {
-    const hands = [makeTrackedHand({ id: "l", fist: true }), makeTrackedHand({ id: "r", openPalm: true })];
-    expect(driveFor(makeHand({ fist: true, hands }), true)).toBe("zoom");
-    expect(reelsToLock({ hands })).toBe(true);
-  });
 
-  it("a fist with no palm beside it still turns the view", () => {
-    const hands = [makeTrackedHand({ id: "l", fist: true })];
-    expect(driveFor(makeHand({ fist: true, hands }), true)).toBe("orbit");
-    expect(reelsToLock({ hands })).toBe(false);
-  });
 
   it("returns orbit for Closed_Fist", () => {
     expect(driveFor(makeHand({ fist: true, hands: [makeTrackedHand({ fist: true })] }), true)).toBe("orbit");
@@ -220,37 +204,8 @@ describe("driveFor", () => {
     expect(driveFor(makeHand({ fist: true, hands: [makeTrackedHand({ fist: true })] }), false)).toBeNull();
   });
 
-  it("a fist and a palm drive nothing while no note is locked", () => {
-    const hands = [makeTrackedHand({ id: "l", fist: true }), makeTrackedHand({ id: "r", openPalm: true })];
-    expect(driveFor(makeHand({ fist: true, hands }), false)).toBeNull();
-  });
 
-  // Measured complaint: reeling in was "chưa mượt" while two-palm zoom was
-  // fine. The span was reading the fist's tracked FINGERTIP, which travels a
-  // long way as the hand curls or merely tightens — motion that is not the
-  // hand moving through space. The zoom law maps the span straight to an
-  // absolute radius, so that curl arrived as camera distance. The orbit
-  // already refuses to read a fist's fingertip for the same reason.
-  it("measures the reel-in from the fist's wrist, not its curled fingertip", () => {
-    const fist = makeTrackedHand({
-      id: "l",
-      fist: true,
-      point: { x: 900, y: 300 },
-      wristPoint: { x: 500, y: 300 },
-    });
-    const palm = makeTrackedHand({ id: "r", openPalm: true, point: { x: 700, y: 300 } });
 
-    expect(zoomSpan({ hands: [fist, palm] })).toBe(200);
-  });
-
-  it("a tightening fist does not move the span while the hand holds still", () => {
-    const palm = makeTrackedHand({ id: "r", openPalm: true, point: { x: 700, y: 300 } });
-    const wrist = { x: 500, y: 300 };
-    const loose = makeTrackedHand({ id: "l", fist: true, point: { x: 560, y: 300 }, wristPoint: wrist });
-    const tight = makeTrackedHand({ id: "l", fist: true, point: { x: 520, y: 300 }, wristPoint: wrist });
-
-    expect(zoomSpan({ hands: [loose, palm] })).toBe(zoomSpan({ hands: [tight, palm] }));
-  });
 
   it("two open palms are still measured fingertip to fingertip", () => {
     const a = makeTrackedHand({ id: "l", openPalm: true, point: { x: 400, y: 200 }, wristPoint: { x: 0, y: 0 } });
@@ -259,77 +214,11 @@ describe("driveFor", () => {
     expect(zoomSpan({ hands: [a, b] })).toBe(300);
   });
 
-  // The two zoom pose pairs measure from different landmarks, so a drive that
-  // changes from one to the other has changed what "distance" means. Both are
-  // "zoom" in the drive partition — correctly, they do the same job — which is
-  // exactly why the drive identity alone cannot carry this: closing one of two
-  // open palms into a fist would otherwise keep a reference measured
-  // fingertip-to-fingertip and compare it against a wrist-to-fingertip span.
-  it("names which zoom this is, so a change of basis can re-seed", () => {
-    const twoPalms = [makeTrackedHand({ id: "l", openPalm: true }), makeTrackedHand({ id: "r", openPalm: true })];
-    expect(zoomKind({ hands: twoPalms })).toBe("spread");
 
-    const fistAndPalm = [makeTrackedHand({ id: "l", fist: true }), makeTrackedHand({ id: "r", openPalm: true })];
-    expect(zoomKind({ hands: fistAndPalm })).toBe("reel");
 
-    expect(zoomKind({ hands: [makeTrackedHand({ id: "l", fist: true })] })).toBeNull();
-    expect(zoomKind({ hands: [makeTrackedHand({ id: "l", openPalm: true })] })).toBeNull();
-  });
 
-  it("the two zoom kinds never share a span basis", () => {
-    // The concrete discontinuity: same hands in the same places, one pose
-    // apart, and the measured span differs — which is only safe if the kind
-    // change is observable.
-    const palmL = makeTrackedHand({ id: "l", openPalm: true, point: { x: 400, y: 300 }, wristPoint: { x: 400, y: 420 } });
-    const palmR = makeTrackedHand({ id: "r", openPalm: true, point: { x: 700, y: 300 } });
-    const fistL = { ...palmL, openPalm: false, fist: true };
 
-    expect(zoomSpan({ hands: [palmL, palmR] })).not.toBe(zoomSpan({ hands: [fistL, palmR] }));
-    expect(zoomKind({ hands: [palmL, palmR] })).not.toBe(zoomKind({ hands: [fistL, palmR] }));
-  });
 
-  // The reference is seeded per KEY, not per drive. These two frames are the
-  // same drive and a different measurement — the case a drive-only comparison
-  // silently gets wrong, and the gesture loop has no test to catch it.
-  it("gives the two zoom pose pairs different engagement keys", () => {
-    const twoPalms = [makeTrackedHand({ id: "l", openPalm: true }), makeTrackedHand({ id: "r", openPalm: true })];
-    const fistAndPalm = [makeTrackedHand({ id: "l", fist: true }), makeTrackedHand({ id: "r", openPalm: true })];
-
-    expect(engagementKey("zoom", { hands: twoPalms })).not.toBe(engagementKey("zoom", { hands: fistAndPalm }));
-  });
-
-  it("keeps one key while the pose pair holds", () => {
-    const fistAndPalm = [makeTrackedHand({ id: "l", fist: true }), makeTrackedHand({ id: "r", openPalm: true })];
-    const moved = [
-      makeTrackedHand({ id: "l", fist: true, point: { x: 50, y: 60 }, wristPoint: { x: 20, y: 30 } }),
-      makeTrackedHand({ id: "r", openPalm: true, point: { x: 900, y: 100 } }),
-    ];
-
-    expect(engagementKey("zoom", { hands: fistAndPalm })).toBe(engagementKey("zoom", { hands: moved }));
-  });
-
-  it("distinguishes orbit from zoom, and drives nothing from either", () => {
-    const fistOnly = [makeTrackedHand({ id: "l", fist: true })];
-
-    expect(engagementKey("orbit", { hands: fistOnly })).toBe("orbit");
-    expect(engagementKey("zoom", { hands: fistOnly })).not.toBe("orbit");
-    expect(engagementKey(null, { hands: fistOnly })).toBeNull();
-    expect(engagementKey("dwell", { hands: fistOnly })).toBeNull();
-    expect(engagementKey("inspect", { hands: fistOnly })).toBeNull();
-  });
-
-  // The lowered-hand release must ask the hands that DRIVE. With a fist and a
-  // palm neither hand points, so the primary is sticky from an earlier
-  // interaction — reading it made the same gesture live or die on history the
-  // user cannot see.
-  it("names both hands of a reel-in, and both palms of a spread", () => {
-    const fist = makeTrackedHand({ id: "l", fist: true });
-    const palm = makeTrackedHand({ id: "r", openPalm: true });
-    expect(drivingHands("zoom", { hands: [fist, palm] }).map((h) => h.id).sort()).toEqual(["l", "r"]);
-
-    const palms = [makeTrackedHand({ id: "a", openPalm: true }), makeTrackedHand({ id: "b", openPalm: true })];
-    expect(drivingHands("zoom", { hands: palms }).map((h) => h.id).sort()).toEqual(["a", "b"]);
-  });
 
   it("names only the fist that turns the view, not a hand resting beside it", () => {
     const fist = makeTrackedHand({ id: "f", fist: true, point: { x: 900, y: 100 } });
@@ -344,24 +233,7 @@ describe("driveFor", () => {
     expect(drivingHands(null, { hands })).toEqual([]);
   });
 
-  it("releases a reel-in when the HOLDING fist drops, not only the moving palm", () => {
-    const H = 900; // lowered below y = 600
-    const lowFist = makeTrackedHand({ id: "l", fist: true, point: { x: 300, y: 700 } });
-    const highPalm = makeTrackedHand({ id: "r", openPalm: true, point: { x: 700, y: 200 } });
-    // The primary hand's own point is high — the old check would have kept the
-    // drive alive here whenever the palm held the sticky primary title.
-    const hand = { hands: [lowFist, highPalm], point: { x: 700, y: 200 } };
 
-    expect(driveIsLowered("zoom", hand, H)).toBe(true);
-  });
-
-  it("keeps a reel-in alive while both hands are up", () => {
-    const H = 900;
-    const fist = makeTrackedHand({ id: "l", fist: true, point: { x: 300, y: 200 } });
-    const palm = makeTrackedHand({ id: "r", openPalm: true, point: { x: 700, y: 250 } });
-
-    expect(driveIsLowered("zoom", { hands: [fist, palm], point: { x: 300, y: 880 } }, H)).toBe(false);
-  });
 
   it("releases a spread when either palm drops", () => {
     const H = 900;
@@ -371,100 +243,8 @@ describe("driveFor", () => {
     expect(driveIsLowered("zoom", { hands: [high, low], point: { x: 300, y: 100 } }, H)).toBe(true);
   });
 
-  // How BIG the basis change is, in the units the camera actually moves in.
-  // The fix (re-seeding when the grip changes) is only worth its complexity if
-  // the discontinuity it removes is visible, so this measures it rather than
-  // asserting it exists. Geometry is illustrative, not sampled: a wrist a
-  // little below the fingertip, which is the direction it always lies in.
-  it("closing a palm into a fist would jump the camera if the reference were kept", () => {
-    const WRIST_DROP = 120;
-    const palmL = {
-      ...makeTrackedHand({ id: "l", openPalm: true }),
-      point: { x: 400, y: 300 },
-      wristPoint: { x: 400, y: 300 + WRIST_DROP },
-    };
-    const palmR = { ...makeTrackedHand({ id: "r", openPalm: true }), point: { x: 700, y: 300 } };
-    const fistL = { ...palmL, openPalm: false, fist: true };
 
-    const spreadSpan = zoomSpan({ hands: [palmL, palmR] })!;
-    const reelSpan = zoomSpan({ hands: [fistL, palmR] })!;
 
-    // Same hands, same places, one pose apart — and the measurement moves.
-    const refRadius = 1000;
-    const kept = zoomRadius({ refRadius, refDist: spreadSpan, curDist: reelSpan, min: 1, max: 100000 });
-    const jump = Math.abs(kept - refRadius) / refRadius;
-    expect(jump).toBeGreaterThan(0.05); // >5% of the camera's distance, in ONE frame
-
-    // Re-seeding is what removes it, and the key is what tells the loop to.
-    expect(engagementKey("zoom", { hands: [palmL, palmR] })).not.toBe(
-      engagementKey("zoom", { hands: [fistL, palmR] }),
-    );
-    const reseeded = zoomRadius({ refRadius, refDist: reelSpan, curDist: reelSpan, min: 1, max: 100000 });
-    expect(reseeded).toBe(refRadius);
-  });
-
-  // The other half of the same guarantee: re-seeding must not cost the travel
-  // already spent. Within one grip the reference is kept, so spreading further
-  // keeps moving the camera rather than restarting from wherever it is now.
-  it("holding one grip keeps the reference, so spread already spent still counts", () => {
-    const fist = { ...makeTrackedHand({ id: "l", fist: true }), wristPoint: { x: 300, y: 300 } };
-    const near = { ...makeTrackedHand({ id: "r", openPalm: true }), point: { x: 500, y: 300 } };
-    const far = { ...makeTrackedHand({ id: "r", openPalm: true }), point: { x: 900, y: 300 } };
-
-    expect(engagementKey("zoom", { hands: [fist, near] })).toBe(engagementKey("zoom", { hands: [fist, far] }));
-
-    const refDist = zoomSpan({ hands: [fist, near] })!;
-    const pulled = zoomRadius({ refRadius: 1000, refDist, curDist: zoomSpan({ hands: [fist, far] })!, min: 1, max: 100000 });
-    expect(pulled).toBeLessThan(1000); // spreading pulls the camera IN
-  });
-
-  // The whole reported flow, step by step, over the real functions. Five
-  // separate fixes meet here, and each was verified alone; this is the guard
-  // on them composing — the step that broke every time was the one where the
-  // hand count changes.
-  it("aim to lock, close a fist, reel in — the flow the report described", () => {
-    const H = 1000;
-    const palm = (x: number) => makeTrackedHand({ id: "hand:Right", openPalm: true, point: { x, y: 300 } });
-    const fist = makeTrackedHand({
-      id: "hand:Left",
-      fist: true,
-      point: { x: 400, y: 300 },
-      wristPoint: { x: 400, y: 400 },
-    });
-
-    // 1. One open palm aims. It drives no camera, and it can aim because no
-    //    fist is in frame.
-    const aiming = { hands: [palm(600)], point: { x: 600, y: 300 }, fist: false, pointing: false };
-    expect(driveFor(aiming, false)).toBeNull();
-    expect(aimPoint(aiming)).not.toBeNull();
-
-    // 2. A fist BEFORE anything is locked drives nothing — the reported bug.
-    const fistUnlocked = { hands: [fist], point: { x: 400, y: 300 }, fist: true, pointing: false };
-    expect(driveFor(fistUnlocked, false)).toBeNull();
-
-    // 3. With a note locked, the fist alone turns the view.
-    expect(driveFor(fistUnlocked, true)).toBe("orbit");
-
-    // 4. Adding the open palm reels in, and nothing aims while a fist is up.
-    const reeling = { hands: [fist, palm(800)], point: { x: 800, y: 300 }, fist: true, pointing: false };
-    expect(driveFor(reeling, true)).toBe("zoom");
-    expect(aimPoint(reeling)).toBeNull();
-
-    // 5. Turning and reeling are different engagements, so the reference is
-    //    re-seeded between them rather than carried across a change of basis.
-    expect(engagementKey("orbit", fistUnlocked)).not.toBe(engagementKey("zoom", reeling));
-
-    // 6. Both hands decide the release, and both are up.
-    expect(driveIsLowered("zoom", reeling, H)).toBe(false);
-
-    // 7. Pulling the palm away pulls the camera in, measured from the fist's
-    //    wrist, and the grip does not change so the reference is kept.
-    const pulled = { ...reeling, hands: [fist, palm(1200)] };
-    expect(engagementKey("zoom", pulled)).toBe(engagementKey("zoom", reeling));
-    const refDist = zoomSpan(reeling)!;
-    const radius = zoomRadius({ refRadius: 900, refDist, curDist: zoomSpan(pulled)!, min: 1, max: 100000 });
-    expect(radius).toBeLessThan(900);
-  });
 
   // Why no hysteresis was added for a flickering pose, though the reel-in
   // needs TWO poses recognized at once and a fist is the harder one.
@@ -475,21 +255,37 @@ describe("driveFor", () => {
   // reel-in rough — and adding remembered state with a made-up tolerance
   // window would contradict "a pose that is not recognized drives nothing".
   //
-  // If a real session shows the drive flickering, that is evidence and this
-  // test is where the decision gets revisited.
-  it("loses either drive the same way when a hand's pose is lost", () => {
-    const lost = makeTrackedHand({ id: "hand:Left" }); // "None"
+
+  // The gesture language, after the user's own verdict on it: a fist and an
+  // open palm used to zoom toward the locked note, and it was a bad trade. The
+  // same movement of the same hand turned the camera or flew it, decided by
+  // the OTHER hand — and the "holding" fist had equal authority over that
+  // flight (100px of fist travel moved the camera 23%, exactly as much as
+  // 100px of palm travel). One pose, one job: the fist is the angle, two open
+  // palms are the distance.
+  it("a fist turns the view whatever the other hand is doing", () => {
+    const fist = makeTrackedHand({ id: "hand:Left", fist: true });
     const palm = makeTrackedHand({ id: "hand:Right", openPalm: true });
 
-    const spreadLostOne = { hands: [lost, palm], point: { x: 0, y: 0 }, fist: false, pointing: false };
-    expect(driveFor(spreadLostOne, true)).toBeNull();
+    expect(driveFor(makeHand({ fist: true, hands: [fist] }), true)).toBe("orbit");
+    expect(driveFor(makeHand({ fist: true, hands: [fist, palm] }), true)).toBe("orbit");
+  });
 
-    const reelLostFist = { hands: [lost, palm], point: { x: 0, y: 0 }, fist: false, pointing: false };
-    expect(driveFor(reelLostFist, true)).toBeNull();
-
-    // And both come straight back once the pose is read again.
+  it("only two open palms zoom", () => {
     const fist = makeTrackedHand({ id: "hand:Left", fist: true });
-    expect(driveFor({ hands: [fist, palm], point: { x: 0, y: 0 }, fist: true, pointing: false }, true)).toBe("zoom");
+    const palm = makeTrackedHand({ id: "hand:Right", openPalm: true });
+    const palms = [makeTrackedHand({ id: "a", openPalm: true }), makeTrackedHand({ id: "b", openPalm: true })];
+
+    expect(driveFor(makeHand({ openPalm: true, hands: palms }), false)).toBe("zoom");
+    expect(driveFor(makeHand({ fist: true, hands: [fist, palm] }), true)).not.toBe("zoom");
+  });
+
+  it("measures a zoom only between two open palms", () => {
+    const fist = makeTrackedHand({ id: "l", fist: true, point: { x: 300, y: 300 }, wristPoint: { x: 300, y: 400 } });
+    const palm = makeTrackedHand({ id: "r", openPalm: true, point: { x: 700, y: 300 } });
+
+    expect(zoomSpan({ hands: [fist, palm] })).toBeNull();
+    expect(zoomSpan({ hands: [{ ...fist, fist: false, openPalm: true }, palm] })).toBe(400);
   });
 
   it("returns null for a single open palm, an unrecognized gesture, and a resting hand", () => {
@@ -583,9 +379,6 @@ describe("zoomSpan", () => {
     expect(zoomSpan({ hands: [h("a", 100, { openPalm: true }), h("b", 400, { openPalm: true })] })).toBe(300);
   });
 
-  it("measures between the fist and the palm while reeling in", () => {
-    expect(zoomSpan({ hands: [h("f", 100, { fist: true }), h("p", 400, { openPalm: true })] })).toBe(300);
-  });
 
   it("is null when neither pose pair is present", () => {
     expect(zoomSpan({ hands: [h("f", 100, { fist: true })] })).toBeNull();

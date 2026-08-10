@@ -63,6 +63,19 @@ const ENGAGED_LINE_PX = 9;
 // once: "is there a note here at all" (a ring appears, where empty space shows
 // nothing) and "how much longer" (it closes). A colour or opacity ramp answers
 // only the second.
+// The LOCK mark, and the one deliberate exception to the achromatic rule
+// above. The lock stopped being "the anchor the camera happens to use" and
+// became the BASIS of every hand gesture: what a fist turns around, what a
+// zoom flies toward, what the whole language is addressed to. A user who
+// cannot see whether they have one cannot tell why the same gesture does
+// something or nothing, and that ambiguity is what made the drives feel
+// arbitrary. Red because it must not be mistaken for the dwell's yellow or the
+// focus's green, and because none of the six tag hues is a red — it stays out
+// of the "which tag is this" channel it would otherwise join.
+const LOCK_COLOR = "rgba(255, 45, 45, 0.95)";
+const LOCK_LINE_PX = 7;
+const LOCK_WORLD_SIZE = 20;
+
 const ACQUIRE_COLOR = "rgba(255, 255, 255, 0.85)";
 const ACQUIRE_LINE_PX = 6;
 const ACQUIRE_START_WORLD_SIZE = 44;
@@ -128,6 +141,7 @@ export type AnchorRings = {
     engaged: boolean,
     acquiringPos: Vec3Like | null,
     acquireProgress: number,
+    lockedPos: Vec3Like | null,
   ): void;
   /** Disposes every texture/material and removes `group` from its parent. */
   dispose(): void;
@@ -143,6 +157,8 @@ export function createRingPair(): AnchorRings {
   const anchor = createRingSprite(ANCHOR_COLOR, ANCHOR_LINE_PX, ANCHOR_WORLD_SIZE);
   const engagedRing = createRingSprite(ENGAGED_COLOR, ENGAGED_LINE_PX, ENGAGED_WORLD_SIZE);
   const acquiring = createRingSprite(ACQUIRE_COLOR, ACQUIRE_LINE_PX, ACQUIRE_START_WORLD_SIZE);
+  const locked = createRingSprite(LOCK_COLOR, LOCK_LINE_PX, LOCK_WORLD_SIZE);
+  group.add(locked);
   group.add(candidate);
   group.add(anchor);
   group.add(engagedRing);
@@ -154,7 +170,14 @@ export function createRingPair(): AnchorRings {
     engaged: boolean,
     acquiringPos: Vec3Like | null,
     acquireProgress: number,
+    lockedPos: Vec3Like | null,
   ) {
+    if (lockedPos) {
+      locked.position.set(lockedPos.x, lockedPos.y, lockedPos.z);
+      locked.visible = true;
+    } else {
+      locked.visible = false;
+    }
     if (acquiringPos) {
       acquiring.position.set(acquiringPos.x, acquiringPos.y, acquiringPos.z);
       const t = Math.max(0, Math.min(1, acquireProgress));
@@ -182,7 +205,7 @@ export function createRingPair(): AnchorRings {
   }
 
   function dispose() {
-    for (const sprite of [candidate, anchor, engagedRing, acquiring]) {
+    for (const sprite of [candidate, anchor, engagedRing, acquiring, locked]) {
       const material = sprite.material as THREE.SpriteMaterial;
       material.map?.dispose();
       material.dispose();

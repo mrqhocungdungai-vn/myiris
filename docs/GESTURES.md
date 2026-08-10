@@ -134,9 +134,9 @@ chrome above it:
 | `Pointing_Up` | Node dwell — hold over a node 300 ms to **open** it (same dwell mechanic as the deck) |
 | `Victory` (two fingers) | **Inspect** — hold near a node to light up its link cluster while held. Selects nothing, opens nothing, leaves nothing behind |
 | A single `Open_Palm` | **Aims** — the sight follows it and chooses the note to lock (D24/D25). Commits nothing. With both hands up, the one further RIGHT on screen wins, which the mirrored preview makes the user's right hand |
-| `Closed_Fist` | **Turns the camera** around the locked note (D25) — and does **nothing at all until a note is locked**. A fist does not aim — one job per pose, or the turn would re-target on its own movement |
+| `Closed_Fist` | **Turns the camera** around the locked note — always, whatever the other hand is doing — and does **nothing at all until a note is locked**. A fist does not aim |
 | Two open palms | Zoom **the middle of the view** — along the axis the camera already looks down |
-| `Closed_Fist` + an open palm | **Reels in** on the locked note: the fist holds it while the other hand pulls you toward it (D26), and like the turn it is inert until something is locked. Which *kind* of zoom you get is still carried by the hands rather than by hidden state. The fist is measured at the **wrist**: a fingertip travels a long way just from curling, and this law maps distance straight to camera radius, so reading the fingertip turned knuckle movement into camera travel |
+| `Closed_Fist` + an open palm | The fist still turns the view; the palm is ignored. This pair used to fly the camera toward the locked note, and the user's verdict on it was that the experience was bad — the same movement of the same hand turned the camera or flew it, decided by the *other* hand, and the "holding" fist had equal authority over the flight (100px of fist travel moved the camera 23%, exactly as much as 100px of palm travel) |
 | Anything else (a single open palm, unrecognized, resting) | Drives nothing |
 | A hand in the **bottom third of the frame**, whatever it is doing | Drives nothing, and releases a drive in progress |
 
@@ -334,12 +334,18 @@ answer on its own, because each names a different mechanism:
 | `lowered` | `YES` mid-gesture is the drive being released because a **driving** hand dropped below the bottom third — raise the holding hand |
 | `curDist` / `refDist` | `curDist` jumping while your hands are still is tracking noise reaching the camera; a `refDist` near 80 means you engaged with the hands almost touching, where the ratio law is at its most sensitive |
 
+**A locked note wears a red ring.** It is the one chromatic mark in the galaxy,
+and it earns the exception: the lock is no longer just the anchor the camera
+happens to use, it is the basis every hand gesture is addressed to. Without a
+lock the only things that do anything are the two-palm zoom on the centre of
+the view and the `Victory` reveal.
+
 `ratio` is what the zoom law actually acts on, and `radius` versus `target` is
 the gap `easeRadius` is closing — if `target` is steady while `radius` crawls,
 the ease is the thing to tune, not the input.
 
-Both fist drives are defined in terms of the locked note — one turns around it,
-the other reels in on it — so **neither exists until something is locked**. A
+The fist drive is defined in terms of the locked note — it turns around it — so
+it **does not exist until something is locked**. A
 fist used to fall back to the point at the centre of the view, which is the
 right fallback for the two-palm zoom (it only moves along an axis already on
 screen) and the wrong one for a turn, which is entirely about *which* axis:
