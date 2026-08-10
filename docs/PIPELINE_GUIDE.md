@@ -110,8 +110,9 @@ shortcut — silences Iris so she can take something in. Two things happen at
 once:
 
 - **Iris goes completely silent.** Nothing she produces reaches you, as sound or
-  as text, until you turn the mode off. Turning it off does not make her
-  volunteer anything either: she waits until you next speak to her.
+  as text, until you turn the mode off. Turning it off buys you at most one short
+  line — and only if she found an answer you had already prepared (see 3c below).
+  Otherwise she volunteers nothing and waits until you next speak to her.
 - **She hears your machine as well as the room.** The audio your Mac is playing
   is captured and mixed into the same stream, so a remote participant on a call
   reaches her rather than only your own side of it.
@@ -157,6 +158,37 @@ Set `IRIS_SYSTEM_AUDIO=0` in `.env` to turn the system-audio half off entirely:
 the mode then only silences her, captures nothing, and triggers no recording
 indicator. The listening window still bounds the engagement — the bound belongs
 to the mode, not to the capture.
+
+## 3c. Prepared answers — point the session's folder at your prep material
+
+Before the talk, put the answers you expect to need in a folder — one markdown
+file of questions and answers is enough — and **pick that folder as the session's
+project folder** from the UI, the same way you would for a coding session. That
+is the folder Iris looks in; there is no separate setting.
+
+Then the flow is short. Someone asks you a question, you engage listen-only mode,
+they finish, you disengage. Iris immediately reads that folder looking for an
+answer, and:
+
+- **If she finds one**, she says one short line — that she has an answer ready —
+  and **stops**. She does not start reading. Say "go ahead" and she reads your
+  wording **as you wrote it**, not a summary of it. Answer the question yourself
+  instead and she stays quiet; nothing is left hanging.
+- **If she finds nothing**, she says nothing at all. Ask her about it when you
+  have the floor back and she will tell you nothing was prepared for it, and
+  offer the two routes that do cost something — searching the folder properly
+  with Claude, or retrieving from your notes. She offers; she does not start
+  either until you pick one.
+
+This costs nothing: no Claude run, no tokens, no credential, and it works in
+chat-only mode. Only `.md` and `.txt` files count as prepared material, and
+`node_modules`, `dist`, `build` and dotted directories are skipped — so if you
+point the session at a code repository by mistake, you get an unhelpful "nothing
+prepared", never a wall of source code read aloud. With **no** folder selected she
+says so rather than searching the default workspace. If your folder is larger than
+fits in one look, she uses the part most likely to be relevant **and says that she
+narrowed** — so "nothing prepared for that" never quietly means "I only looked at
+some of it".
 
 ## 4. Appendix: using the agents directly in Claude Code
 

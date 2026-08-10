@@ -309,6 +309,26 @@ describe("run-dispatch: executeClaudeTool", () => {
     expect(result.status).toBe("ok");
   });
 
+  // prepared-answers: "no Claude run, no execution slot, and no Claude
+  // credential... SHALL remain available in chat-only mode". The lookup reads a
+  // couple of text files out of the folder the user has open, and it is called
+  // in front of an audience — so it must reach its handler with nothing in the
+  // way, and without going near the queue.
+  it("routes find_prepared_answer to the injected lookup with no pipeline available and no queue touched", async () => {
+    const runQueue = makeRunQueue();
+    const findPreparedAnswer = vi.fn(() => ({ status: "ok", found: true, sources: ["qa.md"] }));
+    const dispatchModule = make({ runQueue, getPipelineAvailable: () => false, findPreparedAnswer });
+
+    const result = await dispatchModule.executeClaudeTool("find_prepared_answer", { question: "how long is the window?" });
+
+    expect(findPreparedAnswer).toHaveBeenCalledWith({ question: "how long is the window?" });
+    expect(result.found).toBe(true);
+    // No run was submitted, on either lane, and no execution slot was serialized.
+    expect(runQueue.submit).not.toHaveBeenCalled();
+    expect(runQueue.submitResident).not.toHaveBeenCalled();
+    expect(runQueue.serialize).not.toHaveBeenCalled();
+  });
+
   it("routes control_ui only for known actions", async () => {
     const emitToRenderer = vi.fn();
     const dispatchModule = make({ emitToRenderer });

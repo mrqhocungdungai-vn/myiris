@@ -45,6 +45,7 @@ const DEPRECATED_TASK_TOOL = "submit_claude_task";
  *   captureNote: (args: any) => Promise<any>,
  *   findNoteByName: (args: any) => Promise<any>,
  *   mutateVaultNotes: (args: any) => Promise<any>,
+ *   findPreparedAnswer?: (args: any) => any,
  * }} deps
  */
 export function createRunDispatch({
@@ -71,6 +72,13 @@ export function createRunDispatch({
   captureNote,
   findNoteByName,
   mutateVaultNotes,
+  /**
+   * The prepared-answer lookup (iris-answers-from-the-open-folder). Defaulted so
+   * the many tests that construct a dispatch surface without the capability keep
+   * working — and defaulted to the same "nothing prepared" shape the capability
+   * returns for an empty folder, never to a throw.
+   */
+  findPreparedAnswer = () => ({ status: "ok", found: false, reason: "nothing_prepared" }),
 }) {
   // Parks a Gemini-authored brief for Approve/Edit/Cancel before any Claude
   // tokens are spent (prompt-review-gate spec). Mirrors run-stream.mjs's
@@ -560,6 +568,16 @@ export function createRunDispatch({
         // notes: "no Claude run, no tokens... available without a Claude
         // credential").
         return mutateVaultNotes(args);
+      case "find_prepared_answer":
+        // Also NOT in PIPELINE_ONLY_TOOLS, and this is the case where it matters
+        // most: reading a couple of text files out of the folder the user has
+        // open needs no model, no credential and no queue, and the moment it is
+        // called the user is in front of an audience (prepared-answers: "That
+        // function SHALL require no Claude run, no execution slot, and no Claude
+        // credential, and SHALL remain available in chat-only mode"). Routing it
+        // through the worker would make the one answer that already exists the
+        // slowest and most expensive one to reach.
+        return findPreparedAnswer(args);
       case "go_to_sleep":
         // Give the goodbye a moment to play before the renderer tears down
         // audio (its stop() flushes playback immediately).

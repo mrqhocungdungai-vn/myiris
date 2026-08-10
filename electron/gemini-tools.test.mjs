@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { createGeminiTools } from "./gemini-tools.mjs";
 import { VERB_NAMES, resolveAllVerbs } from "./verbs.mjs";
+import { createPreparedAnswers } from "./capabilities/prepared-answers.mjs";
 
 const modelChoices = [
   { id: "claude-opus-5", label: "Opus 5" },
@@ -124,5 +125,18 @@ describe("gemini-tools", () => {
     for (const verb of VERB_NAMES) {
       expect(names).not.toContain(verb);
     }
+  });
+
+  // prepared-answers: "The lookup works with no Claude credential". Asserted
+  // through the REAL capability rather than a stand-in declaration, because what
+  // matters is that the tool the folder lookup actually ships reaches the voice
+  // surface on a machine with no pipeline at all.
+  it("declares find_prepared_answer in chat-only mode", () => {
+    const preparedAnswers = createPreparedAnswers({ openFolder: () => "/Users/someone/talk" });
+    const names = make({ pipelineAvailable: false, capabilities: [preparedAnswers] })
+      .buildClaudeTools()[0]
+      .functionDeclarations.map((d) => d.name);
+
+    expect(names).toContain("find_prepared_answer");
   });
 });

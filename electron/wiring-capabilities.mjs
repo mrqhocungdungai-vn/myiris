@@ -14,6 +14,7 @@ import { createGeminiPrompts } from "./gemini-prompts.mjs";
 import { createCanvasCapability } from "./capabilities/canvas.mjs";
 import { createSecondBrainCapability } from "./capabilities/second-brain.mjs";
 import { createHudTelemetryCapability } from "./capabilities/hud-telemetry.mjs";
+import { createPreparedAnswers } from "./capabilities/prepared-answers.mjs";
 
 /**
  * @param {{
@@ -53,6 +54,7 @@ import { createHudTelemetryCapability } from "./capabilities/hud-telemetry.mjs";
  *   modelChoices: Array<{ id: string, label: string }>,
  *   envFlag: (name: string, fallback?: boolean) => boolean,
  *   workspaceContextLine: () => string,
+ *   openFolder: () => string | null,
  * }} deps
  */
 export function createCapabilitiesWiring({
@@ -92,6 +94,7 @@ export function createCapabilitiesWiring({
   modelChoices,
   envFlag,
   workspaceContextLine,
+  openFolder,
 }) {
   // Canvas capability (canvas-claude-mcp) and second-brain capability
   // (personal-knowledge-notes, second-brain-galaxy-view), gathered end to end
@@ -146,6 +149,16 @@ export function createCapabilitiesWiring({
     getMainWindow,
   });
 
+  // Prepared answers (iris-answers-from-the-open-folder): what the user already
+  // wrote down in the folder this session has open. Contributes a declaration
+  // and a prompt fragment and nothing else — it holds no state, owns no channel,
+  // and starts no run, so there is nothing here to tear down.
+  //
+  // `openFolder` is the SAME folder `get_workspace_info` reports (design D1),
+  // handed in as a getter rather than read from the session store, which is what
+  // keeps the capability Electron-free and its tests filesystem-free.
+  const preparedAnswersCapability = createPreparedAnswers({ openFolder });
+
   const runExec = createRunExec({
     runQueue,
     emitEvent,
@@ -185,7 +198,7 @@ export function createCapabilitiesWiring({
   });
   const { startClaudeRun } = runExec;
 
-  const capabilities = [canvasCapability, secondBrainCapability, hudTelemetryCapability];
+  const capabilities = [canvasCapability, secondBrainCapability, hudTelemetryCapability, preparedAnswersCapability];
 
   const geminiTools = createGeminiTools({
     getPipelineAvailable,
@@ -207,6 +220,7 @@ export function createCapabilitiesWiring({
     canvasCapability,
     secondBrainCapability,
     hudTelemetryCapability,
+    preparedAnswersCapability,
     startClaudeRun,
     capabilities,
     geminiTools,

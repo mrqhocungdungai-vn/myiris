@@ -98,6 +98,7 @@ function makeDeps(overrides = {}) {
     modelChoices: [{ id: "claude-opus-5", label: "Opus 5" }],
     envFlag: vi.fn(() => false),
     workspaceContextLine: vi.fn(() => ""),
+    openFolder: vi.fn(() => null),
     fenceUntrustedText: vi.fn((text) => text),
     ...overrides,
   };
@@ -110,10 +111,22 @@ describe("wiring-capabilities: createCapabilitiesWiring", () => {
 
   it("returns every capability in the capabilities array, in registration order", () => {
     const result = createCapabilitiesWiring(makeDeps());
-    expect(result.capabilities).toHaveLength(3);
+    expect(result.capabilities).toHaveLength(4);
     expect(result.capabilities[0]).toBe(result.canvasCapability);
     expect(result.capabilities[1]).toBe(result.secondBrainCapability);
     expect(result.capabilities[2]).toBe(result.hudTelemetryCapability);
+    expect(result.capabilities[3]).toBe(result.preparedAnswersCapability);
+  });
+
+  // iris-answers-from-the-open-folder: the folder the lookup searches is the one
+  // the composition root already resolves, injected as a getter — the capability
+  // never reaches into the session store for it.
+  it("wires the prepared-answer lookup to the injected open folder", () => {
+    const openFolder = vi.fn(() => "/Users/someone/talk");
+    const result = createCapabilitiesWiring(makeDeps({ openFolder }));
+
+    expect(result.preparedAnswersCapability.probe()).toEqual({ ok: true, folder: "/Users/someone/talk" });
+    expect(openFolder).toHaveBeenCalled();
   });
 
   it("registers the HUD telemetry capability with no tool declaration to contribute", () => {

@@ -336,12 +336,19 @@ describe("live-session: the in-band silence request (listen-mode-hears-system-au
     const { live, session } = await engagedSession();
     live.toggleListenOnly();
     session.sendClientContent.mockClear();
+    session.sendRealtimeInput.mockClear();
 
     live.toggleListenOnly();
 
-    expect(session.sendClientContent.mock.calls[0][0].turns[0].parts[0].text).toContain(
-      "SYSTEM_EVENT_LISTEN_ONLY_DISENGAGED",
-    );
+    const sent = session.sendClientContent.mock.calls[0][0];
+    expect(sent.turns[0].parts[0].text).toContain("SYSTEM_EVENT_LISTEN_ONLY_DISENGAGED");
+    // Unchanged by iris-answers-from-the-open-folder, and the reason that change
+    // needed no mechanism (D4): the note that now sends Iris to the prepared
+    // folder still travels as conversation content on the SAME in-band path,
+    // still without asking for a reply. What it says changed; how it arrives
+    // did not.
+    expect(sent.turnComplete).toBe(false);
+    expect(session.sendRealtimeInput).not.toHaveBeenCalled();
   });
 
   it("neither transition reconnects or rebuilds the session config", async () => {

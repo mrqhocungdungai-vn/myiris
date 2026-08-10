@@ -75,9 +75,37 @@ describe("gemini-prompts: listen-only mode's in-band requests", () => {
     }
   });
 
-  it("releases the model without volunteering a reply or a summary on the way out", () => {
+  it("releases the model without volunteering a summary on the way out", () => {
     expect(LISTEN_ONLY_DISENGAGE_REQUEST).toContain("SYSTEM_EVENT_LISTEN_ONLY_DISENGAGED");
-    expect(LISTEN_ONLY_DISENGAGE_REQUEST).toMatch(/do not say anything in response/i);
     expect(LISTEN_ONLY_DISENGAGE_REQUEST).toMatch(/do not summarize/i);
+  });
+
+  // iris-answers-from-the-open-folder D4: the settling step is this sentence and
+  // nothing else — no new event, no new channel. The disengage note already fired
+  // at exactly the right moment; what changed is what it says.
+  it("sends her to the prepared folder at once, before any verb", () => {
+    expect(LISTEN_ONLY_DISENGAGE_REQUEST).toMatch(/find_prepared_answer/);
+    expect(LISTEN_ONLY_DISENGAGE_REQUEST).toMatch(/RIGHT NOW/);
+    expect(LISTEN_ONLY_DISENGAGE_REQUEST).toMatch(/before you consider any other tool or verb/i);
+    expect(LISTEN_ONLY_DISENGAGE_REQUEST).toMatch(/without asking the user whether you should look/i);
+  });
+
+  // The one line a disengage may produce, and the beat after it. Reading
+  // unprompted would talk over a live presentation, which is worse than waiting.
+  it("allows exactly one short line for a found answer, and no reading until the cue", () => {
+    expect(LISTEN_ONLY_DISENGAGE_REQUEST).toMatch(/ONE short line/);
+    expect(LISTEN_ONLY_DISENGAGE_REQUEST).toMatch(/do not read it out/i);
+    expect(LISTEN_ONLY_DISENGAGE_REQUEST).toMatch(/until the user tells you to go ahead/i);
+  });
+
+  // listen-only-mode: "In every other case — nothing prepared was found, or
+  // nothing was heard at all — Iris SHALL say nothing until the user next
+  // addresses her." A miss is silent HERE even though a miss the user asked for
+  // is reported, and the note says which of the two this is so the two rules
+  // cannot collide in the model's reading.
+  it("stays completely silent on a miss, and defers the two costly routes", () => {
+    expect(LISTEN_ONLY_DISENGAGE_REQUEST).toMatch(/say nothing at all in response to this message/i);
+    expect(LISTEN_ONLY_DISENGAGE_REQUEST).toMatch(/not even that nothing was prepared/i);
+    expect(LISTEN_ONLY_DISENGAGE_REQUEST).toMatch(/only then, if they ask/i);
   });
 });

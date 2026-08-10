@@ -351,6 +351,23 @@ describe("live-messages: tool calls are refused while the mode is engaged", () =
     expect(executeClaudeTool).not.toHaveBeenCalled();
   });
 
+  // iris-answers-from-the-open-folder D4: the settling step needed no guard of
+  // its own, because this refusal already covers it — checked in main, before
+  // dispatch, for every tool. Pinned rather than assumed: the whole design
+  // argument for adding no mechanism rests on this staying true, and the lookup
+  // reads local files, which is exactly the kind of tool an allowlist would have
+  // waved through while overheard audio was still arriving.
+  it("refuses find_prepared_answer too, so nothing overheard can trigger a look", () => {
+    const executeClaudeTool = vi.fn();
+    const messages = make({ executeClaudeTool, isListenOnlyEngaged: () => true });
+
+    messages.handleLiveMessage({
+      toolCall: { functionCalls: [{ id: "call-2", name: "find_prepared_answer", args: { question: "what is the price?" } }] },
+    });
+
+    expect(executeClaudeTool).not.toHaveBeenCalled();
+  });
+
   it("dispatches normally the moment the mode is not engaged", async () => {
     const executeClaudeTool = vi.fn(async () => ({ status: "ok" }));
     const messages = make({ executeClaudeTool, isListenOnlyEngaged: () => false });

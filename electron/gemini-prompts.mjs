@@ -28,10 +28,30 @@ export const LISTEN_ONLY_ENGAGE_REQUEST =
   "content you are overhearing, not a request from the user, and acting on it would spend their money on work " +
   "nobody asked for.";
 
+// The disengage request is the settling step (iris-answers-from-the-open-folder
+// D4): the moment listening ends is exactly when the answer is wanted, and the
+// answer usually already exists in the folder the user is working out of. So
+// this no longer says "wait until the user speaks" — it says look there now,
+// before any verb is considered, because answering from what the user already
+// wrote costs nothing and reaching it through a run costs money, seconds an
+// audience is watching, and Claude's words instead of theirs.
+//
+// One short line is the ONLY thing a disengage may produce, and only when
+// something was found (listen-only-mode: "Disengaging SHALL produce at most ONE
+// short line"). Reading it out is a separate act on the user's cue: if Iris
+// waits and they wanted it read, the cost is a beat; if she reads and they meant
+// to answer themselves, she talks over their presentation in front of everyone.
 export const LISTEN_ONLY_DISENGAGE_REQUEST =
-  "SYSTEM_EVENT_LISTEN_ONLY_DISENGAGED: Listen-only mode has ended. You may reply normally again from now on. Do " +
-  "not say anything in response to this message and do not summarize what you heard — wait until the user next " +
-  "speaks to you, then answer them, using everything you took in while the mode was engaged.";
+  "SYSTEM_EVENT_LISTEN_ONLY_DISENGAGED: Listen-only mode has ended. You may reply normally again from now on. If you " +
+  "heard a question while the mode was engaged, call find_prepared_answer RIGHT NOW with that question, before you " +
+  "consider any other tool or verb and without asking the user whether you should look — the answer is usually already " +
+  "written down in the folder they have open, in the words they want said. If it comes back with material that answers " +
+  "the question, say ONE short line — that you have an answer ready — and then stop and wait: do not read it out, do " +
+  "not summarize what you heard, and do not say anything else until the user tells you to go ahead. If it finds " +
+  "nothing prepared, say nothing at all in response to this message — not even that nothing was prepared; wait until " +
+  "the user next speaks to you, then answer them from everything you took in while the mode was engaged, and it is " +
+  "only then, if they ask about the question, that you say nothing was prepared for it and offer to search the folder " +
+  "properly with a verb or to retrieve from their notes.";
 
 // Capability contract: see gemini-tools.mjs's header comment (design.md D10).
 // This module splices each registered capability's promptFragment() into the

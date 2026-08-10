@@ -92,6 +92,9 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
   // windowModule/liveSessionModule above).
   let canvasCapability;
   let secondBrainCapability;
+  // Same forward reference, for the same reason: runDispatch below needs the
+  // prepared-answer lookup, and this capability is constructed with the others.
+  let preparedAnswersCapability;
 
   // One task at a time, globally — see electron/run-queue.mjs. startClaudeRun
   // comes from wiring-capabilities.mjs's runExec, constructed later in this
@@ -325,6 +328,7 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     captureNote: (args) => secondBrainCapability.captureNote(args),
     findNoteByName: (args) => secondBrainCapability.findNoteByName(args),
     mutateVaultNotes: (args) => secondBrainCapability.mutateVaultNotes(args),
+    findPreparedAnswer: (args) => preparedAnswersCapability.findPreparedAnswer(args),
   });
   const {
     PendingReview,
@@ -397,9 +401,15 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     modelChoices: MODEL_CHOICES,
     envFlag,
     workspaceContextLine,
+    // The folder the prepared-answer lookup searches, taken from the one place
+    // that already decides what "the folder we are working in" means — so the
+    // folder Iris searches is exactly the folder get_workspace_info names, down
+    // to the existence check (design D1).
+    openFolder: () => workspaceInfo().project_folder,
   });
   canvasCapability = caps.canvasCapability;
   secondBrainCapability = caps.secondBrainCapability;
+  preparedAnswersCapability = caps.preparedAnswersCapability;
   const { startClaudeRun, geminiTools, geminiPrompts } = caps;
   const CAPABILITIES = caps.capabilities;
 

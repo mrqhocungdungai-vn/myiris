@@ -96,6 +96,7 @@ function buildWiring(overrides = {}) {
     modelChoices: [{ id: "claude-opus-5", label: "Opus 5" }],
     envFlag: vi.fn(() => false),
     workspaceContextLine: vi.fn(() => ""),
+    openFolder: vi.fn(() => null),
     ...overrides,
   });
   const activate = wiring.canvasCapability.ipcHandlers.find((h) => h.channel === "canvas:activate");
