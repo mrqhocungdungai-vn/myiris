@@ -10,6 +10,8 @@ import {
   rectCentre,
   resolveAnchor,
   shouldReleaseAnchor,
+  sightMovedEnoughToRetarget,
+  SIGHT_TRAVEL_TO_RETARGET_PX,
   ANCHOR_EASE_MS,
   RELEASE_EXTENT_MULTIPLE,
   type GalaxyAnchor,
@@ -395,5 +397,28 @@ describe("easeAnchor", () => {
     const oneLong = easeAnchor({ x: 0, y: 0, z: 0 }, TARGET, 32);
     const twoShort = easeAnchor(easeAnchor({ x: 0, y: 0, z: 0 }, TARGET, 16), TARGET, 16);
     expect(oneLong.x).toBeCloseTo(twoShort.x, 10);
+  });
+});
+
+describe("sightMovedEnoughToRetarget", () => {
+  // The defect this answers came from the fix before it: bringing a locked note
+  // to the centre of the view slides the whole world under a hand that is not
+  // moving. A note the user never aimed at arrives under the sight, is taken,
+  // and the taking re-centres — which slides the world again. The user is a
+  // bystander to a loop their own hand is not driving.
+  it("refuses a new target while the hand is still, however far the world has moved", () => {
+    const sight = { x: 640, y: 360 };
+    expect(sightMovedEnoughToRetarget(sight, sight)).toBe(false);
+    expect(sightMovedEnoughToRetarget({ x: 640, y: 360 }, { x: 646, y: 364 })).toBe(false);
+  });
+
+  it("allows one the hand actually travelled to", () => {
+    expect(
+      sightMovedEnoughToRetarget({ x: 640, y: 360 }, { x: 640 + SIGHT_TRAVEL_TO_RETARGET_PX, y: 360 }),
+    ).toBe(true);
+  });
+
+  it("allows the first target of all, when the hand has picked nothing yet", () => {
+    expect(sightMovedEnoughToRetarget(null, { x: 12, y: 12 })).toBe(true);
   });
 });

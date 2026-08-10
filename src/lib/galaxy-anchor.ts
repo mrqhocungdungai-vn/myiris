@@ -137,6 +137,31 @@ const pickScratch = new THREE.Vector3();
  * must not make the mark run away to some distant note the user never aimed at,
  * and keeping it is also what lets them pinch back out without re-aiming.
  */
+// How far the hand must travel before a different note counts as chosen.
+//
+// Deliberately about the HAND, because the bug it answers was about the camera:
+// bringing a locked note to the centre slides the whole world under a sight
+// that has not moved, so a note the user never aimed at arrives beneath it and
+// is taken — and taking it re-centres again, which slides the world again. The
+// user is a bystander to a loop their own hand is not driving.
+//
+// A target the user did not move toward is not a target they chose. Everything
+// that moves the world — the centring glide, a zoom, an orbit — is covered by
+// saying so once, in terms of the only thing that is theirs: their hand.
+export const SIGHT_TRAVEL_TO_RETARGET_PX = 48;
+
+/**
+ * Whether the hand has travelled far enough since the current target was picked
+ * for a different one to count as CHOSEN rather than merely arrived at.
+ */
+export function sightMovedEnoughToRetarget(
+  sightAtLastPick: { x: number; y: number } | null,
+  sight: { x: number; y: number },
+): boolean {
+  if (sightAtLastPick === null) return true;
+  return Math.hypot(sight.x - sightAtLastPick.x, sight.y - sightAtLastPick.y) >= SIGHT_TRAVEL_TO_RETARGET_PX;
+}
+
 /** Where one node lands in window pixels, or null if it is behind the camera or gone. */
 function screenPointOf(
   nodes: Iterable<GalaxyNavNode>,

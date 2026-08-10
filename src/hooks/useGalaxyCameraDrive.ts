@@ -28,6 +28,7 @@ import {
   viewCentrePoint,
   zoomLockStep,
   shouldReleaseAnchor,
+  sightMovedEnoughToRetarget,
   type GalaxyAnchor,
   type ZoomLockState,
 } from "../lib/galaxy-anchor";
@@ -152,6 +153,9 @@ export function useGalaxyCameraDrive({
   // The lock already brought to the centre, so the glide runs once per choice
   // rather than every frame it stays chosen.
   const centredLockRef = useRef<string | null>(null);
+  // Where the hand was when the current target was picked, so travel is
+  // measured from the choice rather than from the previous frame.
+  const sightAtPickRef = useRef<{ x: number; y: number } | null>(null);
   const acquireProgressRef = useRef(0);
 
   // Gesture drive (design.md D4b/D5): a thin driver over the pure policy in
@@ -407,7 +411,17 @@ export function useGalaxyCameraDrive({
             anchor.anchorRef.current,
             anchorThresholdPx,
           );
-          candidateIdRef.current = picked.kind === "node" ? picked.id : null;
+          const pickedId = picked.kind === "node" ? picked.id : null;
+          // A target the user did not move toward is not one they chose. The
+          // centring glide slides the world under a still hand, so without this
+          // a note simply ARRIVES under the sight, is taken, and the taking
+          // re-centres — sliding the world again.
+          if (pickedId === candidateIdRef.current) {
+            // unchanged
+          } else if (sightMovedEnoughToRetarget(sightAtPickRef.current, aim)) {
+            candidateIdRef.current = pickedId;
+            sightAtPickRef.current = { x: aim.x, y: aim.y };
+          }
         }
 
         // The lock runs EVERY frame, not on the throttle, because `progress` is

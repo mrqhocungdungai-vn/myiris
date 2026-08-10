@@ -334,6 +334,11 @@ answer on its own, because each names a different mechanism:
 | `lowered` | `YES` mid-gesture is the drive being released because a **driving** hand dropped below the bottom third — raise the holding hand |
 | `curDist` / `refDist` | `curDist` jumping while your hands are still is tracking noise reaching the camera; a `refDist` near 80 means you engaged with the hands almost touching, where the ratio law is at its most sensitive |
 
+**A target you did not move toward is not one you chose.** The target only
+changes once your hand has actually travelled. Centring a locked note slides the
+whole view, so without this a note would arrive under a motionless hand, be
+taken, and re-centre — sliding the view again.
+
 **You cannot choose what you cannot resolve.** A note only takes the target from
 another if the two are plainly apart on screen. Seen from outside a dense
 cluster, neighbouring notes sit closer together than a hand can steady, so the
