@@ -28,10 +28,18 @@ export function renderSessionBlock(utterances) {
   const start = new Date(utterances[0].at).toISOString();
   const end = new Date(utterances[utterances.length - 1].at).toISOString();
   const lines = [
-    `## Verbatim microphone record · ${start} – ${end}`,
+    `## Automatic transcription of the microphone · ${start} – ${end}`,
     "",
     "Everything the microphone picked up during this span, unedited — not notes, and not necessarily this " +
-      "user's own words; anyone near the microphone may appear here.",
+      "user's own words; anyone near the microphone may appear here. " +
+      // It says it is a transcript of the room, but not that it is a GUESS at
+      // one. It is speech-recognition output made while the conversation
+      // happened, and a mishearing here is silent: it reads as a sentence
+      // somebody said. The curator weaving these into durable pages is the
+      // only one who can catch that, and only if the spool tells them to.
+      "These lines are automatic speech recognition, not a human transcript: names, numbers and " +
+      "unfamiliar terms may be wrong, and a confident-looking sentence may never have been said. " +
+      "Check anything load-bearing against another source before writing it into a durable page.",
     "",
     ...utterances.map((entry) => `> ${entry.text}`),
     "",

@@ -143,7 +143,16 @@ export function createGeminiTools({ getPipelineAvailable, modelChoices, envFlag,
               items: {
                 type: "object",
                 properties: {
-                  question: { type: "string", description: "The exact question text, copied verbatim from the event." },
+                  question_number: {
+                    type: "integer",
+                    description:
+                      "Which question this answers, by its NUMBER as listed in the event (1, 2, 3...). This is what identifies the question — do not rely on retyping its text.",
+                  },
+                  question: {
+                    type: "string",
+                    description:
+                      "Optional. The question text as you read it, for diagnostics only. It is not used to match the answer.",
+                  },
                   choice: {
                     type: "string",
                     description:
@@ -152,7 +161,7 @@ export function createGeminiTools({ getPipelineAvailable, modelChoices, envFlag,
                       "than the one that was asked.",
                   },
                 },
-                required: ["question", "choice"],
+                required: ["question_number", "choice"],
               },
             },
           },

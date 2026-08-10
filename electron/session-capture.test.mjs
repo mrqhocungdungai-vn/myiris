@@ -110,16 +110,26 @@ describe("createSessionCapture: disable", () => {
 });
 
 describe("renderSessionBlock", () => {
-  it("headers the block as a verbatim microphone record, naming its time span", () => {
+  it("headers the block as an automatic transcription, naming its time span", () => {
     const block = renderSessionBlock([
       { text: "hello", at: Date.UTC(2026, 7, 5, 10, 0, 0) },
       { text: "world", at: Date.UTC(2026, 7, 5, 10, 5, 0) },
     ]);
-    expect(block).toContain("Verbatim microphone record");
+    expect(block).toContain("Automatic transcription");
     expect(block).toContain("2026-08-05T10:00:00.000Z");
     expect(block).toContain("2026-08-05T10:05:00.000Z");
     expect(block).toContain("> hello");
     expect(block).toContain("> world");
+  });
+
+  // The spool said it was a transcript of the room, but not that it was a
+  // GUESS at one. A mishearing here is silent — it reads as a sentence somebody
+  // said — and the curator weaving these into durable pages is the only one who
+  // can catch it.
+  it("warns that the text is speech recognition and may be wrong", () => {
+    const block = renderSessionBlock([{ text: "hi", at: 0 }]).toLowerCase();
+    expect(block).toContain("automatic speech recognition");
+    expect(block).toContain("may never have been said");
   });
 
   it("states plainly that this is not necessarily the user's own words", () => {

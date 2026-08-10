@@ -481,7 +481,7 @@ export function createRunStream({
       "SYSTEM_EVENT_PO_QUESTION",
       "instructions_to_iris:",
       "- Claude has paused mid-task to ask you something. Read each question aloud with its options, in order, and collect the user's answer for each.",
-      "- Once you have every answer, call answer_claude_question with one entry per question (question text verbatim, and the option label the user chose).",
+      "- Once you have every answer, call answer_claude_question with one entry per question. Identify each question by its NUMBER as listed below — do not retype the question text to identify it.",
       "- If asked for your recommendation, suggest the first-listed option, but submit whatever the user actually picks.",
       // The expiry difference, stated rather than left for Iris to assume
       // (ask-when-unspecified 5.4). Telling the user a default was applied when
@@ -512,11 +512,38 @@ export function createRunStream({
   // wins — the second call is a no-op since PendingQuestion is already settled.
   function resolvePendingPoQuestion(answers) {
     if (!PendingQuestion.current) return { status: "error", error: "No PO question is pending." };
+    // TEXT A MODEL PRODUCED IS NOT AN IDENTIFIER. This used to key the answers
+    // map on `entry.question` — the question sentence, retyped by a speech
+    // model that had just read it aloud IN TRANSLATION to a user speaking
+    // another language. One character off and the key matched nothing: no
+    // error, no warning, the run proceeded as though nobody had answered, and
+    // the user was told a story about their answer that was not true.
+    //
+    // The ordinal was already relayed and is already stable. The question text
+    // is still accepted, but only as corroboration for a mismatch — it decides
+    // nothing.
+    const pending = PendingQuestion.current.questions || [];
     const map = {};
+    const unmatched = [];
     for (const entry of Array.isArray(answers) ? answers : []) {
+      const n = Number(entry?.question_number);
+      const question = Number.isInteger(n) && n >= 1 && n <= pending.length ? pending[n - 1] : null;
+      if (!question) {
+        unmatched.push(entry?.question_number ?? entry?.question ?? "(nothing)");
+        continue;
+      }
       // `choice` may arrive as one label or as several (the UI sends an array
       // for a multi-select question; Gemini sends them comma-separated).
-      if (entry?.question) map[entry.question] = encodeAnswer(entry.choices ?? entry.choice ?? "");
+      map[question.question] = encodeAnswer(entry.choices ?? entry.choice ?? "");
+    }
+    // An answer that matches nothing is an ERROR, not a silence. Answering and
+    // being misfiled is not the same thing as not answering, and the run must
+    // not be allowed to treat it as though it were.
+    if (unmatched.length) {
+      return {
+        status: "error",
+        error: `No pending question numbered ${unmatched.join(", ")}. There ${pending.length === 1 ? "is 1 question" : `are ${pending.length} questions`}; answer by number.`,
+      };
     }
     PendingQuestion.answer(map);
     return { status: "ok" };

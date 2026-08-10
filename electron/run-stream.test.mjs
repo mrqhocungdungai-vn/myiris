@@ -44,11 +44,11 @@ describe("run-stream: PO question settle-once invariant", () => {
       const questions = [{ question: "Which color?", options: [{ label: "Red", description: "r" }] }];
       const promise = stream.askUserQuestionViaVoice("ws1", questions);
 
-      const first = stream.resolvePendingPoQuestion([{ question: "Which color?", choice: "Red" }]);
+      const first = stream.resolvePendingPoQuestion([{ question_number: 1, question: "Which color?", choice: "Red" }]);
       expect(first.status).toBe("ok");
 
       // A second answer call after settlement is a no-op error, not a second resolve.
-      const second = stream.resolvePendingPoQuestion([{ question: "Which color?", choice: "Blue" }]);
+      const second = stream.resolvePendingPoQuestion([{ question_number: 1, question: "Which color?", choice: "Blue" }]);
       expect(second.status).toBe("error");
 
       return promise.then((resolved) => {
@@ -80,13 +80,13 @@ describe("run-stream: PO question settle-once invariant", () => {
     const stream = make({ runQueue });
     stream.askUserQuestionViaVoice("ws1", [{ question: "Q", options: [{ label: "A", description: "a" }] }]);
     expect(runQueue.suspend).toHaveBeenCalledTimes(1);
-    stream.resolvePendingPoQuestion([{ question: "Q", choice: "A" }]);
+    stream.resolvePendingPoQuestion([{ question_number: 1, question: "Q", choice: "A" }]);
     expect(runQueue.resume).toHaveBeenCalledTimes(1);
   });
 
   it("resolvePendingPoQuestion is a no-op error when nothing is pending", () => {
     const stream = make();
-    const result = stream.resolvePendingPoQuestion([{ question: "Q", choice: "A" }]);
+    const result = stream.resolvePendingPoQuestion([{ question_number: 1, question: "Q", choice: "A" }]);
     expect(result.status).toBe("error");
   });
 });
@@ -201,7 +201,7 @@ describe("run-stream: the caller-supplied expiry policy", () => {
     for (const onExpiry of [QUESTION_EXPIRY.RECOMMENDED_OPTION, QUESTION_EXPIRY.DENY]) {
       const stream = make();
       const pending = stream.askUserQuestionViaVoice("ws1", questions, { onExpiry });
-      stream.resolvePendingPoQuestion([{ question: "Which database?", choice: "SQLite" }]);
+      stream.resolvePendingPoQuestion([{ question_number: 1, question: "Which database?", choice: "SQLite" }]);
       const settled = await pending;
 
       expect(settled.behavior).toBe("allow");
@@ -339,7 +339,7 @@ describe("AskUserQuestion survives the relay with its shape intact", () => {
     const pending = stream.askUserQuestionViaVoice("ws1", [multi]).then((value) => {
       delivered = value;
     });
-    stream.resolvePendingPoQuestion([{ question: multi.question, choice: ["lint", "typecheck"] }]);
+    stream.resolvePendingPoQuestion([{ question_number: 1, choice: ["lint", "typecheck"] }]);
     await pending;
 
     expect(delivered.answers[multi.question]).toBe("lint, typecheck");
@@ -352,7 +352,7 @@ describe("AskUserQuestion survives the relay with its shape intact", () => {
     const pending = stream.askUserQuestionViaVoice("ws1", [single]).then((value) => {
       delivered = value;
     });
-    stream.resolvePendingPoQuestion([{ question: single.question, choice: "pnpm" }]);
+    stream.resolvePendingPoQuestion([{ question_number: 1, choice: "pnpm" }]);
     await pending;
 
     expect(delivered.answers[single.question]).toBe("pnpm");
@@ -734,5 +734,51 @@ describe("run-stream: the worker's own sentence wins over a narrated act", () =>
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("run-stream: an answer is matched by number, never by retyped text", () => {
+  // The question sentence was the key. A speech model that had just read it
+  // aloud IN TRANSLATION to a user speaking another language had to retype it
+  // character-for-character, and one character off matched nothing: no error,
+  // no warning, the run proceeded as though nobody had answered, and the user
+  // was told a story about their answer that was not true.
+  const qs = [
+    { question: "Which database?", header: "db", options: [{ label: "SQLite", description: "d" }] },
+    { question: "Which runner?", header: "run", options: [{ label: "pnpm", description: "d" }] },
+  ];
+
+  it("files each answer against the question with that number, whatever the text says", async () => {
+    const stream = make();
+    /** @type {any} */
+    let delivered;
+    const pending = stream.askUserQuestionViaVoice("ws1", qs).then((value) => {
+      delivered = value;
+    });
+    // Deliberately mangled text — a plausible retyping, and now irrelevant.
+    const result = stream.resolvePendingPoQuestion([
+      { question_number: 2, question: "which runner ...?", choice: "pnpm" },
+      { question_number: 1, question: "Which DB", choice: "SQLite" },
+    ]);
+    expect(result.status).toBe("ok");
+    await pending;
+
+    expect(delivered.answers["Which runner?"]).toBe("pnpm");
+    expect(delivered.answers["Which database?"]).toBe("SQLite");
+  });
+
+  it("reports an answer it cannot match instead of settling as unanswered", () => {
+    const stream = make();
+    stream.askUserQuestionViaVoice("ws1", qs);
+    const result = stream.resolvePendingPoQuestion([{ question_number: 7, choice: "SQLite" }]);
+    expect(result.status).toBe("error");
+    expect(result.error).toContain("7");
+  });
+
+  it("rejects an answer carrying only text, since text identifies nothing", () => {
+    const stream = make();
+    stream.askUserQuestionViaVoice("ws1", qs);
+    const result = stream.resolvePendingPoQuestion([{ question: "Which database?", choice: "SQLite" }]);
+    expect(result.status).toBe("error");
   });
 });
