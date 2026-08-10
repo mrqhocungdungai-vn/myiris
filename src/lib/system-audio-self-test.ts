@@ -24,7 +24,7 @@ export const MIN_SYSTEM_AUDIO_MACOS = "14.2";
  * Four outcomes, because the action that resolves each one differs.
  *
  * `silent` is the observed failure that otherwise looks identical to working
- * until a meeting has already been recorded to nothing.
+ * until a whole engagement has already been heard by nothing.
  */
 export type SystemAudioSelfTestVerdict = "heard" | "silent" | "not-obtainable" | "os-too-old";
 
@@ -93,7 +93,7 @@ const VERDICT_COPY: Record<SystemAudioSelfTestVerdict, SelfTestVerdictCopy> = {
   heard: {
     ok: true,
     headline: "Iris can hear your machine.",
-    detail: "Audio arrived from the system capture. Listen-only mode will hear your meetings.",
+    detail: "Audio arrived from the system capture. Listen-only mode will hear your calls.",
     offersSettingsRoute: false,
   },
   silent: {

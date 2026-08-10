@@ -392,6 +392,7 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     // Read through the same forward-reference thunk every other liveSessionModule
     // consumer uses — wiring-live.mjs registers it further down this function.
     getLiveStatus: () => getLiveStatus(),
+    isListenOnlyEngaged: () => Boolean(liveSessionModule?.getListenOnlyEngaged()),
     recentUtterances: () => getRecentUtterances(),
     modelChoices: MODEL_CHOICES,
     envFlag,

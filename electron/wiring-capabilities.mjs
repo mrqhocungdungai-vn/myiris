@@ -48,6 +48,7 @@ import { createHudTelemetryCapability } from "./capabilities/hud-telemetry.mjs";
  *   pushToolEnd: any,
  *   askUserQuestionViaVoice: any,
  *   getLiveStatus: () => { running: boolean },
+ *   isListenOnlyEngaged: () => boolean,
  *   recentUtterances: () => Array<{ text: string, at: number }>,
  *   modelChoices: Array<{ id: string, label: string }>,
  *   envFlag: (name: string, fallback?: boolean) => boolean,
@@ -86,6 +87,7 @@ export function createCapabilitiesWiring({
   pushToolEnd,
   askUserQuestionViaVoice,
   getLiveStatus,
+  isListenOnlyEngaged,
   recentUtterances,
   modelChoices,
   envFlag,
@@ -127,6 +129,11 @@ export function createCapabilitiesWiring({
     // recording path (ambient-memory spec: "Only already-retained text is
     // captured").
     recentUtterances,
+    // Ambient capture stands aside for the whole span listen-only mode is
+    // engaged (ambient-session-capture), so it reads the mode from its owner
+    // through the same forward-reference thunk every other liveSessionModule
+    // consumer here uses.
+    isListenOnlyEngaged,
   });
 
   // The eye HUD's readout telemetry (eye-tracking-hud). Contributes no tool and

@@ -63,9 +63,9 @@ const AMBIENT_CAPTURE_STORAGE_KEY = "iris.ambientCaptureEnabled";
 // with no way back".
 const HUD_CAMERA_SIZE_STORAGE_KEY = "iris.hudCameraEnlarged";
 // listen-mode-hears-system-audio: engaging the mode IS the consent point for
-// meeting retention, so the first engage states what is retained, that it may
-// include other people, and where it is written. Remembered so it is a
-// first-run notice rather than a nag.
+// what Iris hears, so the first engage states that it widens to whatever the
+// machine plays and may include other people. Remembered so it is a first-run
+// notice rather than a nag.
 const LISTEN_ONLY_CONSENT_STORAGE_KEY = "iris.listenOnlyConsentSeen";
 
 function loadSoundsEnabled(): boolean {
@@ -261,12 +261,16 @@ export default function App() {
   // a query on mount/reload and updated only by main's push. Never asserted
   // back. Feeds the audio pipeline's suppression flag from the same push.
   const [listenOnlyEngaged, setListenOnlyEngaged] = useState(false);
-  // The first-run consent notice for meeting retention, and the (non-blocking)
-  // headphone advisory. Both are shown on the engaging edge only.
+  // The listening window's absolute deadline, pushed with the mode state
+  // (listen-window-is-bounded D6). Display only: main owns expiry, and the
+  // countdown is counted down from this locally.
+  const [listenWindowDeadline, setListenWindowDeadline] = useState<number | null>(null);
+  // The first-run consent notice for what Iris hears while engaged, and the
+  // (non-blocking) headphone advisory. Both are shown on the engaging edge only.
   const [listenOnlyNotice, setListenOnlyNotice] = useState<"consent" | "headphones" | "refused" | null>(null);
   // A live readout of what Iris is hearing, for the caption under the orb.
   // Ephemeral by design: it replaces itself and is never added to the
-  // conversation, which is where a meeting's verbatim does not belong.
+  // conversation, which is where overheard speech does not belong.
   const [heardLive, setHeardLive] = useState("");
   const [refusedTool, setRefusedTool] = useState<string>("");
   // Records the HUD Comms panel's open/closed state from just before the
@@ -700,11 +704,15 @@ export default function App() {
     if (!hasBridge) return;
     window.iris.getListenOnlyState().then((state) => {
       setListenOnlyEngaged(state.engaged);
+      // A window opened before this renderer existed is already running, so the
+      // countdown picks up mid-flight rather than starting over.
+      setListenWindowDeadline(state.deadlineAt ?? null);
       audio.applyListenOnlyState(state);
     });
     return window.iris.onListenOnlyState((state) => {
       const { engaged } = state;
       setListenOnlyEngaged(engaged);
+      setListenWindowDeadline(state.deadlineAt ?? null);
       setHeardLive("");
       audio.applyListenOnlyState(state);
       // The consent point and the headphone advice both belong to the engaging
@@ -2198,6 +2206,7 @@ export default function App() {
       <ListenOnlyNotice
         kind={listenOnlyNotice}
         tool={refusedTool}
+        deadlineAt={listenWindowDeadline}
         onDismiss={() => setListenOnlyNotice(null)}
       />
     </>

@@ -115,7 +115,7 @@ export default function CenterStage({
   listenOnlyEngaged: boolean;
   // Whether the mode's system-audio half is actually delivering audio
   // (listen-mode-hears-system-audio). "degraded" is shown for as long as it
-  // lasts, not as a dismissible one-off: a meeting Iris is not hearing looks
+  // lasts, not as a dismissible one-off: a room Iris is not hearing looks
   // exactly like one she is.
   systemAudioState: SystemAudioState;
   onToggleListenOnly: () => void;

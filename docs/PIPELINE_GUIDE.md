@@ -103,27 +103,39 @@ A headless run never blocks — if it hits a real product decision, it applies i
 **Switching models.**
 Ask, e.g. *"put the builder on the stronger model to debug this."* Note that the two shaping tools share one conversation, so changing either one's model changes both — Iris will say so.
 
-## 3b. Listen-only mode (meetings and calls)
+## 3b. Listen-only mode
 
 The headphone control — also a tray item, and the `IRIS_LISTEN_HOTKEY` global
-shortcut — puts Iris into her meeting mode. Two things happen at once:
+shortcut — silences Iris so she can take something in. Two things happen at
+once:
 
 - **Iris goes completely silent.** Nothing she produces reaches you, as sound or
   as text, until you turn the mode off. Turning it off does not make her
   volunteer anything either: she waits until you next speak to her.
 - **She hears your machine as well as the room.** The audio your Mac is playing
-  is captured and mixed into the same stream, so the remote participants of a
-  call reach her rather than only your own side of it.
+  is captured and mixed into the same stream, so a remote participant on a call
+  reaches her rather than only your own side of it.
 
-Everything she hears while the mode is engaged is written to
-`inbox/meetings/` in your notes vault — one file per engagement, so a single
-meeting can be found, read, or deleted on its own. That record is the point:
-making sense of a meeting is work for Claude reading the file afterwards, not
-for the voice layer mid-call. The first time you engage the mode, Iris says
-exactly this, including that other people's speech may be retained.
+What it's for: you are presenting, or on a call, and someone asks you a
+question. Engage the mode, let them ask it, disengage — then ask Iris what they
+wanted. She answers from the conversation itself, from the audio she actually
+received, so nothing has to be written down and nothing is.
+
+**The mode ends on its own.** Engaging opens a listening window of five minutes
+by default (`IRIS_LISTEN_MAX_MINUTES` in `.env`, clamped to 15), and at that
+deadline the mode turns itself off exactly as if you had toggled it. The
+deadline is fixed at the moment you engage: talking through it does not extend
+it. The time remaining is shown on screen for as long as the window is open,
+because Iris is silent and cannot warn you by voice. Toggling it off yourself
+before then cancels the deadline; nothing fires later.
+
+That length is also why nothing needs saving — five minutes of audio sits well
+inside what the voice session holds, so the whole engagement is still there when
+you ask about it. The first time you engage the mode, Iris says what she hears
+widens to whatever your machine plays, which may include other people.
 
 Muting the microphone is independent: with the mic muted and the mode engaged,
-Iris still hears the meeting.
+Iris still hears your machine.
 
 **What to expect:**
 
@@ -139,11 +151,12 @@ Iris still hears the meeting.
   blocks on it.
 - **If the capture goes silent or dies**, Iris drops to the microphone only,
   shows a persistent warning on the headphone control, and **stays silent**. She
-  never starts talking mid-meeting because something failed.
+  never starts talking mid-engagement because something failed.
 
 Set `IRIS_SYSTEM_AUDIO=0` in `.env` to turn the system-audio half off entirely:
-the mode then only silences her, captures nothing, retains nothing, and triggers
-no recording indicator.
+the mode then only silences her, captures nothing, and triggers no recording
+indicator. The listening window still bounds the engagement — the bound belongs
+to the mode, not to the capture.
 
 ## 4. Appendix: using the agents directly in Claude Code
 

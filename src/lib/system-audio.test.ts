@@ -32,7 +32,7 @@ describe("resolveInputMix", () => {
   });
 
   it("never lets the microphone be silenced, however loud system audio is configured", () => {
-    // The mode exists so Iris hears the meeting AS WELL AS the room.
+    // The mode exists so Iris hears the call AS WELL AS the room.
     const mix = resolveInputMix({ systemAudioActive: true, systemAudioGain: 1 });
     expect(mix.micGain).toBe(MIN_MIC_GAIN);
     expect(mix.systemGain).toBe(1);
@@ -57,7 +57,7 @@ describe("resolveInputMix", () => {
 // listen-mode-hears-system-audio 5.4/5.5. The failure that actually occurs is
 // not an error: getDisplayMedia resolves, the track reports `live`, and every
 // sample is exactly zero. A check that only asks whether acquisition succeeded
-// reports a working capture while Iris hears nothing for a whole meeting.
+// reports a working capture while Iris hears nothing for a whole engagement.
 describe("isCaptureSilent", () => {
   it("calls an all-zero window a failed capture", () => {
     expect(isCaptureSilent(new Float32Array(2048))).toBe(true);

@@ -89,7 +89,7 @@ export function useAudioPipeline({
   // explicit refs rather than being left to the context's teardown, because a
   // mic hot-swap tears the graph down and rebuilds it — without these, a swap
   // would either leak a live system capture (with the OS recording indicator
-  // still lit) or silently lose system audio for the rest of the meeting.
+  // still lit) or silently lose system audio for the rest of the engagement.
   const micGainRef = useRef<GainNode | null>(null);
   const loopbackRef = useRef<LoopbackBranch | null>(null);
   const cancelLivenessRef = useRef<(() => void) | null>(null);
@@ -203,7 +203,7 @@ export function useAudioPipeline({
     setSystemAudioState("live");
 
     // A track that ends is the same failure as one that never carried audio —
-    // both mean Iris has stopped hearing the meeting.
+    // both mean Iris has stopped hearing the machine.
     branch.stream.getAudioTracks().forEach((track) => {
       track.addEventListener("ended", () => {
         if (loopbackRef.current !== branch) return;
@@ -306,7 +306,7 @@ export function useAudioPipeline({
         // going without them is that a stereo source loses its right channel
         // (mic-downsample.js reads inputs[0][0] only) — bad, but survivable.
         // The cost of letting the construction throw is NO CAPTURE AT ALL:
-        // no microphone, no system audio, no transcript, no meeting record,
+        // no microphone, no system audio, no transcript, no live readout,
         // and — until this was fixed — no indication of any of it.
         const message = optionsError instanceof Error ? optionsError.message : String(optionsError);
         console.error("[IRIS][audio] AudioWorkletNode rejected the channel options, retrying without:", message);

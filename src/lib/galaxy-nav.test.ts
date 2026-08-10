@@ -14,7 +14,6 @@ import {
   isHandLowered,
   aimPoint,
   preferredHand,
-  reelsToLock,
   zoomSpan,
   drivingHands,
   driveIsLowered,

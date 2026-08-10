@@ -35,6 +35,13 @@ type ListenOnlyState = {
   engaged: boolean;
   systemAudio: boolean;
   systemAudioGain: number;
+  // The listening window's absolute deadline, null when no window is open
+  // (listen-window-is-bounded D6). Main owns expiry; the renderer counts down
+  // from this locally rather than being ticked over IPC, and nothing it does
+  // with the value can extend or shorten the window.
+  deadlineAt: number | null;
+  // The window's full length, so the countdown can be shown against it.
+  windowMs: number;
 };
 
 type SidecarEvent = {

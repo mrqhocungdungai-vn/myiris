@@ -180,7 +180,7 @@ describe("renderer-bridge: who a flushed line is attributed to", () => {
     // conversation between the user and Iris, and it holds 40 lines — twenty
     // minutes of narration would evict the whole real conversation to show a
     // transcript that already exists, in full, in the mode's own record. The
-    // panel gets ONE entry for the engagement instead (announceMeetingRecord).
+    // panel gets ONE entry for the engagement instead (announceListenedFor).
     const win = makeWindow();
     const bridge = createRendererBridge({ getMainWindow: () => win, isOverheard: () => true });
     bridge.appendUserTranscript("something a video said");
@@ -263,12 +263,12 @@ describe("renderer-bridge: who a flushed line is attributed to", () => {
 
   it("still clears its buffers on an overheard flush", () => {
     // The bug this guards: skipping the flush with an early return left the
-    // buffer uncleared, so the next real utterance carried the whole meeting
+    // buffer uncleared, so the next real utterance carried the whole overheard
     // with it.
     const win = makeWindow();
     let overheard = true;
     const bridge = createRendererBridge({ getMainWindow: () => win, isOverheard: () => overheard });
-    bridge.appendUserTranscript("a meeting nobody addressed to Iris");
+    bridge.appendUserTranscript("a question nobody addressed to Iris");
     bridge.flushTranscripts();
 
     overheard = false;

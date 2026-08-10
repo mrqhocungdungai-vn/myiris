@@ -1164,17 +1164,29 @@
   min-width: 0;
 }
 
-/* ===== Listen-only mode's consent notice and headphone advisory =====
-   (listen-mode-hears-system-audio 7.1/7.3.) Rendered at App level, so one
-   definition covers the deck and the HUD. `.hud-hit` on the element opts it
-   into pointer events in HUD mode; the styling here is deliberately the same
-   in both, since the text is a consent statement rather than chrome. */
-.listen-notice {
+/* ===== Listen-only mode's countdown, consent notice and headphone advisory =====
+   (listen-mode-hears-system-audio 7.1/7.3; listen-window-is-bounded 3.1.)
+   Rendered at App level, so one definition covers the deck and the HUD.
+   `.hud-hit` on each element opts it into pointer events in HUD mode; the
+   styling here is deliberately the same in both, since the text is a consent
+   statement rather than chrome.
+
+   The stack owns the position, not the notices: the countdown runs for as long
+   as the window is open and a dismissible notice may sit alongside it, so two
+   individually-fixed elements would land on top of each other. */
+.listen-notice-stack {
   position: fixed;
   left: 50%;
   bottom: 28px;
   transform: translateX(-50%);
   z-index: 60;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.listen-notice {
   display: flex;
   align-items: flex-start;
   gap: 12px;
@@ -1189,6 +1201,17 @@
   color: var(--text);
   font-size: 12.5px;
   line-height: 1.5;
+}
+
+/* No dismiss button on this one, deliberately: Iris is silent while engaged and
+   cannot warn by voice that the mode is about to end, so the countdown IS the
+   warning and must not be waveable away. */
+.listen-notice.listening-window {
+  padding: 10px 16px;
+}
+
+.listen-notice.listening-window .listen-notice-icon {
+  color: var(--amber);
 }
 
 .listen-notice-icon {
@@ -1224,7 +1247,7 @@
 
 /* The degraded system-audio state, on the headphone control in both surfaces.
    Persistent (no animation to "finish"), because it lasts as long as the
-   failure does — a meeting Iris is not hearing looks exactly like one she is. */
+   failure does — a room Iris is not hearing looks exactly like one she is. */
 .t-btn.system-audio-degraded,
 .hud-btn.system-audio-degraded {
   color: var(--amber);

@@ -65,10 +65,37 @@ export function envNumber(name, fallback, { min = -Infinity, max = Infinity, int
 // The system-audio half of listen-only mode (listen-mode-hears-system-audio
 // D8). Default ON: engaging the mode captures what the machine is playing and
 // mixes it into the stream. `IRIS_SYSTEM_AUDIO=0` restores the pre-change
-// behaviour entirely — no capture, no in-band request, no meeting retention,
-// no system recording indicator — which is the whole point of it existing.
+// behaviour entirely — no capture, no in-band request, no system recording
+// indicator — which is the whole point of it existing. The listening window
+// still bounds the engagement either way: the bound belongs to the mode, not
+// to the capture.
 export function systemAudioEnabled() {
   return envFlag("IRIS_SYSTEM_AUDIO", true);
+}
+
+// How long listen-only mode stays engaged before it ends on its own
+// (listen-window-is-bounded D5). Resolved here and handed to
+// listen-window.mjs as a number, so the bound itself reads no configuration.
+export const LISTEN_WINDOW_DEFAULT_MINUTES = 5;
+// A round number well past the use case — hear a question, then go answer it —
+// and well under the session's compression trigger (~54 minutes of audio), so
+// any window this permits still leaves the whole engagement in the voice
+// session's own context. That is the property the removal of retention rests
+// on: what Iris heard is still there to be asked about.
+export const LISTEN_WINDOW_MAX_MINUTES = 15;
+
+export function listenWindowMs() {
+  const raw = process.env.IRIS_LISTEN_MAX_MINUTES;
+  const parsed = Number(raw);
+  // Garbage, zero and negative all mean the default, never "no bound". There is
+  // deliberately no value that unbounds the window — an unbounded engagement is
+  // the behaviour this bound exists to remove, and an escape hatch back to it
+  // would make the spec's bound a suggestion. Above the ceiling clamps rather
+  // than falling back, so a too-large value still means "as long as allowed".
+  if (raw == null || raw === "" || !Number.isFinite(parsed) || parsed <= 0) {
+    return LISTEN_WINDOW_DEFAULT_MINUTES * 60_000;
+  }
+  return Math.round(Math.min(parsed, LISTEN_WINDOW_MAX_MINUTES) * 60_000);
 }
 
 // How loudly captured system audio sits against the microphone in the mix.

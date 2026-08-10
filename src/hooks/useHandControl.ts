@@ -303,7 +303,10 @@ export function useHandControl(enabled: boolean, deviceId: string = SYSTEM_DEFAU
             detected.map((hand) => handIdentity(hand.handLabel, hand === byX[0])),
           );
           for (const memory of [smoothById, smoothWristById, stableGestureById, candidateGestureById, candidateFramesById]) {
-            for (const key of [...memory.keys()]) if (!liveIds.has(key)) memory.delete(key);
+            // Array.from, not the live iterator: this deletes from the map it is
+            // walking, and the copy keeps that obviously safe rather than
+            // relying on Map iteration semantics to make it so.
+            for (const key of Array.from(memory.keys())) if (!liveIds.has(key)) memory.delete(key);
           }
           const hands: TrackedHand[] = detected.map((hand) => {
             // Keyed on HANDEDNESS, not on how many hands are in frame.

@@ -14,8 +14,6 @@ import {
   captureSpoolDir,
   runSpoolDir,
   sessionsSpoolDir,
-  meetingsSpoolDir,
-  meetingFileFor,
   localIsoString,
   appendSpoolRecordTo,
   linkNotes,
@@ -39,58 +37,44 @@ describe("spoolFileFor", () => {
   });
 });
 
-describe("captureSpoolDir / runSpoolDir / sessionsSpoolDir / meetingsSpoolDir", () => {
-  it("place the four spools at fixed paths under the vault root", () => {
+describe("captureSpoolDir / runSpoolDir / sessionsSpoolDir", () => {
+  it("place the three spools at fixed paths under the vault root", () => {
     expect(captureSpoolDir("/vault")).toBe(path.join("/vault", "inbox", "captures"));
     expect(runSpoolDir("/vault")).toBe(path.join("/vault", "inbox", "runs"));
     expect(sessionsSpoolDir("/vault")).toBe(path.join("/vault", "inbox", "sessions"));
-    expect(meetingsSpoolDir("/vault")).toBe(path.join("/vault", "inbox", "meetings"));
   });
 
-  // listen-mode-hears-system-audio 6.1: the meetings area needs no new galaxy
-  // exclusion, because isUserNote already matches on segments[0] — this pins
-  // that, so moving the area out from under inbox/ fails here rather than
-  // silently turning every meeting transcript into a galaxy node.
-  it("keeps meeting records out of the galaxy through the existing inbox/ exclusion", () => {
-    expect(isUserNote("inbox/meetings/meeting-2026-08-06T09-00-00.md")).toBe(false);
+  // The spools need no galaxy exclusion of their own, because isUserNote already
+  // matches on segments[0] — this pins that, so moving an area out from under
+  // inbox/ fails here rather than silently turning every spooled record into a
+  // galaxy node.
+  it("keeps spooled records out of the galaxy through the existing inbox/ exclusion", () => {
     expect(isUserNote("inbox/sessions/2026-08-06.md")).toBe(false);
+    expect(isUserNote("inbox/captures/2026-08-06.md")).toBe(false);
   });
 });
 
-describe("meetingFileFor / localIsoString", () => {
-  // Local components, never Date.UTC: these assertions must hold in every time
-  // zone, and the whole point of the change is that the name follows the
-  // machine's own clock rather than UTC.
-  it("names one file per engagement, on the LOCAL clock, with no unsafe basename characters", () => {
-    const name = meetingFileFor(new Date(2026, 7, 6, 9, 30, 15));
-    expect(name).toBe("meeting-2026-08-06T09-30-15.md");
-    expect(name).not.toContain(":");
-  });
-
-  it("does not file an early-morning meeting under the previous day", () => {
-    // The failure this fixes: at UTC+7, 06:00 local is 23:00Z the day before,
-    // so a UTC name buried this morning's meeting in yesterday's date.
-    expect(meetingFileFor(new Date(2026, 7, 6, 6, 0, 0))).toContain("2026-08-06");
-  });
-
-  it("gives two engagements in one day two different files", () => {
-    const first = meetingFileFor(new Date(2026, 7, 6, 9, 0, 0));
-    const second = meetingFileFor(new Date(2026, 7, 6, 14, 0, 0));
-    expect(first).not.toBe(second);
-  });
-
+describe("localIsoString", () => {
+  // Local components, never Date.UTC: this must hold in every time zone, since
+  // the point of it is that the value follows the machine's own clock.
   it("keeps the offset in the timestamp, so the value stays unambiguous", () => {
     const stamp = localIsoString(new Date(2026, 7, 6, 9, 30, 15));
     expect(stamp).toMatch(/^2026-08-06T09:30:15[+-]\d{2}:\d{2}$/);
+  });
+
+  it("does not report an early-morning local time under the previous day", () => {
+    // The failure this guards: at UTC+7, 06:00 local is 23:00Z the day before,
+    // so a UTC stamp buries this morning under yesterday's date.
+    expect(localIsoString(new Date(2026, 7, 6, 6, 0, 0))).toContain("2026-08-06");
   });
 });
 
 describe("appendSpoolRecordTo", () => {
   it("appends to a named file and reports a failure instead of rejecting", async () => {
     await withTempDir(async (dir) => {
-      const target = path.join(dir, "inbox", "meetings");
-      const first = await appendSpoolRecordTo({ dir: target, name: "meeting-x.md", content: "one\n" });
-      const second = await appendSpoolRecordTo({ dir: target, name: "meeting-x.md", content: "two\n" });
+      const target = path.join(dir, "inbox", "sessions");
+      const first = await appendSpoolRecordTo({ dir: target, name: "2026-08-06.md", content: "one\n" });
+      const second = await appendSpoolRecordTo({ dir: target, name: "2026-08-06.md", content: "two\n" });
       expect(second.ok).toBe(true);
       expect(first.file).toBe(second.file);
       expect(fs.readFileSync(second.file, "utf8")).toBe("one\ntwo\n");
@@ -98,7 +82,7 @@ describe("appendSpoolRecordTo", () => {
 
     const failing = await appendSpoolRecordTo({
       dir: "/vault",
-      name: "meeting-x.md",
+      name: "2026-08-06.md",
       content: "x",
       io: /** @type {any} */ ({ promises: { mkdir: async () => { throw new Error("read-only fs"); } } }),
     });

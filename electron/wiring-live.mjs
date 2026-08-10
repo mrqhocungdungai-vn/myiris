@@ -11,7 +11,7 @@
 import { createWindowModule } from "./window.mjs";
 import { createLiveSession } from "./live-session.mjs";
 import { createLiveMessages } from "./live-messages.mjs";
-import { systemAudioEnabled, systemAudioGain } from "./user-config.mjs";
+import { systemAudioEnabled, systemAudioGain, listenWindowMs } from "./user-config.mjs";
 
 /**
  * @param {{
@@ -36,9 +36,7 @@ import { systemAudioEnabled, systemAudioGain } from "./user-config.mjs";
  *     stopVaultGraphWatch: () => void,
  *     probeSecondBrainAvailability: () => boolean,
  *     setAmbientCaptureAwake: (awake: boolean) => Promise<void>,
- *     setMeetingCaptureEngaged: (engaged: boolean) => Promise<any>,
- *     appendMeetingFragment: (text: string) => void,
- *     closeMeetingUtterance: () => void,
+ *     syncAmbientCaptureState: () => Promise<void>,
  *   },
  *   setWindowModule: (mod: any) => void,
  *   setLiveSessionModule: (mod: any) => void,
@@ -91,12 +89,6 @@ export function createLiveWiring({
     executeClaudeTool,
     submitClaudeTask,
     isListenOnlyEngaged: () => liveSessionModule.getListenOnlyEngaged(),
-    // Meeting retention's feed (listen-mode-hears-system-audio D7) — the raw
-    // transcription fragments, deliberately not the bounded utterance ring.
-    // Both are no-ops unless the mode is engaged, which the capture itself
-    // decides; nothing here needs to know the mode.
-    onInputTranscription: (text) => secondBrainCapability.appendMeetingFragment(text),
-    onUtteranceBoundary: () => secondBrainCapability.closeMeetingUtterance(),
   });
   const { handleLiveMessage, sendAudioChunk, sendCommand } = liveMessages;
 
@@ -125,28 +117,23 @@ export function createLiveWiring({
     // renderer's capture graph never reads the environment a second time.
     systemAudioEnabled,
     systemAudioGain,
-    // Meeting retention is driven by the MODE, so its lifecycle hangs off the
-    // one place every control surface already funnels through — not off the
-    // ambient-capture preference, which governs a different area under a
-    // different consent.
-    onListenOnlyChange: (engaged) => {
-      if (!systemAudioEnabled()) return;
-      // Awaited before announcing: the record's path does not exist until the
-      // final flush and the closing span have settled, so telling the voice
-      // layer where it is has to follow the write rather than race it.
-      // Fire-and-forget from the toggle's point of view — a retention write is
-      // never allowed to hold up the mode changing.
-      secondBrainCapability
-        .setMeetingCaptureEngaged(engaged)
-        .then((record) => liveSessionModule.announceMeetingRecord(record))
-        // Logged, never swallowed. A bare `.catch(() => {})` here would hide
-        // the whole announcement — the user would disengage, see nothing, and
-        // have no way to tell a broken announcement from an engagement that
-        // heard nothing. That failure shape has already cost this change four
-        // separate rounds of diagnosis.
-        .catch((error) => {
-          console.error("[IRIS][listen-only] meeting record announcement failed:", error?.stack || error);
-        });
+    // The engagement's bound (listen-window-is-bounded): main resolves the
+    // length once here, on the same terms it resolves the two values above.
+    listenWindowMs,
+    // Ambient session capture stands aside for the mode's whole span
+    // (ambient-session-capture), and it reads the mode itself — so nothing is
+    // handed over here. This exists only to make the yield happen AT the edge:
+    // flush and stand aside as the mode engages, resume with a fresh watermark
+    // as it ends. Deliberately not gated on systemAudioEnabled(): the reason
+    // ambient yields is the consent, which does not depend on that hatch.
+    //
+    // Fire-and-forget — a retention flush is never allowed to hold up the mode
+    // changing — but logged, never swallowed: a `.catch(() => {})` here would
+    // leave "ambient kept writing through the engagement" invisible.
+    onListenOnlyChange: () => {
+      secondBrainCapability.syncAmbientCaptureState().catch((error) => {
+        console.error("[IRIS][listen-only] ambient capture sync failed:", error?.stack || error);
+      });
     },
   });
   const {
@@ -188,8 +175,8 @@ export function createLiveWiring({
     toggleListenOnly: () => toggleListenOnly(),
     // Everything listen-only mode owns lives behind the renderer — the capture
     // graph and the mixed stream both die with the window, so a mode left
-    // "engaged" behind a closed window would claim a meeting is being recorded
-    // while nothing reaches Iris at all (listen-mode-hears-system-audio 4.7).
+    // "engaged" behind a closed window would claim Iris is listening while
+    // nothing reaches her at all (listen-mode-hears-system-audio 4.7).
     onRendererGone: () => handleRendererGone(),
   });
   const {

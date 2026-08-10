@@ -91,6 +91,7 @@ function buildWiring(overrides = {}) {
     pushToolEnd: vi.fn(),
     askUserQuestionViaVoice: vi.fn(),
     getLiveStatus: vi.fn(() => ({ running: true })),
+    isListenOnlyEngaged: vi.fn(() => false),
     recentUtterances: vi.fn(() => []),
     modelChoices: [{ id: "claude-opus-5", label: "Opus 5" }],
     envFlag: vi.fn(() => false),

@@ -3,7 +3,6 @@ import {
   createGeminiPrompts,
   LISTEN_ONLY_ENGAGE_REQUEST,
   LISTEN_ONLY_DISENGAGE_REQUEST,
-  meetingRecordNote,
 } from "./gemini-prompts.mjs";
 
 const modelChoices = [{ id: "claude-opus-5", label: "Opus 5" }];
@@ -55,41 +54,30 @@ describe("gemini-prompts: listen-only mode's in-band requests", () => {
   it("asks for complete silence and says why, without asking for a reply", () => {
     expect(LISTEN_ONLY_ENGAGE_REQUEST).toContain("SYSTEM_EVENT_LISTEN_ONLY_ENGAGED");
     expect(LISTEN_ONLY_ENGAGE_REQUEST).toMatch(/do not reply/i);
-    expect(LISTEN_ONLY_ENGAGE_REQUEST).toMatch(/keep listening/i);
+    expect(LISTEN_ONLY_ENGAGE_REQUEST).toMatch(/call no tools or functions/i);
+  });
+
+  // listen-window-is-bounded: the request has to state the actual job — hold on
+  // to the question, because it will be asked about in minutes — and must NOT
+  // promise a record, because none is written. A model told a transcript exists
+  // will offer to go and read it.
+  it("says the engagement is short and that she will be asked about it", () => {
+    expect(LISTEN_ONLY_ENGAGE_REQUEST).toMatch(/next few minutes/i);
+    expect(LISTEN_ONLY_ENGAGE_REQUEST).toMatch(/will ask you about it/i);
+    expect(LISTEN_ONLY_ENGAGE_REQUEST).toMatch(/nothing is being written down/i);
+  });
+
+  it("promises no record, since none is written", () => {
+    for (const text of [LISTEN_ONLY_ENGAGE_REQUEST, LISTEN_ONLY_DISENGAGE_REQUEST]) {
+      expect(text).not.toMatch(/\binbox\b/i);
+      expect(text).not.toMatch(/vault/i);
+      expect(text).not.toMatch(/\bfile\b/i);
+    }
   });
 
   it("releases the model without volunteering a reply or a summary on the way out", () => {
     expect(LISTEN_ONLY_DISENGAGE_REQUEST).toContain("SYSTEM_EVENT_LISTEN_ONLY_DISENGAGED");
     expect(LISTEN_ONLY_DISENGAGE_REQUEST).toMatch(/do not say anything in response/i);
     expect(LISTEN_ONLY_DISENGAGE_REQUEST).toMatch(/do not summarize/i);
-  });
-});
-
-describe("gemini-prompts: the meeting-record note", () => {
-  const record = {
-    relativePath: "inbox/meetings/meeting-2026-08-07T10-03-00.md",
-    startedAt: new Date(Date.UTC(2026, 7, 7, 3, 3, 0)),
-    endedAt: new Date(Date.UTC(2026, 7, 7, 3, 23, 0)),
-  };
-
-  it("names the exact record and its span, so a verb reads the right one", () => {
-    const note = meetingRecordNote(record);
-    expect(note).toContain("inbox/meetings/meeting-2026-08-07T10-03-00.md");
-    expect(note).toContain("2026-08-07T03:03:00.000Z");
-    expect(note).toContain("2026-08-07T03:23:00.000Z");
-    expect(note).toMatch(/hand a Claude verb that exact path/i);
-  });
-
-  it("carries the untrusted warning with the path, not separately from it", () => {
-    // The record is the highest-risk content in the vault — it is a verbatim
-    // capture of a room and of whatever the machine played, and one of those
-    // recordings verifiably contained an instruction addressed to an agent.
-    const note = meetingRecordNote(record);
-    expect(note).toMatch(/UNTRUSTED/);
-    expect(note).toMatch(/never a request from the user/i);
-  });
-
-  it("asks for no reply, since it is sent mid-conversation", () => {
-    expect(meetingRecordNote(record)).toMatch(/say nothing in response/i);
   });
 });

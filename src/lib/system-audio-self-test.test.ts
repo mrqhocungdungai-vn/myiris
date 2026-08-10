@@ -50,7 +50,7 @@ describe("resolveSelfTestVerdict: the four outcomes", () => {
 
   // The observed failure: acquisition succeeds, the track reports live, and
   // every sample is exactly zero. Indistinguishable from working until a
-  // meeting has been recorded to nothing.
+  // whole engagement has been heard by nothing.
   it("reports silence distinctly from a capture that could not be obtained", () => {
     expect(resolveSelfTestVerdict({ osVersion: "15.7.8", acquired: true, heard: false })).toBe("silent");
     expect(resolveSelfTestVerdict({ osVersion: "15.7.8", acquired: false })).toBe("not-obtainable");

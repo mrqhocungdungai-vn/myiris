@@ -106,12 +106,9 @@ export function inboxBacklog({ dir, io = fs }) {
     try {
       const names = io
         .readdirSync(oneDir)
-        // Per-day spool files, plus listen-only mode's per-engagement meeting
-        // records (listen-mode-hears-system-audio 6.8) — a meeting transcript
-        // is material worth offering to weave in on exactly the same terms as
-        // a run record or a deliberate capture, and its unit is an engagement
-        // rather than a day, so it does not match the dated shape.
-        .filter((name) => /^\d{4}-\d{2}-\d{2}\.md$/.test(name) || /^meeting-.+\.md$/.test(name))
+        // Per-day spool files only — every spool this counts writes one file per
+        // day, so anything else under the directory is not a spooled record.
+        .filter((name) => /^\d{4}-\d{2}-\d{2}\.md$/.test(name))
         .sort();
       for (const name of names) {
         const text = io.readFileSync(path.join(oneDir, name), "utf8");

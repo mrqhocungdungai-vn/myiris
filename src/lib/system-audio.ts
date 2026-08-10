@@ -9,7 +9,7 @@ export type SystemAudioState = "off" | "live" | "degraded";
 /**
  * The floor on the microphone's own gain in a mixed stream. Derived gains are
  * clamped to it so a system-audio gain of 1.0 cannot silence the user
- * entirely — the mode exists so Iris hears the meeting AS WELL AS the room,
+ * entirely — the mode exists so Iris hears the call AS WELL AS the room,
  * never instead of it.
  */
 export const MIN_MIC_GAIN = 0.25;
@@ -34,8 +34,8 @@ export interface InputMix {
  * stays as a last resort, not as the plan.
  *
  * The microphone runs with `autoGainControl` on, normalising toward full
- * scale, so "both sources are loud at once" is the ordinary case in a meeting
- * rather than the edge case.
+ * scale, so "both sources are loud at once" is the ordinary case while the mode
+ * is engaged rather than the edge case.
  */
 export function resolveInputMix({
   systemAudioActive,
@@ -64,7 +64,7 @@ export function resolveInputMix({
  * loopback feature blocked, `getDisplayMedia` resolves, the track reports
  * `live`, and every sample is exactly zero until the track later ends. A check
  * that only asks whether acquisition succeeded reports a working capture while
- * Iris hears nothing for the length of a meeting.
+ * Iris hears nothing for the whole engagement.
  *
  * The threshold needs no tuning because it is not a threshold: a working
  * capture never read exactly zero across a window, and a blocked one always
@@ -168,7 +168,7 @@ export function releaseLoopbackBranch(branch: LoopbackBranch | null) {
 /**
  * Watches a freshly-opened branch for the silent-capture failure and calls
  * `onSilent` once if every probe across the window reads bit-exact zero. Stops
- * itself the moment any real signal arrives — a meeting that simply starts
+ * itself the moment any real signal arrives — a room that simply starts
  * quiet must not be reported as broken, so the watch ends on first evidence
  * rather than running for the whole engagement.
  *

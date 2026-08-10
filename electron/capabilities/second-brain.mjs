@@ -16,7 +16,6 @@ import {
   captureSpoolDir,
   runSpoolDir,
   sessionsSpoolDir,
-  meetingsSpoolDir,
   linkNotes,
   unlinkNotes,
   setNoteTags,
@@ -24,7 +23,6 @@ import {
 import { INITIAL_FOCUS, FOCUS_PROMPT_BOUND, toggle as toggleFocusId, clear as clearFocusState, resolve as resolveFocus } from "../focus.mjs";
 import { fenceUntrustedText } from "../untrusted-text.mjs";
 import { createSessionCapture } from "../session-capture.mjs";
-import { createMeetingCapture } from "../meeting-capture.mjs";
 import { ambientCaptureForcedOff } from "../worker-env.mjs";
 
 // Personal-knowledge-notes capability (see openspec/changes/llm-wiki/): the
@@ -48,13 +46,6 @@ const NOTES_CAPTURES_DIR = captureSpoolDir(NOTES_VAULT_DIR);
 // granted directory and the same `inbox/` galaxy exclusion the other two
 // spools already have — no new exclusion needed.
 const NOTES_SESSIONS_DIR = sessionsSpoolDir(NOTES_VAULT_DIR);
-
-// Where listen-only mode's meeting records land (listen-mode-hears-system-
-// audio D7). A fourth area on a SECOND consent basis: engaging the mode is the
-// consent point, not the ambient-capture preference, which is why this is not
-// the same directory. Also inside `inbox/`, so it inherits the same galaxy
-// exclusion and the same granted directory with nothing new to wire.
-const NOTES_MEETINGS_DIR = meetingsSpoolDir(NOTES_VAULT_DIR);
 
 // How often a live capture flushes progressively (design D5) — modest enough
 // that a crash loses only a few seconds of conversation, without writing to
@@ -229,6 +220,7 @@ const FIND_NOTE_DECLARATION = {
  *   userDisplayName: () => string,
  *   getPipelineAvailable: () => boolean,
  *   recentUtterances?: () => Array<{ text: string, at: number }>,
+ *   isListenOnlyEngaged?: () => boolean,
  *   openPathExternally?: (filePath: string) => Promise<any>,
  * }} deps
  */
@@ -240,6 +232,14 @@ export function createSecondBrainCapability({
   userDisplayName,
   getPipelineAvailable,
   recentUtterances = () => [],
+  /**
+   * Whether listen-only mode is engaged right now, read from the live session
+   * (its sole owner) at the moment ambient capture asks. Ambient capture stands
+   * aside for that whole span — see ambientCaptureLive below — and it reads the
+   * mode directly rather than being handed a copy, so there is no second piece
+   * of state here to fall out of step with the one that decides.
+   */
+  isListenOnlyEngaged = () => false,
   /**
    * Hands a resolved, in-vault file path to the OS's default application for
    * it. Injected rather than imported (design.md D3 of add-manual-note-editing)
@@ -594,21 +594,17 @@ This note is just a starting point — edit it, retag it, or delete it whenever 
   let ambientAwake = false;
   let ambientFlushTimer = null;
 
-  // Meeting retention (listen-mode-hears-system-audio D7). Governed by the
-  // MODE alone: neither enabling nor disabling ambient capture starts or stops
-  // it, and it writes to its own area. Held here rather than in the live
-  // session because this capability owns the vault and its directories.
-  const meetingCapture = createMeetingCapture();
-  let meetingFlushTimer = null;
-
   function ambientCaptureLive() {
-    // While the mode is engaged, meeting retention OWNS what Iris hears and
-    // ambient capture yields the span. Writing the same speech to two areas
-    // under two different consents is what would make "delete what I recorded"
-    // unanswerable — which is the entire reason the areas are separate. Going
-    // not-live flushes what accumulated, and coming back live re-enables with a
-    // fresh watermark, so the span is neither duplicated nor back-filled.
-    return ambientPreferenceEnabled && ambientAwake && !meetingCapture.isEngaged() && !ambientCaptureForcedOff();
+    // Ambient capture stands aside for the whole span listen-only mode is
+    // engaged (ambient-session-capture). The reason is the CONSENT, not a
+    // competing writer: this preference is consent to retain the user's own
+    // conversations with Iris, and while that mode is engaged what she hears
+    // widens to whatever the machine is playing — remote participants, a video,
+    // people who never agreed to anything. That span is now retained by nobody,
+    // which is the correct outcome and not a gap. Going not-live flushes what
+    // accumulated, and coming back live re-enables with a fresh watermark, so
+    // the span is neither duplicated nor back-filled.
+    return ambientPreferenceEnabled && ambientAwake && !isListenOnlyEngaged() && !ambientCaptureForcedOff();
   }
 
   async function flushAmbientCapture() {
@@ -669,81 +665,6 @@ This note is just a starting point — edit it, retag it, or delete it whenever 
     return syncAmbientCaptureState();
   }
 
-  // ===== Meeting retention (listen-mode-hears-system-audio D7) =====
-
-  async function flushMeetingCapture() {
-    return meetingCapture.flush({
-      dir: NOTES_MEETINGS_DIR,
-      onError: (error) => {
-        emitEvent({ type: "log", level: "warn", message: `Could not write the meeting record: ${error.message}` });
-      },
-    });
-  }
-
-  function startMeetingFlushTimer() {
-    if (meetingFlushTimer) return;
-    meetingFlushTimer = setInterval(() => {
-      flushMeetingCapture();
-    }, AMBIENT_FLUSH_INTERVAL_MS);
-    meetingFlushTimer.unref?.();
-  }
-
-  function stopMeetingFlushTimer() {
-    if (!meetingFlushTimer) return;
-    clearInterval(meetingFlushTimer);
-    meetingFlushTimer = null;
-  }
-
-  /**
-   * Called from the live session on every listen-only transition — the mode is
-   * the consent point and the only thing that governs this, so nothing here
-   * consults the ambient-capture preference. Ambient capture is re-synced on
-   * both edges so it flushes and yields as the mode starts, and resumes with a
-   * fresh watermark (never back-filling the span) as it ends.
-   */
-  async function setMeetingCaptureEngaged(engaged) {
-    if (Boolean(engaged) === meetingCapture.isEngaged()) return null;
-    if (engaged) {
-      // A first-ever engagement on a machine with no vault yet must still
-      // land, exactly as a first-ever capture does.
-      ensureNotesVaultReady();
-      meetingCapture.engage();
-      await syncAmbientCaptureState();
-      startMeetingFlushTimer();
-      return null;
-    }
-    stopMeetingFlushTimer();
-    const { record } = await meetingCapture.disengage({
-      dir: NOTES_MEETINGS_DIR,
-      onError: (error) => {
-        emitEvent({ type: "log", level: "warn", message: `Could not write the meeting record: ${error.message}` });
-      },
-    });
-    await syncAmbientCaptureState();
-    if (!record) return null;
-    // Vault-RELATIVE, the same shape an open note's identity already takes
-    // (resolveOpenNoteForRun). The vault root is named to a run through its
-    // own prompt clause, so a relative path is what a verb can act on — and
-    // handing an absolute filesystem path to the voice layer would put a path
-    // into a model's hands, which this capability avoids everywhere else.
-    return {
-      relativePath: path.relative(NOTES_VAULT_DIR, path.join(NOTES_MEETINGS_DIR, record.name)),
-      startedAt: record.startedAt,
-      endedAt: record.endedAt,
-    };
-  }
-
-  /** One raw `inputAudioTranscription` fragment, straight from the live session. */
-  function appendMeetingFragment(text) {
-    meetingCapture.appendFragment(text);
-  }
-
-  /** A turn boundary — closes the utterance in progress so the next flush may write it. */
-  function closeMeetingUtterance() {
-    if (!meetingCapture.isEngaged()) return;
-    meetingCapture.closeUtterance();
-  }
-
   // What is waiting to be synthesized. Read by the voice layer's prose below so
   // Iris can offer — never so it can act. Counts both spools (design D3): a
   // capture waiting for curation is material too, not just finished-run
@@ -753,11 +674,7 @@ This note is just a starting point — edit it, retag it, or delete it whenever 
     // offer accounts for retained conversation") — a backlog of accumulated
     // talk is material worth offering to weave in, on the same terms as a
     // deliberate capture or a run record.
-    // Meeting records count too (listen-mode-hears-system-audio D11): the
-    // record IS the deliverable of the mode, and making sense of it is work for
-    // a Claude verb reading it afterwards — so it has to be offered for
-    // curation like every other spooled kind, not left sitting unread.
-    const backlog = inboxBacklog({ dir: [NOTES_INBOX_DIR, NOTES_CAPTURES_DIR, NOTES_SESSIONS_DIR, NOTES_MEETINGS_DIR] });
+    const backlog = inboxBacklog({ dir: [NOTES_INBOX_DIR, NOTES_CAPTURES_DIR, NOTES_SESSIONS_DIR] });
     return { ...backlog, worthProcessing: backlog.records >= INBOX_OFFER_THRESHOLD };
   }
 
@@ -1332,13 +1249,6 @@ This note is just a starting point — edit it, retag it, or delete it whenever 
     // itself a no-op while disabled).
     stopAmbientFlushTimer();
     await flushAmbientCapture();
-    // Same discipline for the meeting record: a clean shutdown with the mode
-    // still engaged must not lose the span since the last periodic flush.
-    // Goes through the full disengage rather than a bare flush, so quitting
-    // mid-meeting still closes the record's span — a quit IS the end of the
-    // engagement, and a record left open would read as a crash.
-    stopMeetingFlushTimer();
-    await setMeetingCaptureEngaged(false);
   }
 
   return {
@@ -1353,7 +1263,6 @@ This note is just a starting point — edit it, retag it, or delete it whenever 
     notesInboxDir: NOTES_INBOX_DIR,
     notesCapturesDir: NOTES_CAPTURES_DIR,
     notesSessionsDir: NOTES_SESSIONS_DIR,
-    notesMeetingsDir: NOTES_MEETINGS_DIR,
     captureRunOutcome,
     captureNote,
     findNoteByName,
@@ -1373,13 +1282,13 @@ This note is just a starting point — edit it, retag it, or delete it whenever 
     // channel above.
     setAmbientCaptureAwake,
     isAmbientCaptureLive: ambientCaptureLive,
-    // Meeting retention (listen-mode-hears-system-audio D7): driven from the
-    // live session's listen-only transitions and its transcription feed —
-    // never from the renderer, and never from the ambient-capture preference.
-    setMeetingCaptureEngaged,
-    appendMeetingFragment,
-    closeMeetingUtterance,
-    isMeetingCaptureEngaged: () => meetingCapture.isEngaged(),
+    // Re-evaluates whether capture is live, for a caller that changed something
+    // ambientCaptureLive() reads but this module does not own — today that is
+    // the live session's listen-only transitions (wiring-live.mjs). It hands
+    // nothing over; it only makes the yield happen at the mode's own edge,
+    // flushing as it engages and resuming with a fresh watermark as it ends,
+    // rather than at whatever unrelated flip happens to come next.
+    syncAmbientCaptureState,
     ipcHandlers,
     teardown,
   };

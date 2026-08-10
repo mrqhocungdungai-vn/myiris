@@ -93,6 +93,7 @@ function makeDeps(overrides = {}) {
     pushToolEnd: vi.fn(),
     askUserQuestionViaVoice: vi.fn(),
     getLiveStatus: vi.fn(() => ({ running: false })),
+    isListenOnlyEngaged: vi.fn(() => false),
     recentUtterances: vi.fn(() => []),
     modelChoices: [{ id: "claude-opus-5", label: "Opus 5" }],
     envFlag: vi.fn(() => false),

@@ -333,19 +333,21 @@ island.
 - The tray (menu-bar) icon, which also offers Wake/Sleep without switching to
   the deck first.
 
-**Listen-only mode** — Iris's meeting mode: she goes completely silent and
-starts hearing the audio your Mac plays as well as the room, so the remote
-participants of a call reach her too. What she hears is written to
-`inbox/meetings/` in your notes vault, one file per engagement, to work
-through afterwards. No reconnect on either transition. It has the same
-three-surface pattern: a headphone button beside the mic-mute control (deck
-and HUD), a tray item, and a global hotkey, `⌥L` by default
+**Listen-only mode** — Iris goes completely silent and starts hearing the audio
+your Mac plays as well as the room, so someone else can ask you something — in
+the room or on a call — and you can ask her about it right afterwards. Nothing
+is saved anywhere: what she heard stays in the voice conversation, which is
+what you ask against. The mode **ends on its own** after five minutes
+(`IRIS_LISTEN_MAX_MINUTES`, up to 15), with the time remaining shown on screen
+since she cannot warn you by voice. No reconnect on either transition. It has
+the same three-surface pattern: a headphone button beside the mic-mute control
+(deck and HUD), a tray item, and a global hotkey, `⌥L` by default
 (`IRIS_LISTEN_HOTKEY` to change it). It's independent of the mic — mute the
-mic and Iris still hears the meeting — and resets to audible on every wake.
+mic and Iris still hears your machine — and resets to audible on every wake.
 Needs macOS 14.2+; macOS shows its screen-recording indicator for the whole
 engagement even though Iris captures no video. `IRIS_SYSTEM_AUDIO=0` turns the
 system-audio half off entirely. See
-[docs/PIPELINE_GUIDE.md](docs/PIPELINE_GUIDE.md#3b-listen-only-mode-meetings-and-calls).
+[docs/PIPELINE_GUIDE.md](docs/PIPELINE_GUIDE.md#3b-listen-only-mode).
 
 **Wake and sleep by keyboard** are global too: `⌥⇧W` wakes Iris and `⌥⇧S`
 puts her back to sleep (`IRIS_WAKE_HOTKEY` / `IRIS_SLEEP_HOTKEY` to change

@@ -1,6 +1,10 @@
 ## Purpose
 
-Listen-only mode is Iris's meeting mode. Engaging it makes her completely silent and widens what she hears to include the audio the machine is playing, so the remote participants of a call, a video, or anything else audible reach her as well as the room does — and everything she hears is retained to her own vault area for the length of the engagement. It exists for the one situation a microphone alone cannot cover, and the two halves are inseparable: system-audio capture picks up this app's own output, so a mode where Iris is silent is the only mode where that capture is clean. The mode is reached and left without ever reconnecting or reconfiguring the voice session, which is what distinguishes it from the retired listening mode it replaces.
+Listen-only mode is how Iris takes something in that was not said to her. Engaging it makes her completely silent and widens what she hears to include the audio the machine is playing, so a remote participant on a call, a video, or anything else audible reaches her as well as the room does. It exists for the one situation a microphone alone cannot cover — someone else asking the user a question — and the two halves are inseparable: system-audio capture picks up this app's own output, so a mode where Iris is silent is the only mode where that capture is clean.
+
+Nothing is retained. The engagement is bounded to a few minutes, and at that length what Iris heard is still held by the voice session itself, in the audio form it received — which is the form that was accurate all along. So the user asks about it by asking, and no record has to exist for that to work.
+
+The mode is reached and left without ever reconnecting or reconfiguring the voice session, which is what distinguishes it from the retired listening mode it replaces.
 
 ## Requirements
 

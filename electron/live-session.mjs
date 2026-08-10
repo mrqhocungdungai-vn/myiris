@@ -19,17 +19,22 @@
 // EXPLICIT stop and by nothing else — never by a transport-level event — and
 // never persisted to configuration.
 //
-// Listen-only mode is now Iris's MEETING mode (listen-mode-hears-system-
-// audio): engaging it additionally captures the audio the machine is playing,
-// makes Iris completely silent, and retains what she hears to its own vault
-// area. The transport is still never touched on either transition — the two
-// in-band requests below are conversation content, not configuration, and the
-// silence guarantee is the client discarding replies, not the model obeying.
+// Engaging listen-only mode additionally captures the audio the machine is
+// playing (listen-mode-hears-system-audio) and makes Iris completely silent.
+// The transport is still never touched on either transition — the two in-band
+// requests below are conversation content, not configuration, and the silence
+// guarantee is the client discarding replies, not the model obeying.
+//
+// The engagement is BOUNDED (listen-window-is-bounded): a listening window
+// opens on engage and, at its deadline, disengages the mode through this
+// module's own writer — so the deadline and the user's toggle are one path and
+// cannot drift apart. Nothing is written down; what Iris heard stays in the
+// voice session's own conversation, which is what the user asks against.
 import { GoogleGenAI } from "@google/genai";
 import { poBillingStatus } from "./po-session.mjs";
 import { buildLiveConfig } from "./live-config.mjs";
-import { LISTEN_ONLY_ENGAGE_REQUEST, LISTEN_ONLY_DISENGAGE_REQUEST, meetingRecordNote } from "./gemini-prompts.mjs";
-import { formatDuration } from "./meeting-capture.mjs";
+import { LISTEN_ONLY_ENGAGE_REQUEST, LISTEN_ONLY_DISENGAGE_REQUEST } from "./gemini-prompts.mjs";
+import { createListenWindow, formatDuration } from "./listen-window.mjs";
 
 /**
  * @param {{
@@ -48,6 +53,12 @@ import { formatDuration } from "./meeting-capture.mjs";
  *   onAsleep?: () => void,
  *   systemAudioEnabled?: () => boolean,
  *   systemAudioGain?: () => number,
+ *   listenWindowMs?: () => number,
+ *   listenWindowClock?: {
+ *     now?: () => number,
+ *     setTimer?: (fn: () => void, ms: number) => any,
+ *     clearTimer?: (timer: any) => void,
+ *   },
  *   onListenOnlyChange?: (engaged: boolean) => void,
  * }} deps
  */
@@ -80,9 +91,17 @@ export function createLiveSession({
   // and so the renderer never attempts a capture the escape hatch disabled.
   systemAudioEnabled = () => false,
   systemAudioGain = () => 0.7,
-  // Meeting retention's lifecycle (D7): driven by the MODE, not by the
-  // ambient-capture preference, so it starts on engage and flushes-and-stops
-  // on disengage regardless of what that preference says.
+  // The listening window's length, resolved by user-config.mjs and read once
+  // here (listen-window-is-bounded D5) — the bound itself reads no
+  // configuration. Its clock and timer are injected as one object so the
+  // five-minute deadline is assertable in microseconds; left empty, the window
+  // uses the real ones.
+  listenWindowMs = () => 5 * 60_000,
+  listenWindowClock = {},
+  // Called on every listen-only transition. Ambient session capture yields for
+  // the mode's whole span (ambient-session-capture) and it reads the mode's
+  // state itself — so this hands nothing over, it only makes the yield happen
+  // AT the edge rather than at whatever unrelated flip comes next.
   onListenOnlyChange = () => {},
 }) {
   let liveSession = null;
@@ -100,6 +119,19 @@ export function createLiveSession({
   let reconnectAttempts = 0;
   let reconnectTimer = null;
   const MAX_RECONNECT_ATTEMPTS = 5;
+
+  // The bound on the engagement (listen-window-is-bounded D2/D4). Expiry routes
+  // through setListenOnlyEngaged(false) — the same writer the user's toggle
+  // calls — so the renderer push, the in-band disengage request,
+  // onListenOnlyChange and the tray update all happen on one path, and the
+  // spec's "expiry is indistinguishable from the user disengaging" is true by
+  // construction rather than by two code paths agreeing.
+  const listenWindowLengthMs = listenWindowMs();
+  const listenWindow = createListenWindow({
+    lengthMs: listenWindowLengthMs,
+    onExpire: () => setListenOnlyEngaged(false),
+    ...listenWindowClock,
+  });
 
   function getLiveSession() {
     return liveSession;
@@ -120,6 +152,14 @@ export function createLiveSession({
       engaged: listenOnlyEngaged,
       systemAudio: systemAudioEnabled(),
       systemAudioGain: systemAudioGain(),
+      // The window's absolute deadline and the length it was measured from
+      // (listen-window-is-bounded D6). The renderer counts down from these
+      // locally — a per-second push for a countdown it can compute would put a
+      // timer's worth of traffic across the boundary, and this transition push
+      // is already the one authority for the mode. Nothing the renderer does
+      // with them can extend or shorten the window: main owns expiry.
+      deadlineAt: listenWindow.deadlineAt(),
+      windowMs: listenWindowLengthMs,
     };
   }
 
@@ -142,7 +182,7 @@ export function createLiveSession({
     } catch (error) {
       // Best-effort, never a guarantee — a send that fails must not stop the
       // mode from engaging, because discarding at the client is what actually
-      // keeps Iris silent, and the record exists on disk either way.
+      // keeps Iris silent, and the session hears the audio either way.
       console.warn(`[IRIS][listen-only] could not send the in-band ${label}:`, error?.message || error);
     }
   }
@@ -152,45 +192,43 @@ export function createLiveSession({
   }
 
   /**
-   * Tells the voice layer WHICH record the engagement just produced, so a
-   * later "summarize that meeting" can name the right file instead of the
-   * whole folder. Sent after the write settles — the path does not exist
-   * before then — and skipped entirely when nothing was heard.
-   * @param {{ relativePath: string, startedAt: Date, endedAt: Date } | null} record
+   * The ONE entry the conversation panel gets for a whole engagement (spec
+   * "The engagement leaves one entry behind"), stating how long Iris listened.
+   *
+   * The verbatim deliberately never goes there (renderer-bridge.mjs): that
+   * panel is a conversation between the user and Iris, and overheard speech is
+   * not one. This line is the mark the engagement leaves on it — what the user
+   * points at when they ask what was said. She answers from the voice session's
+   * own audio context, which at this length still holds the whole engagement;
+   * there is no record to name, because none is written.
    */
-  function announceMeetingRecord(record) {
-    // Traced either way: "no record" and "announcement broken" produce the
-    // same silence on screen, and telling them apart from the outside was
-    // impossible until this line existed.
-    console.log("[IRIS][listen-only] meeting record:", record?.relativePath ?? "(none — nothing was heard)");
-    if (!record?.relativePath) return;
-    if (!systemAudioEnabled()) return;
-    sendInBandNote(meetingRecordNote(record), "meeting-record note");
-    // And the same fact to the user, as the ONE entry the conversation panel
-    // gets for the whole engagement. The verbatim deliberately never goes
-    // there (renderer-bridge.mjs): the panel is a conversation, the record is
-    // a file, and this line is the seam between them — it is what the user
-    // points at when they ask Iris to summarise the meeting, and what she
-    // hands a verb.
-    emitEvent({
-      type: "transcript",
-      speaker: "heard",
-      text:
-        `Listened for ${formatDuration(record.endedAt.getTime() - record.startedAt.getTime())} ` +
-        `and saved everything to ${record.relativePath}`,
-    });
+  function announceListenedFor(listenedMs) {
+    console.log("[IRIS][listen-only] listened for", formatDuration(listenedMs));
+    emitEvent({ type: "transcript", speaker: "heard", text: `Listened for ${formatDuration(listenedMs)}` });
   }
 
   // Pushes state one way, main -> renderer, and never the reverse (design.md
   // D3) — a renderer that reported this back would be a second writer for
   // state it does not own.
+  //
+  // Also the single place the listening window opens and closes (listen-window-
+  // is-bounded D4). Symmetry is the point: a manual toggle-off cancels the
+  // pending expiry here, so no second disengage fires at the original deadline.
   function setListenOnlyEngaged(engaged) {
     if (listenOnlyEngaged === engaged) return;
     listenOnlyEngaged = engaged;
+    // Read the span off the window BEFORE closing it — the window is what holds
+    // it, and closing drops the deadline. On the expiry path the window has
+    // already cleared itself, so this reads the full length, which is exactly
+    // how long Iris listened.
+    const listenedMs = engaged ? 0 : listenWindowLengthMs - listenWindow.remainingMs();
+    if (engaged) listenWindow.open();
+    else listenWindow.close();
     emitToRenderer("listen-only:state", listenOnlyStatePayload());
     requestModelSilence(engaged);
     onListenOnlyChange(engaged);
     updateTrayMenu();
+    if (!engaged) announceListenedFor(listenedMs);
   }
 
   // The single entry point every control surface (renderer, tray, hotkey)
@@ -371,12 +409,14 @@ export function createLiveSession({
     if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
       liveStatus = { running: false, pid: null };
       // Listen-only mode is deliberately NOT reset here (listen-mode-hears-
-      // system-audio D4). It used to be, and that meant a network blip during
-      // a meeting restored Iris's voice: she would start speaking aloud into a
-      // room the user had silenced her for, at a moment when they are not
+      // system-audio D4). It used to be, and that meant a network blip
+      // mid-engagement restored Iris's voice: she would start speaking aloud
+      // into a room the user had silenced her for, at a moment when they are not
       // looking at the screen. A transport failure is not a reason to become
-      // audible — only an explicit stop clears the mode. Ambient capture still
-      // stops on the same terms it does for an explicit sleep: no further
+      // audible — only the user and the listening window's deadline end the
+      // mode. The window keeps running here, which is right: the engagement is
+      // still bounded by the span the user actually asked for. Ambient capture
+      // still stops on the same terms it does for an explicit sleep: no further
       // reconnect is coming, so the mic is genuinely not listening.
       onAsleep();
       emitEvent({
@@ -410,6 +450,11 @@ export function createLiveSession({
     // and ambient capture stops and flushes on the same terms (called
     // directly, not left to onclose, since liveSession may already be null).
     setListenOnlyEngaged(false);
+    // Unconditional, not just via the writer above: no deadline may outlive the
+    // session that justified it (spec "The window does not outlive the
+    // session"), and no timer may hold the process open past a quit. Already a
+    // no-op when the mode was engaged, since that path just closed it.
+    listenWindow.close();
     onAsleep();
     userStopped = true;
     resumptionHandle = null;
@@ -434,10 +479,10 @@ export function createLiveSession({
   // The renderer window closed while the mode was engaged. Everything the mode
   // owns lives behind that renderer — the capture graph, the loopback stream,
   // the mixed audio the session is fed — so leaving the mode "engaged" with
-  // nothing behind it would claim a meeting is being recorded when nothing is
-  // reaching Iris at all. Disengaging here flushes the meeting record through
-  // the same path an explicit disengage takes. This is not a transport event:
-  // it is the mode's own machinery going away.
+  // nothing behind it would claim Iris is listening when nothing is reaching
+  // her at all. Disengaging here takes the same path an explicit disengage
+  // takes, window included. This is not a transport event: it is the mode's own
+  // machinery going away.
   function handleRendererGone() {
     if (!listenOnlyEngaged) return;
     setListenOnlyEngaged(false);
@@ -448,7 +493,7 @@ export function createLiveSession({
   // (listen-mode-hears-system-audio D4): the asymmetry is deliberate, and it
   // is the design's most load-bearing choice. Refusing to engage costs the
   // user a retry, with Iris's voice never having been taken away. Disengaging
-  // mid-meeting — which is what a capture that fails LATER must never do —
+  // mid-engagement — which is what a capture that fails LATER must never do —
   // makes Iris audible in a room where the user engaged the mode specifically
   // so she would not be, at a moment when they are not looking at the screen.
   //
@@ -472,7 +517,6 @@ export function createLiveSession({
     listenOnlyStatePayload,
     handleRendererGone,
     handleSystemAudioUnavailable,
-    announceMeetingRecord,
     toggleListenOnly,
     getUserStopped,
     setResumptionHandle,

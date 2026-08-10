@@ -193,6 +193,10 @@ describe("live-session: listen-only mode ownership (design.md D3)", () => {
       engaged: true,
       systemAudio: false,
       systemAudioGain: 0.7,
+      // The window's own bound rides the same push (listen-window-is-bounded
+      // D6) — one authority for the mode, one more field on it.
+      deadlineAt: expect.any(Number),
+      windowMs: 5 * 60_000,
     });
     expect(updateTrayMenu).toHaveBeenCalled();
 
@@ -281,7 +285,7 @@ describe("live-session: listen-only mode ownership (design.md D3)", () => {
 
       // The behaviour change (listen-mode-hears-system-audio D4): this used to
       // disengage, which un-suppresses audio — Iris would start speaking aloud
-      // into a meeting after a network drop, at the moment the user is least
+      // into the room after a network drop, at the moment the user is least
       // likely to be looking at the screen.
       expect(live.getListenOnlyEngaged()).toBe(true);
     } finally {
@@ -290,8 +294,7 @@ describe("live-session: listen-only mode ownership (design.md D3)", () => {
   });
 });
 
-// listen-mode-hears-system-audio §2/§3. The mode is now a meeting mode, and
-// three things have to hold at once: the transport is never touched, the model
+// listen-mode-hears-system-audio §2/§3. Three things have to hold at once: the transport is never touched, the model
 // is ASKED to stay quiet without being asked to speak, and none of it happens
 // under the escape hatch.
 describe("live-session: the in-band silence request (listen-mode-hears-system-audio D3)", () => {
@@ -406,7 +409,7 @@ describe("live-session: the in-band silence request (listen-mode-hears-system-au
     expect(session.sendRealtimeInput).not.toHaveBeenCalled();
   });
 
-  it("drives meeting retention from the mode, and releases it when the renderer goes away", async () => {
+  it("reports every transition on one hook, and releases the mode when the renderer goes away", async () => {
     const onListenOnlyChange = vi.fn();
     const { live } = await engagedSession({ onListenOnlyChange });
 
@@ -418,61 +421,6 @@ describe("live-session: the in-band silence request (listen-mode-hears-system-au
     expect(onListenOnlyChange).toHaveBeenLastCalledWith(false);
   });
 
-  it("tells the voice layer where the record went, without asking for a reply", async () => {
-    const { live, session } = await engagedSession();
-    session.sendClientContent.mockClear();
-
-    live.announceMeetingRecord({
-      relativePath: "inbox/meetings/meeting-2026-08-07T10-03-00.md",
-      startedAt: new Date(Date.UTC(2026, 7, 7, 3, 3, 0)),
-      endedAt: new Date(Date.UTC(2026, 7, 7, 3, 23, 0)),
-    });
-
-    const sent = session.sendClientContent.mock.calls[0][0];
-    expect(sent.turnComplete).toBe(false);
-    expect(sent.turns[0].parts[0].text).toContain("inbox/meetings/meeting-2026-08-07T10-03-00.md");
-  });
-
-  it("gives the conversation panel ONE entry for the engagement, naming the record", async () => {
-    // The verbatim never reaches the panel (renderer-bridge.mjs). This line is
-    // the seam between a conversation and a file: it is what the user points
-    // at when they ask Iris to summarise the meeting.
-    const emitEvent = vi.fn();
-    const { live } = await engagedSession({ emitEvent });
-    emitEvent.mockClear();
-
-    live.announceMeetingRecord({
-      relativePath: "inbox/meetings/meeting-2026-08-07T10-03-00.md",
-      startedAt: new Date(Date.UTC(2026, 7, 7, 3, 3, 0)),
-      endedAt: new Date(Date.UTC(2026, 7, 7, 3, 23, 0)),
-    });
-
-    expect(emitEvent).toHaveBeenCalledWith({
-      type: "transcript",
-      speaker: "heard",
-      text: "Listened for 20m 00s and saved everything to inbox/meetings/meeting-2026-08-07T10-03-00.md",
-    });
-  });
-
-  it("announces nothing for an engagement that produced no record", async () => {
-    const { live, session } = await engagedSession();
-    session.sendClientContent.mockClear();
-    live.announceMeetingRecord(null);
-    live.announceMeetingRecord(/** @type {any} */ ({ relativePath: "" }));
-    expect(session.sendClientContent).not.toHaveBeenCalled();
-  });
-
-  it("announces nothing under the escape hatch", async () => {
-    const { live, session } = await engagedSession({ systemAudioEnabled: () => false });
-    session.sendClientContent.mockClear();
-    live.announceMeetingRecord({
-      relativePath: "inbox/meetings/x.md",
-      startedAt: new Date(),
-      endedAt: new Date(),
-    });
-    expect(session.sendClientContent).not.toHaveBeenCalled();
-  });
-
   it("disengages when the capture could not be acquired at all, and only then", async () => {
     const { live } = await engagedSession();
 
@@ -482,6 +430,215 @@ describe("live-session: the in-band silence request (listen-mode-hears-system-au
 
     live.toggleListenOnly();
     live.handleSystemAudioUnavailable("NotAllowedError");
+    expect(live.getListenOnlyEngaged()).toBe(false);
+  });
+});
+
+// listen-window-is-bounded. The claim under test is not "a timer fires" — it is
+// that expiry and the user's toggle are ONE path, so everything hanging off the
+// writer happens for both and cannot drift apart.
+describe("live-session: the bounded listening window", () => {
+  const WINDOW_MS = 5 * 60_000;
+
+  // The same fake clock shape listen-window.test.mjs uses, injected as one
+  // object so the five-minute deadline is driven in microseconds.
+  function fakeClock(startAt = 1_000_000) {
+    let current = startAt;
+    /** @type {Array<{ fn: () => void, dueAt: number, cancelled: boolean }>} */
+    const timers = [];
+    return {
+      now: () => current,
+      setTimer: (fn, ms) => {
+        const timer = { fn, dueAt: current + ms, cancelled: false };
+        timers.push(timer);
+        return timer;
+      },
+      clearTimer: (timer) => {
+        if (timer) timer.cancelled = true;
+      },
+      advance(ms) {
+        current += ms;
+        // A copy: firing a timer may cancel or add one, and mutating the list
+        // being iterated is how a fake clock quietly drops a timer.
+        for (const timer of timers.slice()) {
+          if (!timer.cancelled && timer.dueAt <= current) {
+            timer.cancelled = true;
+            timer.fn();
+          }
+        }
+      },
+    };
+  }
+
+  async function engagedSession(overrides = {}) {
+    const clock = fakeClock();
+    const session = { sendRealtimeInput: vi.fn(), sendClientContent: vi.fn(), close: vi.fn() };
+    const deps = {
+      emitEvent: vi.fn(),
+      emitToRenderer: vi.fn(),
+      updateTrayMenu: vi.fn(),
+      onListenOnlyChange: vi.fn(),
+      systemAudioEnabled: () => true,
+      listenWindowMs: () => WINDOW_MS,
+      listenWindowClock: { now: clock.now, setTimer: clock.setTimer, clearTimer: clock.clearTimer },
+      ...overrides,
+    };
+    const live = make(deps);
+    const GoogleGenAI = await getMockedGoogleGenAI();
+    GoogleGenAI.mockImplementationOnce(
+      fakeGoogleGenAIImpl(async (args) => {
+        args.callbacks.onopen();
+        return session;
+      }),
+    );
+    await live.startLive();
+    return { live, session, clock, deps };
+  }
+
+  it("opens a window with the configured length when the mode engages", async () => {
+    const { live, clock, deps } = await engagedSession();
+    deps.emitToRenderer.mockClear();
+
+    live.toggleListenOnly();
+
+    expect(live.listenOnlyStatePayload()).toMatchObject({
+      engaged: true,
+      deadlineAt: clock.now() + WINDOW_MS,
+      windowMs: WINDOW_MS,
+    });
+    expect(deps.emitToRenderer).toHaveBeenCalledWith(
+      "listen-only:state",
+      expect.objectContaining({ deadlineAt: clock.now() + WINDOW_MS }),
+    );
+  });
+
+  // The point of the whole change: at the deadline the mode ends by itself, and
+  // it ends the same way the user's toggle ends it.
+  it("disengages at the deadline through the same path as a manual toggle", async () => {
+    const { live, session, clock, deps } = await engagedSession();
+    live.toggleListenOnly();
+    deps.emitToRenderer.mockClear();
+    deps.updateTrayMenu.mockClear();
+    session.sendClientContent.mockClear();
+
+    clock.advance(WINDOW_MS - 1);
+    expect(live.getListenOnlyEngaged()).toBe(true);
+
+    clock.advance(1);
+    expect(live.getListenOnlyEngaged()).toBe(false);
+    // Every consumer of the writer, observed: the renderer push, the in-band
+    // note that ends the silence request, the transition hook, and the tray.
+    expect(deps.emitToRenderer).toHaveBeenCalledWith(
+      "listen-only:state",
+      expect.objectContaining({ engaged: false, deadlineAt: null }),
+    );
+    expect(session.sendClientContent.mock.calls[0][0].turns[0].parts[0].text).toContain(
+      "SYSTEM_EVENT_LISTEN_ONLY_DISENGAGED",
+    );
+    expect(deps.onListenOnlyChange).toHaveBeenLastCalledWith(false);
+    expect(deps.updateTrayMenu).toHaveBeenCalled();
+  });
+
+  it("does not move the deadline for anything Iris hears", async () => {
+    const { live, clock } = await engagedSession();
+    live.toggleListenOnly();
+    const { deadlineAt } = live.listenOnlyStatePayload();
+
+    // Continuous speech is what this mode is pointed at, and it reaches the
+    // session through live-messages — never through the window. There is no
+    // input here that could re-arm it, which is the assertion.
+    clock.advance(WINDOW_MS - 1000);
+    expect(live.listenOnlyStatePayload().deadlineAt).toBe(deadlineAt);
+    expect(live.getListenOnlyEngaged()).toBe(true);
+    clock.advance(1000);
+    expect(live.getListenOnlyEngaged()).toBe(false);
+  });
+
+  it("cancels the expiry on a manual disengage, so nothing fires at the original deadline", async () => {
+    const { live, clock, deps } = await engagedSession();
+    live.toggleListenOnly();
+    clock.advance(60_000);
+    live.toggleListenOnly();
+    expect(live.getListenOnlyEngaged()).toBe(false);
+    deps.emitToRenderer.mockClear();
+
+    clock.advance(WINDOW_MS * 2);
+    // No second disengage, and no push claiming one happened.
+    expect(deps.emitToRenderer).not.toHaveBeenCalled();
+    expect(live.getListenOnlyEngaged()).toBe(false);
+  });
+
+  it("gives a full window to a mode re-engaged after one expired", async () => {
+    const { live, clock } = await engagedSession();
+    live.toggleListenOnly();
+    clock.advance(WINDOW_MS);
+    expect(live.getListenOnlyEngaged()).toBe(false);
+
+    clock.advance(120_000);
+    live.toggleListenOnly();
+    expect(live.listenOnlyStatePayload().deadlineAt).toBe(clock.now() + WINDOW_MS);
+  });
+
+  it("closes the window when the session is stopped, so no deadline outlives it", async () => {
+    const { live, clock, deps } = await engagedSession();
+    live.toggleListenOnly();
+    await live.stopLive();
+    expect(live.getListenOnlyEngaged()).toBe(false);
+    expect(live.listenOnlyStatePayload().deadlineAt).toBe(null);
+    deps.emitToRenderer.mockClear();
+
+    // A later wake does not inherit a running deadline.
+    clock.advance(WINDOW_MS * 2);
+    expect(deps.emitToRenderer).not.toHaveBeenCalled();
+  });
+
+  // Iris is silent while engaged, so she cannot say how long she listened. The
+  // conversation panel gets exactly one entry, and it names the span rather than
+  // a record, because no record is written.
+  it("leaves ONE entry behind stating how long she listened", async () => {
+    const emitEvent = vi.fn();
+    const { live, clock } = await engagedSession({ emitEvent });
+    live.toggleListenOnly();
+    clock.advance(90_000);
+    emitEvent.mockClear();
+
+    live.toggleListenOnly();
+
+    const transcripts = emitEvent.mock.calls.map(([event]) => event).filter((event) => event.type === "transcript");
+    expect(transcripts).toEqual([{ type: "transcript", speaker: "heard", text: "Listened for 1m 30s" }]);
+    expect(transcripts[0].text).not.toMatch(/inbox|saved/i);
+  });
+
+  it("reports the full length when the window itself ended the engagement", async () => {
+    const emitEvent = vi.fn();
+    const { live, clock } = await engagedSession({ emitEvent });
+    live.toggleListenOnly();
+    emitEvent.mockClear();
+
+    clock.advance(WINDOW_MS);
+
+    expect(emitEvent).toHaveBeenCalledWith({ type: "transcript", speaker: "heard", text: "Listened for 5m 00s" });
+  });
+
+  // The bound belongs to the mode, not to the capture (spec: "The bound applies
+  // with system audio disabled").
+  it("still bounds the engagement under the IRIS_SYSTEM_AUDIO escape hatch", async () => {
+    const { live, clock } = await engagedSession({ systemAudioEnabled: () => false });
+    live.toggleListenOnly();
+    expect(live.listenOnlyStatePayload().deadlineAt).toBe(clock.now() + WINDOW_MS);
+
+    clock.advance(WINDOW_MS);
+    expect(live.getListenOnlyEngaged()).toBe(false);
+  });
+
+  it("honours the length main resolved for it, rather than a length of its own", async () => {
+    const { live, clock } = await engagedSession({ listenWindowMs: () => 90_000 });
+    live.toggleListenOnly();
+    expect(live.listenOnlyStatePayload().windowMs).toBe(90_000);
+
+    clock.advance(89_999);
+    expect(live.getListenOnlyEngaged()).toBe(true);
+    clock.advance(1);
     expect(live.getListenOnlyEngaged()).toBe(false);
   });
 });

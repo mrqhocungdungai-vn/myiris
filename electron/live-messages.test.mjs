@@ -105,8 +105,8 @@ describe("live-messages: transcript and audio content", () => {
 
   // listen-mode-hears-system-audio §3: while engaged, a reply reaches NOTHING.
   // Discarding here is the guarantee that Iris is silent — the in-band request
-  // to the model is only a cost reduction, and can be evicted by context-window
-  // compression partway through a long meeting.
+  // to the model is only a cost reduction, and is conversation content that
+  // context-window compression may evict.
   it("discards a whole reply turn while listen-only is engaged — audio, text, and speaking state", () => {
     const emitEvent = vi.fn();
     const emitToRenderer = vi.fn();
@@ -125,25 +125,18 @@ describe("live-messages: transcript and audio content", () => {
     expect(emitEvent).not.toHaveBeenCalledWith({ type: "audio_state", state: "speaking" });
   });
 
-  it("keeps recording what Iris HEARS while engaged, which is the point of the mode", () => {
+  it("keeps taking in what Iris HEARS while engaged, which is the point of the mode", () => {
     const appendUserTranscript = vi.fn();
-    const onInputTranscription = vi.fn();
-    const onUtteranceBoundary = vi.fn();
-    const messages = make({
-      appendUserTranscript,
-      onInputTranscription,
-      onUtteranceBoundary,
-      isListenOnlyEngaged: () => true,
-    });
+    const flushTranscripts = vi.fn();
+    const messages = make({ appendUserTranscript, flushTranscripts, isListenOnlyEngaged: () => true });
     messages.handleLiveMessage({ serverContent: { inputTranscription: { text: "someone said this" } } });
     messages.handleLiveMessage({ serverContent: { turnComplete: true } });
 
-    // Fed to meeting retention as a RAW fragment, deliberately not through the
-    // bounded utterance ring — a busy meeting overruns that ring between two
-    // flushes and loses whatever was pruned.
-    expect(onInputTranscription).toHaveBeenCalledWith("someone said this");
-    expect(onUtteranceBoundary).toHaveBeenCalled();
+    // What it reaches is the live readout under the orb, and nothing else: the
+    // bridge decides provenance when the text ARRIVES and keeps overheard speech
+    // out of the conversation and out of the recent-utterance ring.
     expect(appendUserTranscript).toHaveBeenCalledWith("someone said this");
+    expect(flushTranscripts).toHaveBeenCalled();
   });
 
   it("reads main's own flag, not a value the renderer reported — no such param exists to pass", () => {
@@ -216,9 +209,9 @@ describe("live-messages: sendAudioChunk/sendCommand", () => {
 
 // listen-mode-hears-system-audio: an utterance boundary must not depend on the
 // model taking a turn. Measured on a real engagement, a continuously-narrated
-// video produced one or two turn boundaries in SEVERAL MINUTES — so both the
-// displayed transcript and the meeting record arrived in rare huge lumps, and
-// the 30-second retention flush usually had nothing to write.
+// video produced one or two turn boundaries in SEVERAL MINUTES — so the live
+// readout under the orb updated in rare huge lumps, and "hearing perfectly" and
+// "capture is dead" looked identical for minutes at a time.
 describe("live-messages: utterance boundaries while the mode is engaged", () => {
   it("waits for a transcription gap normally", () => {
     expect(utteranceBoundaryDelayMs({ elapsedMs: 0 })).toBe(UTTERANCE_IDLE_MS);
@@ -227,7 +220,7 @@ describe("live-messages: utterance boundaries while the mode is engaged", () => 
 
   it("caps the wait so continuous audio still closes on a bounded cadence", () => {
     // The failure this fixes: narration that never pauses never goes idle, so
-    // an idle-only rule would keep one utterance open for the whole meeting.
+    // an idle-only rule would keep one utterance open for the whole engagement.
     expect(utteranceBoundaryDelayMs({ elapsedMs: UTTERANCE_MAX_SPAN_MS - 500 })).toBe(500);
     expect(utteranceBoundaryDelayMs({ elapsedMs: UTTERANCE_MAX_SPAN_MS })).toBe(0);
     expect(utteranceBoundaryDelayMs({ elapsedMs: UTTERANCE_MAX_SPAN_MS + 9999 })).toBe(0);
@@ -237,15 +230,13 @@ describe("live-messages: utterance boundaries while the mode is engaged", () => 
     vi.useFakeTimers();
     try {
       const flushTranscripts = vi.fn();
-      const onUtteranceBoundary = vi.fn();
-      const messages = make({ flushTranscripts, onUtteranceBoundary, isListenOnlyEngaged: () => true });
+      const messages = make({ flushTranscripts, isListenOnlyEngaged: () => true });
 
       messages.handleLiveMessage({ serverContent: { inputTranscription: { text: "a sentence" } } });
       expect(flushTranscripts).not.toHaveBeenCalled();
 
       vi.advanceTimersByTime(UTTERANCE_IDLE_MS);
       expect(flushTranscripts).toHaveBeenCalledTimes(1);
-      expect(onUtteranceBoundary).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }
@@ -273,17 +264,16 @@ describe("live-messages: utterance boundaries while the mode is engaged", () => 
     vi.useFakeTimers();
     try {
       const flushTranscripts = vi.fn();
-      const onUtteranceBoundary = vi.fn();
-      const messages = make({ flushTranscripts, onUtteranceBoundary, isListenOnlyEngaged: () => true });
+      const messages = make({ flushTranscripts, isListenOnlyEngaged: () => true });
 
       messages.handleLiveMessage({ serverContent: { inputTranscription: { text: "a sentence" } } });
       messages.handleLiveMessage({ serverContent: { turnComplete: true } });
-      expect(onUtteranceBoundary).toHaveBeenCalledTimes(1);
+      expect(flushTranscripts).toHaveBeenCalledTimes(1);
 
       // The pending idle timer was cancelled by that turn, so letting it run
       // adds nothing.
       vi.advanceTimersByTime(UTTERANCE_MAX_SPAN_MS * 2);
-      expect(onUtteranceBoundary).toHaveBeenCalledTimes(1);
+      expect(flushTranscripts).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }
@@ -407,8 +397,7 @@ describe("live-messages: a tool call flushes the words that caused it", () => {
 
   it("does not append that same fragment twice", () => {
     const appendUserTranscript = vi.fn();
-    const onInputTranscription = vi.fn();
-    const messages = make({ appendUserTranscript, onInputTranscription });
+    const messages = make({ appendUserTranscript });
 
     messages.handleLiveMessage({
       toolCall: { functionCalls: [{ id: "1", name: "shape_on_canvas", args: {} }] },
@@ -416,7 +405,6 @@ describe("live-messages: a tool call flushes the words that caused it", () => {
     });
 
     expect(appendUserTranscript).toHaveBeenCalledTimes(1);
-    expect(onInputTranscription).toHaveBeenCalledTimes(1);
   });
 
   it("still appends a fragment that arrives with no tool call", () => {
@@ -429,8 +417,8 @@ describe("live-messages: a tool call flushes the words that caused it", () => {
   });
 
   it("flushes even when the tool call is refused by listen-only mode", () => {
-    // The refusal is still a turn boundary for the record: what was said is
-    // what fills the meeting transcript, and it must not sit in a buffer.
+    // The refusal is still a point to flush at: what was said is what puts the
+    // live readout on screen, and it must not sit in a buffer.
     const flushTranscripts = vi.fn();
     const messages = make({ flushTranscripts, isListenOnlyEngaged: () => true });
 

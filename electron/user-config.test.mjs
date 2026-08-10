@@ -4,9 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import {
   DEFAULT_PROMPT_REVIEW_MODE,
+  LISTEN_WINDOW_DEFAULT_MINUTES,
+  LISTEN_WINDOW_MAX_MINUTES,
   createUserConfig,
   envFlag,
   envNumber,
+  listenWindowMs,
   systemAudioEnabled,
   systemAudioGain,
   parseEnvFile,
@@ -102,6 +105,36 @@ describe("user-config: the system-audio readers", () => {
     expect(systemAudioGain()).toBe(0.7);
     process.env.IRIS_SYSTEM_AUDIO_GAIN = "-1";
     expect(systemAudioGain()).toBe(0.7);
+  });
+});
+
+describe("user-config: the listening window's length", () => {
+  it("defaults to five minutes when unset", () => {
+    delete process.env.IRIS_LISTEN_MAX_MINUTES;
+    expect(listenWindowMs()).toBe(LISTEN_WINDOW_DEFAULT_MINUTES * 60_000);
+    expect(listenWindowMs()).toBe(300_000);
+  });
+
+  it("honours a configured length, fractions included", () => {
+    process.env.IRIS_LISTEN_MAX_MINUTES = "10";
+    expect(listenWindowMs()).toBe(600_000);
+    process.env.IRIS_LISTEN_MAX_MINUTES = "0.5";
+    expect(listenWindowMs()).toBe(30_000);
+  });
+
+  it("clamps a value above the ceiling instead of falling back to the default", () => {
+    process.env.IRIS_LISTEN_MAX_MINUTES = "120";
+    expect(listenWindowMs()).toBe(LISTEN_WINDOW_MAX_MINUTES * 60_000);
+  });
+
+  // Every rejected value means the DEFAULT, never "no bound": an unbounded
+  // engagement is what the window exists to remove, so a typo must not restore
+  // it (design D5).
+  it("falls back to the default for garbage, zero and negative values", () => {
+    for (const raw of ["forever", "", "0", "-1", "-30", "NaN", "Infinity"]) {
+      process.env.IRIS_LISTEN_MAX_MINUTES = raw;
+      expect(listenWindowMs()).toBe(LISTEN_WINDOW_DEFAULT_MINUTES * 60_000);
+    }
   });
 });
 

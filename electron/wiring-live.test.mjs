@@ -89,9 +89,7 @@ function makeDeps(overrides = {}) {
       stopVaultGraphWatch: vi.fn(),
       probeSecondBrainAvailability: vi.fn(() => false),
       setAmbientCaptureAwake: vi.fn(() => Promise.resolve()),
-      setMeetingCaptureEngaged: vi.fn(() => Promise.resolve()),
-      appendMeetingFragment: vi.fn(),
-      closeMeetingUtterance: vi.fn(),
+      syncAmbientCaptureState: vi.fn(() => Promise.resolve()),
     },
     setWindowModule: vi.fn(),
     setLiveSessionModule: vi.fn(),
@@ -137,6 +135,28 @@ describe("wiring-live: createLiveWiring", () => {
     expect(windowDeps.isListenOnlyEngaged()).toBe(true);
     windowDeps.toggleListenOnly();
     expect(liveSessionInstance.toggleListenOnly).toHaveBeenCalled();
+  });
+
+  // ambient-session-capture: ambient capture reads the mode itself, so this
+  // wiring hands nothing over — it exists to make the yield happen at the mode's
+  // own edge rather than at whatever unrelated flip comes next.
+  it("re-syncs ambient capture on every listen-only transition, in both directions", () => {
+    const deps = makeDeps();
+    createLiveWiring(deps);
+    const { onListenOnlyChange } = createLiveSession.mock.calls.at(-1)[0];
+    onListenOnlyChange(true);
+    onListenOnlyChange(false);
+    expect(deps.secondBrainCapability.syncAmbientCaptureState).toHaveBeenCalledTimes(2);
+  });
+
+  // The listening window's length is resolved in main, on the same terms the
+  // system-audio values are (listen-window-is-bounded D5) — the bound itself
+  // reads no configuration.
+  it("hands live-session a resolved window length rather than letting it read the environment", () => {
+    createLiveWiring(makeDeps());
+    const { listenWindowMs } = createLiveSession.mock.calls.at(-1)[0];
+    expect(typeof listenWindowMs).toBe("function");
+    expect(listenWindowMs()).toBeGreaterThan(0);
   });
 
   it("fires logPoBillingPathOnce during construction", () => {

@@ -138,15 +138,15 @@ export function createRendererBridge({
 
       // Overheard speech does not reach the conversation panel AT ALL, neither
       // as the user's words nor as anything else. That panel is a conversation
-      // between the user and Iris; a meeting's verbatim is not that, and it is
-      // held at 40 lines (App.tsx), so twenty minutes of narration would evict
-      // the whole real conversation to show a transcript that already exists,
-      // in full and unbounded, in the mode's own record.
+      // between the user and Iris; overheard speech is not that, and it is held
+      // at 40 lines (App.tsx), so a few minutes of narration would evict the
+      // whole real conversation to show a transcript nobody asked for.
       //
-      // What the panel gets instead is ONE entry when the mode ends, naming
-      // that record and its span (announceMeetingRecord in live-session.mjs) —
-      // a path Iris can hand to a verb, rather than a transcript she would have
-      // to read back.
+      // What the panel gets instead is ONE entry when the mode ends, stating how
+      // long Iris listened (announceListenedFor in live-session.mjs). That entry
+      // is what the user points at when they ask her about what she heard; she
+      // answers from the voice session's own audio context, which still holds
+      // the whole engagement, since the window that bounds it is minutes long.
       //
       // It is also kept out of the recent-utterance ring below. Every consumer
       // of that ring renders it into a run's prompt as "what the user said

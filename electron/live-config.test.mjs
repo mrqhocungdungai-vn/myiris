@@ -26,14 +26,14 @@ describe("buildLiveConfig", () => {
     expect(/** @type {any} */ (config.speechConfig).voiceConfig.prebuiltVoiceConfig.voiceName).toBe("Zephyr");
   });
 
-  // listen-mode-hears-system-audio 2.1: the meeting mode explicitly does NOT
+  // listen-mode-hears-system-audio 2.1: listen-only mode explicitly does NOT
   // add a second profile here. A per-mode config reached by reconnecting was
   // built, used, and retired in this app (archive/2026-08-04-replace-listening-
   // mode-with-listen-only) because the seam a deliberate transition puts in the
   // conversation costs more than the interjections it prevents. This pins the
   // whole key set so re-adding one is a failing test rather than a quiet
   // regression.
-  it("has exactly one profile, with the key set unchanged by the meeting mode", () => {
+  it("has exactly one profile, with the key set unchanged by listen-only mode", () => {
     expect(Object.keys(buildLiveConfig(BASE_INPUTS)).sort()).toEqual([
       "contextWindowCompression",
       "inputAudioTranscription",
