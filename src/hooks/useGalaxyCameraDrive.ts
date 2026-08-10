@@ -28,7 +28,6 @@ import {
   viewCentrePoint,
   zoomLockStep,
   shouldReleaseAnchor,
-  sightMovedEnoughToRetarget,
   type GalaxyAnchor,
   type ZoomLockState,
 } from "../lib/galaxy-anchor";
@@ -150,12 +149,6 @@ export function useGalaxyCameraDrive({
   // The locked note, kept for the mark that draws it. Separate from the pivot
   // ref because the pivot is a resolved anchor and this is an identity.
   const lockedIdRef = useRef<string | null>(null);
-  // The lock already brought to the centre, so the glide runs once per choice
-  // rather than every frame it stays chosen.
-  const centredLockRef = useRef<string | null>(null);
-  // Where the hand was when the current target was picked, so travel is
-  // measured from the choice rather than from the previous frame.
-  const sightAtPickRef = useRef<{ x: number; y: number } | null>(null);
   const acquireProgressRef = useRef(0);
 
   // Gesture drive (design.md D4b/D5): a thin driver over the pure policy in
@@ -411,17 +404,10 @@ export function useGalaxyCameraDrive({
             anchor.anchorRef.current,
             anchorThresholdPx,
           );
-          const pickedId = picked.kind === "node" ? picked.id : null;
-          // A target the user did not move toward is not one they chose. The
-          // centring glide slides the world under a still hand, so without this
-          // a note simply ARRIVES under the sight, is taken, and the taking
-          // re-centres — sliding the world again.
-          if (pickedId === candidateIdRef.current) {
-            // unchanged
-          } else if (sightMovedEnoughToRetarget(sightAtPickRef.current, aim)) {
-            candidateIdRef.current = pickedId;
-            sightAtPickRef.current = { x: aim.x, y: aim.y };
-          }
+          // Taken as picked. No travel floor and no separation floor: the
+          // thumb being up IS the statement that a choice is being made, so
+          // there is nothing left to infer from how the hand moved.
+          candidateIdRef.current = picked.kind === "node" ? picked.id : null;
         }
 
         // The lock runs EVERY frame, not on the throttle, because `progress` is
@@ -434,18 +420,6 @@ export function useGalaxyCameraDrive({
         pivotPickRef.current = lock.lockedId === null ? null : { kind: "node", id: lock.lockedId };
         lockedIdRef.current = lock.lockedId;
 
-        // A NEW LOCK PULLS ITS NOTE TO THE CENTRE. Locking used to change
-        // nothing you could see except the ring: the note stayed wherever it
-        // happened to sit, and every drive then worked around a point off in
-        // the corner of the view — which is a hard thing to steer by, because
-        // the pivot of the motion is not where you are looking.
-        //
-        // Eased, and only while no drive is engaged: with a hand on the camera
-        // the drive owns the aim, and a second writer would fight it (D4b).
-        if (lock.lockedId !== null && lock.lockedId !== centredLockRef.current && cameraEngagedRef.current === null) {
-          anchor.setAnchor({ kind: "node", id: lock.lockedId }, { ease: true });
-        }
-        centredLockRef.current = lock.lockedId;
 
         // Read AFTER the lock step, and from THE PIVOT rather than from the
         // lock id — deliberately the same ref the drives pivot around, so that

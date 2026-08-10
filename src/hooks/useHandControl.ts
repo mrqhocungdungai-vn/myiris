@@ -26,6 +26,7 @@ export type TrackedHand = {
   gestureScore: number;
   pointing: boolean;
   openPalm: boolean;
+  thumbUp: boolean;
   fist: boolean;
   /** Normalized thumb-tip-to-index-tip distance (landmarks 4/8); smaller = tighter pinch. */
   pinchDistance: number;
@@ -41,6 +42,7 @@ export type HandState = {
   gestureScore: number;
   pointing: boolean;
   openPalm: boolean;
+  thumbUp: boolean;
   fist: boolean;
   pinchDistance: number;
   hands: TrackedHand[];
@@ -92,6 +94,7 @@ const EMPTY_STATE: HandState = {
   gestureScore: 0,
   pointing: false,
   openPalm: false,
+  thumbUp: false,
   fist: false,
   pinchDistance: 0,
   hands: [],
@@ -338,6 +341,7 @@ export function useHandControl(enabled: boolean, deviceId: string = SYSTEM_DEFAU
               gestureScore: hand.score,
               pointing: gesture === "Pointing_Up",
               openPalm: gesture === "Open_Palm",
+              thumbUp: gesture === "Thumb_Up",
               fist: gesture === "Closed_Fist",
               pinchDistance: hand.pinchDistance,
             };
@@ -357,6 +361,7 @@ export function useHandControl(enabled: boolean, deviceId: string = SYSTEM_DEFAU
             gestureScore: primary.gestureScore,
             pointing: primary.pointing,
             openPalm: primary.openPalm,
+            thumbUp: primary.thumbUp,
             fist: primary.fist,
             pinchDistance: primary.pinchDistance,
             hands,

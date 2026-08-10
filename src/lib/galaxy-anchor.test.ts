@@ -10,8 +10,6 @@ import {
   rectCentre,
   resolveAnchor,
   shouldReleaseAnchor,
-  sightMovedEnoughToRetarget,
-  SIGHT_TRAVEL_TO_RETARGET_PX,
   ANCHOR_EASE_MS,
   RELEASE_EXTENT_MULTIPLE,
   type GalaxyAnchor,
@@ -94,67 +92,8 @@ function screenXOf(camera: THREE.Camera, node: GalaxyNavNode): number {
 }
 
 describe("pickZoomTarget", () => {
-  // The user's report: locking a note inside a dense cloud, seen from outside
-  // it, made the target flicker through its neighbours. The movement causing it
-  // is real — an unsteady hand travels tens of pixels — but at that distance
-  // neighbours land tens of pixels apart too, so the sweep crosses notes the
-  // user cannot resolve, let alone choose between. Screen separation is the
-  // measure of "could this have been aimed at", and it scales itself.
-  it("will not swap between neighbours that are inseparable on screen", () => {
-    // Backed off outside the cloud, which is where the report came from.
-    const camera = makeCamera();
-    camera.position.set(0, 0, 40);
-    camera.updateMatrixWorld(true);
-    camera.updateProjectionMatrix();
-    const held: GalaxyNavNode = { id: "held", title: "Held", x: 0, y: 0, z: 0 };
-    // Far from the camera, so a whole world unit of separation is only a few
-    // dozen pixels on screen.
-    const neighbour: GalaxyNavNode = { id: "neighbour", title: "Neighbour", x: 5.2, y: 0, z: 0 };
-    const held0 = screenXOf(camera, held);
-    const neighbour0 = screenXOf(camera, neighbour);
-    // Strictly between the old incumbent bias and the new separation rule, so
-    // this test fails if the rule is removed rather than passing on the bias.
-    const gap = Math.abs(neighbour0 - held0);
-    // Strictly ABOVE what the incumbent bias and the occlusion rule already
-    // block (~58px) and below the separation rule, so this test fails if the
-    // rule is removed instead of passing on margins that predate it.
-    expect(gap).toBeGreaterThan(58);
-    expect(gap).toBeLessThan(120);
 
-    // The sight sits right on the neighbour, and it still does not take it.
-    const sight = { x: neighbour0, y: RECT.height / 2 };
-    const current = { kind: "node", id: "held" } as const;
-    expect(pickZoomTarget([held, neighbour], camera, RECT, sight, current, 400)).toEqual(current);
-  });
 
-  it("lets the same neighbour be chosen once the camera is close enough to tell them apart", () => {
-    const close = makeCamera();
-    close.position.set(0, 0, 1.6);
-    close.updateMatrixWorld(true);
-    close.updateProjectionMatrix();
-    const held: GalaxyNavNode = { id: "held", title: "Held", x: 0, y: 0, z: 0 };
-    const neighbour: GalaxyNavNode = { id: "neighbour", title: "Neighbour", x: 1, y: 0, z: 0 };
-    const gap = Math.abs(screenXOf(close, neighbour) - screenXOf(close, held));
-    expect(gap).toBeGreaterThan(120);
-
-    const sight = { x: screenXOf(close, neighbour), y: RECT.height / 2 };
-    expect(pickZoomTarget([held, neighbour], close, RECT, sight, { kind: "node", id: "held" }, 400)).toEqual({
-      kind: "node",
-      id: "neighbour",
-    });
-  });
-
-  it("still switches to a note that is plainly somewhere else", () => {
-    const camera = makeCamera();
-    const held: GalaxyNavNode = { id: "held", title: "Held", x: 0, y: 0, z: 0 };
-    const distant: GalaxyNavNode = { id: "distant", title: "Distant", x: 6, y: 0, z: 0 };
-    expect(Math.abs(screenXOf(camera, distant) - screenXOf(camera, held))).toBeGreaterThan(120);
-    const sight = { x: screenXOf(camera, distant), y: RECT.height / 2 };
-    expect(pickZoomTarget([held, distant], camera, RECT, sight, { kind: "node", id: "held" }, 400)).toEqual({
-      kind: "node",
-      id: "distant",
-    });
-  });
 
 
   it("takes the node under the sight", () => {
@@ -397,28 +336,5 @@ describe("easeAnchor", () => {
     const oneLong = easeAnchor({ x: 0, y: 0, z: 0 }, TARGET, 32);
     const twoShort = easeAnchor(easeAnchor({ x: 0, y: 0, z: 0 }, TARGET, 16), TARGET, 16);
     expect(oneLong.x).toBeCloseTo(twoShort.x, 10);
-  });
-});
-
-describe("sightMovedEnoughToRetarget", () => {
-  // The defect this answers came from the fix before it: bringing a locked note
-  // to the centre of the view slides the whole world under a hand that is not
-  // moving. A note the user never aimed at arrives under the sight, is taken,
-  // and the taking re-centres — which slides the world again. The user is a
-  // bystander to a loop their own hand is not driving.
-  it("refuses a new target while the hand is still, however far the world has moved", () => {
-    const sight = { x: 640, y: 360 };
-    expect(sightMovedEnoughToRetarget(sight, sight)).toBe(false);
-    expect(sightMovedEnoughToRetarget({ x: 640, y: 360 }, { x: 646, y: 364 })).toBe(false);
-  });
-
-  it("allows one the hand actually travelled to", () => {
-    expect(
-      sightMovedEnoughToRetarget({ x: 640, y: 360 }, { x: 640 + SIGHT_TRAVEL_TO_RETARGET_PX, y: 360 }),
-    ).toBe(true);
-  });
-
-  it("allows the first target of all, when the hand has picked nothing yet", () => {
-    expect(sightMovedEnoughToRetarget(null, { x: 12, y: 12 })).toBe(true);
   });
 });

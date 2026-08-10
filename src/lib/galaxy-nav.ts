@@ -323,14 +323,25 @@ export function isHandLowered(point: HandPoint | null, viewportHeight: number): 
  * middle of the screen instead of at a note the user never chose.
  */
 export function aimPoint(hand: Pick<HandState, "hands">): HandPoint | null {
-  const palms = hand.hands.filter((item) => item.openPalm);
-  if (palms.length !== 1) return null;
-  // A fist means the camera is being driven — turning (fist alone) or reeling
-  // in on the locked note (fist + palm, D26). Either way the open palm is part
-  // of that drive, not an aim: the rule "a pose that drives the camera may not
-  // also aim it" extends to "while ANY hand drives it, nothing aims".
+  // AIMING IS ITS OWN GESTURE: `Thumb_Up`, and nothing else.
+  //
+  // It used to be a single open palm — the pose a hand falls into by simply
+  // being raised — so the galaxy was always half-listening for a choice, and
+  // had to guess from movement whether one was meant. Three heuristics grew out
+  // of that guessing (a screen-separation floor, a hand-travel floor, and
+  // centring the locked note to steady the view), each defensible alone and
+  // together unpredictable: they contradicted one another until a deliberate
+  // reselection could fail for reasons no user could see.
+  //
+  // A pose held on purpose answers the question the heuristics were estimating.
+  // While it is up the user IS choosing; while it is down they are not, so
+  // there is nothing to infer and no need to be careful — which is why all
+  // three could be deleted rather than tuned.
+  const aiming = hand.hands.filter((item) => item.thumbUp);
+  if (aiming.length !== 1) return null;
+  // A pose that drives the camera may not also aim it.
   if (hand.hands.some((item) => item.fist)) return null;
-  return palms[0].point;
+  return aiming[0].point;
 }
 
 

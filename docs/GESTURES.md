@@ -134,6 +134,7 @@ chrome above it:
 | `Pointing_Up` | Node dwell — hold over a node 300 ms to **open** it (same dwell mechanic as the deck) |
 | `Victory` (two fingers) | **Inspect** — hold near a node to light up its link cluster while held. Selects nothing, opens nothing, leaves nothing behind |
 | A single `Open_Palm` | **Aims** — the sight follows it and chooses the note to lock (D24/D25). Commits nothing. With both hands up, the one further RIGHT on screen wins, which the mirrored preview makes the user's right hand |
+| `Thumb_Up` | **Aims and locks.** The only pose that chooses anything |
 | `Closed_Fist` | **Turns the camera** around the locked note — always, whatever the other hand is doing — and does **nothing at all until a note is locked**. A fist does not aim |
 | Two open palms | Zoom **the middle of the view** — along the axis the camera already looks down |
 | `Closed_Fist` + an open palm | The fist still turns the view; the palm is ignored. This pair used to fly the camera toward the locked note, and the user's verdict on it was that the experience was bad — the same movement of the same hand turned the camera or flew it, decided by the *other* hand, and the "holding" fist had equal authority over the flight (100px of fist travel moved the camera 23%, exactly as much as 100px of palm travel) |
@@ -334,16 +335,12 @@ answer on its own, because each names a different mechanism:
 | `lowered` | `YES` mid-gesture is the drive being released because a **driving** hand dropped below the bottom third — raise the holding hand |
 | `curDist` / `refDist` | `curDist` jumping while your hands are still is tracking noise reaching the camera; a `refDist` near 80 means you engaged with the hands almost touching, where the ratio law is at its most sensitive |
 
-**A target you did not move toward is not one you chose.** The target only
-changes once your hand has actually travelled. Centring a locked note slides the
-whole view, so without this a note would arrive under a motionless hand, be
-taken, and re-centre — sliding the view again.
-
-**You cannot choose what you cannot resolve.** A note only takes the target from
-another if the two are plainly apart on screen. Seen from outside a dense
-cluster, neighbouring notes sit closer together than a hand can steady, so the
-target holds still instead of flickering through them — move in among them and
-they separate, and then they are choosable.
+**Choosing is its own gesture: `Thumb_Up`.** The crosshair and the candidate
+ring appear only while it is held — the galaxy is silent until you ask. Aiming
+used to be a single open palm, the pose a hand falls into by simply being
+raised, so the system had to guess from movement whether a choice was meant; the
+three rules that guessing needed are gone. A single open palm now means nothing,
+which is right: a raised hand is not a statement.
 
 **A lock outranks the zoom.** Zooming out never releases it — that release only
 exists while nothing is locked. Once you have chosen a note, some note is always

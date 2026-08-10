@@ -762,19 +762,19 @@ The mark SHALL NOT outlive the lock: whatever clears the lock SHALL clear the ma
 
 **A lock SHALL outrank the zoom.** Backing the camera out SHALL NOT release a lock; the return-to-overview release SHALL apply only while nothing is locked. A zoom that could delete the lock would make the most ordinary navigation gesture destroy the user's choice without being about it, and would leave the drive that is supposed to honour that choice with nothing to honour. The locked note SHALL be changed by aiming at another one.
 
-**A target the user did not move toward SHALL NOT be taken.** A different note SHALL become the target only once the hand has travelled a real distance since the current one was picked, measured from where the hand was at that moment rather than from the previous frame, so that slow deliberate movement still counts.
-
 The rule is stated in terms of the HAND because the hand is the only thing that is the user's. Bringing a locked note to the centre slides the world under a sight that has not moved, so a note nobody aimed at arrives beneath it — and taking it re-centres, sliding the world again. Naming the camera motions one at a time would leave the next one uncovered; requiring the user's own movement covers all of them, including ones not yet designed.
-
-**A note SHALL NOT take the target from one it cannot be told apart from.** A challenger SHALL be separated from the current target on screen by a clear margin before it may replace it — a margin large enough that the two read as two places rather than one, and separate from any margin allowed for tracking noise.
 
 Screen separation is the measure because it is the question itself: a user cannot be aiming at a particular note when they cannot resolve one from its neighbours, and the sight sweeping across a dozen of them is not a dozen choices. It also scales itself — the same two notes are tens of pixels apart from across the vault and hundreds apart from among them — so approaching a cluster is what makes its notes choosable, and nothing needs to say so.
 
 A note plainly elsewhere on screen SHALL still be taken at once.
 
-**A newly locked note SHALL be brought to the centre of the view**, eased rather than snapped, and SHALL NOT be moved this way while a camera drive is engaged — the drive owns the aim, and a second writer would fight it. A lock the user is not looking at is a poor pivot: every drive works around it, and motion around a point in the corner of the view is hard to steer.
-
 Without a lock, the only gestures that SHALL move the camera are the two-palm zoom on the centre of the view.
+
+**Choosing SHALL be a gesture of its own — `Thumb_Up` — and never inferred.** While it is held the user is choosing; while it is not, they are not. The sight and the candidate mark SHALL appear only with it, so nothing on screen claims a choice is being made when none is.
+
+Nothing SHALL infer intent from how the hand moved: no floor on how far a note must be from the current target on screen, no floor on how far the hand must travel, and no moving of the camera to steady the view for aiming. Those rules existed because a raised open palm could not be told apart from a deliberate one, and each was added to survive the last — together they made a deliberate reselection fail for reasons the user could not see. A declared pose removes the question rather than answering it better.
+
+A single open palm SHALL therefore mean nothing at all: a hand that is merely raised is not a statement.
 
 Aiming SHALL remain available without a lock, because gating it is circular: aiming is the only thing that creates a lock, so requiring one in order to aim means none can ever exist.
 
@@ -831,4 +831,14 @@ The reveal SHALL take a single `Victory` hand. A second adds nothing to it, and 
 
 - **WHEN** the user travels the sight across to another note
 - **THEN** that note becomes the target
+
+#### Scenario: The galaxy is silent until asked
+
+- **WHEN** the user raises an open palm over the galaxy without the aiming gesture
+- **THEN** no sight and no candidate mark appear, and the target does not change
+
+#### Scenario: Choosing is immediate once declared
+
+- **WHEN** the user holds `Thumb_Up` and moves the sight onto a note beside the current target
+- **THEN** that note is offered as the candidate, however close the two are on screen and however little the hand travelled
 

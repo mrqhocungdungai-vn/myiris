@@ -537,62 +537,53 @@ describe("isHandLowered", () => {
 });
 
 describe("aimPoint", () => {
-  function palm(id: string, x: number, y: number, openPalm = true): TrackedHand {
+  function hand(id: string, x: number, y: number, gesture: string): TrackedHand {
     return {
       id,
       point: { x, y },
       wristPoint: { x, y },
       landmarks: [],
-      gesture: openPalm ? "Open_Palm" : "None",
+      gesture,
       gestureScore: 0.9,
-      pointing: false,
-      openPalm,
-      fist: false,
+      pointing: gesture === "Pointing_Up",
+      openPalm: gesture === "Open_Palm",
+      thumbUp: gesture === "Thumb_Up",
+      fist: gesture === "Closed_Fist",
       pinchDistance: 0,
     } as TrackedHand;
   }
 
-  // D24's whole point: two hands zoom, and while they do the user is not
-  // aiming at all. Real palms part asymmetrically, so a midpoint carried as
-  // the aim made every zoom a slight re-aim.
+  // Aiming is now its OWN gesture. It used to be a single open palm — the pose
+  // a hand falls into by simply being raised — so the galaxy was always
+  // half-listening for a choice and had to guess from movement whether one was
+  // meant. Three heuristics grew out of that guessing (a screen-separation
+  // floor, a hand-travel floor, and centring the locked note) and contradicted
+  // one another. A pose held on purpose answers what they were estimating.
+  it("aims at the thumb-up hand, and never at an open palm", () => {
+    expect(aimPoint({ hands: [hand("r", 410, 260, "Thumb_Up")] })).toEqual({ x: 410, y: 260 });
+    expect(aimPoint({ hands: [hand("l", 900, 700, "Open_Palm")] })).toBeNull();
+  });
+
+  it("keeps aiming while the other hand is doing something else", () => {
+    const thumb = hand("r", 410, 260, "Thumb_Up");
+    expect(aimPoint({ hands: [thumb, hand("l", 900, 700, "Open_Palm")] })).toEqual({ x: 410, y: 260 });
+  });
+
+  // Two open palms zoom, and while they do nobody is aiming.
   it("returns null while two open palms are up — two hands zoom, they do not aim", () => {
-    expect(aimPoint({ hands: [palm("a", 100, 200), palm("b", 300, 400)] })).toBeNull();
+    expect(aimPoint({ hands: [hand("a", 100, 200, "Open_Palm"), hand("b", 300, 400, "Open_Palm")] })).toBeNull();
   });
 
-  it("aims at a single OPEN PALM's own point", () => {
-    expect(aimPoint({ hands: [palm("a", 100, 200)] })).toEqual({ x: 100, y: 200 });
+  it("does not aim while a fist is driving the camera", () => {
+    const thumb = hand("r", 410, 260, "Thumb_Up");
+    expect(aimPoint({ hands: [thumb, hand("l", 5, 5, "Closed_Fist")] })).toBeNull();
   });
 
-  // D25: each pose has exactly one job. A fist turns the camera, so it must not
-  // also aim it — that would re-target on the very motion doing the turning,
-  // which is the D14 coupling in a new place.
-  it("does not aim from a hand that is not an open palm", () => {
-    expect(aimPoint({ hands: [palm("a", 100, 200, false)] })).toBeNull();
+  it("does not aim when two hands both claim it", () => {
+    expect(aimPoint({ hands: [hand("a", 1, 1, "Thumb_Up"), hand("b", 2, 2, "Thumb_Up")] })).toBeNull();
   });
 
-  it("prefers the RIGHTMOST hand on screen, which the mirrored preview makes the user's right", () => {
-    const left = palm("l", 200, 300);
-    const right = palm("r", 900, 300);
-    // Only one may aim at a time (two open palms zoom), so this fires as the
-    // tiebreak wherever several hands are eligible.
-    expect(preferredHand([left, right])?.id).toBe("r");
-    expect(preferredHand([right, left])?.id).toBe("r");
-    expect(preferredHand([])).toBeNull();
-  });
-
-  // The bug D26 removes: with two open palms, one hand's pose flickering off
-  // leaves a single palm in frame, which used to read as aiming — and since the
-  // hands are spread apart by then, it could re-lock onto a different note
-  // mid-zoom. A fist in frame means the camera is being driven, so nothing aims.
-  it("does not aim while any hand is a fist — a driving hand never aims", () => {
-    const hands = [palm("f", 100, 200, false), palm("p", 600, 200)];
-    (hands[0] as { fist: boolean }).fist = true;
-    expect(aimPoint({ hands })).toBeNull();
-  });
-
-  it("returns null with no open palm in frame, rather than falling back to the view centre", () => {
-    // "Nothing is being aimed at" has to be visible to the caller: it is what
-    // makes an un-targeted zoom fall back to the middle of the screen.
+  it("does not aim when no hand is raised", () => {
     expect(aimPoint({ hands: [] })).toBeNull();
   });
 });

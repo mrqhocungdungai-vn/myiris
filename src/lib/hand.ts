@@ -19,6 +19,7 @@ function sameHand(a: TrackedHand, b: TrackedHand): boolean {
     a.gesture === b.gesture &&
     a.pointing === b.pointing &&
     a.openPalm === b.openPalm &&
+    a.thumbUp === b.thumbUp &&
     a.fist === b.fist
   );
 }
@@ -34,6 +35,7 @@ export function semanticEquals(a: HandState, b: HandState): boolean {
     a.gesture === b.gesture &&
     a.pointing === b.pointing &&
     a.openPalm === b.openPalm &&
+    a.thumbUp === b.thumbUp &&
     a.fist === b.fist &&
     a.hands.length === b.hands.length &&
     a.hands.every((hand, index) => sameHand(hand, b.hands[index]))

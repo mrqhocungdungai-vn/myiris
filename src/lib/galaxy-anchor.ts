@@ -87,29 +87,6 @@ const ZOOM_INCUMBENT_BIAS_PX = 30;
 // hysteresis.
 const ZOOM_INCUMBENT_DEPTH_FACTOR = 0.8;
 
-// A challenger must be this far from the incumbent ON SCREEN before it may take
-// the target at all — separately from being nearer the sight.
-//
-// The incumbent bias above is a margin against NOISE; this is a rule about
-// INTENT. Viewing a dense cloud from outside it, neighbouring notes land tens of
-// pixels apart, which is inside the travel of an unsteady hand: the sight sweeps
-// across a dozen of them, each briefly nearest, and the target flickers through
-// notes the user never chose one of. No margin fixes that, because the movement
-// is real — what is missing is that the user cannot be AIMING at a particular
-// note when they cannot resolve one from its neighbours.
-//
-// Screen separation is the honest measure of exactly that, and it scales itself:
-// the same two notes that are 20px apart from across the vault are 200px apart
-// once the user has flown in among them. So "get closer to choose within a
-// cluster" is not a rule anyone has to be told — it is the only thing that
-// makes the neighbours choosable, and it is what the user asked for.
-// 120px, not a hair over the existing margins. The incumbent bias (30px) and
-// the occlusion rule (28px) already make a challenger within roughly 58px lose,
-// so a threshold near that would have changed nothing while looking like a fix.
-// This is deliberately a distance at which two notes are plainly two places on
-// screen — about a thumb's width — because that is the claim being made: below
-// it, the user is not choosing between them, they are trembling between them.
-const ZOOM_SWITCH_SEPARATION_PX = 120;
 
 const pickScratch = new THREE.Vector3();
 
@@ -137,51 +114,6 @@ const pickScratch = new THREE.Vector3();
  * must not make the mark run away to some distant note the user never aimed at,
  * and keeping it is also what lets them pinch back out without re-aiming.
  */
-// How far the hand must travel before a different note counts as chosen.
-//
-// Deliberately about the HAND, because the bug it answers was about the camera:
-// bringing a locked note to the centre slides the whole world under a sight
-// that has not moved, so a note the user never aimed at arrives beneath it and
-// is taken — and taking it re-centres again, which slides the world again. The
-// user is a bystander to a loop their own hand is not driving.
-//
-// A target the user did not move toward is not a target they chose. Everything
-// that moves the world — the centring glide, a zoom, an orbit — is covered by
-// saying so once, in terms of the only thing that is theirs: their hand.
-export const SIGHT_TRAVEL_TO_RETARGET_PX = 48;
-
-/**
- * Whether the hand has travelled far enough since the current target was picked
- * for a different one to count as CHOSEN rather than merely arrived at.
- */
-export function sightMovedEnoughToRetarget(
-  sightAtLastPick: { x: number; y: number } | null,
-  sight: { x: number; y: number },
-): boolean {
-  if (sightAtLastPick === null) return true;
-  return Math.hypot(sight.x - sightAtLastPick.x, sight.y - sightAtLastPick.y) >= SIGHT_TRAVEL_TO_RETARGET_PX;
-}
-
-/** Where one node lands in window pixels, or null if it is behind the camera or gone. */
-function screenPointOf(
-  nodes: Iterable<GalaxyNavNode>,
-  id: string,
-  camera: THREE.Camera,
-  rect: ScreenRect,
-): { x: number; y: number } | null {
-  for (const node of nodes) {
-    if (node.id !== id || node.x === undefined) continue;
-    pickScratch.set(node.x, node.y ?? 0, node.z ?? 0);
-    pickScratch.project(camera);
-    if (!(pickScratch.z >= -1 && pickScratch.z <= 1)) return null;
-    return {
-      x: rect.left + ((pickScratch.x + 1) * rect.width) / 2,
-      y: rect.top + ((1 - pickScratch.y) * rect.height) / 2,
-    };
-  }
-  return null;
-}
-
 export function pickZoomTarget(
   nodes: Iterable<GalaxyNavNode>,
   camera: THREE.Camera,
@@ -191,10 +123,6 @@ export function pickZoomTarget(
   thresholdPx: number,
 ): GalaxyAnchor {
   const incumbentId = current.kind === "node" ? current.id : null;
-  // Where the incumbent sits on screen, so a challenger can be measured against
-  // it. Resolved in its own pass because the loop below meets the nodes in
-  // arbitrary order and a challenger may be reached first.
-  const incumbentScreen = incumbentId === null ? null : screenPointOf(nodes, incumbentId, camera, rect);
   let bestId: string | null = null;
   let bestD = Infinity;
   let bestZ = Infinity;
@@ -215,14 +143,6 @@ export function pickZoomTarget(
     const raw = Math.hypot(x - point.x, y - point.y);
     const d = isIncumbent ? Math.max(0, raw - ZOOM_INCUMBENT_BIAS_PX) : raw;
     if (d > thresholdPx) continue;
-    // Too close to the incumbent to be a choice between them.
-    if (
-      !isIncumbent &&
-      incumbentScreen !== null &&
-      Math.hypot(x - incumbentScreen.x, y - incumbentScreen.y) < ZOOM_SWITCH_SEPARATION_PX
-    ) {
-      continue;
-    }
 
     if (bestId === null) {
       bestId = node.id;
