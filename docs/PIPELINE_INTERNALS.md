@@ -27,17 +27,35 @@ reads the park label, `run-exec.mjs` builds the `query()` options. A verb is
 defined in one place, because three hand-wired copies of a definition is exactly
 the mechanism that let `appendSystemPrompt` sit unread for months.
 
-| verb | stateful | park | model | session |
-| --- | --- | --- | --- | --- |
-| `shape_requirements` | yes | on opening | Opus 5 | `stateful` |
-| `shape_on_canvas` | yes *(same session)* | on opening | *(follows the live session)* | `stateful` |
-| `execute` | no | **every call** | Sonnet 5 | `execute` |
-| `finish` | no | **every call** | Sonnet 5 | `finish` |
-| `investigate` (`depth: explain`) | no | no | Sonnet 5 | `investigate` |
-| `investigate` (`depth: judge`) | no | no | Opus 5 | `review` |
+| verb | stateful | park | model | session | also declares |
+| --- | --- | --- | --- | --- | --- |
+| `shape_requirements` | yes | on opening | Opus 5 | `stateful` | `structuredOutput` |
+| `shape_on_canvas` | yes *(same session)* | on opening | *(follows the live session)* | `stateful` | the canvas MCP server, `speakWhileWorking`, verbatim read-out, and no `Write`/`Edit`/`NotebookEdit`/`Bash` |
+| `work_on_note` | yes *(own session)* | on opening | Opus 5 | **per open note** (`noteSessionKey`) | `vault`, verbatim read-out, `guardOpenNoteWrites` |
+| `execute` | no | **every call** | Sonnet 5 | `execute` | `structuredOutput`; may ask when no change is open |
+| `finish` | no | **every call** | Sonnet 5 | `finish` | `structuredOutput`, never asks |
+| `investigate` (`depth: explain`) | no | no | Sonnet 5 | `investigate` | read-only and never asks (`Write`/`Edit`/`NotebookEdit`/`AskUserQuestion` all withheld) |
+| `investigate` (`depth: judge`) | no | no | Opus 5 | `review` | the same bounds, with the review skills |
+| `capture_learning` | no | no | Haiku 4.5 | `capture_learning` | `vault`, never asks |
 
-`investigate` is one verb with two depths, because it used to be two verbs. `review` — the strongest model with the review skills — was called **zero** times across every run ever logged, while `investigate` (fast) took the traffic: their descriptions overlapped ("is that done" against "is this any good"), and a routing contest between two sentences has no error path. The model always picks something, so a user asking for a judgement silently got the cheap verb with the wrong skills and never saw a failure. The choice is now a required `depth` enum the API constrains, and `model`/`skills`/`structuredOutput`/`clause` resolve from it. `depth` is carried on the run — through the review gate too — so a run executes as the call that was made, not as a default.
-| `capture_learning` | no | no | Haiku 4.5 | `capture_learning` |
+Seven verbs, eight rows: `investigate` is one verb with two depths, because it
+used to be two verbs. `review` — the strongest model with the review skills — was
+called **zero** times across every run ever logged, while `investigate` (fast)
+took the traffic: their descriptions overlapped ("is that done" against "is this
+any good"), and a routing contest between two sentences has no error path. The
+model always picks something, so a user asking for a judgement silently got the
+cheap verb with the wrong skills and never saw a failure. The choice is now a
+required `depth` enum the API constrains, and `model`/`skills`/`structuredOutput`/`clause`
+resolve from it. `depth` is carried on the run — through the review gate too — so
+a run executes as the call that was made, not as a default. The session key
+`review` survives it, so a judgement resumes prior judgements.
+
+`work_on_note` is stateful for the same reason the shaping verbs are — it pauses
+to ask before it changes someone's note — but it keeps **its own** session, keyed
+per open note, so returning to a note resumes that note's conversation instead of
+accumulating several notes in one context window. That is why "may pause and ask"
+(`STATEFUL_VERBS`) and "shares the one shaping conversation"
+(`SHARED_SESSION_VERBS`) are two different sets in `verbs.mjs`.
 
 Resolution is a **pure function of `(verb, project state)`** — `resolveVerb()`
 takes the array `openChangesWithTasks(cwd)` returns and hands back the complete
@@ -61,7 +79,10 @@ only: this verb's runs may pause mid-turn and ask by voice.
   pause mid-turn via `AskUserQuestion` and get a voice answer back before
   continuing (see "Voice decision relay" below).
 - **Stateless — one-shot `query()` per run**, resuming the stored session id —
-  fire-and-forget, never asks.
+  fire-and-forget. Usually it cannot ask, but that is a **separately declared
+  property** (`disallowedTools`), not a consequence of being stateless:
+  `execute` with no open change may ask, because nothing upstream settled the
+  work. See "Voice decision relay" below.
 
 **Statefulness is not continuity.** Every verb, stateless included, resumes its
 own prior conversation via `resume`; that is what makes a follow-up request
@@ -69,7 +90,7 @@ intelligible. Conflating the two is what made "PO" and "DEV" each mean two
 unrelated things at once — *who the worker is* and *how the run behaves* — when
 only the second matters to the runtime.
 
-Both stateful verbs share **one** resident session, keyed `stateful`: shaping by
+The two *shaping* verbs share **one** resident session, keyed `stateful`: shaping by
 voice and shaping on the canvas are the same conversation in two media, and
 switching to the canvas happens precisely when talking has stopped working, which
 is when the accumulated context matters most. Two consequences are declared
@@ -127,14 +148,14 @@ produced bugs that typechecked perfectly:
 
 - `pipelineAvailable` (owned by `electron/pipeline-probes.mjs`) is the single source of truth for whether the Claude pipeline is on. Set by `probePipelineAvailability()`, and it takes **two** inputs together (`pipeline-probes.mjs`): the bundled binary answers a `--version` probe (`checkClaudeStatus().reachable`) **and** at least one credential is configured (`claudeCredentialStatus()` — `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`). The two stay deliberately distinct in what `checkClaudeHealth()` reports: `reachable` is strictly "the bundled binary launched", so the SetupPanel can tell a packaging failure apart from a user who simply has not logged in yet. `poBillingStatus()` answers a third question again — *which* credential pays for the stateful verbs; see "Subscription auth" below.
 - Probed at app boot (fire-and-forget) and at the top of every `connectLive()` call (fresh connect or Live's periodic reconnect) — Live tool declarations are fixed per session, so availability flipping mid-session only changes the declared tool surface on the next (re)connect. Also re-probed by `checkClaudeHealth()`, the SetupPanel's "Check Claude" / re-check path.
-- Gates three things from one flag, no separate toggles: `buildClaudeTools()` only spreads in `buildPipelineToolDeclarations()` — the eight verbs plus the control tools — when true (interface-control tools from `buildAlwaysToolDeclarations()` are always declared); `buildSystemInstructionText()` includes the pipeline paragraphs only when true, with a short chat-only alternative otherwise — one builder, not two maintained prompts; `executeClaudeTool` additionally guards `PIPELINE_ONLY_TOOLS` at call time as a defensive backstop.
+- Gates three things from one flag, no separate toggles: `buildClaudeTools()` only spreads in `buildPipelineToolDeclarations()` — the seven verbs plus the control tools — when true (interface-control tools from `buildAlwaysToolDeclarations()` are always declared); `buildSystemInstructionText()` includes the pipeline paragraphs only when true, with a short chat-only alternative otherwise — one builder, not two maintained prompts; `executeClaudeTool` additionally guards `PIPELINE_ONLY_TOOLS` at call time as a defensive backstop.
 - The renderer learns the value via `window.iris.getPipelineStatus()` (IPC `pipeline:status`, read at mount) and the `pipeline_availability` sidecar event (emitted only when the value changes). `App.tsx` holds it as `pipelineAvailable` state and conditionally renders Work Stream, PipelineBar, the workstream switcher (nested inside WorkStream), TaskChooser, and — inside `HudShell` via a passed-down prop — the HUD tasks column and the live-question banner.
 - See `openspec/specs/pipeline-availability/spec.md` for the full requirement set.
 
 ## The delegation model (key mental model)
 
 1. Gemini decides routing: quick facts → built-in Google Search; real work → **a
-   verb** (only declared when `pipelineAvailable`, see above). Alongside the eight
+   verb** (only declared when `pipelineAvailable`, see above). Alongside the seven
    verbs it has `check_claude_status`, `get_claude_task_status`,
    `stop_claude_task`, `start_new_claude_session`, `get_workspace_info`,
    `get_project_state`, `answer_claude_question`, `set_verb_model`, and
@@ -158,14 +179,27 @@ produced bugs that typechecked perfectly:
    session so it proactively announces the result. Other internal events follow
    the same `SYSTEM_EVENT_*` convention (`SESSION_START`, `WORKSPACE_UPDATE`,
    `PO_QUESTION`, `TASK_REVIEW_PARKED`, `TASK_REVIEW_RESOLVED`).
-5. `runQueue` still enforces "Claude does one thing at a time" globally — a
-   stateful turn and a stateless run share the same execution slot and queue
-   behind each other. The resident session itself is separate, independent state
-   that is never touched while a turn is merely queued.
+5. `runQueue` has **two lanes**, and which one a turn takes is the difference
+   between answering now and waiting behind unrelated work. The **single global
+   execution slot** (`submit`, `run-queue.mjs`) is what "Claude does one thing at
+   a time" means, and a stateful turn that *opens* a conversation contends for it
+   like any stateless run. But a turn pushed into a conversation that is
+   **already open** goes to `submitResident` instead: a per-conversation lane
+   that never takes the slot and waits only for the previous turn of its own
+   conversation. It has to be that way — a turn into a live session shares one
+   context window and cannot begin a second worker, so making "make that box
+   blue" queue behind a twenty-minute `execute` bought nothing. The lane
+   predicate is *mechanics* ("is there a live session to push a turn into"),
+   deliberately **not** the review gate's *consent* predicate ("has the user
+   taken part in this conversation") — conflating the two is what left the first
+   sentence after the canvas opened still queued behind unrelated work. Consent
+   is unaffected: a turn that must be reviewed never reaches lane selection until
+   it has been. The resident session itself is separate, independent state that is
+   never touched while a turn is merely queued.
 
 ### Every dispatch records why it happened
 
-Offering eight verbs creates more ways to select wrongly than one general tool
+Offering seven verbs creates more ways to select wrongly than one general tool
 did. That trade is accepted deliberately, and it is only acceptable while every
 selection is inspectable afterwards — so `startClaudeRun` logs the verb, its
 fully resolved configuration (model, statefulness, session key, park label, skill
@@ -210,7 +244,7 @@ brief's wording, which fails silently in both directions.
   turn of a live grilling conversation is friction with no safety gained, since
   the session is already alive and already spending. Once the conversation ends,
   opening a new one is reviewed again.
-- `investigate`, `review`, and `capture_learning` never park.
+- `investigate` (at either depth) and `capture_learning` never park.
 
 The consent unit is therefore the **conversation** for one kind of verb and the
 **run** for the other — which is exactly the difference between them. The decision
@@ -226,7 +260,7 @@ naming a review-mode mutation tool is refused.
 - The `canUseTool` handler stays in place for a run that *is* permitted to ask, because permission is granted at run start and the listener can go away while the run continues. Reaching it with no listener aborts with a diagnostic rather than waiting — that abort is the only thing between a mid-run sleep and a run parking the single execution slot forever.
 - `investigate` additionally carries `Write`/`Edit`/`NotebookEdit` in that list — investigating does not modify, and that has to be structural too; a withheld edit tool is denied *without* ending the run, since the model can still answer. The prompt is the explanation of when asking is *warranted*; the configuration is the guarantee of whether it is *possible*.
 - A question is relayed **without losing its shape**: its `header` (short topic label) and `multiSelect` flag both reach the voice layer and the UI. `AskUserQuestion`'s `answers` map takes one string per question with multi-select answers **comma-separated**, and every answer path — voice, click, and the timeout default — encodes through the one `encodeAnswer` in `run-stream.mjs`, so none of them can silently reduce a multi-select question to a single choice.
-- `askUserQuestionViaVoice` emits `SYSTEM_EVENT_PO_QUESTION` (and a `po_question` sidecar event for the UI) and registers a single global `pendingPoQuestion` — at most one can ever be in flight, since `runQueue` allows only one run system-wide at a time.
+- `askUserQuestionViaVoice` emits `SYSTEM_EVENT_PO_QUESTION` (and a `po_question` sidecar event for the UI) and registers a single global `pendingPoQuestion`: the relay holds **one** question slot. That used to be argued from the queue — one run system-wide, so one asker — but the resident lane means a turn in an already-open conversation runs alongside whatever holds the execution slot, and the verbs that may ask sit on both sides of that line (the stateful verbs, and `execute` with no open change). The single slot is a property of the relay itself, not something the queue enforces on its behalf.
 - Two paths can answer it: the Gemini tool `answer_claude_question` (primary, voice) or `window.iris.answerPoQuestion` (secondary, UI click) via `ipcMain.handle("po:answer-question", ...)`. Whichever resolves first wins; `resolvePendingPoQuestion` is a no-op once already settled.
 - **An answer names its question by NUMBER, and the app owns the mapping back to text.** The relay lists the questions numbered; `answer_claude_question` requires that number, and `resolvePendingPoQuestion` looks the question up in `PendingQuestion.current.questions` and builds the SDK's answers map from *the verb's own question text*. That string never round-trips through the voice layer. It used to: the map was keyed on the question sentence retyped by a speech model that had just read it aloud in translation, and one character off matched nothing — no error, no warning, the run proceeded as though nobody had answered. An answer whose number matches no pending question is now a reported **error**, and the question is left pending: being answered and misfiled is not the same as going unanswered.
 - Unanswered after `IRIS_PO_QUESTION_TIMEOUT_MS` (default 300000ms/5min): **what that settles as is the asking caller's declared policy**, passed as `onExpiry` (`QUESTION_EXPIRY` in `run-stream.mjs`) rather than inferred from the verb or the run.
@@ -647,7 +681,7 @@ this is the mechanism behind it).
 
 - The skills the personas invoke (`grilling`, `tdd`, `code-review`, `diagnosing-bugs`, the OpenSpec workflow skills, the LLM-Wiki skills) and the `/opsx` commands ship inside the app as a Claude Code **plugin** at `resources/iris-plugin/`, passed to every run through the SDK's `plugins` option (`{ type: "local", path, skipMcpDiscovery: true }`).
 - Everything the plugin provides is **namespaced by the plugin name**: skills are `iris:grilling`, `iris:openspec-propose`, …; commands are `/iris:opsx:apply`, `/iris:opsx:archive`, …. The persona prompts reference those exact names.
-- **A run sees only the skills its own work needs, declared by its verb.** Both roles used to pass `skills: "all"`, so the implementation path could invoke `iris:grilling` and the shaping path could reach the `wiki-*` suite. `electron/run-skills.mjs` holds the lists — named for the *work*, with each entry justified by a skill the persona or the plugin's own cross-references actually invokes — and the registry binds one to each verb. **This scoping is the substance of the verb surface**: without bounded capability surfaces, eight verbs would be eight names for one agent. Measured, this is a real context filter, not a label: identical prompt, total input tokens — `"all"` (17 skills) 18 007, a two-skill list 16 056, `[]` 15 934. Plugin-qualified (`iris:grilling`) and bare (`grilling`) names behave identically; qualified is used so the list and the persona diff against each other by eye. Per the SDK's own wording this is **a context filter, not a sandbox**: unlisted skills are hidden from the model and rejected by the Skill tool, but their files stay readable via Read/Bash.
+- **A run sees only the skills its own work needs, declared by its verb.** Both roles used to pass `skills: "all"`, so the implementation path could invoke `iris:grilling` and the shaping path could reach the `wiki-*` suite. `electron/run-skills.mjs` holds the lists — named for the *work*, with each entry justified by a skill the persona or the plugin's own cross-references actually invokes — and the registry binds one to each verb. **This scoping is the substance of the verb surface**: without bounded capability surfaces, seven verbs would be seven names for one agent. Measured, this is a real context filter, not a label: identical prompt, total input tokens — `"all"` (17 skills) 18 007, a two-skill list 16 056, `[]` 15 934. Plugin-qualified (`iris:grilling`) and bare (`grilling`) names behave identically; qualified is used so the list and the persona diff against each other by eye. Per the SDK's own wording this is **a context filter, not a sandbox**: unlisted skills are hidden from the model and rejected by the Skill tool, but their files stay readable via Read/Bash.
 - `settingSources` is `["project"]`: the user's **`~/.claude` is never read**, so Iris neither depends on nor is perturbed by whatever they have installed in their own Claude Code. The working repository's `.claude/` is still loaded, which is what makes a project-local `.claude/agents/iris-<base>.md` override work.
 - `skipMcpDiscovery` is set because Iris owns its own MCP wiring (the canvas server arrives via `mcpServers`); the plugin must not open connections of its own.
 - **`settingSources` is not sufficient on its own**, and this is the part that is easy to get wrong. A few filesystem inputs are read and written *regardless* of it: the session transcript of every run, the always-read global `.claude.json`, and auto-memory. They all resolve under `CLAUDE_CONFIG_DIR`. So `computeClaudeWorkerEnv` (`electron/worker-env.mjs`) pins that variable to **`~/.myiris/claude-home`** for every run and sets `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`. Measured before this existed: one run against the default workspace left a 57 KB transcript in the user's `~/.claude/projects/`. The directory has to be **stable** (not a temp dir) because a resumed session must find the transcript an earlier run wrote; the CLI creates it, and its own `.claude.json` inside it, on first use.
@@ -659,7 +693,7 @@ this is the mechanism behind it).
 
 - There are **two** personas, named for the property that actually differs at runtime: `resources/personas/stateful.md` and `stateless.md`. They were `iris-po.md` and `iris-dev.md`; naming them after job titles bundled *who the worker is* with *how the run behaves*, and only the second is real. They are parsed into the SDK's `AgentDefinition` (`electron/agent-definitions.mjs`) and passed to `query()` **by value** via `agents: { "iris-<base>": … }` + `agent: "iris-<base>"` — nothing is installed into `~/.claude/agents`. A project-local `.claude/agents/iris-<base>.md` still wins, since `settingSources` keeps the `project` scope; the override keeps the `iris-` prefix because it sits in a directory shared with the user's own agents, while the bundled file does not need one.
 - The personas describe **behaviour, not skill names**, because one persona serves several verbs with different skill lists — naming `iris:tdd` in the stateless body would tell `investigate` to invoke a skill it cannot see. What each verb is *for* comes from its registry clause; what it may *reach* comes from its skill list. A test asserts that any `iris:*` name appearing in a persona is available to every verb using it.
-- **The pipeline runs on OpenSpec — it is the single SDD surface (no `.scratch/` PRD).** `shape_requirements` grills the request (the `grilling` skill; questions surface via the `AskUserQuestion` voice relay), then runs the OpenSpec propose flow to create `openspec/changes/<name>/` with a `tasks.md`. `execute` implements the remaining unchecked tasks of an open change (`openspec-apply-change` + `tdd`, verifying itself with `code-review`); `finish` closes the change out and archives it to sync `openspec/specs/`. Stateless verbs never ask — they record "Decisions needed" that Iris reads aloud at run end.
+- **The pipeline runs on OpenSpec — it is the single SDD surface (no `.scratch/` PRD).** `shape_requirements` grills the request (the `grilling` skill; questions surface via the `AskUserQuestion` voice relay), then runs the OpenSpec propose flow to create `openspec/changes/<name>/` with a `tasks.md`. `execute` implements the remaining unchecked tasks of an open change (`openspec-apply-change` + `tdd`, verifying itself with `code-review`); `finish` closes the change out and archives it to sync `openspec/specs/`. A stateless verb ordinarily records "Decisions needed" that Iris reads aloud at run end rather than asking mid-run — but whether it may ask at all is the verb's declared `disallowedTools`, resolved against project state, not a consequence of its run shape: `execute` with **no** open change may ask, precisely because no upstream shaping settled anything for it (see "Voice decision relay").
 - **The ordering survives; the requirement that the *user* enforce it does not.** Work that goes through the process is still specified before it is implemented, but that follows from the project's own state, which `execute` reads at dispatch — not from a user naming a worker or operating a control.
 - The first shaping run in a fresh project makes it OpenSpec-ready via `ensureProjectScaffold` → `openspec init <cwd> --tools claude` (non-interactive; no-op if `openspec/` already exists). The `openspec` CLI ships with the app (`@fission-ai/openspec`): `openspecCommand()` returns a command spec that runs it through Electron's own Node (`ELECTRON_RUN_AS_NODE=1`), since it is a JS entry point rather than a native executable.
 - **No prerequisite installer.** `resources/iris-plugin/` vendors snapshots of the required third-party skills (mattpocock's `grilling`/`tdd`/`code-review`/`diagnosing-bugs`, plus the OpenSpec-generated skills + `/opsx` commands — see `resources/iris-plugin/ATTRIBUTION.md` for sources/versions/refresh steps) and ships them as a plugin, so there is nothing to install and no install step to skip. `checkSkillsStatus()` verifies the **bundle** is intact rather than checking the machine, and backs the SetupPanel's "Bundled / Damaged" row. What remains of the old installer is its inverse: `legacyClaudeArtifactsStatus()` / `removeLegacyClaudeArtifacts()` (IPC `pipeline:legacy-artifacts` / `pipeline:remove-legacy-artifacts`) report and, on an explicit click, remove what *older* Iris versions wrote into `~/.claude` — including the retired `iris-po.md` / `iris-dev.md` personas.

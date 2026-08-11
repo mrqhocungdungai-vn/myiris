@@ -14,11 +14,20 @@ Underneath, Iris reaches Claude Code through seven named tools, each with its ow
 | --- | --- | --- |
 | "I want to add dark mode" | **Shape** | Grills you to settle the requirements, then writes an [OpenSpec](https://github.com/Fission-AI/OpenSpec) change |
 | "draw that out", "what's on my diagram?" | **Canvas** | The same conversation, on the drawing canvas — it can read and draw on it |
+| "work on this note with me", "tidy this up" | **Note** | Works on the note you have open, in conversation, and asks before it changes your words |
 | "build it", "fix this bug", "rename that file" | **Build** | Does the work. With an open change it implements its tasks; without one it just does what you asked |
 | "wrap that change up", "archive it" | **Finish** | Verifies the tasks are done and folds the change into the living spec |
-| "what's left?", "how does X work?" | **Look** | Reads the project and answers. It cannot change anything |
-| "review what it just did" | **Review** | Judges the work and reports findings |
+| "what's left?", "how does X work?", "review what it just did" | **Look** | Reads the project and answers — explaining, or judging work that already exists when you ask for a verdict. It cannot change anything |
 | "save what we learned" | **Notes** | Weaves what has happened into your second brain |
+
+**What is actually behind one of these names.** Not a function and not a preset
+prompt: a **full Claude Code agent**, running in the app on the bundled Claude
+Code, with its own model, its own skills, its own bounds on what it may touch,
+and its own spend ceiling. Iris chooses which one runs, from what you said and
+what your project looks like — there is nothing for you to set. The one place
+*you* stand in the path is the approval below, which happens before any token is
+spent. "Talk mode" and "Build mode" are just how Iris *describes* the two halves
+when you ask what she can do; they are not settings, and there is no switch.
 
 Work that goes through the full process still flows the same way — shaping produces a change on disk, and building implements it — but **the ordering follows from the project's own state, not from you enforcing it**:
 
@@ -34,13 +43,13 @@ You (voice) ──▶ Shape (grills you, proposes an OpenSpec change)
                 Finish (archives it) ──▶ openspec/specs/  (the living spec, updated)
 ```
 
-- **Shape and Canvas are live** — they can pause mid-turn to ask you something by voice, and they share one conversation, so moving to the canvas continues what you were already discussing.
-- **The other five are headless** — they never ask; they do the work, verify themselves, and report back.
+- **Shape, Canvas and Note are live** — each can pause mid-turn to ask you something by voice. Shape and Canvas share one conversation, so moving to the canvas continues what you were already discussing; Note keeps its own conversation per note, so coming back to a note picks that note up rather than the last one.
+- **The other four are headless** — they do the work, verify themselves, and report back, normally listing any decisions at the end rather than stopping to ask. The one exception is **Build with no open change**: nothing was settled up front, so it may ask you once instead of guessing.
 - You never type the underlying `/opsx:propose`, `/opsx:apply`, or `/opsx:archive` commands. Iris invokes them.
 
 ### Which requests stop for your approval
 
-Two of these write to your project — **Build** and **Finish** — so by default each one is **parked for your review** before anything starts: you see the full brief on screen and approve, edit, or cancel it, and nothing has been sent to Claude until you do. Opening a new shaping conversation is parked once, at the start; steering that conversation afterwards is not, because you already agreed to it. Look, Review, and Notes change nothing, so they run straight away.
+Two of these write to your project — **Build** and **Finish** — so by default each one is **parked for your review** before anything starts: you see the full brief on screen and approve, edit, or cancel it, and nothing has been sent to Claude until you do. Opening a live conversation (Shape, Canvas, or Note) is parked once, at the start; steering that conversation afterwards is not, because you already agreed to it. Look changes nothing at all and Notes writes only into your second brain, never your project, so both run straight away.
 
 The control is on the pipeline bar and cycles through three settings: **Risky** (the default, above), **All**, and **Off**. It is deliberately not something Iris can change for you.
 

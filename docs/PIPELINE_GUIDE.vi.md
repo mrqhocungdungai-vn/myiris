@@ -16,9 +16,18 @@ Bên dưới, Iris gọi Claude Code qua bảy công cụ có tên riêng, mỗi
 | "vẽ ra đi", "sơ đồ của tôi có gì?" | **Canvas** | Vẫn cuộc hội thoại đó, nhưng trên canvas — nó đọc và vẽ được lên đó |
 | "làm đi", "sửa lỗi này", "đổi tên file kia" | **Build** | Làm việc thật. Có change đang mở thì làm các task của nó; không có thì cứ làm điều bạn yêu cầu |
 | "chốt change đó lại", "archive đi" | **Finish** | Xác minh các task đã xong rồi gộp change vào living spec |
-| "còn gì chưa làm?", "X hoạt động thế nào?" | **Look** | Đọc dự án và trả lời. Nó không sửa được gì cả |
-| "review cái vừa làm đi" | **Review** | Đánh giá công việc và báo cáo các vấn đề |
+| "làm việc với ghi chú này", "dọn lại cái này" | **Note** | Làm việc trên ghi chú bạn đang mở, theo lối hội thoại, và hỏi trước khi sửa chữ của bạn |
+| "còn gì chưa làm?", "X hoạt động thế nào?", "review cái vừa làm đi" | **Look** | Đọc dự án và trả lời — giải thích, hoặc đánh giá công việc đã có khi bạn cần một phán quyết. Nó không sửa được gì cả |
 | "lưu lại những gì học được" | **Notes** | Dệt những gì đã xảy ra vào second brain của bạn |
+
+**Thực chất đằng sau một cái tên đó là gì.** Không phải một hàm, cũng không phải
+một prompt dựng sẵn: đó là **một agent Claude Code đầy đủ**, chạy trong app trên
+bản Claude Code đi kèm, với model riêng, bộ skill riêng, giới hạn riêng về những
+gì nó được phép chạm tới, và mức chi riêng. Iris chọn cái nào chạy, dựa trên điều
+bạn nói và trạng thái dự án của bạn — bạn không phải thiết lập gì. Chỗ duy nhất
+*bạn* đứng trong luồng này là bước duyệt bên dưới, xảy ra trước khi tiêu bất kỳ
+token nào. "Talk mode" và "Build mode" chỉ là cách Iris *diễn đạt* hai nửa đó khi
+bạn hỏi cô ấy làm được gì; chúng không phải thiết lập, và không có công tắc nào.
 
 Công việc đi qua quy trình đầy đủ vẫn chạy theo đúng luồng cũ — shaping tạo ra một change trên đĩa, rồi build triển khai nó — nhưng **thứ tự đó nay đến từ chính trạng thái của dự án, không phải từ việc bạn tự áp đặt**:
 
@@ -34,13 +43,13 @@ Bạn (giọng nói) ──▶ Shape (hỏi vặn, đề xuất một OpenSpec c
                     Finish (archive) ──▶ openspec/specs/  (living spec được cập nhật)
 ```
 
-- **Shape và Canvas chạy sống** — có thể dừng giữa chừng để hỏi lại bạn bằng giọng nói, và chúng dùng chung một cuộc hội thoại, nên chuyển sang canvas là tiếp tục đúng thứ đang bàn dở.
-- **Năm cái còn lại chạy ngầm** — không hỏi bao giờ; tự làm, tự xác minh, rồi báo cáo lại.
+- **Shape, Canvas và Note chạy sống** — mỗi cái đều có thể dừng giữa chừng để hỏi lại bạn bằng giọng nói. Shape và Canvas dùng chung một cuộc hội thoại, nên chuyển sang canvas là tiếp tục đúng thứ đang bàn dở; Note giữ hội thoại riêng cho từng ghi chú, nên quay lại một ghi chú là tiếp tục đúng ghi chú đó chứ không phải ghi chú gần nhất.
+- **Bốn cái còn lại chạy ngầm** — tự làm, tự xác minh, rồi báo cáo lại, và thường liệt kê các quyết định ở cuối chứ không dừng lại để hỏi. Ngoại lệ duy nhất là **Build khi không có change nào đang mở**: chưa có gì được chốt trước, nên nó có thể hỏi bạn một lần thay vì tự đoán.
 - Bạn không bao giờ tự gõ `/opsx:propose`, `/opsx:apply` hay `/opsx:archive`. Iris gọi chúng.
 
 ### Yêu cầu nào sẽ dừng lại chờ bạn duyệt
 
-Hai công cụ ghi vào dự án của bạn — **Build** và **Finish** — nên mặc định mỗi lần gọi đều được **giữ lại chờ bạn duyệt**: bạn thấy toàn bộ brief trên màn hình và chọn duyệt, sửa, hoặc hủy; chưa có gì được gửi cho Claude cho tới lúc đó. Mở một cuộc hội thoại shaping mới cũng được giữ lại một lần, ở đầu; các lượt lái cuộc hội thoại đó về sau thì không, vì bạn đã đồng ý rồi. Look, Review và Notes không sửa gì cả nên chạy thẳng.
+Hai công cụ ghi vào dự án của bạn — **Build** và **Finish** — nên mặc định mỗi lần gọi đều được **giữ lại chờ bạn duyệt**: bạn thấy toàn bộ brief trên màn hình và chọn duyệt, sửa, hoặc hủy; chưa có gì được gửi cho Claude cho tới lúc đó. Mở một cuộc hội thoại sống (Shape, Canvas hoặc Note) cũng được giữ lại một lần, ở đầu; các lượt lái cuộc hội thoại đó về sau thì không, vì bạn đã đồng ý rồi. Look không sửa gì cả, còn Notes chỉ ghi vào second brain của bạn chứ không ghi vào dự án, nên cả hai chạy thẳng.
 
 Nút điều khiển nằm trên pipeline bar và xoay vòng qua ba mức: **Risky** (mặc định, như trên), **All**, và **Off**. Đây là thứ Iris cố ý không tự đổi được cho bạn.
 

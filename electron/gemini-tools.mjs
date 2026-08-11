@@ -22,7 +22,7 @@
 // a capability-specific declaration or prose string.
 //
 // The Claude-facing surface is no longer one undifferentiated task tool. It is
-// eight named verbs, each with its own parameter schema, derived from the verb
+// seven named verbs, each with its own parameter schema, derived from the verb
 // registry — because prose is advice a model may ignore and a schema is a
 // contract the calling interface enforces. See electron/verbs.mjs.
 import { SHARED_SESSION_VERBS, VERB_NAMES, resolveAllVerbs } from "./verbs.mjs";
@@ -36,7 +36,7 @@ import { SHARED_SESSION_VERBS, VERB_NAMES, resolveAllVerbs } from "./verbs.mjs";
  * }} deps
  */
 export function createGeminiTools({ getPipelineAvailable, modelChoices, envFlag, capabilities = [] }) {
-  // The eight verbs, derived from electron/verbs.mjs rather than written out
+  // The seven verbs, derived from electron/verbs.mjs rather than written out
   // here. A verb is defined in one place; the declaration, the review gate, and
   // the run configuration all follow from that one record. Two call sites
   // independently constructing the same thing, with nothing forcing them to

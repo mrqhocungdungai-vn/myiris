@@ -4,14 +4,28 @@
 
 How the Gemini↔Claude bridge works end to end: the realtime audio path, the delegation flow, the main process/renderer split, and the exact Gemini tool surface.
 
+**The shape of the whole thing, in one paragraph.** Every tool Gemini Live can
+call for real work **is a verb** — one of the seven records in
+`electron/verbs.mjs`, each with its own parameter schema. Behind a verb is not a
+function but a **full Claude Code agent**: the Agent SDK's `query()` against the
+`claude` binary bundled in the app, running with that verb's own lifetime
+(resident session or one-shot), model, skills, MCP servers, tool bounds, and
+spend ceiling. **Gemini picks the verb, per request** — there is no role to set,
+no mode to operate, and no requirement that the user knows verbs exist. The one
+place a human stands in the path is the **review gate**, which parks a
+privileged request before any token is spent and waits for an approval or a
+cancellation. Talk/Build is *explanatory* vocabulary Iris uses when asked what
+she can do, not a switch anyone throws (the `talk-and-build-modes` spec requires
+exactly that).
+
 ## Current Architecture
 
 ```mermaid
 flowchart TD
-  User["User speaks"] --> ElectronRenderer["Electron Renderer UI"]
+  User["User speaks"] --> ElectronRenderer["Electron Renderer — src/App.tsx"]
 
   ElectronRenderer -->|"getUserMedia with echoCancellation, noiseSuppression, autoGainControl"| WebRTCAudio["WebRTC Audio Capture"]
-  WebRTCAudio -->|"Downsample to 16k PCM chunks"| ElectronMain["Electron Main Process"]
+  WebRTCAudio -->|"Downsample to 16k PCM chunks"| ElectronMain["Electron Main — live-session.mjs"]
 
   ElectronMain -->|"sendRealtimeInput audio/text"| GeminiLive["Gemini Live API"]
 
@@ -26,19 +40,30 @@ flowchart TD
   GeminiLive -->|"Quick current fact or lightweight search"| GoogleSearch["Gemini Built-in Google Search"]
   GoogleSearch --> GeminiLive
 
-  GeminiLive -->|"Function call: submit_claude_task"| ClaudeTool["Claude Tool Bridge in Electron Main"]
+  Registry["verbs.mjs — the registry: one record per verb, 7 of them"]
+  Registry -->|"resolveAllVerbs(), against the EMPTY project state"| Declarations["gemini-tools.mjs — one function declaration per verb, plus the control tools"]
+  Declarations -->|"declared only while the pipeline is available"| GeminiLive
 
-  ClaudeTool -->|"Agent SDK query({ prompt, options })"| ClaudeCLI["Bundled Claude Code (headless)"]
-  ClaudeCLI --> ClaudeAgent["Claude Agent Run (one continuous session)"]
+  GeminiLive -->|"Function call: a verb, by name"| ToolCall["live-messages.mjs — transcripts flushed first, then dispatch"]
+  ToolCall --> Submit["run-dispatch.mjs submitVerb — resolveVerb, missingRequired, composeBrief"]
+  Submit --> Gate{"run-dispatch.mjs shouldPark — the review gate"}
+  Gate -->|"parked_for_review: no run, no run_id, zero Claude tokens"| Human["The user approves or cancels"]
+  Gate -->|"this verb never parks, or the conversation is already open"| Lane{"run-queue.mjs — which lane"}
+  Human -->|"approved"| Lane
+  Lane -->|"stateful verb with a live resident session: submitResident, per-conversation lane"| Exec["run-exec.mjs startClaudeRun — the verb is re-resolved at run start"]
+  Lane -->|"otherwise: the single global execution slot"| Exec
 
-  ClaudeAgent -->|"Uses terminal, files, web, MCP, skills"| ClaudeTools["Claude Code Tool Ecosystem"]
+  Exec -->|"stateful: a resident query() kept alive across turns — po-session.mjs"| ClaudeAgent["Claude Code agent — the bundled claude binary, headless, carrying its verb's model, skills, MCP servers, tool bounds, budget, and base prompt (role-prompt.mjs)"]
+  Exec -->|"stateless: one one-shot query() per run"| ClaudeAgent
+  ClaudeAgent -->|"Uses terminal, files, web, MCP, its verb's skills"| ClaudeTools["Claude Code Tool Ecosystem"]
 
-  ClaudeCLI -->|"NDJSON stream: tool calls, progress, final result"| ClaudeTool
+  ClaudeAgent -->|"SDK message stream: tool calls, progress, live questions, final result"| Stream["run-stream.mjs"]
+  Stream --> ElectronRenderer
+  ElectronRenderer --> ClaudeTasks["Work Stream Panel"]
 
-  ClaudeTool -->|"Task status updates"| ElectronRenderer
-  ElectronRenderer --> ClaudeTasks["Claude Tasks Panel"]
-
-  ClaudeTool -->|"SYSTEM_EVENT_CLAUDE_COMPLETE"| GeminiLive
+  ClaudeAgent -->|"terminal result"| Finalize["wiring.mjs onFinalized"]
+  Finalize -->|"SYSTEM_EVENT_CLAUDE_COMPLETE, injected in-band"| Announce["announcements.mjs"]
+  Announce --> GeminiLive
   GeminiLive -->|"Proactive spoken summary"| ElectronMain
   ElectronMain -->|"Audio chunks"| ElectronRenderer
   ElectronRenderer --> Speaker
@@ -50,9 +75,13 @@ flowchart TD
 
   User -->|"After wake: hand in front of webcam"| Camera["Webcam getUserMedia"]
   Camera --> MediaPipe["MediaPipe GestureRecognizer (on-device)"]
-  MediaPipe -->|"Landmarks + gesture class"| HandHook["useHandControl hook"]
+  MediaPipe -->|"Landmarks + gesture class"| HandHook["src/hooks/useHandControl.ts"]
   HandHook -->|"Smoothed pointer + gesture state"| ElectronRenderer
 ```
+
+Stations carry file names and no line numbers: the names stay greppable against
+the tree as the files move, and the line references live in the prose below,
+where they are cheap to re-check.
 
 ## How The Flow Works
 
@@ -81,42 +110,64 @@ flowchart TD
    Gemini has two tool paths:
 
    - **Google Search** for quick current facts and simple web lookups.
-   - **Claude tools** for real work: deals, research, coding, files, terminal work, email checks, browser tasks, automation, and anything that should continue in the background.
+   - **A verb** for real work: research, coding, files, terminal work, shaping a change, working on a note, and anything that should continue in the background.
 
-5. **Claude runs work in the background — one continuous session, one task at a time.**
+5. **What Gemini was offered came from the registry.**
 
-   When Gemini calls `submit_claude_task`, Electron main starts a headless Claude Code run through the Agent SDK — `query({ prompt, options })` against the `claude` binary bundled inside the app, under `permissionMode: "bypassPermissions"`. There is no `claude -p` subprocess and no host CLI; see [PIPELINE_INTERNALS.md](PIPELINE_INTERNALS.md) for the full option surface.
+   `electron/verbs.mjs` holds one record per verb, and `buildVerbDeclarations()` (`electron/gemini-tools.mjs:48-54`) maps `resolveAllVerbs()` onto `{ name, description, parameters }`. The declarations are built against the **empty** project state on purpose (`gemini-tools.mjs:46-47`): what a verb is *called for* does not change with the project — only how it then runs does. `buildPipelineToolDeclarations()` adds the control tools, `buildAlwaysToolDeclarations()` adds the interface tools, and each registered capability contributes its own `toolDeclarations`. The full surface is enumerated under [Gemini Tools](#gemini-tools) below.
 
-   The call returns a `run_id` immediately, so Gemini can keep talking while Claude works. Sessions are **user-controlled**: the Work Stream panel has a session picker and a **New** button, and the active session can also be reset by voice ("Iris, new session"). Every task resumes the active session (the SDK's `resume`), so Claude remembers earlier tasks and follow-ups build on previous work — Gemini cannot pick or invent session ids. Tasks run strictly **one at a time**: if Claude is busy, the new task is queued and starts automatically when the current one finishes. Sessions persist across app restarts (`~/.myiris/claude-sessions.json`).
+6. **The tool call arrives — and the words that caused it are flushed first.**
 
-6. **The app streams Claude progress live.**
+   `message.toolCall` is handled in `electron/live-messages.mjs:213`. Before dispatch, the pending transcription is flushed into the ring (`:226-233`), because the run's brief is composed from that transcript the moment dispatch happens — the one sentence a request most needs was otherwise still sitting in a buffer. While listen-only mode is engaged, tool calls are refused here (`:237-238`), before any verb can cost money or write.
 
-   Electron parses the NDJSON stream as Claude works: every tool call (`[Bash] npm test …`) and intermediate note appears in the task card in realtime, so you can see what Claude is doing. When the process exits, the card shows the final result.
+7. **One dispatch path, whichever verb it was.**
 
-7. **Claude completion is fed back to Gemini.**
+   `executeClaudeTool` (`electron/run-dispatch.mjs:527-533`) applies the `PIPELINE_ONLY_TOOLS` backstop (`:512`) and then hands every verb to the one entry point, `submitVerb` (`:310-322`): `resolveVerb(verb, projectState)` resolves the record, `missingRequired` rejects an incomplete call against the verb's own schema, and `composeBrief` builds the prompt from that schema — no verb has formatting code of its own.
 
-   When a run completes, Electron sends Gemini an internal message:
+8. **The review gate is where a human stands in the path.**
 
-   ```text
-   SYSTEM_EVENT_CLAUDE_COMPLETE
-   ```
+   `run-dispatch.mjs:326-336`: `shouldPark` (`:292-300`) reads `getPromptReviewMode()` and the verb's **declared** `park` label — never the brief's wording. A parked request returns `parked_for_review` and has **no run and no `run_id`**: zero Claude tokens are spent until the user approves it.
 
-   Gemini then proactively tells you Claude has returned, summarizes the result, and asks whether you want to go through the details before continuing.
+9. **Which lane the run takes.**
 
-8. **You can interrupt Gemini.**
+   `run-dispatch.mjs:222-235`. A stateful verb whose conversation is *already open* goes to `runQueue.submitResident` (`electron/run-queue.mjs:335-354`) — a per-conversation lane, so the next sentence in a live conversation does not wait behind an unrelated twenty-minute job. Everything else takes the single global execution slot (`run-queue.mjs:142`), which is what "Claude does one thing at a time" means. These are two different questions wearing similar names: consent (has the user taken part in this conversation) is the gate above, mechanics (is there a live session to push a turn into) is this line.
 
-   If you speak while Gemini is talking, Gemini sends an interruption event. The app flushes queued playback so Gemini stops talking over you.
+10. **The agent runs.**
+
+    `startClaudeRun` (`electron/run-exec.mjs:300`) re-resolves the verb **at run start**, so a change proposed while the run sat queued is seen by it, then starts either `startStatefulRun` — a resident `query()` via `electron/po-session.mjs` — or `startStatelessRun`, one one-shot `query()`. Either way it is `query({ prompt, options })` against the `claude` binary bundled inside the app under `permissionMode: "bypassPermissions"`, carrying that verb's model, `skills`, `mcpServers`, tool bounds and budget, with the base prompt coming from one policy module (`electron/role-prompt.mjs`). There is no `claude -p` subprocess and no host CLI; see [PIPELINE_INTERNALS.md](PIPELINE_INTERNALS.md) for the full option surface.
+
+    The tool call returns immediately — a `run_id` for a fresh run, or a queue position — so Gemini can keep talking while Claude works. Sessions are **user-controlled**: the Work Stream panel has a session picker and a **New** button, and the active session can also be reset by voice ("Iris, new session"). Every verb resumes its own prior session (the SDK's `resume`), stateless ones included, so follow-ups build on previous work — Gemini cannot pick or invent session ids. Sessions persist across app restarts (`~/.myiris/claude-sessions.json`).
+
+11. **The app streams progress live.**
+
+    `electron/run-stream.mjs` projects the SDK message stream: every tool call (`[Bash] npm test …`) and intermediate note appears in the task card in realtime, so you can see what Claude is doing. A run permitted to ask — every stateful verb, and `execute` when no change is open — has its mid-turn `AskUserQuestion` relayed by voice from here. On the terminal `result` message the card shows the final result.
+
+12. **Completion is fed back to Gemini in-band.**
+
+    `wiring.mjs:126-188` runs on finalize: the run's tokens are counted, the outcome is appended to the second brain, and then `announceVerbatimResult` (for verbs declaring `spokenResult: "verbatim"` — bounded at 8000 chars) or `announceClaudeCompletion` (2500) hands off to `electron/announcements.mjs`, which injects
+
+    ```text
+    SYSTEM_EVENT_CLAUDE_COMPLETE
+    ```
+
+    into the Live conversation. It is a message *in* the conversation, not a callback: Gemini then proactively tells you Claude has returned, summarizes the result, and asks whether you want the details.
+
+13. **You can interrupt Gemini.**
+
+    If you speak while Gemini is talking, Gemini sends an interruption event. The app flushes queued playback so Gemini stops talking over you.
 
 ## Main Components
 
 Two-process Electron app. The Gemini↔Claude bridge used to live almost entirely
-in `electron/main.mjs`; it's now ~40 single-responsibility modules under
-`electron/`, with Electron API access confined to four of them (`main.mjs`,
-`ipc.mjs`, `window.mjs`, `renderer-security.mjs`) — every other module is
-Electron-free and importable in a plain vitest file with no harness. See the
-`main-process-structure` capability spec for the full discipline.
+in `electron/main.mjs`; it is now spread across single-responsibility modules
+under `electron/`, with Electron API access confined to four of them
+(`main.mjs`, `ipc.mjs`, `window.mjs`, `renderer-security.mjs`) — every other
+module is Electron-free and importable in a plain vitest file with no harness.
+See the `main-process-structure` capability spec for the full discipline. (Module
+and line counts are deliberately not stated here: nothing keeps such a number
+true, and every one this doc used to carry had rotted.)
 
-- **`electron/main.mjs`** (~240 lines) — the composition root: imports every module, wires dependency injection via `wiring.mjs`, and runs the `app.whenReady()` startup sequence, `shutdownTeardown`, and quit handlers. No domain logic.
+- **`electron/main.mjs`** — the composition root: imports every module, wires dependency injection via `wiring.mjs`, and runs the `app.whenReady()` startup sequence, `shutdownTeardown`, and quit handlers. No domain logic.
 - **`electron/wiring.mjs`** (+ **`wiring-capabilities.mjs`**, **`wiring-live.mjs`**) — the composition root's dependency-injection wiring, split across three files purely because the block exceeded the 450-line file-size convention once every module existed. `wiring-capabilities.mjs` wires the canvas/second-brain capabilities, run-exec, and the Gemini tool/prompt modules; `wiring-live.mjs` wires the Live session and window/HUD/tray (a mutual dependency: window reads Live status and listen-only state, Live session reads the tray's `updateTrayMenu`).
 - **`electron/ipc.mjs`** — every `ipcMain.handle`/`on` registration (the renderer↔main channel surface), diffable against `preload.cjs`. Marshals arguments and delegates only. Includes the OS-permission surface (`permissions:query` / `:request` / `:open-settings`) and the self-test arming pair (`system-audio-self-test:arm` / `:disarm`).
 - **`electron/window.mjs`** — the main window, the Glass HUD shape-morph (`enterHud`/`exitHud`/`toggleHud`), and the Tray.
@@ -129,8 +180,9 @@ Electron-free and importable in a plain vitest file with no harness. See the
 - **`electron/capabilities/prepared-answers.mjs`** — the `find_prepared_answer` declaration and prompt fragment. The open folder arrives as an injected getter (the same one `get_workspace_info` reports), the text is fenced with `fenceUntrustedText` on the way to the model, and the capability holds no state and owns no channel.
 - **`electron/gemini-tools.mjs`** / **`gemini-prompts.mjs`** — Gemini's function-declaration schemas and system-instruction prose; both compose contributions from registered capabilities rather than hardcoding them.
 - **`electron/session-store.mjs`** — workstreams, the agent roster, and per-role model selection.
-- **`electron/verbs.mjs`** — the verb registry: one record per verb (statefulness, park label, session key, model, skills, MCP servers, budget, parameter schema, persona, clause). Pure, Electron-free, and the single definition every consumer derives from.
+- **`electron/verbs.mjs`** — the verb registry: one record per verb, and everything a run needs follows from it. Statefulness, park label, session key, model, `skills`, `mcpServers`, budget, parameter schema, persona and clause — plus the fields that are easy to miss and shape real behavior: `speakWhileWorking` (whether the worker's own prose is spoken as it works, read at `run-stream.mjs`), `spokenResult` (`"verbatim"` gets read out at up to 8000 chars instead of summarized), `vault` (second-brain access: `additionalDirectories` plus the notes clause), `structuredOutput` (the `summary`/`decisions[]` schema in `run-output-format.mjs`), `disallowedTools` (the *structural* tool bound — this, not the prompt, is what makes "cannot ask" and "cannot write" guarantees), and `guardOpenNoteWrites` (the Edit/Write confirm seam over the note the user has open). Pure, Electron-free, and the single definition every consumer derives from.
 - **`electron/run-dispatch.mjs`** (+ **`run-stream.mjs`**, **`run-exec.mjs`**) — the pre-dispatch review gate and tool-execution surface; run activity/tool-step streaming and the live-question relay; driving both run shapes (stateful and stateless, both via the Agent SDK's `query()`).
+- **`electron/run-queue.mjs`** — the two lanes a submitted run can take. `submit` acquires the **single global execution slot** (`active`, backed by an idle watchdog): that slot is what "Claude does one thing at a time" means, and a run that cannot have it is queued and starts automatically. `submitResident` is the **per-conversation lane** for a turn pushed into a conversation that is already open — it never takes the slot and waits only for the previous turn of its own conversation, because a turn into a live session shares one context window and cannot begin a second worker. Safe against the slot by construction: every slot side-effect in `finalize` is guarded on `active === runId`, so a resident run cannot disarm the active run's watchdog or take its place in the queue. Both lanes finalize through the same `finalize()`.
 - **`electron/run-context.mjs`** (+ **`untrusted-text.mjs`**) — composes a run's brief from its verb's own parameter schema and attaches the bounded, fenced transcript of what the user actually said.
 - **The note reader's hand-editing write** (`add-manual-note-editing`) — `secondbrain:write-note` and `secondbrain:open-note-externally` in `capabilities/second-brain.mjs`, the app's **only** arbitrary-content vault write. It is reachable from the note reader's editor and from nowhere else: not a verb, not an MCP tool, not in any skills surface — which is what keeps `personal-knowledge-notes`'s model-facing rule ("only enumerated structural operations") true while the vault's owner can still type in their own note. It shares `resolveVaultNotePath(id)` with `read-note`, so ghost nodes, unknown ids and symlinks escaping the vault are refused by the same guard. `read-note` serves a content-hash `revision` that a save must present, so a write is **refused** (never merged, never silently clobbered) when Claude's note session, a capture, or another app changed the file in between; overwriting is a separate explicit user act. A save to the currently-open note pushes a `SYSTEM_EVENT_NOTE_EDITED` so a resident note session re-reads instead of acting on a superseded paragraph division. `shell.openPath` is injected as `openPathExternally` from `main.mjs` through the wiring, so the capability stays Electron-free.
 - **`electron/vault-write.mjs`** — the one module that owns writing to the second-brain vault: synchronous and async spool-append (`appendSpoolRecordSync`/`appendSpoolRecord`), an atomic, title-sanitized note-page writer (`createNotePage`), and the three enumerated structural edits (`linkNotes`, `unlinkNotes`, `setNoteTags`) that back the `mutate_vault_notes` tool. Electron-free, injected `fs`, never throws.
@@ -176,12 +228,53 @@ uses (see the `wake-sleep-voice` and `hud-activation` specs).
 
 ## Gemini Tools
 
-Gemini Live is configured with `{ googleSearch: {} }` (if billing is enabled) plus a `functionDeclarations` set that includes interface-control tools (`get_ui_context`, `control_ui`, `go_to_sleep`) always, and the Claude pipeline tools (`check_claude_status`, `submit_claude_task`, `get_claude_task_status`, `stop_claude_task`, `start_new_claude_session`, `get_workspace_info`, `answer_po_question`, `set_agent_model`) **only when the Claude pipeline is available** (see the [Pipeline Guide](PIPELINE_GUIDE.md)) — so in chat-only mode Gemini is never given a tool it can't use, and never offers to delegate.
+Gemini Live is configured with `{ googleSearch: {} }` (if billing is enabled)
+plus one `functionDeclarations` set, assembled in `electron/gemini-tools.mjs`
+from four sources.
+
+**The seven verbs** — the work surface, derived from `electron/verbs.mjs` and
+never written out in the tools module: `shape_requirements`, `shape_on_canvas`,
+`work_on_note`, `execute`, `finish`, `investigate`, `capture_learning`. Each
+carries its own parameter schema, because prose is advice a model may ignore and
+a schema is a contract the calling interface enforces. The per-verb detail —
+model, statefulness, park label, skills, tool bounds — is in
+[PIPELINE_INTERNALS.md](PIPELINE_INTERNALS.md#the-verb-registry).
+
+**The control tools** — everything about a run that is not the work itself:
+`check_claude_status`, `get_workspace_info`, `get_project_state`,
+`get_claude_task_status`, `stop_claude_task`, `start_new_claude_session`,
+`answer_claude_question` (answers a **live**, blocking mid-run question),
+`set_verb_model`, and `respond_to_task_review` (approves or cancels a **parked**
+request that has not started at all — deliberately a different tool from
+`answer_claude_question`, because they act on different things).
+
+**The interface tools**, declared always because they have nothing to do with
+Claude: `get_ui_context`, `control_ui`, `go_to_sleep`.
+
+**The worker-free tools**, contributed by capabilities: `capture_note`,
+`find_note_by_name`, `mutate_vault_notes`
+(`electron/capabilities/second-brain.mjs`) and `find_prepared_answer`
+(`electron/capabilities/prepared-answers.mjs`). These are local reads and
+enumerated writes — no run, no tokens, no execution slot, no credential — which
+is why they sit outside `PIPELINE_ONLY_TOOLS` on purpose.
+
+The verbs and the control tools are declared **only when the Claude pipeline is
+available** (see the [Pipeline Guide](PIPELINE_GUIDE.md)) — so in chat-only mode
+Gemini is never given a tool it can't use, and never offers to delegate.
+`executeClaudeTool` re-checks `PIPELINE_ONLY_TOOLS` at call time as a defensive
+backstop, not as the primary gate.
+
+`submit_claude_task` still appears in the declarations, described to the model as
+**deprecated — do not call this**. It exists only so a Gemini session resumed
+mid-conversation does not call a tool that has vanished; it dispatches as
+`execute`, and it is retained for one release. It is not the delegation path and
+nothing new should route through it.
 
 Routing behavior:
 
 - Quick answer or current fact: **Gemini Search**.
-- Multi-step work or background task: **Claude**.
+- Multi-step work or background task: **a verb** — Gemini picks which one.
+- A request purely about the interface, not new work: **`control_ui`**, never a verb.
 - Claude completion: **Gemini proactively announces result**.
 - A stateful run pauses mid-task with a question (`SYSTEM_EVENT_PO_QUESTION`): **Gemini reads it aloud immediately and answers via `answer_claude_question`** once the user responds — distinct from the end-of-run "Decisions needed" relay, which applies to the stateless verbs and to a stateful run's lower-stakes calls.
 

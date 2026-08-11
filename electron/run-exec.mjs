@@ -317,7 +317,7 @@ export function createRunExec({
       return;
     }
     run.verbConfig = verb;
-    // Every dispatch records why it happened: offering eight verbs creates more
+    // Every dispatch records why it happened: offering seven verbs creates more
     // ways to select wrongly than one general tool did, and that trade is only
     // acceptable while every selection is inspectable afterwards. The brief
     // itself is deliberately absent — it is the user's content, not diagnostics.
@@ -495,7 +495,7 @@ export function createRunExec({
       // picks up the settings of the repository it is working in.
       settingSources: /** @type {Array<"project">} */ (["project"]),
       // Not "all": a run sees only the skills its own work needs, declared by
-      // its verb. Without this, eight verbs would be eight names for one agent —
+      // its verb. Without this, seven verbs would be seven names for one agent —
       // the scoping is the substance and the verb table is the vehicle. The
       // lists and the evidence behind each entry live in run-skills.mjs.
       skills: verb.skills,

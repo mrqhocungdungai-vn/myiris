@@ -1,0 +1,5 @@
+schema: spec-driven
+created: 2026-08-11
+# Docs/comments truth-fix only: the living spec is correct at every audited
+# point (design.md D1); the drift is in docs/, README, and code comments.
+skip_specs: true
