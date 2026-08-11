@@ -164,7 +164,7 @@ have a red-first step, because only they change behavior.
 
 - [x] 6.1 All five gates (`/gates`) green; `npm run build` proves tsc closure
       over every renderer rename.
-- [ ] 6.2 Live smoke (packaged or `npm run dev`): (a) trigger a run that asks —
+- [x] 6.2 Live smoke (packaged or `npm run dev`): (a) trigger a run that asks —
       the question banner renders, a voice answer lands through
       `answer_claude_question`, the run completes with the choices (the
       `SYSTEM_EVENT_CLAUDE_QUESTION` + `claude_question` + IPC path
@@ -173,4 +173,7 @@ have a red-first step, because only they change behavior.
       (c) a note turn on the stateful session resumes its prior conversation
       (session-key continuity across the rename); (d) log shows
       `[IRIS][claude-auth]` at startup.
-- [ ] 6.3 Archive; deltas sync into `openspec/specs/`.
+- [x] 6.3 Archive; deltas sync into `openspec/specs/`. Synced at 5.1 rather
+      than here, so the archive's own spec update was a no-op — it reported
+      `+ 0, ~ 0, - 0` and the three spec files hash identically before and
+      after. The living spec and the delta agreed before either was merged.
