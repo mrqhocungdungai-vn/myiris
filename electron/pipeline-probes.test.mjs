@@ -75,7 +75,8 @@ describe("pipeline-probes", () => {
     process.env.ANTHROPIC_API_KEY = "sk-test";
     expect(probes.claudeCredentialStatus()).toEqual({ ok: true, kind: "api-key" });
 
-    // A subscription token outranks the API key: it is the billing path PO wants.
+    // A subscription token outranks the API key: it is the billing path a
+    // long-running resident session is priced for.
     process.env.CLAUDE_CODE_OAUTH_TOKEN = "tok";
     expect(probes.claudeCredentialStatus()).toEqual({ ok: true, kind: "subscription" });
   });

@@ -280,8 +280,8 @@ describe("run-queue", () => {
     expect(queue.status(active.run_id)).toBe(RUN_STATUS.CANCELLED);
     expect(cancelCalls).toEqual([active.run_id]);
     // Not finalized yet — stop() itself never releases the slot for a
-    // no-child run, exactly as it doesn't for the DEV (killWithEscalation)
-    // branch until the transport actually terminates.
+    // no-child run, exactly as it doesn't for the subprocess
+    // (killWithEscalation) branch until the transport actually terminates.
     expect(queue.get(active.run_id).finalized).not.toBe(true);
 
     // A further submit still queues — the slot is still held.

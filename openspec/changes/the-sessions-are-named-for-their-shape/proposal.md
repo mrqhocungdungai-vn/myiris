@@ -43,6 +43,15 @@ pair has no module of its own — it hides inside `run-exec.mjs` (1040 lines).
   but no production code sets `run.agent` — the guard is dead, kept green only
   by a test fixture. It becomes `claudeTurnRunning()` with an honest predicate
   (any running run), test rewritten first.
+- **A second, smaller one, found by rewording the message that carried it:**
+  the startup billing line (`logClaudeBillingPathOnce`, live-session.mjs:261)
+  branched on `billing.ok`, which is true for *either* credential — so an
+  API-key-only user was told at every launch that runs would "bill against the
+  Claude subscription". Rewording it to current vocabulary meant either
+  restating that or branching on `billing.mode`; it now branches, and names
+  metered billing when that is what applies. Asserted per branch
+  (live-session.test.mjs), which nothing did before: the existing test checked
+  only that the line was logged, never what it said.
 
 ## Non-goals (frozen surface)
 
@@ -69,7 +78,8 @@ pair has no module of its own — it hides inside `run-exec.mjs` (1040 lines).
   `PoQuestionBanner.tsx`, `SetupPanel.tsx`, `styles/claude.css`; three
   `vi.mock` blocks and the `ipc.test.mjs` channel roster;
   `scripts/check-spec-drift.mjs` allowance anchors; docs + `.env.example`.
-- No behavior change except the `claudeTurnRunning` fix and the env alias.
+- No behavior change except the two defect fixes above (`claudeTurnRunning`, and
+  which credential the startup log names) and the env alias.
   Session resume is safe: the persisted key namespace is already `"stateful"`,
   `note:<id>`, `execute` — no on-disk artifact carries "po" after first-load
   migration.

@@ -87,9 +87,9 @@ describe("nameSession", () => {
   it("names the session", async () => {
     const rename = vi.fn(async () => {});
     await expect(
-      nameSession("s1", "Iris · PO", { dir: "/tmp/project", rename, claudeHome: HOME, env: {} }),
+      nameSession("s1", "Iris · Shape requirements", { dir: "/tmp/project", rename, claudeHome: HOME, env: {} }),
     ).resolves.toBe(true);
-    expect(rename).toHaveBeenCalledWith("s1", "Iris · PO", { dir: "/tmp/project" });
+    expect(rename).toHaveBeenCalledWith("s1", "Iris · Shape requirements", { dir: "/tmp/project" });
   });
 
   it("does nothing without an id or a label", async () => {

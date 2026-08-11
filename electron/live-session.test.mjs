@@ -791,3 +791,67 @@ describe("live-session: onAwake/onAsleep (ambient session capture)", () => {
     }
   });
 });
+
+// The startup line naming which credential a run will bill against. Asserted by
+// BRANCH, not just by "it was called": the message used to read "will bill
+// against the Claude subscription" whenever any credential was present, so an
+// API-key-only user was told they were on a subscription they had not bought.
+// wiring-live.test.mjs checks the call happens; nothing checked what it said.
+describe("live-session: which credential the startup log names", () => {
+  /** @param {Record<string, string>} env */
+  function logWith(env) {
+    delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    delete process.env.ANTHROPIC_API_KEY;
+    Object.assign(process.env, env);
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      make().logClaudeBillingPathOnce();
+      return {
+        logged: log.mock.calls.map(([line]) => String(line)).join("\n"),
+        warned: warn.mock.calls.map(([line]) => String(line)).join("\n"),
+      };
+    } finally {
+      log.mockRestore();
+      warn.mockRestore();
+    }
+  }
+
+  it("names the subscription when a subscription token is set", () => {
+    const { logged, warned } = logWith({ CLAUDE_CODE_OAUTH_TOKEN: "tok" });
+    expect(logged).toContain("[IRIS][claude-auth]");
+    expect(logged).toMatch(/bill against the Claude subscription/);
+    expect(warned).toBe("");
+  });
+
+  // The credential that pays outranks the one that does not: a subscription
+  // token present means the API key is stripped from the worker environment
+  // (worker-env.mjs), so the log must say subscription, not per-token.
+  it("still names the subscription when both credentials are set", () => {
+    const { logged } = logWith({ CLAUDE_CODE_OAUTH_TOKEN: "tok", ANTHROPIC_API_KEY: "sk-test" });
+    expect(logged).toMatch(/bill against the Claude subscription/);
+    expect(logged).not.toMatch(/per token/);
+  });
+
+  // The branch that did not exist: an API key IS a working credential, and
+  // reporting it as a subscription was a false account of what the user pays.
+  it("names metered billing when only an API key is set", () => {
+    const { logged, warned } = logWith({ ANTHROPIC_API_KEY: "sk-test" });
+    expect(logged).toMatch(/bill per token against ANTHROPIC_API_KEY/);
+    expect(logged).not.toMatch(/bill against the Claude subscription/);
+    expect(warned).toBe("");
+  });
+
+  // No credential is the honest chat-only state: it warns, and says both ways
+  // out rather than only the subscription one.
+  it("warns with both remedies when there is no credential at all", () => {
+    const { logged, warned } = logWith({});
+    expect(logged).toBe("");
+    expect(warned).toContain("[IRIS][claude-auth]");
+    expect(warned).toMatch(/CLAUDE_CODE_OAUTH_TOKEN/);
+    expect(warned).toMatch(/ANTHROPIC_API_KEY/);
+    // Voice conversation does not need a Claude credential, and a warning that
+    // implied otherwise would read as the whole app being broken.
+    expect(warned).toMatch(/Voice conversation is unaffected/);
+  });
+});

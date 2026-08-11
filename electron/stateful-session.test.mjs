@@ -281,7 +281,7 @@ describe("stateful-session canvas MCP wiring", () => {
 
 // Cancellation: interrupt the turn, keep the resident conversation. Tearing the
 // transport down to stop one turn threw away the context window that is the
-// whole reason PO is a live session.
+// whole reason this shape is a live session.
 describe("cancelStatefulTurn", () => {
   function withInterrupt(source, receipt) {
     source.query.interrupt = async () => receipt;
