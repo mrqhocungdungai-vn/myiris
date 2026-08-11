@@ -22,6 +22,32 @@ import { composeBrief, missingRequired } from "./run-context.mjs";
 // the whole reason two dispatch surfaces are tolerable for one release.
 const DEPRECATED_TASK_TOOL = "submit_claude_task";
 
+// Tools that only make sense when the pipeline is available — declared to
+// Gemini only when pipelineAvailable is true (see geminiTools.buildClaudeTools).
+// This guard is a defensive backstop, not the primary gate: Gemini should never
+// call one of these in chat-only mode since it was never given the
+// declaration, but a stray call (e.g. a race right after availability drops)
+// gets a clean error instead of throwing.
+//
+// Exported so a test can hold it against the tool declarations themselves:
+// this is a hand-maintained second copy of that list, and the failure mode is
+// silent — a pipeline tool omitted here stays callable with no credential, and
+// nothing else would notice. See run-dispatch.pipeline-tools.test.mjs, which
+// also records the tools deliberately left OUT.
+export const PIPELINE_ONLY_TOOLS = new Set([
+  ...VERB_NAMES,
+  DEPRECATED_TASK_TOOL,
+  "check_claude_status",
+  "get_claude_task_status",
+  "stop_claude_task",
+  "start_new_claude_session",
+  "get_workspace_info",
+  "get_project_state",
+  "answer_claude_question",
+  "set_verb_model",
+  "respond_to_task_review",
+]);
+
 /**
  * @param {{
  *   runQueue: any,
@@ -502,26 +528,6 @@ export function createRunDispatch({
     emitToRenderer("iris:ui-action", { action, target_id, query });
     return { status: "sent", action, target_id, query };
   }
-
-  // Tools that only make sense when the pipeline is available — declared to
-  // Gemini only when pipelineAvailable is true (see geminiTools.buildClaudeTools).
-  // This guard is a defensive backstop, not the primary gate: Gemini should never
-  // call one of these in chat-only mode since it was never given the
-  // declaration, but a stray call (e.g. a race right after availability drops)
-  // gets a clean error instead of throwing.
-  const PIPELINE_ONLY_TOOLS = new Set([
-    ...VERB_NAMES,
-    DEPRECATED_TASK_TOOL,
-    "check_claude_status",
-    "get_claude_task_status",
-    "stop_claude_task",
-    "start_new_claude_session",
-    "get_workspace_info",
-    "get_project_state",
-    "answer_claude_question",
-    "set_verb_model",
-    "respond_to_task_review",
-  ]);
 
   /** @param {string} name @param {any} [args] */
   async function executeClaudeTool(name, args = {}) {
