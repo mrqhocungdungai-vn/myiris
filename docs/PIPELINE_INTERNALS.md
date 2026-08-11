@@ -11,8 +11,8 @@ subscription path.
 Read this before changing anything in the pipeline modules under `electron/`
 (`verbs.mjs`, `pipeline-probes.mjs`, `pipeline-install.mjs`, `run-dispatch.mjs`,
 `run-stream.mjs`, `run-exec.mjs`, `run-context.mjs`, `run-inbox.mjs`,
-`vault-write.mjs`, `session-store.mjs`, `user-config.mjs`) or
-`electron/po-session.mjs`. The
+`vault-write.mjs`, `session-store.mjs`, `user-config.mjs`) or the two run-shape
+modules `electron/stateful-session.mjs` / `electron/stateless-session.mjs`. The
 corresponding living specs are in `openspec/specs/` (`verb-tool-surface`,
 `pipeline-availability`, `voice-decision-relay`, `per-verb-model-selection`,
 `agent-subscription-auth`, `openspec-native-pipeline`, `run-execution-queue`,
@@ -23,7 +23,7 @@ wins and this doc needs fixing.
 
 `electron/verbs.mjs` holds **one record per verb**, and everything else derives
 from it: `gemini-tools.mjs` builds the function declarations, `run-dispatch.mjs`
-reads the park label, `run-exec.mjs` builds the `query()` options. A verb is
+reads the park label, and the two session modules build the `query()` options. A verb is
 defined in one place, because three hand-wired copies of a definition is exactly
 the mechanism that let `appendSystemPrompt` sit unread for months.
 
@@ -74,7 +74,7 @@ The runtime axis is **stateful vs stateless**, and `stateful` means one thing
 only: this verb's runs may pause mid-turn and ask by voice.
 
 - **Stateful — a resident session.** A persistent
-  `@anthropic-ai/claude-agent-sdk` session (`electron/po-session.mjs`) kept alive
+  `@anthropic-ai/claude-agent-sdk` session (`electron/stateful-session.mjs`) kept alive
   across turns: one continuous context window, no respawn/replay per turn. It can
   pause mid-turn via `AskUserQuestion` and get a voice answer back before
   continuing (see "Voice decision relay" below).
@@ -116,7 +116,7 @@ The system holds four such slots, each in its own module:
 | Slot | Owner | Funnel |
 | --- | --- | --- |
 | A pending voice question | `PendingQuestion` (`electron/run-stream.mjs`) | `settle()` + its own timeout |
-| A stateful verb's in-flight turn | `state.currentTurn` (`electron/po-session.mjs`) | settles on turn end, session end, or cancel |
+| A stateful verb's in-flight turn | `state.currentTurn` (`electron/stateful-session.mjs`) | settles on turn end, session end, or cancel |
 | The single execution slot | `active` (`electron/run-queue.mjs`) | `finalize()`, backed by the idle watchdog |
 | A parked prompt review | `electron/run-dispatch.mjs` | settle-once relay, deliberately mirroring `PendingQuestion` |
 
@@ -126,7 +126,7 @@ one `settle()`, with a `setTimeout` as the backstop. The other three were brough
 to that shape afterwards, one bug at a time.
 
 **The invariant lives at each slot, never in a central lifecycle manager.** A
-manager would have to couple `run-queue.mjs` to `po-session.mjs`, collapsing
+manager would have to couple `run-queue.mjs` to `stateful-session.mjs`, collapsing
 exactly the module boundary the main-process split exists to maintain. The
 authoritative per-slot requirements are in `openspec/specs/run-execution-queue/`
 and `openspec/specs/prompt-review-gate/`.
@@ -146,7 +146,7 @@ produced bugs that typechecked perfectly:
 
 ## Pipeline availability (chat-only mode)
 
-- `pipelineAvailable` (owned by `electron/pipeline-probes.mjs`) is the single source of truth for whether the Claude pipeline is on. Set by `probePipelineAvailability()`, and it takes **two** inputs together (`pipeline-probes.mjs`): the bundled binary answers a `--version` probe (`checkClaudeStatus().reachable`) **and** at least one credential is configured (`claudeCredentialStatus()` — `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`). The two stay deliberately distinct in what `checkClaudeHealth()` reports: `reachable` is strictly "the bundled binary launched", so the SetupPanel can tell a packaging failure apart from a user who simply has not logged in yet. `poBillingStatus()` answers a third question again — *which* credential pays for the stateful verbs; see "Subscription auth" below.
+- `pipelineAvailable` (owned by `electron/pipeline-probes.mjs`) is the single source of truth for whether the Claude pipeline is on. Set by `probePipelineAvailability()`, and it takes **two** inputs together (`pipeline-probes.mjs`): the bundled binary answers a `--version` probe (`checkClaudeStatus().reachable`) **and** at least one credential is configured (`claudeCredentialStatus()` — `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`). The two stay deliberately distinct in what `checkClaudeHealth()` reports: `reachable` is strictly "the bundled binary launched", so the SetupPanel can tell a packaging failure apart from a user who simply has not logged in yet. `claudeBillingStatus()` answers a third question again — *which* credential pays for the stateful verbs; see "Subscription auth" below.
 - Probed at app boot (fire-and-forget) and at the top of every `connectLive()` call (fresh connect or Live's periodic reconnect) — Live tool declarations are fixed per session, so availability flipping mid-session only changes the declared tool surface on the next (re)connect. Also re-probed by `checkClaudeHealth()`, the SetupPanel's "Check Claude" / re-check path.
 - Gates three things from one flag, no separate toggles: `buildClaudeTools()` only spreads in `buildPipelineToolDeclarations()` — the seven verbs plus the control tools — when true (interface-control tools from `buildAlwaysToolDeclarations()` are always declared); `buildSystemInstructionText()` includes the pipeline paragraphs only when true, with a short chat-only alternative otherwise — one builder, not two maintained prompts; `executeClaudeTool` additionally guards `PIPELINE_ONLY_TOOLS` at call time as a defensive backstop.
 - The renderer learns the value via `window.iris.getPipelineStatus()` (IPC `pipeline:status`, read at mount) and the `pipeline_availability` sidecar event (emitted only when the value changes). `App.tsx` holds it as `pipelineAvailable` state and conditionally renders Work Stream, PipelineBar, the workstream switcher (nested inside WorkStream), TaskChooser, and — inside `HudShell` via a passed-down prop — the HUD tasks column and the live-question banner.
@@ -169,7 +169,7 @@ produced bugs that typechecked perfectly:
    verb spawns a one-shot `query()` and **returns a `run_id` immediately** —
    Gemini Live function calls are synchronous, so a tool call must never block on
    long work. A stateful verb delivers the request as a new turn into the
-   resident session (`getOrCreatePoSession`/`deliverPoTurn` in `po-session.mjs`),
+   resident session (`getOrCreateStatefulSession`/`deliverStatefulTurn` in `stateful-session.mjs`),
    created on the first stateful turn in a workstream.
 3. Both shapes report progress through the same projection: SDK messages are
    routed through `handleClaudeStreamMessage`, each tool call/note pushed to the
@@ -178,7 +178,7 @@ produced bugs that typechecked perfectly:
 4. On completion, main injects `SYSTEM_EVENT_CLAUDE_COMPLETE` into the Gemini
    session so it proactively announces the result. Other internal events follow
    the same `SYSTEM_EVENT_*` convention (`SESSION_START`, `WORKSPACE_UPDATE`,
-   `PO_QUESTION`, `TASK_REVIEW_PARKED`, `TASK_REVIEW_RESOLVED`).
+   `CLAUDE_QUESTION`, `TASK_REVIEW_PARKED`, `TASK_REVIEW_RESOLVED`).
 5. `runQueue` has **two lanes**, and which one a turn takes is the difference
    between answering now and waiting behind unrelated work. The **single global
    execution slot** (`submit`, `run-queue.mjs`) is what "Claude does one thing at
@@ -254,16 +254,16 @@ naming a review-mode mutation tool is refused.
 
 ## Voice decision relay
 
-- A stateful run may call `AskUserQuestion` mid-turn (its persona and its system prompt say so explicitly). The SDK's `canUseTool` callback in `po-session.mjs` intercepts it and awaits an answer from `askUserQuestionViaVoice` in `run-stream.mjs`.
+- A stateful run may call `AskUserQuestion` mid-turn (its persona and its system prompt say so explicitly). The SDK's `canUseTool` callback in `stateful-session.mjs` intercepts it and awaits an answer from `askUserQuestionViaVoice` in `run-stream.mjs`.
 - **A stateless run may too, but only where nothing upstream settled the work.** `execute` with an open change cannot ask — the task list is settled, the grilling happened in shaping, and that is the long unattended path whose value is that the user can walk away. `execute` with *no* open change can: there is no upstream to have resolved anything, so withholding the question tool does not stop the run needing the answer, it makes it invent one and write the result. The permission is a resolved field of the verb (see below), never a parameter the voice layer supplies.
 - **The rule is enforced, not just stated, and in both directions.** Measured: `AskUserQuestion` is only offered to the model when a `canUseTool` callback is present, and `disallowedTools` removes it even then. So `disallowedTools` *is* the guarantee — and it is declared per verb in `verbs.mjs`, resolved against project state like `skills` and `clause` (there is no verb-name conditional in `resolveVerb`). `run-exec.mjs` then narrows the resolved list by a **second, independent** condition: the injected `canRelayQuestion()` predicate (the live session's own status), so a run is never offered a tool whose answer nothing could deliver. `role-prompt.mjs` picks the run's base clause from that same effective list, so the prose can neither promise a tool the run was not given nor withhold one it was.
 - The `canUseTool` handler stays in place for a run that *is* permitted to ask, because permission is granted at run start and the listener can go away while the run continues. Reaching it with no listener aborts with a diagnostic rather than waiting — that abort is the only thing between a mid-run sleep and a run parking the single execution slot forever.
 - `investigate` additionally carries `Write`/`Edit`/`NotebookEdit` in that list — investigating does not modify, and that has to be structural too; a withheld edit tool is denied *without* ending the run, since the model can still answer. The prompt is the explanation of when asking is *warranted*; the configuration is the guarantee of whether it is *possible*.
 - A question is relayed **without losing its shape**: its `header` (short topic label) and `multiSelect` flag both reach the voice layer and the UI. `AskUserQuestion`'s `answers` map takes one string per question with multi-select answers **comma-separated**, and every answer path — voice, click, and the timeout default — encodes through the one `encodeAnswer` in `run-stream.mjs`, so none of them can silently reduce a multi-select question to a single choice.
-- `askUserQuestionViaVoice` emits `SYSTEM_EVENT_PO_QUESTION` (and a `po_question` sidecar event for the UI) and registers a single global `pendingPoQuestion`: the relay holds **one** question slot. That used to be argued from the queue — one run system-wide, so one asker — but the resident lane means a turn in an already-open conversation runs alongside whatever holds the execution slot, and the verbs that may ask sit on both sides of that line (the stateful verbs, and `execute` with no open change). The single slot is a property of the relay itself, not something the queue enforces on its behalf.
-- Two paths can answer it: the Gemini tool `answer_claude_question` (primary, voice) or `window.iris.answerPoQuestion` (secondary, UI click) via `ipcMain.handle("po:answer-question", ...)`. Whichever resolves first wins; `resolvePendingPoQuestion` is a no-op once already settled.
-- **An answer names its question by NUMBER, and the app owns the mapping back to text.** The relay lists the questions numbered; `answer_claude_question` requires that number, and `resolvePendingPoQuestion` looks the question up in `PendingQuestion.current.questions` and builds the SDK's answers map from *the verb's own question text*. That string never round-trips through the voice layer. It used to: the map was keyed on the question sentence retyped by a speech model that had just read it aloud in translation, and one character off matched nothing — no error, no warning, the run proceeded as though nobody had answered. An answer whose number matches no pending question is now a reported **error**, and the question is left pending: being answered and misfiled is not the same as going unanswered.
-- Unanswered after `IRIS_PO_QUESTION_TIMEOUT_MS` (default 300000ms/5min): **what that settles as is the asking caller's declared policy**, passed as `onExpiry` (`QUESTION_EXPIRY` in `run-stream.mjs`) rather than inferred from the verb or the run.
+- `askUserQuestionViaVoice` emits `SYSTEM_EVENT_CLAUDE_QUESTION` (and a `claude_question` sidecar event for the UI) and registers a single global `pendingClaudeQuestion`: the relay holds **one** question slot. That used to be argued from the queue — one run system-wide, so one asker — but the resident lane means a turn in an already-open conversation runs alongside whatever holds the execution slot, and the verbs that may ask sit on both sides of that line (the stateful verbs, and `execute` with no open change). The single slot is a property of the relay itself, not something the queue enforces on its behalf.
+- Two paths can answer it: the Gemini tool `answer_claude_question` (primary, voice) or `window.iris.answerClaudeQuestion` (secondary, UI click) via `ipcMain.handle("claude:answer-question", ...)`. Whichever resolves first wins; `resolvePendingClaudeQuestion` is a no-op once already settled.
+- **An answer names its question by NUMBER, and the app owns the mapping back to text.** The relay lists the questions numbered; `answer_claude_question` requires that number, and `resolvePendingClaudeQuestion` looks the question up in `PendingQuestion.current.questions` and builds the SDK's answers map from *the verb's own question text*. That string never round-trips through the voice layer. It used to: the map was keyed on the question sentence retyped by a speech model that had just read it aloud in translation, and one character off matched nothing — no error, no warning, the run proceeded as though nobody had answered. An answer whose number matches no pending question is now a reported **error**, and the question is left pending: being answered and misfiled is not the same as going unanswered.
+- Unanswered after `IRIS_CLAUDE_QUESTION_TIMEOUT_MS` (default 300000ms/5min; the legacy `IRIS_PO_QUESTION_TIMEOUT_MS` is still read as an alias): **what that settles as is the asking caller's declared policy**, passed as `onExpiry` (`QUESTION_EXPIRY` in `run-stream.mjs`) rather than inferred from the verb or the run.
   - `RECOMMENDED_OPTION` (the default, and what every resident-session caller uses): resolves with the first-listed ("recommended") option per question, encoded in the shape the question asked for. Right where the run's output is something the user reads *before* anything happens to their files.
   - `DENY` (what a one-shot `execute` question uses): supplies **no answer at all**. The run is aborted and finalizes as `unanswered` — its own terminal status, because it did not fail and the user did not cancel it. Applying a default on a run that writes is the one outcome worse than an honest guess: the work lands on disk *and* every account of it reads as though the user had been consulted. The result text, `announceClaudeCompletion`'s spoken instruction, and the `inbox/runs` record are each asserted to claim no choice was made.
   - Both branches funnel through `PendingQuestion.settle()`, so neither can miss `runQueue.resume()`. Session reset settles a pending question as a denial too, tagged `reason: "abandoned"` so the asking run reports a cancellation rather than an absent answer.
@@ -325,7 +325,7 @@ verb and writes the summary line.
 
 Drawing with Iris is the one place the pipeline runs as a *dialogue* rather than
 as a request and a wait, and almost everything that makes that work is policy
-rather than transport. The transport was already right: `po-session.mjs` keeps a
+rather than transport. The transport was already right: `stateful-session.mjs` keeps a
 `query()` alive across turns through a pull-based channel, residency has no idle
 teardown, and the canvas MCP server survives runs. What was wrong was when a
 session existed, when a turn could run, and what the user heard meanwhile.
@@ -349,13 +349,13 @@ later probe tick cannot open a second one.
 is load-bearing. The review gate parks on the call that *opens* a conversation
 and decides that by asking whether a live session exists — so a warmed transport
 answering "yes" would send the user's first sentence through unreviewed, into a
-conversation they were never asked about. `po-session` carries a `warm` flag,
+conversation they were never asked about. `stateful-session` carries a `warm` flag,
 cleared by the first delivered turn, and two predicates read it:
 
 | Question | Predicate | Used by |
 | --- | --- | --- |
-| Has the user taken part in this conversation? (consent) | `hasUsedPoSession` | the review gate |
-| Is there a live session to deliver into? (mechanics) | `getPoSessionState` | the lane |
+| Has the user taken part in this conversation? (consent) | `hasUsedStatefulSession` | the review gate |
+| Is there a live session to deliver into? (mechanics) | `getStatefulSessionState` | the lane |
 
 Conflating them is not academic: it left the first sentence after opening the
 canvas queueing behind unrelated work, which is the half of the cost warming does
@@ -365,7 +365,7 @@ not remove.
 stop two *jobs* running at once, because two workers writing a repository is the
 hazard. The next turn of an open conversation shares a context window and cannot
 begin a second worker, so it takes its own lane (`runQueue.submitResident`) and
-waits only for the previous turn *of its own conversation* — `deliverPoTurn`
+waits only for the previous turn *of its own conversation* — `deliverStatefulTurn`
 overwrites the in-flight turn's handle, so two turns of one conversation genuinely
 must not overlap. This is safe against the slot by construction: `finalize`
 already guards every slot side-effect behind `active === runId`.
@@ -540,7 +540,7 @@ as one message with nothing behind it.
 ## Sessions, workstreams, and context ownership
 
 - Context is **user-controlled**. Each "workstream" (session) has a project folder (`cwd`). Every verb keeps its **own** continuous conversation within a workstream, resumed on each run — except the two shaping verbs, which deliberately share one. Tasks run **one at a time** (queued if Claude is busy) — see `runQueue` above.
-- Sessions never reset on their own — only on explicit user action (New button, voice "new session", or picking a different project folder; Claude scopes conversations per directory). Persisted to `~/.myiris/claude-sessions.json`. Each of these actions also closes any resident session bound to the workstream/cwd being left (`closePoSession`) so no subprocess is orphaned.
+- Sessions never reset on their own — only on explicit user action (New button, voice "new session", or picking a different project folder; Claude scopes conversations per directory). Persisted to `~/.myiris/claude-sessions.json`. Each of these actions also closes any resident session bound to the workstream/cwd being left (`closeStatefulSession`) so no subprocess is orphaned.
 - **Migrating a pre-verb store discards nothing.** On load, `agent_sessions.po` → `stateful`; `dev` and `default` both map to `execute`, with the old `last_agent_used` deciding which wins and the loser retained under `execute__superseded` rather than deleted. `agent_models.po` carries onto the shaping verbs and `.dev` onto the rest, because a stored model choice is about the *kind* of work. `active_agent` is dropped — a workstream no longer has a current role. The migration is idempotent, and `CLAUDE.md` promises a context reset only when the user asks: an app upgrade is not the user asking.
 - Default Claude working dir is `~/.myiris/workspace` (override `IRIS_CLAUDE_CWD`).
 - **A dead resume id is detected before the run, not after it fails.** `electron/run-sessions.mjs` asks `getSessionInfo()` up front; a session the runtime does not know about is dropped and the run starts fresh. This replaced a regex over the SDK's error string, which could only run *after* a run had already failed. It reports "dead" only on a positive answer — an inconclusive probe keeps the id, because discarding a live conversation is far worse than one failed run.
@@ -702,6 +702,6 @@ this is the mechanism behind it).
 ## Subscription auth (stateful verbs only)
 
 - Runs do **not** inherit the interactive `claude` `/login` session — and since the config-dir pin (above) that is now enforced rather than merely assumed. A run authenticates via `CLAUDE_CODE_OAUTH_TOKEN` (generate once with `claude setup-token`, pointed at Iris's own bundled binary) so usage bills against the subscription, or via `ANTHROPIC_API_KEY` for metered billing.
-- `computeClaudeWorkerEnv` (in `worker-env.mjs`) strips `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` whenever a subscription token is present — `ANTHROPIC_API_KEY` outranks the OAuth token in the SDK's own auth precedence, so a stray key left in `.env` would otherwise silently switch usage to per-token API billing. With no token it is left in place as the only credential an API-key-only user has. This is a **single policy for both run shapes** (`computePoSessionEnv` is a thin alias of it), so they cannot drift apart.
-- `logPoBillingPathOnce()` logs which path is active at startup; `poBillingStatus()` gates `startStatefulRun` with an actionable error if no token is configured. The stateless verbs are unaffected.
-- The token is settable from the app: SetupPanel's Claude section (always shown — the binary ships with the app, so a missing credential is the only thing a user can actually lack) has a masked field plus Save/Remove, routed through `savePoToken()` in `electron/user-config.mjs` (IPC `config:save-po-token` / `config:remove-po-token`). It writes the same `.env` as every other setting, which is the only editable location in a packaged build (`~/.myiris/.env`). Two rules make this safe: the value never reaches the renderer (`getFullConfig()` exposes only `poTokenSet`, and an empty token in an ordinary `config:save` is ignored via `KEEP_ON_EMPTY_CONFIG_KEYS` so the global Save can't blank it), and because `computePoSessionEnv` snapshots the environment at session creation, a token change calls `closeAllPoSessions()` — stored session ids are kept, so the next stateful turn resumes the same conversation with the new credential. A change is refused while a turn is `RUNNING`. See `openspec/specs/setup-panel/` and `agent-subscription-auth/`.
+- `computeClaudeWorkerEnv` (in `worker-env.mjs`) strips `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` whenever a subscription token is present — `ANTHROPIC_API_KEY` outranks the OAuth token in the SDK's own auth precedence, so a stray key left in `.env` would otherwise silently switch usage to per-token API billing. With no token it is left in place as the only credential an API-key-only user has. This is a **single policy for both run shapes** — one function, called by both — so they cannot drift apart.
+- `logClaudeBillingPathOnce()` logs which path is active at startup; `claudeBillingStatus()` gates `startStatefulRun` with an actionable error if no token is configured. The stateless verbs are unaffected.
+- The token is settable from the app: SetupPanel's Claude section (always shown — the binary ships with the app, so a missing credential is the only thing a user can actually lack) has a masked field plus Save/Remove, routed through `saveClaudeToken()` in `electron/user-config.mjs` (IPC `config:save-claude-token` / `config:remove-claude-token`). It writes the same `.env` as every other setting, which is the only editable location in a packaged build (`~/.myiris/.env`). Two rules make this safe: the value never reaches the renderer (`getFullConfig()` exposes only `claudeTokenSet`, and an empty token in an ordinary `config:save` is ignored via `KEEP_ON_EMPTY_CONFIG_KEYS` so the global Save can't blank it), and because `computeClaudeWorkerEnv` snapshots the environment at session creation, a token change calls `closeAllStatefulSessions()` — stored session ids are kept, so the next stateful turn resumes the same conversation with the new credential. A change is refused while a turn is `RUNNING`. See `openspec/specs/setup-panel/` and `agent-subscription-auth/`.

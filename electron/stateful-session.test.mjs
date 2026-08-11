@@ -1,23 +1,23 @@
-// The BUG A regression: a PO turn must always settle, even when the SDK
-// stream ends without throwing (closePoSession's channel.close(), or a
+// The BUG A regression: a stateful turn must always settle, even when the SDK
+// stream ends without throwing (closeStatefulSession's channel.close(), or a
 // stream that just stops on its own). Driven through the Wave 0.0 injected
 // `query` seam — a fake async iterator, no subprocess, no Electron. See
 // openspec/changes/settle-and-attribute-po-turn/design.md D1/D2/D5.
 import { describe, it, expect, vi } from "vitest";
 import {
-  getOrCreatePoSession,
-  deliverPoTurn,
-  cancelPoTurn,
-  closePoSession,
-  setPoSessionMcpServers,
-  hasUsedPoSession,
-} from "./po-session.mjs";
+  getOrCreateStatefulSession,
+  deliverStatefulTurn,
+  cancelStatefulTurn,
+  closeStatefulSession,
+  setStatefulSessionMcpServers,
+  hasUsedStatefulSession,
+} from "./stateful-session.mjs";
 import { STATEFULNESS_CLAUSES, buildRunInstructions, buildSystemPrompt } from "./role-prompt.mjs";
 import { resolveVerb } from "./verbs.mjs";
 
 // A hand-rolled async iterator (not a generator function) so the test has
 // direct control over `.return()` — mirroring exactly what
-// `state.query?.return?.()` does in closePoSession, and what "the stream
+// `state.query?.return?.()` does in closeStatefulSession, and what "the stream
 // just stops" looks like when nothing calls `.return()` at all.
 function createFakeQuerySource() {
   const pending = [];
@@ -33,10 +33,10 @@ function createFakeQuerySource() {
     }
   }
 
-  // Deliberately minimal: only the async-iterator surface po-session.mjs's
+  // Deliberately minimal: only the async-iterator surface stateful-session.mjs's
   // pump() drives plus return() for teardown. The real SDK Query interface
   // has ~29 more control-request methods (setModel, interrupt, etc.); this
-  // fake omits them because po-session.mjs only ever calls them through
+  // fake omits them because stateful-session.mjs only ever calls them through
   // `state.query?.method?.()` optional chaining, so an untested method being
   // absent here is not a gap in what's being verified. Cast rather than
   // stub every member.
@@ -63,7 +63,7 @@ function createFakeQuerySource() {
         });
       }
     },
-    // What closePoSession calls: ends the iterator without throwing, exactly
+    // What closeStatefulSession calls: ends the iterator without throwing, exactly
     // like the real SDK query object when its channel is closed.
     async return(value) {
       ended = true;
@@ -110,52 +110,52 @@ function withTimeout(promise, ms = 1000) {
   ]);
 }
 
-describe("po-session pump settlement", () => {
+describe("stateful-session pump settlement", () => {
   it("settles (rejects) a delivered turn when the session is torn down mid-turn", async () => {
     const source = createFakeQuerySource();
     const workstream = makeWorkstream();
-    const state = getOrCreatePoSession(workstream, { query: () => source.query });
+    const state = getOrCreateStatefulSession(workstream, { query: () => source.query });
 
-    const turnPromise = deliverPoTurn(state, "do the thing");
-    closePoSession(workstream.id);
+    const turnPromise = deliverStatefulTurn(state, "do the thing");
+    closeStatefulSession(workstream.id);
 
     await expect(withTimeout(turnPromise)).rejects.toBeInstanceOf(Error);
   });
 
-  it("tags the rejection with the teardown reason after closePoSession", async () => {
+  it("tags the rejection with the teardown reason after closeStatefulSession", async () => {
     const source = createFakeQuerySource();
     const workstream = makeWorkstream();
-    const state = getOrCreatePoSession(workstream, { query: () => source.query });
+    const state = getOrCreateStatefulSession(workstream, { query: () => source.query });
 
-    const turnPromise = deliverPoTurn(state, "do the thing");
-    closePoSession(workstream.id);
+    const turnPromise = deliverStatefulTurn(state, "do the thing");
+    closeStatefulSession(workstream.id);
 
-    await expect(withTimeout(turnPromise)).rejects.toMatchObject({ poEndReason: { kind: "teardown" } });
+    await expect(withTimeout(turnPromise)).rejects.toMatchObject({ statefulEndReason: { kind: "teardown" } });
   });
 
   it("rejects without a teardown reason when the stream ends on its own", async () => {
     const source = createFakeQuerySource();
     const workstream = makeWorkstream();
-    const state = getOrCreatePoSession(workstream, { query: () => source.query });
+    const state = getOrCreateStatefulSession(workstream, { query: () => source.query });
 
-    const turnPromise = deliverPoTurn(state, "do the thing");
+    const turnPromise = deliverStatefulTurn(state, "do the thing");
     source.endSilently();
 
     const error = await withTimeout(turnPromise.catch((e) => e));
     expect(error).toBeInstanceOf(Error);
-    expect(error.poEndReason).toBeUndefined();
+    expect(error.statefulEndReason).toBeUndefined();
   });
 
   it("resolves normally on a result message, and finally does not re-settle it", async () => {
     const source = createFakeQuerySource();
     const workstream = makeWorkstream();
-    const state = getOrCreatePoSession(workstream, { query: () => source.query });
+    const state = getOrCreateStatefulSession(workstream, { query: () => source.query });
 
-    const turnPromise = deliverPoTurn(state, "do the thing");
+    const turnPromise = deliverStatefulTurn(state, "do the thing");
     source.pushMessage(resultMessage("all good"));
 
     // `subtype` and `usage` ride along on every outcome so run-exec can tell a
-    // ceiling from a failure and record what the turn cost; po-session itself
+    // ceiling from a failure and record what the turn cost; stateful-session itself
     // interprets neither.
     await expect(withTimeout(turnPromise)).resolves.toEqual({
       status: "completed",
@@ -172,15 +172,15 @@ describe("po-session pump settlement", () => {
   });
 });
 
-// canvas-claude-mcp wiring (design.md D8, task 5.1): po-session.mjs forwards
+// canvas-claude-mcp wiring (design.md D8, task 5.1): stateful-session.mjs forwards
 // an opaque mcpServers record into the SDK session without knowing anything
 // about canvas.
-describe("po-session system prompt", () => {
+describe("stateful-session system prompt", () => {
   function captureOptions(overrides = {}) {
     const source = createFakeQuerySource();
     /** @type {any} */
     let captured;
-    getOrCreatePoSession(makeWorkstream(), {
+    getOrCreateStatefulSession(makeWorkstream(), {
       query: ({ options }) => {
         captured = options;
         return source.query;
@@ -226,7 +226,7 @@ describe("po-session system prompt", () => {
   });
 });
 
-describe("po-session canvas MCP wiring", () => {
+describe("stateful-session canvas MCP wiring", () => {
   const record = { "iris-canvas": { type: "http", url: "http://127.0.0.1:1234/mcp", headers: { Authorization: "Bearer tok" }, alwaysLoad: true } };
 
   it("passes mcpServers through to the SDK query() options at session creation", () => {
@@ -240,7 +240,7 @@ describe("po-session canvas MCP wiring", () => {
       return source.query;
     };
 
-    const state = getOrCreatePoSession(workstream, { mcpServers: record, query: queryFn });
+    const state = getOrCreateStatefulSession(workstream, { mcpServers: record, query: queryFn });
 
     expect(capturedOptions.mcpServers).toBe(record);
     expect(state.currentMcp).toBe(true);
@@ -257,22 +257,22 @@ describe("po-session canvas MCP wiring", () => {
       return source.query;
     };
 
-    const state = getOrCreatePoSession(workstream, { query: queryFn });
+    const state = getOrCreateStatefulSession(workstream, { query: queryFn });
 
     expect(capturedOptions.mcpServers).toBeUndefined();
     expect(state.currentMcp).toBeNull();
   });
 
-  it("setPoSessionMcpServers wires an already-live session via query.setMcpServers", async () => {
+  it("setStatefulSessionMcpServers wires an already-live session via query.setMcpServers", async () => {
     const source = createFakeQuerySource();
     const workstream = makeWorkstream();
-    const state = getOrCreatePoSession(workstream, { query: () => source.query });
+    const state = getOrCreateStatefulSession(workstream, { query: () => source.query });
     let calledWith;
     state.query.setMcpServers = async (servers) => {
       calledWith = servers;
     };
 
-    await setPoSessionMcpServers(state, record);
+    await setStatefulSessionMcpServers(state, record);
 
     expect(calledWith).toBe(record);
     expect(state.currentMcp).toBe(true);
@@ -282,7 +282,7 @@ describe("po-session canvas MCP wiring", () => {
 // Cancellation: interrupt the turn, keep the resident conversation. Tearing the
 // transport down to stop one turn threw away the context window that is the
 // whole reason PO is a live session.
-describe("cancelPoTurn", () => {
+describe("cancelStatefulTurn", () => {
   function withInterrupt(source, receipt) {
     source.query.interrupt = async () => receipt;
     return source;
@@ -295,13 +295,13 @@ describe("cancelPoTurn", () => {
       returned = true;
     };
     withInterrupt(source, { still_queued: [] });
-    const state = getOrCreatePoSession(makeWorkstream(), { query: () => source.query });
+    const state = getOrCreateStatefulSession(makeWorkstream(), { query: () => source.query });
 
-    const turnPromise = deliverPoTurn(state, "do the thing");
-    await cancelPoTurn(state);
+    const turnPromise = deliverStatefulTurn(state, "do the thing");
+    await cancelStatefulTurn(state);
 
     await expect(withTimeout(turnPromise)).rejects.toMatchObject({
-      poEndReason: { kind: "cancelled" },
+      statefulEndReason: { kind: "cancelled" },
     });
     expect(returned).toBe(false);
     // The session survives, so the next turn resumes the same conversation.
@@ -312,13 +312,13 @@ describe("cancelPoTurn", () => {
   // the receipt exists to prevent.
   it("records the queued work that survived the interrupt", async () => {
     const source = withInterrupt(createFakeQuerySource(), { still_queued: ["u1", "u2"] });
-    const state = getOrCreatePoSession(makeWorkstream(), { query: () => source.query });
+    const state = getOrCreateStatefulSession(makeWorkstream(), { query: () => source.query });
 
-    const turnPromise = deliverPoTurn(state, "do the thing");
-    await cancelPoTurn(state);
+    const turnPromise = deliverStatefulTurn(state, "do the thing");
+    await cancelStatefulTurn(state);
 
     await expect(withTimeout(turnPromise)).rejects.toMatchObject({
-      poEndReason: { kind: "cancelled", survived: ["u1", "u2"] },
+      statefulEndReason: { kind: "cancelled", survived: ["u1", "u2"] },
     });
   });
 
@@ -327,36 +327,36 @@ describe("cancelPoTurn", () => {
     source.query.interrupt = async () => {
       throw new Error("unsupported");
     };
-    const state = getOrCreatePoSession(makeWorkstream(), { query: () => source.query });
+    const state = getOrCreateStatefulSession(makeWorkstream(), { query: () => source.query });
 
-    const turnPromise = deliverPoTurn(state, "do the thing");
-    await cancelPoTurn(state);
+    const turnPromise = deliverStatefulTurn(state, "do the thing");
+    await cancelStatefulTurn(state);
 
     await expect(withTimeout(turnPromise)).rejects.toMatchObject({
-      poEndReason: { kind: "cancelled" },
+      statefulEndReason: { kind: "cancelled" },
     });
   });
 
   it("is a no-op on a session that has already ended", async () => {
     const source = createFakeQuerySource();
-    const state = getOrCreatePoSession(makeWorkstream(), { query: () => source.query });
+    const state = getOrCreateStatefulSession(makeWorkstream(), { query: () => source.query });
     state.ended = true;
-    await expect(cancelPoTurn(state)).resolves.toBeUndefined();
+    await expect(cancelStatefulTurn(state)).resolves.toBeUndefined();
   });
 });
 
 // open-note-session design D2a: the regression 4.2 fixes — before this,
-// getOrCreatePoSession returned any live session for the workstream without
+// getOrCreateStatefulSession returned any live session for the workstream without
 // checking which conversation it belonged to.
-describe("getOrCreatePoSession: sessionKey mismatch yields the resident slot", () => {
+describe("getOrCreateStatefulSession: sessionKey mismatch yields the resident slot", () => {
   it("delivers a turn for a different sessionKey into a NEW session, not the resident one", () => {
     const first = createFakeQuerySource();
     const second = createFakeQuerySource();
     const queries = [first.query, second.query];
     const workstream = makeWorkstream();
 
-    const shaping = getOrCreatePoSession(workstream, { sessionKey: "stateful", query: () => queries.shift() });
-    const note = getOrCreatePoSession(workstream, { sessionKey: "note:abc", query: () => queries.shift() });
+    const shaping = getOrCreateStatefulSession(workstream, { sessionKey: "stateful", query: () => queries.shift() });
+    const note = getOrCreateStatefulSession(workstream, { sessionKey: "note:abc", query: () => queries.shift() });
 
     expect(note).not.toBe(shaping);
     expect(note.sessionKey).toBe("note:abc");
@@ -368,10 +368,10 @@ describe("getOrCreatePoSession: sessionKey mismatch yields the resident slot", (
     const queries = [first.query, second.query];
     const workstream = makeWorkstream();
 
-    const shaping = getOrCreatePoSession(workstream, { sessionKey: "stateful", query: () => queries.shift() });
-    getOrCreatePoSession(workstream, { sessionKey: "note:abc", query: () => queries.shift() });
+    const shaping = getOrCreateStatefulSession(workstream, { sessionKey: "stateful", query: () => queries.shift() });
+    getOrCreateStatefulSession(workstream, { sessionKey: "note:abc", query: () => queries.shift() });
 
-    // The outgoing conversation is torn down through the SAME path closePoSession
+    // The outgoing conversation is torn down through the SAME path closeStatefulSession
     // always uses (endReason set synchronously; `ended` itself flips once
     // pump's `for await` unwinds on a later microtask) — a handoff, not a
     // reset: `agent_sessions` is left untouched, so it stays resumable.
@@ -382,8 +382,8 @@ describe("getOrCreatePoSession: sessionKey mismatch yields the resident slot", (
     const source = createFakeQuerySource();
     const workstream = makeWorkstream();
 
-    const first = getOrCreatePoSession(workstream, { sessionKey: "note:abc", query: () => source.query });
-    const second = getOrCreatePoSession(workstream, { sessionKey: "note:abc", query: () => source.query });
+    const first = getOrCreateStatefulSession(workstream, { sessionKey: "note:abc", query: () => source.query });
+    const second = getOrCreateStatefulSession(workstream, { sessionKey: "note:abc", query: () => source.query });
 
     expect(second).toBe(first);
   });
@@ -394,8 +394,8 @@ describe("getOrCreatePoSession: sessionKey mismatch yields the resident slot", (
     const queries = [first.query, second.query];
     const workstream = makeWorkstream();
 
-    const noteA = getOrCreatePoSession(workstream, { sessionKey: "note:a", query: () => queries.shift() });
-    const noteB = getOrCreatePoSession(workstream, { sessionKey: "note:b", query: () => queries.shift() });
+    const noteA = getOrCreateStatefulSession(workstream, { sessionKey: "note:a", query: () => queries.shift() });
+    const noteB = getOrCreateStatefulSession(workstream, { sessionKey: "note:b", query: () => queries.shift() });
 
     expect(noteA).not.toBe(noteB);
     expect(noteA.sessionKey).toBe("note:a");
@@ -410,12 +410,12 @@ describe("getOrCreatePoSession: sessionKey mismatch yields the resident slot", (
     const queries = sources.map((s) => s.query);
     const workstream = makeWorkstream();
 
-    const shaping = getOrCreatePoSession(workstream, { sessionKey: "stateful", query: () => queries.shift() });
-    const note = getOrCreatePoSession(workstream, { sessionKey: "note:a", query: () => queries.shift() });
+    const shaping = getOrCreateStatefulSession(workstream, { sessionKey: "stateful", query: () => queries.shift() });
+    const note = getOrCreateStatefulSession(workstream, { sessionKey: "note:a", query: () => queries.shift() });
     expect(note).not.toBe(shaping);
     expect(shaping.endReason).toEqual({ kind: "teardown" }); // shaping→note yielded
 
-    const backToShaping = getOrCreatePoSession(workstream, { sessionKey: "stateful", query: () => queries.shift() });
+    const backToShaping = getOrCreateStatefulSession(workstream, { sessionKey: "stateful", query: () => queries.shift() });
     expect(backToShaping).not.toBe(note);
     expect(note.endReason).toEqual({ kind: "teardown" }); // note→shaping yielded, on the same terms
   });
@@ -427,9 +427,9 @@ describe("getOrCreatePoSession: sessionKey mismatch yields the resident slot", (
     const queries = [first.query, second.query, third.query];
     const workstream = makeWorkstream();
 
-    getOrCreatePoSession(workstream, { sessionKey: "note:a", resumeSessionId: "stored-a", query: () => queries.shift() });
-    getOrCreatePoSession(workstream, { sessionKey: "note:b", query: () => queries.shift() });
-    const backToA = getOrCreatePoSession(workstream, { sessionKey: "note:a", resumeSessionId: "stored-a", query: () => queries.shift() });
+    getOrCreateStatefulSession(workstream, { sessionKey: "note:a", resumeSessionId: "stored-a", query: () => queries.shift() });
+    getOrCreateStatefulSession(workstream, { sessionKey: "note:b", query: () => queries.shift() });
+    const backToA = getOrCreateStatefulSession(workstream, { sessionKey: "note:a", resumeSessionId: "stored-a", query: () => queries.shift() });
 
     expect(backToA.sessionKey).toBe("note:a");
     expect(backToA.sessionId).toBe("stored-a");
@@ -437,14 +437,14 @@ describe("getOrCreatePoSession: sessionKey mismatch yields the resident slot", (
 });
 
 // open-note-session design D6/8.2: the injected confirmWrite seam alongside
-// onAskUserQuestion — po-session.mjs stays ignorant of notes/vaults/paths, it
+// onAskUserQuestion — stateful-session.mjs stays ignorant of notes/vaults/paths, it
 // only forwards Edit/Write calls to whatever the caller supplied.
-describe("po-session confirmWrite seam", () => {
+describe("stateful-session confirmWrite seam", () => {
   it("allows Edit/Write through canUseTool when confirmWrite is absent", async () => {
     const source = createFakeQuerySource();
     /** @type {any} */
     let options;
-    getOrCreatePoSession(makeWorkstream(), {
+    getOrCreateStatefulSession(makeWorkstream(), {
       query: (args) => {
         options = args.options;
         return source.query;
@@ -459,7 +459,7 @@ describe("po-session confirmWrite seam", () => {
     const confirmWrite = async () => ({ behavior: "deny", message: "hold on" });
     /** @type {any} */
     let options;
-    getOrCreatePoSession(makeWorkstream(), {
+    getOrCreateStatefulSession(makeWorkstream(), {
       confirmWrite,
       query: (args) => {
         options = args.options;
@@ -475,7 +475,7 @@ describe("po-session confirmWrite seam", () => {
     const confirmWrite = vi.fn();
     /** @type {any} */
     let options;
-    getOrCreatePoSession(makeWorkstream(), {
+    getOrCreateStatefulSession(makeWorkstream(), {
       confirmWrite,
       query: (args) => {
         options = args.options;
@@ -490,12 +490,12 @@ describe("po-session confirmWrite seam", () => {
 // open-note-session: the decisions schema's own "keep it to a few sentences"
 // instruction would condense exactly what a verbatim reading must not
 // condense — work_on_note opts out via an explicit `outputFormat: false`.
-describe("po-session outputFormat override", () => {
+describe("stateful-session outputFormat override", () => {
   it("defaults to DECISION_OUTPUT_FORMAT when the caller passes nothing", async () => {
     const source = createFakeQuerySource();
     /** @type {any} */
     let options;
-    getOrCreatePoSession(makeWorkstream(), {
+    getOrCreateStatefulSession(makeWorkstream(), {
       query: (args) => {
         options = args.options;
         return source.query;
@@ -508,7 +508,7 @@ describe("po-session outputFormat override", () => {
     const source = createFakeQuerySource();
     /** @type {any} */
     let options;
-    getOrCreatePoSession(makeWorkstream(), {
+    getOrCreateStatefulSession(makeWorkstream(), {
       outputFormat: false,
       query: (args) => {
         options = args.options;
@@ -519,14 +519,14 @@ describe("po-session outputFormat override", () => {
   });
 });
 
-describe("the PO session's own abort controller", () => {
+describe("the resident session's own abort controller", () => {
   it("is handed to the SDK and fired on teardown, not on a turn cancel", async () => {
     const source = createFakeQuerySource();
     withInterruptNoop(source);
     /** @type {any} */
     let captured;
     const workstream = makeWorkstream();
-    const state = getOrCreatePoSession(workstream, {
+    const state = getOrCreateStatefulSession(workstream, {
       query: ({ options }) => {
         captured = options;
         return source.query;
@@ -537,10 +537,10 @@ describe("the PO session's own abort controller", () => {
 
     // Cancelling a turn must NOT abort the session — that would take the whole
     // resident conversation down with it.
-    await cancelPoTurn(state);
+    await cancelStatefulTurn(state);
     expect(state.abortController.signal.aborted).toBe(false);
 
-    closePoSession(workstream.id);
+    closeStatefulSession(workstream.id);
     expect(state.abortController.signal.aborted).toBe(true);
   });
 
@@ -555,60 +555,60 @@ describe("the PO session's own abort controller", () => {
 // that by asking whether a live session exists. A warmed transport answering
 // "yes" would send the user's very first sentence straight through, into a
 // conversation they were never asked about.
-describe("po-session: a warmed session is not yet a conversation", () => {
+describe("stateful-session: a warmed session is not yet a conversation", () => {
   it("reports a warmed session as not-yet-used", () => {
     const source = createFakeQuerySource();
     const workstream = makeWorkstream();
-    getOrCreatePoSession(workstream, { warm: true, query: () => source.query });
+    getOrCreateStatefulSession(workstream, { warm: true, query: () => source.query });
 
-    expect(hasUsedPoSession(workstream.id)).toBe(false);
+    expect(hasUsedStatefulSession(workstream.id)).toBe(false);
   });
 
   it("counts as a conversation the moment a turn is delivered into it", () => {
     const source = createFakeQuerySource();
     const workstream = makeWorkstream();
-    const state = getOrCreatePoSession(workstream, { warm: true, query: () => source.query });
+    const state = getOrCreateStatefulSession(workstream, { warm: true, query: () => source.query });
 
     // The promise is deliberately not awaited — the assertion is about the
     // state flipping on delivery, not about the turn's outcome — so its
     // rejection is absorbed rather than left to surface as an unhandled one.
-    deliverPoTurn(state, "connect those two boxes").catch(() => {});
+    deliverStatefulTurn(state, "connect those two boxes").catch(() => {});
 
-    expect(hasUsedPoSession(workstream.id)).toBe(true);
+    expect(hasUsedStatefulSession(workstream.id)).toBe(true);
   });
 
   it("treats an ordinary session as a conversation from the start", () => {
     // Only a warm creates the in-between state; nothing else changes.
     const source = createFakeQuerySource();
     const workstream = makeWorkstream();
-    getOrCreatePoSession(workstream, { query: () => source.query });
+    getOrCreateStatefulSession(workstream, { query: () => source.query });
 
-    expect(hasUsedPoSession(workstream.id)).toBe(true);
+    expect(hasUsedStatefulSession(workstream.id)).toBe(true);
   });
 
   it("reports no conversation once the session is closed", () => {
     const source = createFakeQuerySource();
     const workstream = makeWorkstream();
-    const state = getOrCreatePoSession(workstream, { query: () => source.query });
-    deliverPoTurn(state, "x").catch(() => {});
-    closePoSession(workstream.id);
+    const state = getOrCreateStatefulSession(workstream, { query: () => source.query });
+    deliverStatefulTurn(state, "x").catch(() => {});
+    closeStatefulSession(workstream.id);
 
-    expect(hasUsedPoSession(workstream.id)).toBe(false);
+    expect(hasUsedStatefulSession(workstream.id)).toBe(false);
   });
 });
 
 // The false-coverage lesson, in one suite. The prose-narration tests were
 // written against handleClaudeStreamMessage — the STATELESS path — while the
-// canvas conversation is resident and routes through po-session's own parser.
+// canvas conversation is resident and routes through stateful-session's own parser.
 // They passed while the feature was wired to nothing: the one conversation it
 // exists for was the one that never spoke.
-describe("po-session: a resident turn forwards the assistant's prose", () => {
+describe("stateful-session: a resident turn forwards the assistant's prose", () => {
   it("hands assistant text to the turn's onAssistantText", async () => {
     const source = createFakeQuerySource();
     const workstream = makeWorkstream();
-    const state = getOrCreatePoSession(workstream, { query: () => source.query });
+    const state = getOrCreateStatefulSession(workstream, { query: () => source.query });
     const onAssistantText = vi.fn();
-    deliverPoTurn(state, "what do you make of this?", { onAssistantText }).catch(() => {});
+    deliverStatefulTurn(state, "what do you make of this?", { onAssistantText }).catch(() => {});
 
     source.pushMessage({
       type: "assistant",
@@ -622,10 +622,10 @@ describe("po-session: a resident turn forwards the assistant's prose", () => {
     // onActivity carries "[Tool] input" lines; reading those aloud would be
     // narrating machinery.
     const source = createFakeQuerySource();
-    const state = getOrCreatePoSession(makeWorkstream(), { query: () => source.query });
+    const state = getOrCreateStatefulSession(makeWorkstream(), { query: () => source.query });
     const onAssistantText = vi.fn();
     const onActivity = vi.fn();
-    deliverPoTurn(state, "draw it", { onAssistantText, onActivity }).catch(() => {});
+    deliverStatefulTurn(state, "draw it", { onAssistantText, onActivity }).catch(() => {});
 
     source.pushMessage({
       type: "assistant",
@@ -638,9 +638,9 @@ describe("po-session: a resident turn forwards the assistant's prose", () => {
 
   it("survives a caller that supplies no handler", async () => {
     const source = createFakeQuerySource();
-    const state = getOrCreatePoSession(makeWorkstream(), { query: () => source.query });
+    const state = getOrCreateStatefulSession(makeWorkstream(), { query: () => source.query });
     const onActivity = vi.fn();
-    deliverPoTurn(state, "x", { onActivity }).catch(() => {});
+    deliverStatefulTurn(state, "x", { onActivity }).catch(() => {});
 
     source.pushMessage({ type: "assistant", message: { content: [{ type: "text", text: "hello" }] } });
 

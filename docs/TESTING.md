@@ -39,7 +39,8 @@ requirement is *true*, which no checker can:
 
 - **Retired vocabulary** — a registered term list, each term with its own matching
   rule. `PO`/`DEV` match case-sensitively with word boundaries (a spec citing
-  `IRIS_PO_QUESTION_TIMEOUT_MS` is correct, not drifting); `role`/`Hermes` match
+  `IRIS_PO_MODEL`, or the `IRIS_PO_QUESTION_TIMEOUT_MS` alias the code still
+  reads, is correct rather than drifting); `role`/`Hermes` match
   case-insensitively, because the previous sweep's uppercase-only criterion is
   exactly what let 72 lowercase occurrences through a check reporting zero.
   Retiring a concept means **registering its name** — the gate cannot infer it.

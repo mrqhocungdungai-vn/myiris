@@ -36,7 +36,7 @@ import ListenOnlyNotice from "./components/ListenOnlyNotice";
 import { transcriptVoice, liveHeardCaption } from "./lib/transcript-speaker";
 import WorkStream from "./components/WorkStream";
 import PipelineBar from "./components/PipelineBar";
-import PoQuestionBanner from "./components/PoQuestionBanner";
+import ClaudeQuestionBanner from "./components/ClaudeQuestionBanner";
 import ReviewBanner from "./components/ReviewBanner";
 import ProjectBar from "./components/ProjectBar";
 import ReaderOverlay from "./components/ReaderOverlay";
@@ -183,8 +183,8 @@ export default function App() {
   // that warned before switching pipeline roles. Nothing asks the user to
   // confirm anything now — Iris picks the verb, and the review gate is where a
   // consequential dispatch stops for a human decision.
-  // Master switch for the PO → DEV pipeline surface (Work Stream, PipelineBar,
-  // workstream switcher, task chooser, HUD tasks column, PO question banner) —
+  // Master switch for the whole pipeline surface (Work Stream, PipelineBar,
+  // workstream switcher, task chooser, HUD tasks column, question banner) —
   // determined by main from whether the `claude` binary resolves. Defaults to
   // false (chat-only) until the boot-time fetch or a pipeline_availability
   // sidecar event says otherwise, so first paint never flashes pipeline UI
@@ -202,17 +202,17 @@ export default function App() {
   const [verbs, setVerbs] = useState<VerbsSnapshot | null>(null);
   // Bumped whenever a run completes or sessions change so the gate ✓s re-scan.
   const [agentsTick, setAgentsTick] = useState(0);
-  // The PO's live session is mid-question — set while status is "pending",
+  // A run is mid-question — set while status is "pending",
   // cleared once main reports "answered" or "timed_out".
-  const [pendingPoQuestion, setPendingPoQuestion] = useState<{
+  const [pendingClaudeQuestion, setPendingClaudeQuestion] = useState<{
     workstreamId: string;
-    questions: PoQuestion[];
+    questions: ClaudeQuestion[];
   } | null>(null);
-  // Local picks for the CURRENT pendingPoQuestion — submitted as one batch
+  // Local picks for the CURRENT pendingClaudeQuestion — submitted as one batch
   // once every question has a pick, matching the voice path's batching.
   // Picks per question, as a LIST: a multi-select question may take several,
-  // and collapsing it to one answers a different question than the PO asked.
-  const [poAnswers, setPoAnswers] = useState<Record<string, string[]>>({});
+  // and collapsing it to one answers a different question than the run asked.
+  const [claudeAnswers, setClaudeAnswers] = useState<Record<string, string[]>>({});
   // A request a verb just parked for Approve/Edit/Cancel
   // (prompt-review-gate spec) — cleared by the "task_review" sidecar event
   // once main resolves it (approved/cancelled/timed_out/abandoned), never
@@ -634,7 +634,7 @@ export default function App() {
       .then((status) => setReviewModeState(status.reviewMode ?? "verb"))
       .catch(() => {});
     // Dispatch through the ref so this always calls the newest closure —
-    // handleSidecarEvent may safely read live state (pendingPoQuestion,
+    // handleSidecarEvent may safely read live state (pendingClaudeQuestion,
     // sortedTasks, …) without a stale-render-0 read.
     return window.iris.onSidecarEvent((event) => sidecarHandlerRef.current(event));
   }, [hasBridge]);
@@ -1117,34 +1117,34 @@ export default function App() {
   // pick, matching the voice path's "collect all answers, then resolve"
   // batching. If the voice path answers first, the submit call is a no-op —
   // main resolves whichever side (voice or UI) completes first.
-  function pickPoAnswer(question: string, choice: string) {
-    if (!hasBridge || !pendingPoQuestion) return;
-    const multi = pendingPoQuestion.questions.find((q) => q.question === question)?.multiSelect;
-    const current = poAnswers[question] ?? [];
+  function pickClaudeAnswer(question: string, choice: string) {
+    if (!hasBridge || !pendingClaudeQuestion) return;
+    const multi = pendingClaudeQuestion.questions.find((q) => q.question === question)?.multiSelect;
+    const current = claudeAnswers[question] ?? [];
     // Multi-select toggles within a list; single-select replaces, as before.
     const picks = multi
       ? current.includes(choice)
         ? current.filter((label) => label !== choice)
         : [...current, choice]
       : [choice];
-    const next = { ...poAnswers, [question]: picks };
-    setPoAnswers(next);
+    const next = { ...claudeAnswers, [question]: picks };
+    setClaudeAnswers(next);
 
     // A multi-select question cannot auto-submit on the last pick — the user
     // has to be able to say when they are done choosing, which is what the
     // banner's Send button is for.
-    if (pendingPoQuestion.questions.some((q) => q.multiSelect)) return;
-    if (!pendingPoQuestion.questions.every((q) => (next[q.question] ?? []).length > 0)) return;
-    submitPoAnswers(next);
+    if (pendingClaudeQuestion.questions.some((q) => q.multiSelect)) return;
+    if (!pendingClaudeQuestion.questions.every((q) => (next[q.question] ?? []).length > 0)) return;
+    submitClaudeAnswers(next);
   }
 
-  function submitPoAnswers(picks: Record<string, string[]>) {
-    if (!hasBridge || !pendingPoQuestion) return;
-    if (!pendingPoQuestion.questions.every((q) => (picks[q.question] ?? []).length > 0)) return;
-    const questions = pendingPoQuestion.questions;
-    setPendingPoQuestion(null);
-    setPoAnswers({});
-    window.iris.answerPoQuestion(
+  function submitClaudeAnswers(picks: Record<string, string[]>) {
+    if (!hasBridge || !pendingClaudeQuestion) return;
+    if (!pendingClaudeQuestion.questions.every((q) => (picks[q.question] ?? []).length > 0)) return;
+    const questions = pendingClaudeQuestion.questions;
+    setPendingClaudeQuestion(null);
+    setClaudeAnswers({});
+    window.iris.answerClaudeQuestion(
       questions.map((q) => ({ question: q.question, choice: picks[q.question] ?? [] })),
     );
   }
@@ -1321,16 +1321,16 @@ export default function App() {
       return;
     }
 
-    if (event.type === "po_question") {
+    if (event.type === "claude_question") {
       const status = readString(event.status, "pending");
       const workstreamId = readString(event.workstream_id);
-      const questions = Array.isArray(event.questions) ? (event.questions as PoQuestion[]) : [];
+      const questions = Array.isArray(event.questions) ? (event.questions as ClaudeQuestion[]) : [];
       if (status === "pending") {
-        setPendingPoQuestion({ workstreamId, questions });
-        setPoAnswers({});
+        setPendingClaudeQuestion({ workstreamId, questions });
+        setClaudeAnswers({});
       } else {
-        setPendingPoQuestion(null);
-        setPoAnswers({});
+        setPendingClaudeQuestion(null);
+        setClaudeAnswers({});
         if (status === "timed_out") {
           // Which branch actually ran — main tells us (run-stream.mjs's
           // settle `outcome`), we do not infer it. "timed_out" covers both
@@ -1343,10 +1343,10 @@ export default function App() {
           pushLog(
             "warn",
             outcome === "defaulted"
-              ? "The PO's question went unanswered — applied its recommended option."
+              ? "Claude's question went unanswered — applied its recommended option."
               : outcome === "unanswered"
-                ? "The PO's question went unanswered — no answer was supplied and the run stopped."
-                : "The PO's question went unanswered.",
+                ? "Claude's question went unanswered — no answer was supplied and the run stopped."
+                : "Claude's question went unanswered.",
             eventTime(event),
           );
         }
@@ -1487,7 +1487,7 @@ export default function App() {
   }, [handError]);
 
   // Universal point-and-hold: the finger pointer can activate ANY clickable
-  // element — task cards, close buttons, PO answer options, chips. Holding
+  // element — task cards, close buttons, answer options, chips. Holding
   // over a target for 300ms fires a real click; the target must be left and
   // re-entered before it can fire again. Reads live per-frame hand data from
   // a ref (not React state) so charging the dwell timer never forces a
@@ -1755,10 +1755,10 @@ export default function App() {
       return;
     }
 
-    // A pending PO question or parked review outranks disambiguation
+    // A pending question or parked review outranks disambiguation
     // (design.md D2, prompt-review-gate D3): the chooser must never stack
     // over those banners — drop the ambiguous request rather than showing it.
-    if (pendingPoQuestion || pendingReview) return;
+    if (pendingClaudeQuestion || pendingReview) return;
     setTaskChooser({ query: query || "task", matches: matches.map((match) => match.task) });
   }
 
@@ -1803,10 +1803,10 @@ export default function App() {
   ]);
 
   // Gemini's control_ui tool forwards here over iris:ui-action. Suppressed
-  // implicitly for disambiguation purposes while a PO question is pending: the
-  // PO banner already occupies the "answer by voice" surface, and Iris's own
+  // implicitly for disambiguation purposes while a question is pending: the
+  // question banner already occupies the "answer by voice" surface, and Iris's own
   // system prompt is told not to issue open_task_by_query in that state — see
-  // design.md D2 and specs/voice-ui-control's PO precedence requirement.
+  // design.md D2 and specs/voice-ui-control's question-precedence requirement.
   useEffect(() => {
     if (!hasBridge) return;
     return window.iris.onUiAction(({ action, target_id, query }) => {
@@ -1858,7 +1858,7 @@ export default function App() {
         return;
       }
     });
-  }, [hasBridge, tasks, sortedTasks, expandedTaskId, focusedTaskId, latestResultTask, pendingPoQuestion, pendingReview]);
+  }, [hasBridge, tasks, sortedTasks, expandedTaskId, focusedTaskId, latestResultTask, pendingClaudeQuestion, pendingReview]);
 
   const caption = useMemo(() => {
     // No local default for the chord: main owns what is registered, and until
@@ -1981,13 +1981,13 @@ export default function App() {
           cameraEnlarged={hudCameraEnlarged}
           onToggleCameraSize={toggleHudCameraSize}
           pipelineAvailable={pipelineAvailable}
-          poQuestion={
-            pendingPoQuestion
+          claudeQuestion={
+            pendingClaudeQuestion
               ? {
-                  questions: pendingPoQuestion.questions,
-                  answers: poAnswers,
-                  onPick: pickPoAnswer,
-                  onSubmit: () => submitPoAnswers(poAnswers),
+                  questions: pendingClaudeQuestion.questions,
+                  answers: claudeAnswers,
+                  onPick: pickClaudeAnswer,
+                  onSubmit: () => submitClaudeAnswers(claudeAnswers),
                 }
               : null
           }
@@ -2113,12 +2113,12 @@ export default function App() {
                 onSetReviewMode={setReviewMode}
               />
               <ProjectBar project={activeProject} onChoose={chooseProjectFolder} />
-              {pendingPoQuestion ? (
-                <PoQuestionBanner
-                  questions={pendingPoQuestion.questions}
-                  answers={poAnswers}
-                  onPick={pickPoAnswer}
-                  onSubmit={() => submitPoAnswers(poAnswers)}
+              {pendingClaudeQuestion ? (
+                <ClaudeQuestionBanner
+                  questions={pendingClaudeQuestion.questions}
+                  answers={claudeAnswers}
+                  onPick={pickClaudeAnswer}
+                  onSubmit={() => submitClaudeAnswers(claudeAnswers)}
                 />
               ) : null}
               {pendingReview ? (

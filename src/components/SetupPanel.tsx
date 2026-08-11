@@ -72,7 +72,7 @@ export default function SetupPanel({
   onRunWizard?: () => void;
 }) {
   const [draft, setDraft] = useState<Draft>({
-    // The stored key never reaches the renderer (design D11, mirrors the PO
+    // The stored key never reaches the renderer (design D11, mirrors the
     // token below), so the input always starts empty regardless of whether a
     // key is already configured — see `geminiApiKeySet`.
     GEMINI_API_KEY: "",
@@ -97,11 +97,11 @@ export default function SetupPanel({
   const [legacyArtifacts, setLegacyArtifacts] = useState<LegacyClaudeArtifacts | null>(null);
   const [geminiApiKeySet, setGeminiApiKeySet] = useState(config.geminiApiKeySet);
   // The stored token never reaches the renderer, so the input is always empty
-  // and `poTokenSet` is the only thing we know about it.
-  const [poToken, setPoToken] = useState("");
-  const [poTokenSet, setPoTokenSet] = useState(config.poTokenSet);
-  const [poTokenBusy, setPoTokenBusy] = useState(false);
-  const [poTokenError, setPoTokenError] = useState<string | null>(null);
+  // and `claudeTokenSet` is the only thing we know about it.
+  const [claudeToken, setClaudeToken] = useState("");
+  const [claudeTokenSet, setClaudeTokenSet] = useState(config.claudeTokenSet);
+  const [claudeTokenBusy, setClaudeTokenBusy] = useState(false);
+  const [claudeTokenError, setClaudeTokenError] = useState<string | null>(null);
   // The metered alternative, same presence-only contract as the token above.
   // Either credential satisfies the pipeline gate.
   const [apiKey, setApiKey] = useState("");
@@ -178,33 +178,33 @@ export default function SetupPanel({
 
   // Save/remove share one path across both credentials: on success clear the
   // input, refresh the presence flags, and re-run the Claude check so the
-  // billing and availability lines update in place. On refusal (a PO turn is
+  // billing and availability lines update in place. On refusal (a run is
   // running) keep what the user typed.
   async function applyCredential(action: "save" | "remove", key: ClaudeCredentialKey) {
-    const value = key === "CLAUDE_CODE_OAUTH_TOKEN" ? poToken : apiKey;
-    setPoTokenBusy(true);
-    setPoTokenError(null);
+    const value = key === "CLAUDE_CODE_OAUTH_TOKEN" ? claudeToken : apiKey;
+    setClaudeTokenBusy(true);
+    setClaudeTokenError(null);
     try {
       const result =
         action === "save"
-          ? await window.iris.savePoToken(value.trim(), key)
-          : await window.iris.removePoToken(key);
+          ? await window.iris.saveClaudeToken(value.trim(), key)
+          : await window.iris.removeClaudeToken(key);
       if (!result.ok) {
-        setPoTokenError(result.error || "Could not update the credential.");
+        setClaudeTokenError(result.error || "Could not update the credential.");
         return;
       }
-      if (key === "CLAUDE_CODE_OAUTH_TOKEN") setPoToken("");
+      if (key === "CLAUDE_CODE_OAUTH_TOKEN") setClaudeToken("");
       else setApiKey("");
-      setPoTokenSet(result.config.poTokenSet);
+      setClaudeTokenSet(result.config.claudeTokenSet);
       setApiKeySet(result.config.anthropicApiKeySet);
       onSaved(result.config);
       await checkClaude();
     } finally {
-      setPoTokenBusy(false);
+      setClaudeTokenBusy(false);
     }
   }
 
-  function applyPoToken(action: "save" | "remove") {
+  function applyClaudeToken(action: "save" | "remove") {
     return applyCredential(action, "CLAUDE_CODE_OAUTH_TOKEN");
   }
 
@@ -325,7 +325,7 @@ export default function SetupPanel({
   const claudeSection = (
     <Section
       title="Claude pipeline (optional)"
-      hint="Iris talks to you with just a Gemini key. Claude Code ships inside Iris — adding a Claude credential below additionally unlocks the PO/DEV build pipeline. Recheck any time from here."
+      hint="Iris talks to you with just a Gemini key. Claude Code ships inside Iris — adding a Claude credential below additionally unlocks the build pipeline. Recheck any time from here."
     >
       <div className="setup-actions">
         <button className="setup-btn" onClick={checkClaude} disabled={claude.status === "testing"}>
@@ -337,9 +337,9 @@ export default function SetupPanel({
       {pipelinePrereqs ? (
         <p className="setup-note">
           {pipelinePrereqs.pipelineAvailable
-            ? "Pipeline enabled — PO/DEV tools and the Work Stream panel are active."
+            ? "Pipeline enabled — the build pipeline and the Work Stream panel are active."
             : pipelinePrereqs.reachable
-              ? "Pipeline off — chat-only mode. Add a Claude credential below to unlock PO/DEV."
+              ? "Pipeline off — chat-only mode. Add a Claude credential below to unlock the build pipeline."
               : "Pipeline off — Iris could not launch its bundled Claude binary. Reinstalling the app should fix this."}
         </p>
       ) : null}
@@ -353,13 +353,13 @@ export default function SetupPanel({
             <span>Subscription token</span>
             <input
               type="password"
-              value={poToken}
+              value={claudeToken}
               placeholder={
-                poTokenSet ? "Token saved — paste a new one to replace it" : "Paste the token the command below prints"
+                claudeTokenSet ? "Token saved — paste a new one to replace it" : "Paste the token the command below prints"
               }
               onChange={(event) => {
-                setPoToken(event.target.value);
-                setPoTokenError(null);
+                setClaudeToken(event.target.value);
+                setClaudeTokenError(null);
               }}
               autoComplete="off"
               spellCheck={false}
@@ -373,18 +373,18 @@ export default function SetupPanel({
           <div className="setup-actions">
             <button
               className="setup-btn"
-              onClick={() => applyPoToken("save")}
-              disabled={poTokenBusy || !poToken.trim()}
+              onClick={() => applyClaudeToken("save")}
+              disabled={claudeTokenBusy || !claudeToken.trim()}
             >
-              {poTokenBusy ? <Loader2 size={14} className="spin" /> : null}
+              {claudeTokenBusy ? <Loader2 size={14} className="spin" /> : null}
               Save token
             </button>
-            {poTokenSet ? (
+            {claudeTokenSet ? (
               <button
                 className="setup-btn ghost"
                 data-no-dwell
-                onClick={() => applyPoToken("remove")}
-                disabled={poTokenBusy}
+                onClick={() => applyClaudeToken("remove")}
+                disabled={claudeTokenBusy}
               >
                 Remove
               </button>
@@ -398,7 +398,7 @@ export default function SetupPanel({
               placeholder={apiKeySet ? "Key saved — paste a new one to replace it" : "sk-ant-…"}
               onChange={(event) => {
                 setApiKey(event.target.value);
-                setPoTokenError(null);
+                setClaudeTokenError(null);
               }}
               autoComplete="off"
               spellCheck={false}
@@ -413,9 +413,9 @@ export default function SetupPanel({
             <button
               className="setup-btn"
               onClick={() => applyCredential("save", "ANTHROPIC_API_KEY")}
-              disabled={poTokenBusy || !apiKey.trim()}
+              disabled={claudeTokenBusy || !apiKey.trim()}
             >
-              {poTokenBusy ? <Loader2 size={14} className="spin" /> : null}
+              {claudeTokenBusy ? <Loader2 size={14} className="spin" /> : null}
               Save key
             </button>
             {apiKeySet ? (
@@ -423,13 +423,13 @@ export default function SetupPanel({
                 className="setup-btn ghost"
                 data-no-dwell
                 onClick={() => applyCredential("remove", "ANTHROPIC_API_KEY")}
-                disabled={poTokenBusy}
+                disabled={claudeTokenBusy}
               >
                 Remove
               </button>
             ) : null}
           </div>
-          {poTokenError ? <p className="setup-note">{poTokenError}</p> : null}
+          {claudeTokenError ? <p className="setup-note">{claudeTokenError}</p> : null}
       </>
       {/* Everything below reports on the bundled runtime and the skills on
           disk, so it only renders once the probe has actually returned. */}
@@ -713,7 +713,7 @@ export default function SetupPanel({
         <h2>Welcome to Iris</h2>
         <p>
           Iris is a hands-free voice companion — add a Gemini key and start talking. Claude Code ships inside
-          Iris, so adding a Claude credential also unlocks an optional PO/DEV build pipeline for real work —
+          Iris, so adding a Claude credential also unlocks an optional build pipeline for real work —
           with nothing else to install. Let's get you set up in under a minute.
         </p>
       </div>

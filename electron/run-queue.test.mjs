@@ -303,7 +303,7 @@ describe("run-queue", () => {
 
     // Simulates startPoRun's settle handler finalizing the run once the
     // turn's teardown-driven promise rejects — the same finalize() call path
-    // a real cancelPoTurn round-trip ends in.
+    // a real cancelStatefulTurn round-trip ends in.
     queue.finalize(active.run_id, RUN_STATUS.CANCELLED, "Run was stopped before completion.");
 
     expect(queue.get(active.run_id).status).toBe(RUN_STATUS.CANCELLED);
@@ -665,7 +665,7 @@ describe("run-queue: the resident lane", () => {
   });
 
   it("serializes two turns of the SAME conversation", () => {
-    // deliverPoTurn overwrites the in-flight turn's handle, so two turns of one
+    // deliverStatefulTurn overwrites the in-flight turn's handle, so two turns of one
     // conversation must never be in flight together.
     const { startRun, invoked } = makeStartRunFake();
     const queue = createRunQueue({ startRun, emit: vi.fn() });

@@ -48,7 +48,7 @@ export function userConfigFile(homedir = os.homedir) {
  * written regardless of it, and they all live under CLAUDE_CONFIG_DIR (default
  * ~/.claude) — the session transcript for every run, the always-read
  * .claude.json global config, and auto-memory. Measured before this existed: one
- * DEV run against the default workspace left a 57 KB transcript in
+ * run against the default workspace left a 57 KB transcript in
  * ~/.claude/projects/-Users-...--iris-workspace/. That is the user's own Claude
  * Code history directory, and the app was writing the contents of their projects
  * into it.

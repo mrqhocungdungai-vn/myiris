@@ -166,7 +166,7 @@ const VERBS = Object.freeze({
   shape_requirements: {
     label: "Shape",
     description:
-      "Settle what to build, by talking it through. Use for a NEW project or feature, for a request that is not yet pinned down, and for steering a shaping conversation that is already under way ('propose it now', 'what's the state of it'). This verb grills the user through you: it pauses mid-run to ask questions by voice, which arrive as SYSTEM_EVENT_PO_QUESTION and are answered with answer_claude_question. Do NOT write a specification yourself — pass on what was said and let it do the analysis.",
+      "Settle what to build, by talking it through. Use for a NEW project or feature, for a request that is not yet pinned down, and for steering a shaping conversation that is already under way ('propose it now', 'what's the state of it'). This verb grills the user through you: it pauses mid-run to ask questions by voice, which arrive as SYSTEM_EVENT_CLAUDE_QUESTION and are answered with answer_claude_question. Do NOT write a specification yourself — pass on what was said and let it do the analysis.",
     stateful: true,
     park: PARK.ON_OPEN,
     sessionKey: STATEFUL_SESSION_KEY,
@@ -267,7 +267,7 @@ const VERBS = Object.freeze({
     // of what this verb is.
     spokenResult: "verbatim",
     disallowedTools: ASKS_FREELY,
-    // open-note-session D6: the main-process write guard (po-session.mjs's
+    // open-note-session D6: the main-process write guard (stateful-session.mjs's
     // canUseTool seam, wired in run-exec.mjs) applies only to this verb.
     guardOpenNoteWrites: true,
     params: THIN_PARAMS,
@@ -287,7 +287,7 @@ const VERBS = Object.freeze({
   execute: {
     label: "Build",
     description:
-      "Do the work. Implementing, fixing, writing, automating, looking something up and acting on it — anything the user asks to have DONE. In a project with an open change this implements its remaining tasks; with no open change it simply does the work, so a small request is not refused for lacking a specification. It runs on its own and never comes back to YOU for more: its parameters are the whole instruction, so a detail you leave out is lost. Where nothing was specified up front it may pause once to ask the USER directly, which reaches you as SYSTEM_EVENT_PO_QUESTION like any other live question — read it out and collect the answer, never decide it yourself.",
+      "Do the work. Implementing, fixing, writing, automating, looking something up and acting on it — anything the user asks to have DONE. In a project with an open change this implements its remaining tasks; with no open change it simply does the work, so a small request is not refused for lacking a specification. It runs on its own and never comes back to YOU for more: its parameters are the whole instruction, so a detail you leave out is lost. Where nothing was specified up front it may pause once to ask the USER directly, which reaches you as SYSTEM_EVENT_CLAUDE_QUESTION like any other live question — read it out and collect the answer, never decide it yourself.",
     stateful: false,
     park: PARK.ALWAYS,
     sessionKey: "execute",

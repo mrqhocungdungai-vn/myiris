@@ -16,16 +16,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-vi.mock("./po-session.mjs", () => ({
-  poBillingStatus: () => ({ ok: true, mode: "subscription" }),
-  getOrCreatePoSession: vi.fn(() => ({ currentModel: "claude-opus-5", currentMcp: true, ended: false })),
-  getPoSessionState: vi.fn(() => null),
-  hasUsedPoSession: vi.fn(() => false),
-  deliverPoTurn: vi.fn(() => new Promise(() => {})),
-  cancelPoTurn: vi.fn(),
-  setPoSessionModel: vi.fn(async () => {}),
-  setPoSessionMcpServers: vi.fn(async () => {}),
-  DEFAULT_PO_QUESTION_TIMEOUT_MS: 300000,
+vi.mock("./stateful-session.mjs", () => ({
+  getOrCreateStatefulSession: vi.fn(() => ({ currentModel: "claude-opus-5", currentMcp: true, ended: false })),
+  getStatefulSessionState: vi.fn(() => null),
+  hasUsedStatefulSession: vi.fn(() => false),
+  deliverStatefulTurn: vi.fn(() => new Promise(() => {})),
+  cancelStatefulTurn: vi.fn(),
+  setStatefulSessionModel: vi.fn(async () => {}),
+  setStatefulSessionMcpServers: vi.fn(async () => {}),
 }));
 
 vi.mock("./canvas-mcp.mjs", () => ({
@@ -38,7 +36,7 @@ vi.mock("./canvas-mcp.mjs", () => ({
 }));
 
 /** @type {any} */
-const poSession = await import("./po-session.mjs");
+const statefulSession = await import("./stateful-session.mjs");
 const { createCapabilitiesWiring } = await import("./wiring-capabilities.mjs");
 
 let dirs = [];
@@ -51,6 +49,16 @@ function tempCanvasFile() {
 afterEach(() => {
   for (const dir of dirs) fs.rmSync(dir, { recursive: true, force: true });
   dirs = [];
+});
+
+// Warming a conversation refuses without a credential (claudeBillingStatus,
+// worker-env.mjs — real policy, deliberately not mocked). Stubbed rather than
+// inherited so the suite does not pass or fail on the developer's own .env.
+beforeEach(() => {
+  vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "test-token");
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 function buildWiring(overrides = {}) {
@@ -105,8 +113,8 @@ function buildWiring(overrides = {}) {
 
 describe("opening the canvas, through the real wiring", () => {
   beforeEach(() => {
-    poSession.getOrCreatePoSession.mockClear();
-    poSession.getPoSessionState.mockReturnValue(null);
+    statefulSession.getOrCreateStatefulSession.mockClear();
+    statefulSession.getStatefulSessionState.mockReturnValue(null);
   });
 
   it("opens a Claude session — the effect, not the call", async () => {
@@ -116,9 +124,9 @@ describe("opening the canvas, through the real wiring", () => {
     const { activate, workstream } = buildWiring();
 
     activate.fn();
-    await vi.waitFor(() => expect(poSession.getOrCreatePoSession).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(statefulSession.getOrCreateStatefulSession).toHaveBeenCalledTimes(1));
 
-    const [passedWorkstream, options] = poSession.getOrCreatePoSession.mock.calls[0];
+    const [passedWorkstream, options] = statefulSession.getOrCreateStatefulSession.mock.calls[0];
     expect(passedWorkstream).toBe(workstream);
     expect(options.warm).toBe(true);
   });
@@ -138,7 +146,7 @@ describe("opening the canvas, through the real wiring", () => {
     activate.fn();
     await new Promise((resolve) => setTimeout(resolve, 10));
 
-    expect(poSession.getOrCreatePoSession).not.toHaveBeenCalled();
+    expect(statefulSession.getOrCreateStatefulSession).not.toHaveBeenCalled();
     expect(notifyIris).not.toHaveBeenCalled();
   });
 
@@ -158,8 +166,8 @@ describe("opening the canvas, through the real wiring", () => {
 // sentence paid the whole cost the warm exists to remove.
 describe("the canvas opened before Claude was reachable", () => {
   beforeEach(() => {
-    poSession.getOrCreatePoSession.mockClear();
-    poSession.getPoSessionState.mockReturnValue(null);
+    statefulSession.getOrCreateStatefulSession.mockClear();
+    statefulSession.getStatefulSessionState.mockReturnValue(null);
   });
 
   it("warms when the pipeline arrives later", async () => {
@@ -168,29 +176,29 @@ describe("the canvas opened before Claude was reachable", () => {
 
     activate.fn();
     await new Promise((resolve) => setTimeout(resolve, 5));
-    expect(poSession.getOrCreatePoSession).not.toHaveBeenCalled();
+    expect(statefulSession.getOrCreateStatefulSession).not.toHaveBeenCalled();
 
     // Claude becomes reachable; this is the signal the pipeline probe sends.
     available = true;
     wiring.canvasCapability.maybeStartCanvasMcp();
-    await vi.waitFor(() => expect(poSession.getOrCreatePoSession).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(statefulSession.getOrCreateStatefulSession).toHaveBeenCalledTimes(1));
 
-    expect(poSession.getOrCreatePoSession.mock.calls[0][1].warm).toBe(true);
+    expect(statefulSession.getOrCreateStatefulSession.mock.calls[0][1].warm).toBe(true);
   });
 
   it("does not warm a second time when one is already open", async () => {
     const { wiring, activate } = buildWiring();
 
     activate.fn();
-    await vi.waitFor(() => expect(poSession.getOrCreatePoSession).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(statefulSession.getOrCreateStatefulSession).toHaveBeenCalledTimes(1));
 
     // A later probe tick must not open a second conversation, which would be a
     // handoff closing the one it means to have ready.
-    poSession.getPoSessionState.mockReturnValue({ ended: false });
+    statefulSession.getStatefulSessionState.mockReturnValue({ ended: false });
     wiring.canvasCapability.maybeStartCanvasMcp();
     await new Promise((resolve) => setTimeout(resolve, 5));
 
-    expect(poSession.getOrCreatePoSession).toHaveBeenCalledTimes(1);
+    expect(statefulSession.getOrCreateStatefulSession).toHaveBeenCalledTimes(1);
   });
 
   it("does nothing at all while the canvas has never been opened", async () => {
@@ -199,6 +207,6 @@ describe("the canvas opened before Claude was reachable", () => {
     wiring.canvasCapability.maybeStartCanvasMcp();
     await new Promise((resolve) => setTimeout(resolve, 5));
 
-    expect(poSession.getOrCreatePoSession).not.toHaveBeenCalled();
+    expect(statefulSession.getOrCreateStatefulSession).not.toHaveBeenCalled();
   });
 });

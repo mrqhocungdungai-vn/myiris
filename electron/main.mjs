@@ -11,7 +11,7 @@ import { createLogSink, logConfigFromEnv } from "./log-sink.mjs";
 import { installLogTee } from "./log-tee.mjs";
 import { PRODUCT_NAME } from "./app-identity.mjs";
 import { canvasStoreFile, logDir } from "./app-paths.mjs";
-import { closeAllPoSessions } from "./po-session.mjs";
+import { closeAllStatefulSessions } from "./stateful-session.mjs";
 import { shouldRefuseLaunch } from "./platform.mjs";
 import { loadEnvFile, envFlag, shutdownDeadlineMs, systemAudioEnabled } from "./user-config.mjs";
 import { loopbackAudioSwitch } from "./chromium-switches.mjs";
@@ -34,7 +34,7 @@ const repoRoot = path.resolve(__dirname, "..");
 // app-identity.mjs. The Dock tile fully reflects this only in a packaged build; in
 // dev the generic Electron bundle name is used.
 //
-// Runs at module scope, so it also decides `app.getPath("userData")` for a DEV run
+// Runs at module scope, so it also decides `app.getPath("userData")` for a run
 // — which is why changing PRODUCT_NAME resets the renderer's localStorage in dev
 // too, not only for the installed app (see the app-identity capability).
 app.setName(PRODUCT_NAME);
@@ -126,14 +126,14 @@ const {
   setVerbModel,
   legacyClaudeArtifactsStatus,
   removeLegacyClaudeArtifacts,
-  resolvePendingPoQuestion,
+  resolvePendingClaudeQuestion,
   getPromptReviewMode,
   setPromptReviewMode,
   resolvePromptReview,
   sendContextSupplement,
   getFullConfig,
   writeUserConfig,
-  savePoToken,
+  saveClaudeToken,
   testGeminiKey,
   previewVoice,
   checkClaudeHealth,
@@ -224,14 +224,14 @@ app.whenReady().then(() => {
     setVerbModel,
     legacyClaudeArtifactsStatus,
   removeLegacyClaudeArtifacts,
-    resolvePendingPoQuestion,
+    resolvePendingClaudeQuestion,
     getPromptReviewMode,
     setPromptReviewMode,
     resolvePromptReview,
     sendContextSupplement,
     getFullConfig,
     writeUserConfig,
-    savePoToken,
+    saveClaudeToken,
     testGeminiKey,
     previewVoice,
     checkClaudeHealth,
@@ -298,9 +298,9 @@ app.whenReady().then(() => {
 });
 
 // Awaited teardown for app quit (design.md D3 of bound-shutdown-teardown):
-// closes the Gemini Live socket, aborts every live DEV query so the Agent SDK
+// closes the Gemini Live socket, aborts every live stateless query so the Agent SDK
 // tears down its subprocess and no tool process is orphaned, then closes every
-// resident PO session — in that deliberate order (design.md D8), centrally,
+// resident session — in that deliberate order (design.md D8), centrally,
 // rather than as self-registered per-module hooks whose order would become
 // incidental. run-queue.mjs owns the runs map, so live runs are reached
 // directly via list() rather than mutating run.status from outside the module.
@@ -312,7 +312,7 @@ async function shutdownTeardown() {
   for (const run of runQueue.list()) {
     run.cancel?.();
   }
-  await closeAllPoSessions();
+  await closeAllStatefulSessions();
   for (const cap of capabilities) {
     await cap.teardown?.();
   }

@@ -7,7 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { GoogleGenAI } from "@google/genai";
 import { userConfigFile } from "./app-paths.mjs";
-import { closeAllPoSessions } from "./po-session.mjs";
+import { closeAllStatefulSessions } from "./stateful-session.mjs";
 import { RUN_STATUS } from "./run-queue.mjs";
 import { writeFileAtomicSync } from "./atomic-file.mjs";
 import { wakeHotkey, sleepHotkey } from "./hotkeys.mjs";
@@ -118,7 +118,7 @@ export function activityEmitIntervalMs() {
 
 // Hard backstop for before-quit's teardown race (design.md D3 of
 // bound-shutdown-teardown) — generous enough for a SIGTERM/SIGKILL grace
-// cycle plus PO query.return() settle, but bounded so a stuck transport can
+// cycle plus the resident session's query.return() settle, but bounded so a stuck transport can
 // never wedge quit.
 export function shutdownDeadlineMs() {
   const parsed = Number(process.env.IRIS_SHUTDOWN_DEADLINE_MS);
@@ -242,7 +242,7 @@ export function createUserConfig({
   function getFullConfig() {
     return {
       // Presence only — the key itself never crosses the IPC boundary (design
-      // D11, mirrors poTokenSet below): setup-panel's secrets contract already
+      // D11, mirrors claudeTokenSet below): setup-panel's secrets contract already
       // required this for CLAUDE_CODE_OAUTH_TOKEN, and applies here too.
       geminiApiKeySet: Boolean((process.env.GEMINI_API_KEY || "").trim()),
       geminiModel: process.env.GEMINI_LIVE_MODEL || "models/gemini-3.1-flash-live-preview",
@@ -261,10 +261,10 @@ export function createUserConfig({
       wakeHotkey: wakeHotkey(),
       sleepHotkey: sleepHotkey(),
       // Presence only — the credential itself never crosses the IPC boundary
-      // (design D2). Reported per-key rather than through poBillingStatus(),
+      // (design D2). Reported per-key rather than through claudeBillingStatus(),
       // which is now true for EITHER credential: the panel has a separate field
       // for each and must not show the API key as a saved subscription token.
-      poTokenSet: Boolean((process.env.CLAUDE_CODE_OAUTH_TOKEN || "").trim()),
+      claudeTokenSet: Boolean((process.env.CLAUDE_CODE_OAUTH_TOKEN || "").trim()),
       anthropicApiKeySet: Boolean((process.env.ANTHROPIC_API_KEY || "").trim()),
       configured: Boolean((process.env.GEMINI_API_KEY || "").trim()),
       voices: GEMINI_VOICES,
@@ -358,13 +358,20 @@ export function createUserConfig({
     return { status: "ok", reviewMode: promptReviewMode };
   }
 
-  // The live PO session captures its environment once, at creation
-  // (computePoSessionEnv), so a token written to process.env is invisible to a
-  // session that is already alive — every resident session has to go. The stored
-  // session ids in claude-sessions.json are untouched, so the next PO turn
-  // resumes the same conversation with the new credential (design D5).
-  function poTurnRunning() {
-    return runQueue.list().some((run) => run.agent === "po" && run.status === RUN_STATUS.RUNNING);
+  // A run captures its environment once, when its session is created
+  // (computeClaudeWorkerEnv), so a token written to process.env is invisible to
+  // anything already alive — every resident session has to go. The stored session
+  // ids in claude-sessions.json are untouched, so the next stateful turn resumes
+  // the same conversation with the new credential (design D5).
+  //
+  // ANY running run, of either shape. This used to read `run.agent === "po"` — a
+  // field no production code ever sets (a run record is verb-keyed; run-queue.mjs
+  // only ever projects `run.agent ?? null`), so the guard was dead and a
+  // credential could be swapped out from under a live run. Only a test fixture
+  // that supplied the field kept it looking alive. The env-snapshot concern was
+  // never specific to one shape, so the honest predicate is the broad one.
+  function claudeTurnRunning() {
+    return runQueue.list().some((run) => run.status === RUN_STATUS.RUNNING);
   }
 
   // Set or clear a Claude credential from the SetupPanel — either the
@@ -373,7 +380,7 @@ export function createUserConfig({
   // place; the value is never echoed back and never logged (design D2/D6).
   const CLAUDE_CREDENTIAL_KEYS = new Set(["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"]);
 
-  function savePoToken(rawToken, { remove = false, key = "CLAUDE_CODE_OAUTH_TOKEN" } = {}) {
+  function saveClaudeToken(rawToken, { remove = false, key = "CLAUDE_CODE_OAUTH_TOKEN" } = {}) {
     if (!CLAUDE_CREDENTIAL_KEYS.has(key)) {
       return { ok: false, error: `${key} is not a Claude credential.`, config: getFullConfig() };
     }
@@ -381,10 +388,10 @@ export function createUserConfig({
     if (!remove && !token) {
       return { ok: false, error: "No token provided.", config: getFullConfig() };
     }
-    if (poTurnRunning()) {
+    if (claudeTurnRunning()) {
       return {
         ok: false,
-        error: "A PO turn is running right now. Wait for it to finish, then change the credential.",
+        error: "A Claude run is in flight right now. Wait for it to finish, then change the credential.",
         config: getFullConfig(),
       };
     }
@@ -394,7 +401,7 @@ export function createUserConfig({
     } catch (error) {
       return { ok: false, error: error.message, config: getFullConfig() };
     }
-    closeAllPoSessions();
+    closeAllStatefulSessions();
     // The pipeline gate is now a credential check, so adding or removing one
     // changes app-wide availability. Re-probe here rather than leaving the UI
     // stale until the user happens to hit "Test" or restarts — writeUserConfig
@@ -402,7 +409,7 @@ export function createUserConfig({
     // Fire-and-forget: the returned config snapshot does not depend on it, and
     // the flip reaches the renderer through the probe's own event.
     Promise.resolve(probePipelineAvailability?.()).catch(() => {});
-    console.log(`[IRIS][po-auth] ${key} ${remove ? "removed" : "updated"} from Settings.`);
+    console.log(`[IRIS][claude-auth] ${key} ${remove ? "removed" : "updated"} from Settings.`);
     return { ok: true, config };
   }
 
@@ -490,7 +497,7 @@ export function createUserConfig({
     writeUserConfig,
     assertConfigValueIsSafe,
     setPromptReviewMode,
-    savePoToken,
+    saveClaudeToken,
     testGeminiKey,
     previewVoice,
   };

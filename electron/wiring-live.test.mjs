@@ -19,7 +19,7 @@ vi.mock("./live-session.mjs", () => ({
     toggleListenOnly: vi.fn(),
     getUserStopped: vi.fn(() => false),
     setResumptionHandle: vi.fn(),
-    logPoBillingPathOnce: vi.fn(),
+    logClaudeBillingPathOnce: vi.fn(),
     startLive: vi.fn(),
     connectLive: vi.fn(),
     scheduleReconnect: vi.fn(),
@@ -159,10 +159,10 @@ describe("wiring-live: createLiveWiring", () => {
     expect(listenWindowMs()).toBeGreaterThan(0);
   });
 
-  it("fires logPoBillingPathOnce during construction", () => {
+  it("fires logClaudeBillingPathOnce during construction", () => {
     createLiveWiring(makeDeps());
     const liveSessionInstance = createLiveSession.mock.results.at(-1).value;
-    expect(liveSessionInstance.logPoBillingPathOnce).toHaveBeenCalled();
+    expect(liveSessionInstance.logClaudeBillingPathOnce).toHaveBeenCalled();
   });
 
   it("returns setRendererSecurity, and window.mjs's getAppDevUrl thunk reads through it", () => {

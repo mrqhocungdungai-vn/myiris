@@ -32,9 +32,10 @@ const TAG = "[spec-drift]";
 // ---------------------------------------------------------------------------
 
 const RETIRED_TERMS = [
-  // Case-sensitive with word boundaries: IRIS_PO_QUESTION_TIMEOUT_MS and
-  // SYSTEM_EVENT_PO_QUESTION are real identifiers the code reads, and `_` is a
-  // word character, so \bPO\b never matches inside them.
+  // Case-sensitive with word boundaries: IRIS_PO_MODEL and the
+  // IRIS_PO_QUESTION_TIMEOUT_MS alias are real identifiers the code still reads
+  // for back-compat, and `_` is a word character, so \bPO\b never matches
+  // inside them.
   { term: "PO", pattern: /\bPO\b/g },
   { term: "DEV", pattern: /\bDEV\b/g },
   // Case-insensitive: the last sweep's uppercase-only criterion is exactly

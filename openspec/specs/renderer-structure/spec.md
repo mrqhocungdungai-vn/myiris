@@ -32,7 +32,7 @@ asserted a module that does not exist.
 
 ### Requirement: Zero behavior change for Claude-specific UI
 
-All Claude-specific renderer features SHALL survive the restructure with identical behavior: pipeline bar with its verb roster; per-verb model popover; question banner with clickable options; Claude session line and ⛓ chain badges; project-folder bar; CLAUDE telemetry row; and handling of the existing `claude_*`, `agent_*`, and `po_question` sidecar events.
+All Claude-specific renderer features SHALL survive the restructure with identical behavior: pipeline bar with its verb roster; per-verb model popover; question banner with clickable options; Claude session line and ⛓ chain badges; project-folder bar; CLAUDE telemetry row; and handling of the existing `claude_*` (including `claude_question`) and `agent_*` sidecar events.
 
 #### Scenario: Custom features re-hosted as components
 

@@ -76,7 +76,7 @@ export const TERMINAL_STATUSES = Object.freeze([
 
 // The binding constraint is a sub-agent `Task` call: from the parent stream
 // it appears as one `tool_use` -> total silence -> one `tool_result`, and it
-// sits on DEV's standard path (the persona invokes the `code-review` skill,
+// sits on the stateless path's standard route (the persona invokes the `code-review` skill,
 // which runs two parallel sub-agents). Measured sub-agent durations on a
 // mid-size codebase: 263s / 365s / 380s. 30 minutes is ~4.7x the longest
 // observed and 3x the Bash tool's own 600s self-timeout. Erring long is
@@ -84,8 +84,8 @@ export const TERMINAL_STATUSES = Object.freeze([
 // is this env var, not a code change. See design.md D6.
 export const DEFAULT_RUN_IDLE_TIMEOUT_MS = 1_800_000; // 30 minutes
 
-// Read the same way every other IRIS_* budget is read (see po-session.mjs's
-// poQuestionTimeoutMs). A very large value is not special-cased — it is
+// Read the same way every other IRIS_* budget is read (see run-stream.mjs's
+// claudeQuestionTimeoutMs). A very large value is not special-cased — it is
 // passed straight through to setTimeout, which is what makes "set it high
 // enough to never fire" a valid rollback (keep it under ~24.8 days, Node's
 // setTimeout ceiling).
@@ -124,8 +124,8 @@ export function toUpdateEvent(run, status, extra = {}) {
 
 /**
  * @param {Object} deps
- * @param {(run: Run) => void} deps.startRun - launches the transport (DEV subprocess or PO turn); must not touch the slot itself
- * @param {(run: Run) => void} [deps.cancelRun] - ends an active run's transport (aborting a DEV query, cancelling a PO turn); must not touch the slot itself — the slot is released when the run is later finalized through the normal settle path. Optional: if omitted, stop() on an active run remains a no-op.
+ * @param {(run: Run) => void} deps.startRun - launches the transport (a stateless run or a stateful turn); must not touch the slot itself
+ * @param {(run: Run) => void} [deps.cancelRun] - ends an active run's transport (aborting a stateless query, cancelling a stateful turn); must not touch the slot itself — the slot is released when the run is later finalized through the normal settle path. Optional: if omitted, stop() on an active run remains a no-op.
  * @param {(event: Object) => void} deps.emit - the sidecar event sink
  * @param {(run: Run) => void} [deps.onFinalized] - fires once per run, after a terminal claude_task_update (e.g. the voice completion announcement); NOT called for a queued run cancelled before it ever started
  * @param {number} [deps.idleTimeoutMs] - overrides runIdleTimeoutMs() for testing; production callers should omit this and let it read IRIS_RUN_IDLE_TIMEOUT_MS
@@ -156,7 +156,7 @@ export function createRunQueue({
   // buys nothing and costs the conversation — in a brainstorm, an answer that
   // arrives after the thought has passed is not slow, it is wrong.
   //
-  // Serialized PER CONVERSATION rather than globally: `deliverPoTurn`
+  // Serialized PER CONVERSATION rather than globally: `deliverStatefulTurn`
   // overwrites the in-flight turn's handle unconditionally, so two turns of
   // one conversation must never be in flight together.
   //
@@ -281,7 +281,7 @@ export function createRunQueue({
 
   function beginRun(run) {
     // Slot acquisition lives here and nowhere else — see design D2. A run
-    // that finalizes synchronously inside startRun (missing agent, PO
+    // that finalizes synchronously inside startRun (missing agent, a resident session
     // billing failure) is safe because finalize() is already re-entrant via
     // the finalize-once guard below.
     active = run.run_id;
@@ -312,7 +312,7 @@ export function createRunQueue({
     emit(toUpdateEvent(run, EMIT_STATUS.STARTING, {}));
     beginRun(run);
     // beginRun calls startRun synchronously, and a start-time gate (missing
-    // agent, DEV with no open change, a transport that fails to launch) can
+    // agent, a transport that fails to launch) can
     // finalize the run before this line runs — a function that invokes an
     // injected callback must re-read state before reporting on it, so the
     // real status is read back rather than assumed.

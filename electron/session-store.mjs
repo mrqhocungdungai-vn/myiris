@@ -9,7 +9,7 @@ import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
 import { sessionStoreFile } from "./app-paths.mjs";
-import { closePoSession } from "./po-session.mjs";
+import { closeStatefulSession } from "./stateful-session.mjs";
 import { writeFileAtomicSync, quarantineFile } from "./atomic-file.mjs";
 import {
   MODEL_CHOICES,
@@ -342,7 +342,7 @@ export function createSessionStore({
     if (previousActiveId && previousActiveId !== workstream.id) {
       abandonPendingQuestion(previousActiveId);
       abandonPendingReview(previousActiveId);
-      closePoSession(previousActiveId);
+      closeStatefulSession(previousActiveId);
     }
     return workstream;
   }
@@ -362,7 +362,7 @@ export function createSessionStore({
     if (previousActiveId && previousActiveId !== workstream.id) {
       abandonPendingQuestion(previousActiveId);
       abandonPendingReview(previousActiveId);
-      closePoSession(previousActiveId);
+      closeStatefulSession(previousActiveId);
     }
     return { status: "ok", ...sessionsSnapshot() };
   }
@@ -382,7 +382,7 @@ export function createSessionStore({
       // otherwise its next turn would run in a directory it no longer matches.
       abandonPendingQuestion(workstream.id);
       abandonPendingReview(workstream.id);
-      closePoSession(workstream.id);
+      closeStatefulSession(workstream.id);
       workstream.agent_sessions = {};
       workstream.last_verb_used = null;
       workstream.cwd = cwd;

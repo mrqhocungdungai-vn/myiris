@@ -1,6 +1,6 @@
-// Run activity/tool-step stream projection and the PO live-question relay:
+// Run activity/tool-step stream projection and the live-question relay:
 // reacting to a running Claude process's NDJSON stream and, separately,
-// pausing a PO turn to ask the user a question by voice. Split out of
+// pausing a run to ask the user a question by voice. Split out of
 // electron/main.mjs (split-main-process-modules): Electron-free — every
 // cross-module effect (the run queue, session store, renderer emission,
 // voice announcements) is injected.
@@ -8,16 +8,35 @@
 // Carved out of run-dispatch.mjs (task 3.5) once that module's verbatim
 // move measured 670 lines against the reorganization's 450-line ceiling —
 // see run-dispatch.mjs's header comment. run-dispatch.mjs takes this
-// module's resolvePendingPoQuestion as an injected dependency for its
+// module's resolvePendingClaudeQuestion as an injected dependency for its
 // answer_claude_question tool case.
 import { parseClaudeStreamMessage, runUsageFrom } from "./claude-stream.mjs";
 import { nameSession } from "./run-sessions.mjs";
-import { poQuestionTimeoutMs } from "./po-session.mjs";
 import { RUN_STATUS, toUpdateEvent } from "./run-queue.mjs";
 import { createTrailingThrottle } from "./coalesce.mjs";
 import { fenceUntrustedText } from "./untrusted-text.mjs";
 import { isVerb, resolveVerb } from "./verbs.mjs";
 import { activityEmitIntervalMs } from "./user-config.mjs";
+
+export const DEFAULT_CLAUDE_QUESTION_TIMEOUT_MS = 300000; // 5 minutes
+
+/**
+ * How long a raised question is given to be answered. It lives here because
+ * this module is what waits: the relay is shape-agnostic, and every asking run
+ * — resident session, note write guard, one-shot build — waits the same way.
+ *
+ * `IRIS_PO_QUESTION_TIMEOUT_MS` is still read as a fallback: the variable was
+ * renamed into the IRIS_CLAUDE_* worker family, and an existing .env must not
+ * be silently reinterpreted because of it. Same alias contract as
+ * MODEL_ENV_VARS (session-store.mjs) — current name first, legacy name second.
+ */
+export function claudeQuestionTimeoutMs(env = process.env) {
+  for (const name of ["IRIS_CLAUDE_QUESTION_TIMEOUT_MS", "IRIS_PO_QUESTION_TIMEOUT_MS"]) {
+    const raw = Number(env[name]);
+    if (Number.isFinite(raw) && raw > 0) return raw;
+  }
+  return DEFAULT_CLAUDE_QUESTION_TIMEOUT_MS;
+}
 
 /**
  * What an unanswered question settles as. **Supplied by the caller that raises
@@ -62,7 +81,7 @@ export function createRunStream({
   persistSessionStore,
   emitSessions,
 }) {
-  // At most one PO turn (or DEV run) is ever mid-execution system-wide — Claude
+  // At most one run of either shape is ever mid-execution system-wide — Claude
   // runs strictly one at a time (see runQueue) — so at most one
   // AskUserQuestion can be pending across the whole app. This object owns that
   // single slot and the "raised → answered/expired/abandoned, exactly once"
@@ -93,7 +112,7 @@ export function createRunStream({
       return new Promise((resolve) => {
         const timer = setTimeout(() => this.expire(), timeoutMs);
         this.current = { workstreamId, questions, resolve, timer, onExpiry };
-        emitPoQuestionEvent(workstreamId, questions, "pending");
+        emitClaudeQuestionEvent(workstreamId, questions, "pending");
       });
     },
 
@@ -114,7 +133,7 @@ export function createRunStream({
       // abandon) goes through — not at the individual call sites — so no
       // future settlement path can miss it (design D3).
       runQueue.resume();
-      emitPoQuestionEvent(workstreamId, questions, status, outcome);
+      emitClaudeQuestionEvent(workstreamId, questions, status, outcome);
       resolve(resolvedValue);
     },
 
@@ -154,7 +173,7 @@ export function createRunStream({
         level: "warn",
         message: "The question went unanswered — applying the recommended option for each.",
       });
-      this.settle("timed_out", { behavior: "allow", answers: defaultPoAnswers(questions) }, "defaulted");
+      this.settle("timed_out", { behavior: "allow", answers: defaultClaudeAnswers(questions) }, "defaulted");
     },
 
     // A deliberate reset denies the question rather than answering it with a
@@ -388,7 +407,8 @@ export function createRunStream({
   }
 
   // Takes an already-parsed SDK message. Both transports now deliver objects —
-  // DEV iterates the Agent SDK's async iterator and PO's pump routes the same
+  // a stateless run iterates the Agent SDK's async iterator and the resident
+  // session's pump routes the same
   // union — so there is no newline-delimited JSON to decode on either side.
   function handleClaudeStreamMessage(run, event) {
     if (!event || typeof event !== "object") return;
@@ -419,12 +439,12 @@ export function createRunStream({
       .join(", ");
   }
 
-  // The PO's recommended choice for each question, used both as the AskUserQuestion
+  // The recommended choice for each question, used both as the AskUserQuestion
   // convention (first option = recommended) and as the safe default on timeout/reset.
   // Encoded in the shape the question asked for: a multi-select question's default
   // travels as a list, so it carries however many options the recommendation names
   // rather than being structurally capped at one.
-  function defaultPoAnswers(questions) {
+  function defaultClaudeAnswers(questions) {
     const answers = {};
     for (const q of questions) {
       const recommended = q.options?.[0]?.label ?? "";
@@ -451,9 +471,8 @@ export function createRunStream({
     );
   }
 
-  // The event type stays `po_question` for renderer/IPC back-compat.
-  function emitPoQuestionEvent(workstreamId, questions, status, outcome = status) {
-    emitEvent({ type: "po_question", workstream_id: workstreamId, status, outcome, questions });
+  function emitClaudeQuestionEvent(workstreamId, questions, status, outcome = status) {
+    emitEvent({ type: "claude_question", workstream_id: workstreamId, status, outcome, questions });
   }
 
   // canUseTool's onAskUserQuestion callback: pauses the asking run, relays the
@@ -473,12 +492,12 @@ export function createRunStream({
    */
   function askUserQuestionViaVoice(workstreamId, questions, { onExpiry = QUESTION_EXPIRY.RECOMMENDED_OPTION } = {}) {
     const promise = PendingQuestion.raise(workstreamId, questions, {
-      timeoutMs: poQuestionTimeoutMs(),
+      timeoutMs: claudeQuestionTimeoutMs(),
       onExpiry,
     });
 
     const lines = [
-      "SYSTEM_EVENT_PO_QUESTION",
+      "SYSTEM_EVENT_CLAUDE_QUESTION",
       "instructions_to_iris:",
       "- Claude has paused mid-task to ask you something. Read each question aloud with its options, in order, and collect the user's answer for each.",
       "- Once you have every answer, call answer_claude_question with one entry per question. Identify each question by its NUMBER as listed below — do not retype the question text to identify it.",
@@ -510,8 +529,8 @@ export function createRunStream({
 
   // Voice (Gemini tool) and the UI (IPC) both call this; whichever answers first
   // wins — the second call is a no-op since PendingQuestion is already settled.
-  function resolvePendingPoQuestion(answers) {
-    if (!PendingQuestion.current) return { status: "error", error: "No PO question is pending." };
+  function resolvePendingClaudeQuestion(answers) {
+    if (!PendingQuestion.current) return { status: "error", error: "No question is pending." };
     // TEXT A MODEL PRODUCED IS NOT AN IDENTIFIER. This used to key the answers
     // map on `entry.question` — the question sentence, retyped by a speech
     // model that had just read it aloud IN TRANSLATION to a user speaking
@@ -559,6 +578,6 @@ export function createRunStream({
     pushToolEnd,
     handleClaudeStreamMessage,
     askUserQuestionViaVoice,
-    resolvePendingPoQuestion,
+    resolvePendingClaudeQuestion,
   };
 }

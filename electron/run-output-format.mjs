@@ -21,7 +21,57 @@
 // demands, the likelier a run that did all its real work dies on
 // `error_max_structured_output_retries` because it could not format a summary.
 //
+// This module also owns how a run's FAILURE is worded, for the same reason it
+// owns how a success is: both shapes finalize through it, and a failure account
+// that differed between them would be two stories about the same event.
+//
 // Electron-free, no I/O.
+
+// A run that terminated because it could not produce valid structured output
+// after the SDK's own retries. Named as its own cause: the work it did may be
+// complete on disk, and telling the user "the run failed" would send them
+// looking for a problem that is not there.
+export const STRUCTURED_OUTPUT_FAILURE =
+  "The run finished its work but could not format a valid summary after several attempts, so its report was " +
+  "lost. Check the project for what it actually changed before re-running — the work itself may be done.";
+
+// How many trailing stderr lines a failed run carries. Enough to show a stack or
+// a spawn error, small enough that a chatty subprocess cannot turn a failure
+// message into a wall of text.
+export const STDERR_TAIL_LINES = 20;
+
+// The SDK hands stderr over in arbitrary chunks, not lines, so this keeps a
+// rolling line buffer rather than concatenating everything a run ever wrote.
+// Attached to a run only when it FAILS — on the success path these lines are
+// debug noise the user has no reason to read.
+export function createStderrBuffer(limit = STDERR_TAIL_LINES) {
+  const lines = [];
+  let partial = "";
+  return {
+    collect(chunk) {
+      partial += String(chunk ?? "");
+      const parts = partial.split("\n");
+      partial = parts.pop() ?? "";
+      for (const line of parts) {
+        if (line.trim()) lines.push(line);
+      }
+      if (lines.length > limit) lines.splice(0, lines.length - limit);
+    },
+    tail() {
+      const all = partial.trim() ? [...lines, partial] : lines;
+      return all.slice(-limit).join("\n").trim();
+    },
+  };
+}
+
+// A failure message with the subprocess's own diagnostics behind it. Before
+// this, a transport failure reached the user as `Failed to run claude: <message>`
+// and nothing else. `limit` is a parameter rather than a closed-over constant so
+// the wording always names the same number of lines the buffer actually kept.
+export function withStderr(message, tail, limit = STDERR_TAIL_LINES) {
+  const diagnostics = tail();
+  return diagnostics ? `${message}\n\n--- claude stderr (last ${limit} lines) ---\n${diagnostics}` : message;
+}
 
 export const DECISION_OUTPUT_FORMAT = Object.freeze({
   type: /** @type {"json_schema"} */ ("json_schema"),

@@ -52,7 +52,7 @@ function parseImportClause(clause) {
 // syntactic shapes: `import ... from "spec"` (default/named/namespace) and
 // side-effect-only `import "spec"`. Both anchor `^import` per line (`m`
 // flag) so a multi-line named-import block (e.g. main.mjs's 12-line
-// po-session.mjs import) is still exactly one statement, matching how a
+// stateful-session.mjs import) is still exactly one statement, matching how a
 // naive `grep ^import` count would see it too (task 4.4's guard).
 const WITH_FROM_RE = /^import\s+([\s\S]*?)\s+from\s*["']([^"']+)["']\s*;?\s*$/gm;
 const SIDE_EFFECT_RE = /^import\s*["']([^"']+)["']\s*;?\s*$/gm;

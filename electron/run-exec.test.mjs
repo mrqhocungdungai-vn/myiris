@@ -2,7 +2,8 @@ import { describe, it, expect, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createRunExec, buildNoteWriteGuard, effectiveDisallowedTools } from "./run-exec.mjs";
+import { createRunExec, buildNoteWriteGuard } from "./run-exec.mjs";
+import { effectiveDisallowedTools } from "./stateless-session.mjs";
 import { buildRunInstructions } from "./role-prompt.mjs";
 import { resolveVerb } from "./verbs.mjs";
 import { runUsageFrom } from "./claude-stream.mjs";
@@ -713,9 +714,9 @@ describe("run-exec: the stateless run shape", () => {
 
 describe("run-exec: the stateful run shape", () => {
   it("refuses to start without a subscription token", async () => {
-    // poBillingStatus is imported directly by run-exec.mjs from po-session.mjs,
-    // not injected — clear the credentials it reads rather than stubbing
-    // that import, so this test doesn't depend on the ambient environment.
+    // claudeBillingStatus is imported directly by run-exec.mjs from
+    // worker-env.mjs, not injected — clear the credentials it reads rather than
+    // stubbing that import, so this test doesn't depend on the ambient environment.
     const originalEnv = { ...process.env };
     delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
     try {
@@ -793,7 +794,7 @@ describe("run-exec: the user's own words reach the run", () => {
 
 // open-note-session design D6/8: the destructive-edit confirmation, wired only
 // for the verb that declares `guardOpenNoteWrites`. buildNoteWriteGuard is the
-// caller half of the seam po-session.mjs's buildCanUseTool exposes — this
+// caller half of the seam stateful-session.mjs's buildCanUseTool exposes — this
 // exercises it directly against a real file, the same convention
 // vault-write.test.mjs uses.
 describe("run-exec: the note write guard", () => {
@@ -869,7 +870,7 @@ describe("run-exec: the note write guard", () => {
 
   it("writes nothing when the confirmation goes unanswered (the relay's own timeout default is options[0])", async () => {
     const notePath = withNote("Paragraph one.\n\nParagraph two.");
-    // Mirrors defaultPoAnswers' behavior: an unanswered question resolves to
+    // Mirrors defaultClaudeAnswers' behavior: an unanswered question resolves to
     // options[0].label, which MUST be the no-op (task 8.5/9.9).
     const askUserQuestionViaVoice = vi.fn(async (_workstreamId, questions) => ({
       behavior: "allow",

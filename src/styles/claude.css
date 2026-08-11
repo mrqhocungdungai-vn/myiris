@@ -70,7 +70,7 @@
   background: rgba(var(--cyan-rgb), 0.16);
 }
 
-/* ----- Agent pipeline (PO → DEV) — switching roles is a gate ----- */
+/* ----- The pipeline surface — switching verbs is a gate ----- */
 .pipeline-bar {
   display: flex;
   align-items: center;
@@ -294,8 +294,8 @@
   white-space: nowrap;
 }
 
-/* ----- PO question banner (voice-decision relay) ----- */
-.po-question-banner {
+/* ----- Question banner (voice-decision relay) ----- */
+.claude-question-banner {
   margin: 0 12px 10px;
   padding: 10px 12px;
   border-radius: var(--r-card);
@@ -306,7 +306,7 @@
   gap: 8px;
 }
 
-.po-question-banner-head {
+.claude-question-banner-head {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -318,7 +318,7 @@
   text-transform: uppercase;
 }
 
-.po-question-block + .po-question-block {
+.claude-question-block + .claude-question-block {
   margin-top: 8px;
   padding-top: 8px;
   border-top: 1px solid rgba(var(--violet-rgb), 0.16);
@@ -326,7 +326,7 @@
 
 /* The question's own short label (AskUserQuestion's `header`), so the user sees
    what a question is ABOUT before reading the question itself. */
-.po-question-header {
+.claude-question-header {
   display: inline-block;
   margin-bottom: 4px;
   padding: 1px 6px;
@@ -340,7 +340,7 @@
 
 /* A question that accepts several options must say so — otherwise the user
    picks one and assumes they have answered it. */
-.po-question-multi {
+.claude-question-multi {
   display: block;
   margin-bottom: 6px;
   font-size: 10px;
@@ -349,7 +349,7 @@
 
 /* Multi-select cannot auto-submit on the last pick, so it needs an explicit
    "I am done choosing". */
-.po-question-submit {
+.claude-question-submit {
   align-self: flex-start;
   border: 1px solid rgba(var(--violet-rgb), 0.55);
   background: rgba(var(--violet-rgb), 0.22);
@@ -360,25 +360,25 @@
   cursor: pointer;
 }
 
-.po-question-submit:disabled {
+.claude-question-submit:disabled {
   opacity: 0.45;
   cursor: default;
 }
 
-.po-question-text {
+.claude-question-text {
   margin: 0 0 6px;
   color: var(--text);
   font-size: 12px;
   line-height: 1.4;
 }
 
-.po-question-options {
+.claude-question-options {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
 }
 
-.po-question-option {
+.claude-question-option {
   border: 1px solid rgba(var(--violet-rgb), 0.4);
   background: transparent;
   color: var(--violet-soft);
@@ -388,25 +388,25 @@
   cursor: pointer;
 }
 
-.po-question-option:hover {
+.claude-question-option:hover {
   background: rgba(var(--violet-rgb), 0.15);
   border-color: rgba(var(--violet-rgb), 0.7);
 }
 
-.po-question-option.picked {
+.claude-question-option.picked {
   background: rgba(var(--violet-rgb), 0.3);
   border-color: var(--violet-soft);
   color: var(--text);
 }
 
-.po-question-hint {
+.claude-question-hint {
   margin: 0;
   font-size: 10px;
   color: var(--muted);
 }
 
 /* ----- Task review banner (prompt-review-gate) — cyan accent so it reads
-   distinctly from the PO question banner's violet when both stack ----- */
+   distinctly from the question banner's violet when both stack ----- */
 .task-review-banner {
   margin: 0 12px 10px;
   padding: 10px 12px;
@@ -529,18 +529,18 @@
   border-color: rgba(var(--cyan-rgb), 0.7);
 }
 
-/* ----- PO question / task review banners, floating in the Glass HUD -----
-   A pending PO question or parked review outranks the HUD's minimal-surface
+/* ----- Question / task review banners, floating in the Glass HUD -----
+   A pending question or parked review outranks the HUD's minimal-surface
    philosophy: it is a permanent lit island (not tucked behind a toggle like
    Comms/Tasks) so it can't go unnoticed while floating over another app.
    Positioned top-center, clear of the tasks column (top-right) and
    orb/camera/comms clusters (bottom). Both banners can be live at once
-   (prompt-review-gate spec D3) — they stack in this one flex column, PO
+   (prompt-review-gate spec D3) — they stack in this one flex column, the question
    question first. */
 /* Stacking comes from `.hud-chrome` in hud.css, which this element also
    carries — that is what keeps it above an open galaxy/drawing panel and
    dwell-reachable there. It previously declared no z-index at all, so the
-   galaxy (z-index 1) painted straight over a live PO question. */
+   galaxy (z-index 1) painted straight over a live question. */
 .hud-review-stack {
   position: absolute;
   top: 18px;
@@ -554,7 +554,7 @@
   animation: hud-rise 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) 0.16s backwards;
 }
 
-.hud-review-stack .po-question-banner,
+.hud-review-stack .claude-question-banner,
 .hud-review-stack .task-review-banner {
   margin: 0;
   background: linear-gradient(180deg, rgba(26, 36, 57, 0.72), rgba(10, 16, 28, 0.76));
@@ -563,7 +563,7 @@
     0 12px 40px rgba(0, 0, 0, 0.4);
 }
 
-.hud-review-stack .po-question-banner {
+.hud-review-stack .claude-question-banner {
   border-color: rgba(var(--violet-rgb), 0.5);
 }
 
@@ -571,8 +571,8 @@
   border-color: rgba(var(--cyan-rgb), 0.5);
 }
 
-.hud-review-stack .po-question-text,
-.hud-review-stack .po-question-hint,
+.hud-review-stack .claude-question-text,
+.hud-review-stack .claude-question-hint,
 .hud-review-stack .task-review-text,
 .hud-review-stack .task-review-hint {
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);

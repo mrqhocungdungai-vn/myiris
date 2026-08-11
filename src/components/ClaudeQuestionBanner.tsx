@@ -1,15 +1,15 @@
 import { MessageSquare } from "lucide-react";
 
 // A question may permit several options (`multiSelect`). Reducing one of those
-// to a single pick answers a different question than the PO asked, so picks are
+// to a single pick answers a different question than the run asked, so picks are
 // tracked as a list per question.
-export default function PoQuestionBanner({
+export default function ClaudeQuestionBanner({
   questions,
   answers,
   onPick,
   onSubmit,
 }: {
-  questions: PoQuestion[];
+  questions: ClaudeQuestion[];
   answers: Record<string, string[]>;
   onPick: (question: string, choice: string) => void;
   onSubmit?: () => void;
@@ -21,23 +21,23 @@ export default function PoQuestionBanner({
   const complete = questions.every((q) => (answers[q.question] ?? []).length > 0);
 
   return (
-    <div className="po-question-banner" role="status">
-      <div className="po-question-banner-head">
+    <div className="claude-question-banner" role="status">
+      <div className="claude-question-banner-head">
         <MessageSquare size={13} />
-        <span>PO is waiting on you</span>
+        <span>Claude is waiting on you</span>
       </div>
       {questions.map((q) => {
         const picked = answers[q.question] ?? [];
         return (
-          <div key={q.question} className="po-question-block">
-            {q.header ? <span className="po-question-header">{q.header}</span> : null}
-            <p className="po-question-text">{q.question}</p>
-            {q.multiSelect ? <span className="po-question-multi">Choose one or more</span> : null}
-            <div className="po-question-options">
+          <div key={q.question} className="claude-question-block">
+            {q.header ? <span className="claude-question-header">{q.header}</span> : null}
+            <p className="claude-question-text">{q.question}</p>
+            {q.multiSelect ? <span className="claude-question-multi">Choose one or more</span> : null}
+            <div className="claude-question-options">
               {q.options.map((opt) => (
                 <button
                   key={opt.label}
-                  className={`po-question-option ${picked.includes(opt.label) ? "picked" : ""}`}
+                  className={`claude-question-option ${picked.includes(opt.label) ? "picked" : ""}`}
                   title={opt.description}
                   aria-pressed={picked.includes(opt.label)}
                   onClick={() => onPick(q.question, opt.label)}
@@ -50,11 +50,11 @@ export default function PoQuestionBanner({
         );
       })}
       {hasMultiSelect ? (
-        <button className="po-question-submit" disabled={!complete} onClick={onSubmit}>
+        <button className="claude-question-submit" disabled={!complete} onClick={onSubmit}>
           Send answers
         </button>
       ) : null}
-      <p className="po-question-hint">
+      <p className="claude-question-hint">
         {hasMultiSelect
           ? "Answer by voice, or pick your options above and send."
           : "Answer by voice, or click an option above."}

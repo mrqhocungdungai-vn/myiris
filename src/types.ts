@@ -1,6 +1,6 @@
 export type ReactorState = "idle" | "online" | "listening" | "speaking" | "listenMode" | "working";
 
-// One Claude tool invocation, surfaced live from the DEV NDJSON / PO SDK
+// One Claude tool invocation, surfaced live from the stateless NDJSON / resident SDK
 // event stream (see electron/claude-stream.mjs). Keyed by the tool_use id
 // Claude itself assigns, so start/end pairing does not depend on tool name.
 export type TaskStep = {

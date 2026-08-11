@@ -10,7 +10,7 @@
 // received injected from main.mjs, one of the four modules allowed to
 // import Electron directly, like any other domain module.
 import { createRunQueue, RUN_STATUS } from "./run-queue.mjs";
-import { getPoSessionState, hasUsedPoSession } from "./po-session.mjs";
+import { getStatefulSessionState, hasUsedStatefulSession } from "./stateful-session.mjs";
 import { isVerb, projectState, resolveVerb } from "./verbs.mjs";
 import { createPipelineProbes } from "./pipeline-probes.mjs";
 import { createPipelineInstall } from "./pipeline-install.mjs";
@@ -111,13 +111,13 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
   // the whole split).
   const runQueue = createRunQueue({
     startRun: (run) => startClaudeRun(run),
-    // Ends an active run's transport, whichever shape it has. A DEV run carries
-    // its own `cancel` (the AbortController for its query); a PO turn is ended
+    // Ends an active run's transport, whichever shape it has. A stateless run carries
+    // its own `cancel` (the AbortController for its query); a stateful turn is ended
     // through its resident session, looked up by workstream. Never touches the
     // slot itself — the slot releases when the transport settles and finalizes
     // the run (design.md D1/D2).
     // One path for both lifetimes: run-exec gives every run a `cancel`, whether
-    // it is a one-shot DEV query (abort its controller) or a PO turn inside a
+    // it is a one-shot query (abort its controller) or a stateful turn inside a
     // resident session (interrupt the turn, keep the session). Nothing here
     // needs to know which. Never touches the slot itself — the slot releases
     // when the transport settles and finalizes the run (design.md D1/D2).
@@ -288,7 +288,7 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     getFullConfig,
     writeUserConfig,
     setPromptReviewMode,
-    savePoToken,
+    saveClaudeToken,
     testGeminiKey,
     previewVoice,
   } = userConfig;
@@ -311,7 +311,7 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     pushToolEnd,
     handleClaudeStreamMessage,
     askUserQuestionViaVoice,
-    resolvePendingPoQuestion,
+    resolvePendingClaudeQuestion,
   } = runStream;
 
   const runDispatch = createRunDispatch({
@@ -339,12 +339,12 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     // had no turn: the review gate must still park on the first sentence, and
     // the voice layer must not be told a shaping conversation is under way
     // before one is.
-    hasLiveStatefulSession: (workstreamId) => hasUsedPoSession(workstreamId),
+    hasLiveStatefulSession: (workstreamId) => hasUsedStatefulSession(workstreamId),
     // Mechanics, not consent: a warmed session counts here, because a turn can
     // be delivered into it without starting a job.
-    hasResidentSession: (workstreamId) => Boolean(getPoSessionState(workstreamId)),
+    hasResidentSession: (workstreamId) => Boolean(getStatefulSessionState(workstreamId)),
     getUiContextSnapshot,
-    resolvePendingPoQuestion,
+    resolvePendingClaudeQuestion,
     // secondBrainCapability is constructed further down (see the forward
     // declaration above) — same thunk-through-a-closure shape as
     // checkNotesSkillsStatus/ensureNotesVaultReady elsewhere in this file, since
@@ -516,7 +516,7 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     setVerbModel,
       legacyClaudeArtifactsStatus,
     removeLegacyClaudeArtifacts,
-    resolvePendingPoQuestion,
+    resolvePendingClaudeQuestion,
     // Config / prompt review
     getPromptReviewMode,
     setPromptReviewMode,
@@ -524,7 +524,7 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     sendContextSupplement,
     getFullConfig,
     writeUserConfig,
-    savePoToken,
+    saveClaudeToken,
     testGeminiKey,
     previewVoice,
     checkClaudeHealth,

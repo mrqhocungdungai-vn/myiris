@@ -21,7 +21,7 @@ import ReactorCore, { ORB_ACCENT, ORB_ENERGY } from "./ReactorCore";
 import { listenOnlyControlTitle, type SystemAudioState } from "../lib/system-audio";
 import { transcriptVoice, transcriptVoiceLabel } from "../lib/transcript-speaker";
 import WorkCard from "./WorkCard";
-import PoQuestionBanner from "./PoQuestionBanner";
+import ClaudeQuestionBanner from "./ClaudeQuestionBanner";
 import ReviewBanner from "./ReviewBanner";
 import ContextSupplementInput from "./ContextSupplementInput";
 import { HandSkeleton } from "./CameraDock";
@@ -212,7 +212,7 @@ export default function HudShell({
   cameraEnlarged,
   onToggleCameraSize,
   pipelineAvailable,
-  poQuestion,
+  claudeQuestion,
   taskReview,
   drawingActive,
   onToggleDrawing,
@@ -298,18 +298,18 @@ export default function HudShell({
   cameraEnlarged: boolean;
   onToggleCameraSize: () => void;
   // Pipeline master switch (pipeline-availability spec) — hides the tasks
-  // column and PO question banner in chat-only mode.
+  // column and question banner in chat-only mode.
   pipelineAvailable: boolean;
-  // Claude-specific delta vs upstream (design.md D2): a pending PO question
+  // Claude-specific delta vs upstream (design.md D2): a pending question
   // must stay answerable (voice, click, or dwell-click) while floating.
-  poQuestion: {
-    questions: PoQuestion[];
+  claudeQuestion: {
+    questions: ClaudeQuestion[];
     answers: Record<string, string[]>;
     onPick: (question: string, choice: string) => void;
     onSubmit?: () => void;
   } | null;
-  // A parked review (prompt-review-gate spec) stacks BENEATH a pending PO
-  // question when both are live — the PO question blocks a token-burning
+  // A parked review (prompt-review-gate spec) stacks BENEATH a pending
+  // question when both are live — the question blocks a token-burning
   // run, so it keeps precedence (design.md D3). HUD editing is voice-only
   // (D7), so ReviewBanner renders with editable={false} here.
   taskReview: {
@@ -373,17 +373,17 @@ export default function HudShell({
 
   return (
     <div className={`hud-shell ${awake ? "awake" : "asleep"}`}>
-      {/* A pending PO question outranks everything else in the HUD — it stays
+      {/* A pending question outranks everything else in the HUD — it stays
           a lit, always-visible island rather than tucked behind a toggle. A
           parked review stacks beneath it (design.md D3) in the same island. */}
-      {pipelineAvailable && (poQuestion || taskReview) ? (
+      {pipelineAvailable && (claudeQuestion || taskReview) ? (
         <div className={`hud-review-stack hud-hit ${HUD_CHROME_CLASS}`}>
-          {poQuestion ? (
-            <PoQuestionBanner
-              questions={poQuestion.questions}
-              answers={poQuestion.answers}
-              onPick={poQuestion.onPick}
-              onSubmit={poQuestion.onSubmit}
+          {claudeQuestion ? (
+            <ClaudeQuestionBanner
+              questions={claudeQuestion.questions}
+              answers={claudeQuestion.answers}
+              onPick={claudeQuestion.onPick}
+              onSubmit={claudeQuestion.onSubmit}
             />
           ) : null}
           {taskReview ? (

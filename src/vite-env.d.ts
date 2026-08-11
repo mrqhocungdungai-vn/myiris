@@ -120,22 +120,22 @@ type LegacyCleanupResult = {
   errors: string[];
 };
 
-type PoQuestionOption = {
+type ClaudeQuestionOption = {
   label: string;
   description: string;
   preview?: string;
 };
 
-type PoQuestion = {
+type ClaudeQuestion = {
   question: string;
   header: string;
-  options: PoQuestionOption[];
+  options: ClaudeQuestionOption[];
   // When true the user may choose several options. Reducing such a question to
   // one choice answers a different question than the one that was asked.
   multiSelect?: boolean;
 };
 
-type PoQuestionAnswer = {
+type ClaudeQuestionAnswer = {
   question: string;
   // One label, or several for a multi-select question. Main encodes it into the
   // comma-separated string AskUserQuestion expects.
@@ -177,8 +177,8 @@ type IrisConfig = {
   wakeHotkey: string;
   /** The global sleep accelerator actually registered, e.g. "Alt+Shift+S". */
   sleepHotkey: string;
-  /** Presence only — the PO subscription token itself never reaches the renderer. */
-  poTokenSet: boolean;
+  /** Presence only — the subscription token itself never reaches the renderer. */
+  claudeTokenSet: boolean;
   /** Presence only — the metered API key itself never reaches the renderer. */
   anthropicApiKeySet: boolean;
   configured: boolean;
@@ -187,7 +187,7 @@ type IrisConfig = {
   configPath: string;
 };
 
-type PoTokenResult = {
+type ClaudeTokenResult = {
   ok: boolean;
   error?: string;
   config: IrisConfig;
@@ -405,7 +405,7 @@ type IrisApi = {
     verb: Verb,
     model: string,
   ) => Promise<SessionsSnapshot & { status?: string; error?: string; verbs?: Verb[]; shared?: boolean }>;
-  answerPoQuestion: (answers: PoQuestionAnswer[]) => Promise<{ status: string; error?: string }>;
+  answerClaudeQuestion: (answers: ClaudeQuestionAnswer[]) => Promise<{ status: string; error?: string }>;
   getPromptStatus: () => Promise<PromptReviewStatus>;
   resolvePromptReview: (payload: {
     action: PromptReviewResolveAction;
@@ -464,8 +464,8 @@ type IrisApi = {
   disarmSystemAudioSelfTest: () => void;
   getConfig: () => Promise<IrisConfig>;
   saveConfig: (updates: Partial<Record<string, string>>) => Promise<IrisConfig>;
-  savePoToken: (token: string, key?: ClaudeCredentialKey) => Promise<PoTokenResult>;
-  removePoToken: (key?: ClaudeCredentialKey) => Promise<PoTokenResult>;
+  saveClaudeToken: (token: string, key?: ClaudeCredentialKey) => Promise<ClaudeTokenResult>;
+  removeClaudeToken: (key?: ClaudeCredentialKey) => Promise<ClaudeTokenResult>;
   testGemini: (key: string) => Promise<{ ok: boolean; error?: string }>;
   testClaude: () => Promise<ClaudeHealth>;
   getPipelineStatus: () => Promise<PipelineStatus>;

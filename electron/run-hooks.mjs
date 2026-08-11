@@ -92,8 +92,8 @@ export async function readInFlightCostUsd(queryHandle) {
  * Builds the `hooks` option for one run.
  *
  * Takes callbacks rather than a run record, because the two roles have different
- * shapes to bind to: DEV's hooks close over the one run they belong to, while
- * PO's session outlives any single turn and must route to whichever turn is
+ * shapes to bind to: a stateless run's hooks close over the one run they belong
+ * to, while a resident session outlives any single turn and must route to whichever turn is
  * currently in flight. Callbacks let both express that in their own terms.
  *
  * @param {{

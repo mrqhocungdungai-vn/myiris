@@ -50,14 +50,14 @@ const { ipcMain, shell, systemPreferences } = electron;
  *   setVerbModel: (workstreamId: string, verb: any, model: any) => any,
  *   legacyClaudeArtifactsStatus: () => any,
  *   removeLegacyClaudeArtifacts: () => any,
- *   resolvePendingPoQuestion: (answers: any) => any,
+ *   resolvePendingClaudeQuestion: (answers: any) => any,
  *   getPromptReviewMode: () => string,
  *   setPromptReviewMode: (mode: string) => any,
  *   resolvePromptReview: (payload: any) => any,
  *   sendContextSupplement: (text: any) => any,
  *   getFullConfig: () => any,
  *   writeUserConfig: (updates: any) => any,
- *   savePoToken: (token: any, opts?: any) => any,
+ *   saveClaudeToken: (token: any, opts?: any) => any,
  *   testGeminiKey: (key: any) => any,
  *   previewVoice: (payload: any) => any,
  *   checkClaudeHealth: () => any,
@@ -93,14 +93,14 @@ export function registerIpc(deps) {
     setVerbModel,
     legacyClaudeArtifactsStatus,
     removeLegacyClaudeArtifacts,
-    resolvePendingPoQuestion,
+    resolvePendingClaudeQuestion,
     getPromptReviewMode,
     setPromptReviewMode,
     resolvePromptReview,
     sendContextSupplement,
     getFullConfig,
     writeUserConfig,
-    savePoToken,
+    saveClaudeToken,
     testGeminiKey,
     previewVoice,
     checkClaudeHealth,
@@ -155,12 +155,12 @@ export function registerIpc(deps) {
   // click an option directly instead of answering by voice. Whichever path
   // (this, or the Gemini answer_claude_question tool) answers first wins; the
   // other becomes a no-op since the question is already resolved.
-  ipcMain.handle("po:answer-question", (_event, answers) => resolvePendingPoQuestion(answers));
+  ipcMain.handle("claude:answer-question", (_event, answers) => resolvePendingClaudeQuestion(answers));
   // Renderer's boot-time read of the review-gate mode (see setPromptReviewMode
   // above) plus the UI's Approve/Edit/Cancel and mode-toggle paths. Only
   // Approve/Edit/Cancel have a voice counterpart (respond_to_task_review) —
   // the mode toggle below is UI-only, never model-writable — mirroring the
-  // po:answer-question pattern for whichever channel resolves first.
+  // claude:answer-question pattern for whichever channel resolves first.
   ipcMain.handle("prompt:status", () => ({ reviewMode: getPromptReviewMode() }));
   ipcMain.handle("prompt:resolve-review", (_event, payload) => resolvePromptReview(payload));
   ipcMain.handle("prompt:set-review-mode", (_event, payload) => setPromptReviewMode(payload?.mode));
@@ -185,13 +185,13 @@ export function registerIpc(deps) {
   ipcMain.handle("config:get", () => getFullConfig());
   ipcMain.handle("config:save", (_event, updates) => writeUserConfig(updates));
   // `key` selects which Claude credential is being written — the subscription
-  // token or the metered API key. Defaulted in savePoToken, which also rejects
+  // token or the metered API key. Defaulted in saveClaudeToken, which also rejects
   // any key that is not one of those two.
-  ipcMain.handle("config:save-po-token", (_event, payload) =>
-    savePoToken(payload?.token, payload?.key ? { key: payload.key } : {}),
+  ipcMain.handle("config:save-claude-token", (_event, payload) =>
+    saveClaudeToken(payload?.token, payload?.key ? { key: payload.key } : {}),
   );
-  ipcMain.handle("config:remove-po-token", (_event, payload) =>
-    savePoToken("", { remove: true, ...(payload?.key ? { key: payload.key } : {}) }),
+  ipcMain.handle("config:remove-claude-token", (_event, payload) =>
+    saveClaudeToken("", { remove: true, ...(payload?.key ? { key: payload.key } : {}) }),
   );
   ipcMain.handle("config:test-gemini", (_event, payload) => testGeminiKey(payload?.key));
   ipcMain.handle("config:test-claude", () => checkClaudeHealth());

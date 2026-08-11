@@ -75,7 +75,7 @@ const INBOX_OFFER_THRESHOLD = 8;
 // The 6 vendored skill names this capability needs installed in
 // ~/.claude/skills before Claude actually has LLM-Wiki instructions to follow
 // (they are deliberately NOT in REQUIRED_SKILLS — that list gates the
-// PO/DEV pipeline, not Talk-mode notes; see pipeline-probes.mjs's
+// build pipeline, not Talk-mode notes; see pipeline-probes.mjs's
 // checkSkillsStatus()). Vault creation (ensureNotesVaultReady, below) and
 // skill installation (installPipelinePrereqs, via the SetupPanel's "Install
 // missing" button) are two independent actions on two different schedules —

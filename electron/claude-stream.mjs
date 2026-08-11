@@ -1,6 +1,6 @@
-// Shared message-shape parsing for both Claude transports: DEV's spawned
-// `claude -p` NDJSON stdout (electron/main.mjs) and PO's resident Agent SDK
-// `for await` stream (electron/po-session.mjs). Both transports carry the
+// Shared message-shape parsing for both Claude run shapes: the stateless
+// one-shot `query()` (stateless-session.mjs) and the resident Agent SDK
+// `for await` stream (electron/stateful-session.mjs). Both transports carry the
 // same underlying message schema (system/init, assistant content parts,
 // terminal result) — only how each side dispatches from there differs, via
 // the onSessionId/onActivity/onResult callbacks passed in.
@@ -81,7 +81,7 @@ export function parseClaudeStreamMessage(
 // instead of it, because a run that used subagents spends on more than one model
 // and a single top-level number attributes that incorrectly — both measured runs
 // in design.md D3 carried two models. Lives here, with the rest of the shared
-// message-shape knowledge, so DEV's stream projection and PO's resident session
+// message-shape knowledge, so the stateless stream projection and the resident session
 // read the same fields the same way.
 /**
  * @param {any} result

@@ -28,7 +28,7 @@ function rect(id, x = 0, y = 0, width = 50, height = 50) {
 }
 
 // Wiring-shape coverage (design.md D6/5.1/5.2, task 7.4): both the PO
-// options.mcpServers entry (po-session.test.mjs asserts it flows through
+// options.mcpServers entry (stateful-session.test.mjs asserts it flows through
 // unmodified) and the DEV --mcp-config JSON (main.mjs wraps this same record
 // as { mcpServers: { "iris-canvas": record } }) are built from this one
 // function, so this is the single place that needs to assert the shape.

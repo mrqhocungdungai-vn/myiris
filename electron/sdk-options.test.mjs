@@ -18,7 +18,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRunExec } from "./run-exec.mjs";
-import { getOrCreatePoSession, closeAllPoSessions } from "./po-session.mjs";
+import { getOrCreateStatefulSession, closeAllStatefulSessions } from "./stateful-session.mjs";
 import { buildSystemPrompt } from "./role-prompt.mjs";
 import { DECISION_OUTPUT_FORMAT } from "./run-output-format.mjs";
 import { resolveRunBudget } from "./run-budget.mjs";
@@ -286,7 +286,7 @@ describe("the options `investigate` hands to query()", () => {
 });
 
 describe("the options the resident session hands to query()", () => {
-  const PO_KEYS = [
+  const STATEFUL_KEYS = [
     "agent",
     "cwd",
     "abortController",
@@ -309,10 +309,10 @@ describe("the options the resident session hands to query()", () => {
     "title",
   ];
 
-  function poOptions() {
+  function statefulOptions() {
     /** @type {any} */
     let captured;
-    getOrCreatePoSession(
+    getOrCreateStatefulSession(
       { id: `ws-${Math.random()}` },
       {
         agent: "iris-stateful",
@@ -339,28 +339,28 @@ describe("the options the resident session hands to query()", () => {
   }
 
   it("has exactly these fields, and no others", async () => {
-    expect(Object.keys(poOptions()).sort()).toEqual([...PO_KEYS].sort());
-    await closeAllPoSessions();
+    expect(Object.keys(statefulOptions()).sort()).toEqual([...STATEFUL_KEYS].sort());
+    await closeAllStatefulSessions();
   });
 
   // The whole point of the original failure: the live-session instruction must
   // travel on the field the SDK reads.
   it("carries the live-session instruction on `systemPrompt`, never `appendSystemPrompt`", async () => {
-    const options = poOptions();
+    const options = statefulOptions();
     expect(options).not.toHaveProperty("appendSystemPrompt");
     expect(options.systemPrompt).toEqual(buildSystemPrompt(resolveVerb("shape_requirements")));
-    await closeAllPoSessions();
+    await closeAllStatefulSessions();
   });
 
   it("shares its ceilings, skills, and schema policy with the stateless shape's", async () => {
-    const options = poOptions();
+    const options = statefulOptions();
     expect(options.maxTurns).toBe(resolveRunBudget("stateful", {}).maxTurns);
     expect(options.skills).toEqual(resolveVerb("shape_requirements").skills);
     expect(options.outputFormat).toBe(DECISION_OUTPUT_FORMAT);
     // This is the shape that IS allowed to ask, so it must not be locked out.
     expect(options).not.toHaveProperty("disallowedTools");
     expect(typeof options.canUseTool).toBe("function");
-    await closeAllPoSessions();
+    await closeAllStatefulSessions();
   });
 });
 
@@ -370,8 +370,8 @@ describe("the options the resident session hands to query()", () => {
 // per-note sessionKey rather than the shared shaping one.
 describe("the options work_on_note hands to query()", () => {
   const noteVerb = resolveVerb("work_on_note", { changes: [], openNoteId: "note-1" });
-  // Same shape as PO_KEYS, minus outputFormat: run-exec.mjs passes `false`
-  // explicitly for this verb, and po-session.mjs omits the key entirely
+  // Same shape as STATEFUL_KEYS, minus outputFormat: run-exec.mjs passes `false`
+  // explicitly for this verb, and stateful-session.mjs omits the key entirely
   // rather than falling back to its default.
   const NOTE_KEYS = [
     "agent",
@@ -398,7 +398,7 @@ describe("the options work_on_note hands to query()", () => {
   function noteOptions(overrides = {}) {
     /** @type {any} */
     let captured;
-    getOrCreatePoSession(
+    getOrCreateStatefulSession(
       { id: `ws-${Math.random()}` },
       {
         // Derived from the verb, like run-exec.mjs does it — a hard-coded
@@ -433,7 +433,7 @@ describe("the options work_on_note hands to query()", () => {
     const options = noteOptions();
     expect(Object.keys(options).sort()).toEqual([...NOTE_KEYS].sort());
     expect(options).not.toHaveProperty("outputFormat");
-    await closeAllPoSessions();
+    await closeAllStatefulSessions();
   });
 
   it("resolves to its own per-note session key, distinct from the shared shaping one", () => {
@@ -457,7 +457,7 @@ describe("the options work_on_note hands to query()", () => {
     expect(options).not.toHaveProperty("disallowedTools");
     const decision = await options.canUseTool("Edit", { file_path: "/x", old_string: "a", new_string: "b" });
     expect(decision).toEqual({ behavior: "deny", message: "hold" });
-    await closeAllPoSessions();
+    await closeAllStatefulSessions();
   });
 });
 

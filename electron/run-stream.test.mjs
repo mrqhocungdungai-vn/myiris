@@ -1,5 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
-import { createRunStream, QUESTION_EXPIRY } from "./run-stream.mjs";
+import {
+  createRunStream,
+  QUESTION_EXPIRY,
+  claudeQuestionTimeoutMs,
+  DEFAULT_CLAUDE_QUESTION_TIMEOUT_MS,
+} from "./run-stream.mjs";
 
 function makeRunQueue(overrides = {}) {
   return {
@@ -35,7 +40,7 @@ function make(overrides = {}) {
   });
 }
 
-describe("run-stream: PO question settle-once invariant", () => {
+describe("run-stream: question settle-once invariant", () => {
   it("settles exactly once even if answered and expired race", () => {
     vi.useFakeTimers();
     try {
@@ -44,11 +49,11 @@ describe("run-stream: PO question settle-once invariant", () => {
       const questions = [{ question: "Which color?", options: [{ label: "Red", description: "r" }] }];
       const promise = stream.askUserQuestionViaVoice("ws1", questions);
 
-      const first = stream.resolvePendingPoQuestion([{ question_number: 1, question: "Which color?", choice: "Red" }]);
+      const first = stream.resolvePendingClaudeQuestion([{ question_number: 1, question: "Which color?", choice: "Red" }]);
       expect(first.status).toBe("ok");
 
       // A second answer call after settlement is a no-op error, not a second resolve.
-      const second = stream.resolvePendingPoQuestion([{ question_number: 1, question: "Which color?", choice: "Blue" }]);
+      const second = stream.resolvePendingClaudeQuestion([{ question_number: 1, question: "Which color?", choice: "Blue" }]);
       expect(second.status).toBe("error");
 
       return promise.then((resolved) => {
@@ -80,13 +85,13 @@ describe("run-stream: PO question settle-once invariant", () => {
     const stream = make({ runQueue });
     stream.askUserQuestionViaVoice("ws1", [{ question: "Q", options: [{ label: "A", description: "a" }] }]);
     expect(runQueue.suspend).toHaveBeenCalledTimes(1);
-    stream.resolvePendingPoQuestion([{ question_number: 1, question: "Q", choice: "A" }]);
+    stream.resolvePendingClaudeQuestion([{ question_number: 1, question: "Q", choice: "A" }]);
     expect(runQueue.resume).toHaveBeenCalledTimes(1);
   });
 
-  it("resolvePendingPoQuestion is a no-op error when nothing is pending", () => {
+  it("resolvePendingClaudeQuestion is a no-op error when nothing is pending", () => {
     const stream = make();
-    const result = stream.resolvePendingPoQuestion([{ question_number: 1, question: "Q", choice: "A" }]);
+    const result = stream.resolvePendingClaudeQuestion([{ question_number: 1, question: "Q", choice: "A" }]);
     expect(result.status).toBe("error");
   });
 });
@@ -155,7 +160,7 @@ describe("run-stream: the caller-supplied expiry policy", () => {
 
       const settlement = emitEvent.mock.calls
         .map(([event]) => event)
-        .filter((event) => event.type === "po_question" && event.status !== "pending");
+        .filter((event) => event.type === "claude_question" && event.status !== "pending");
       expect(settlement).toHaveLength(1);
       expect(settlement[0].status).toBe("timed_out");
       expect(settlement[0].outcome).toBe(outcome);
@@ -173,7 +178,7 @@ describe("run-stream: the caller-supplied expiry policy", () => {
 
     const settlement = emitEvent.mock.calls
       .map(([event]) => event)
-      .find((event) => event.type === "po_question" && event.status !== "pending");
+      .find((event) => event.type === "claude_question" && event.status !== "pending");
     expect(settlement.status).toBe("answered");
     expect(settlement.outcome).toBe("answered");
   });
@@ -201,7 +206,7 @@ describe("run-stream: the caller-supplied expiry policy", () => {
     for (const onExpiry of [QUESTION_EXPIRY.RECOMMENDED_OPTION, QUESTION_EXPIRY.DENY]) {
       const stream = make();
       const pending = stream.askUserQuestionViaVoice("ws1", questions, { onExpiry });
-      stream.resolvePendingPoQuestion([{ question_number: 1, question: "Which database?", choice: "SQLite" }]);
+      stream.resolvePendingClaudeQuestion([{ question_number: 1, question: "Which database?", choice: "SQLite" }]);
       const settled = await pending;
 
       expect(settled.behavior).toBe("allow");
@@ -339,7 +344,7 @@ describe("AskUserQuestion survives the relay with its shape intact", () => {
     const pending = stream.askUserQuestionViaVoice("ws1", [multi]).then((value) => {
       delivered = value;
     });
-    stream.resolvePendingPoQuestion([{ question_number: 1, choice: ["lint", "typecheck"] }]);
+    stream.resolvePendingClaudeQuestion([{ question_number: 1, choice: ["lint", "typecheck"] }]);
     await pending;
 
     expect(delivered.answers[multi.question]).toBe("lint, typecheck");
@@ -352,7 +357,7 @@ describe("AskUserQuestion survives the relay with its shape intact", () => {
     const pending = stream.askUserQuestionViaVoice("ws1", [single]).then((value) => {
       delivered = value;
     });
-    stream.resolvePendingPoQuestion([{ question_number: 1, choice: "pnpm" }]);
+    stream.resolvePendingClaudeQuestion([{ question_number: 1, choice: "pnpm" }]);
     await pending;
 
     expect(delivered.answers[single.question]).toBe("pnpm");
@@ -756,7 +761,7 @@ describe("run-stream: an answer is matched by number, never by retyped text", ()
       delivered = value;
     });
     // Deliberately mangled text — a plausible retyping, and now irrelevant.
-    const result = stream.resolvePendingPoQuestion([
+    const result = stream.resolvePendingClaudeQuestion([
       { question_number: 2, question: "which runner ...?", choice: "pnpm" },
       { question_number: 1, question: "Which DB", choice: "SQLite" },
     ]);
@@ -770,7 +775,7 @@ describe("run-stream: an answer is matched by number, never by retyped text", ()
   it("reports an answer it cannot match instead of settling as unanswered", () => {
     const stream = make();
     stream.askUserQuestionViaVoice("ws1", qs);
-    const result = stream.resolvePendingPoQuestion([{ question_number: 7, choice: "SQLite" }]);
+    const result = stream.resolvePendingClaudeQuestion([{ question_number: 7, choice: "SQLite" }]);
     expect(result.status).toBe("error");
     expect(result.error).toContain("7");
   });
@@ -778,7 +783,50 @@ describe("run-stream: an answer is matched by number, never by retyped text", ()
   it("rejects an answer carrying only text, since text identifies nothing", () => {
     const stream = make();
     stream.askUserQuestionViaVoice("ws1", qs);
-    const result = stream.resolvePendingPoQuestion([{ question: "Which database?", choice: "SQLite" }]);
+    const result = stream.resolvePendingClaudeQuestion([{ question: "Which database?", choice: "SQLite" }]);
     expect(result.status).toBe("error");
+  });
+});
+
+// The relay owns how long a question waits, because the relay is what waits.
+// The variable was renamed into the IRIS_CLAUDE_* worker family; an existing
+// .env must not be silently reinterpreted just because of that, so the old
+// name is still read — the same alias contract as MODEL_ENV_VARS
+// (session-store.mjs) applied to the one var that times a human.
+describe("run-stream: how long a question is given to be answered", () => {
+  it("waits five minutes when neither name is set", () => {
+    expect(claudeQuestionTimeoutMs({})).toBe(DEFAULT_CLAUDE_QUESTION_TIMEOUT_MS);
+    expect(DEFAULT_CLAUDE_QUESTION_TIMEOUT_MS).toBe(300000);
+  });
+
+  it("reads the current name", () => {
+    expect(claudeQuestionTimeoutMs({ IRIS_CLAUDE_QUESTION_TIMEOUT_MS: "1234" })).toBe(1234);
+  });
+
+  it("still honours the previous name", () => {
+    expect(claudeQuestionTimeoutMs({ IRIS_PO_QUESTION_TIMEOUT_MS: "4321" })).toBe(4321);
+  });
+
+  it("prefers the current name when both are set", () => {
+    expect(
+      claudeQuestionTimeoutMs({
+        IRIS_CLAUDE_QUESTION_TIMEOUT_MS: "1000",
+        IRIS_PO_QUESTION_TIMEOUT_MS: "9000",
+      }),
+    ).toBe(1000);
+  });
+
+  it("falls through an unusable current value to the previous name", () => {
+    expect(
+      claudeQuestionTimeoutMs({
+        IRIS_CLAUDE_QUESTION_TIMEOUT_MS: "not-a-number",
+        IRIS_PO_QUESTION_TIMEOUT_MS: "9000",
+      }),
+    ).toBe(9000);
+  });
+
+  it("ignores a non-positive value rather than never waiting", () => {
+    expect(claudeQuestionTimeoutMs({ IRIS_CLAUDE_QUESTION_TIMEOUT_MS: "0" })).toBe(DEFAULT_CLAUDE_QUESTION_TIMEOUT_MS);
+    expect(claudeQuestionTimeoutMs({ IRIS_CLAUDE_QUESTION_TIMEOUT_MS: "-5" })).toBe(DEFAULT_CLAUDE_QUESTION_TIMEOUT_MS);
   });
 });

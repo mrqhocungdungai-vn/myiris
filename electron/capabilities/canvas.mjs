@@ -195,7 +195,7 @@ export function createCanvasCapability({
     // in gemini-prompts.mjs — the verb this points at is only declared then.
     //
     // The workaround that used to live here is gone. It read: call the general
-    // task tool "with no 'agent' parameter (never DEV, which would be refused
+    // task tool "with no 'agent' parameter (never a stateless verb, which would be refused
     // for lacking an open OpenSpec change)" — a drawing feature carrying an
     // instruction about a pipeline gate it has nothing to do with, because
     // there was no way to reach Claude except through one tool that meant

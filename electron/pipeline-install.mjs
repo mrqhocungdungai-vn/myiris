@@ -75,8 +75,8 @@ export function createPipelineInstall({
     return bundledResourceDir("personas");
   }
 
-  // The Claude Code plugin Iris ships: the skills and /opsx commands the PO and
-  // DEV personas invoke, bundled with the app and handed to the SDK as a local
+  // The Claude Code plugin Iris ships: the skills and /opsx commands the verb
+  // personas invoke, bundled with the app and handed to the SDK as a local
   // plugin. This is what replaced copying them into the user's ~/.claude — the
   // system Claude Code install is now neither read nor written.
   //
@@ -199,7 +199,7 @@ export function createPipelineInstall({
 
   // OpenSpec is the pipeline's only SDD surface (see the po-voice-controller
   // change). A fresh project `cwd` is made OpenSpec-ready with `openspec init`.
-  // The PO agent then produces changes under `openspec/changes/`, and archiving
+  // A shaping run then produces changes under `openspec/changes/`, and archiving
   // syncs deltas into `openspec/specs/`. No-op if `openspec/` already exists so an
   // existing OpenSpec setup is never disturbed.
   function ensureProjectScaffold(cwd) {

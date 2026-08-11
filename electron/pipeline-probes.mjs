@@ -8,11 +8,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { execFile as nodeExecFile } from "node:child_process";
 import { defaultWorkspace } from "./app-paths.mjs";
-import { poBillingStatus } from "./po-session.mjs";
+import { claudeBillingStatus } from "./worker-env.mjs";
 import { resolveBundledClaude, resolveBundledOpenspec } from "./bundled-binaries.mjs";
 
-// Skills the PO/DEV personas actually invoke by name (resources/personas/
-// iris-po.md, iris-dev.md). They ship in the Iris plugin
+// Skills the verb personas actually invoke by name (resources/personas/
+// stateful.md, stateless.md, note.md). They ship in the Iris plugin
 // (resources/iris-plugin/skills/) and reach a run through the SDK's `plugins`
 // option, so this probes the APP BUNDLE — never ~/.claude, which Iris no longer
 // reads or writes. "Missing" therefore means a damaged bundle, not a skipped
@@ -44,7 +44,7 @@ export function createPipelineProbes({
   irisPluginDir,
   execFileImpl = nodeExecFile,
 }) {
-  // Single source of truth for whether the PO → DEV pipeline is available.
+  // Single source of truth for whether the build pipeline is available.
   //
   // This used to be "the host has a `claude` binary somewhere on disk". Iris now
   // SHIPS Claude Code inside the app (see bundled-binaries.mjs), so that question
@@ -134,8 +134,10 @@ export function createPipelineProbes({
   }
 
   // Names of active (non-archived) OpenSpec changes in `cwd` whose tasks.md still
-  // has at least one unchecked `- [ ]` task. DEV runs are gated on this being
-  // non-empty (see startClaudeRun): no open change with work → no DEV run.
+  // has at least one unchecked `- [ ]` task. This is the project state a verb is
+  // resolved against at run start (`startClaudeRun`): `execute` forks on whether
+  // it is empty rather than being refused for it, which is what stopped a
+  // note-sized request needing a specification first.
   function openChangesWithTasks(cwd) {
     const out = [];
     try {
@@ -222,14 +224,14 @@ export function createPipelineProbes({
   }
 
   // Combined status for the SetupPanel's Claude section (design.md D3b/D3c):
-  // CLI reachability (same probe as checkClaudeStatus), the PO subscription
+  // CLI reachability (same probe as checkClaudeStatus), the subscription
   // billing-path status, and the openspec CLI / global skills / agents
   // prerequisite checks (pipeline-availability spec) — all read-only, never
   // editable from the UI. Also the SetupPanel's re-check path for pipeline
   // availability (design.md decision 1).
   async function checkClaudeHealth() {
     const { available, status } = await probePipelineAvailability();
-    const billing = poBillingStatus();
+    const billing = claudeBillingStatus();
     const openspecStatus = await checkOpenSpecStatus();
     const skillsStatus = checkSkillsStatus();
     const notesSkillsStatus = checkNotesSkillsStatus();
@@ -274,7 +276,7 @@ export function createPipelineProbes({
         ? ""
         : `missing from the app bundle: ${skillsStatus.missing.join(", ")} — reinstall Iris`,
       // Informational only — not a pipeline gate: a Talk-only user with these
-      // missing is not "missing a prerequisite" for PO/DEV, just missing the
+      // missing is not "missing a prerequisite" for the build pipeline, just missing the
       // second-brain notes capability specifically.
       notesSkillsOk: notesSkillsStatus.ok,
       missingNotesSkills: notesSkillsStatus.missing,

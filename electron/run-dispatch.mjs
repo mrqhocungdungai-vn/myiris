@@ -7,7 +7,7 @@
 // verbatim move measured at 670 lines, over the 450-line ceiling. run-stream.mjs
 // owns the run activity/tool-step stream and the live-question relay; this
 // module owns the review gate and tool-execution surface, taking run-stream's
-// resolvePendingPoQuestion as an injected dependency for answer_claude_question
+// resolvePendingClaudeQuestion as an injected dependency for answer_claude_question
 // below.
 import fs from "node:fs";
 import crypto from "node:crypto";
@@ -41,7 +41,7 @@ const DEPRECATED_TASK_TOOL = "submit_claude_task";
  *   hasLiveStatefulSession: (workstreamId: string) => boolean,
  *   hasResidentSession?: (workstreamId: string) => boolean,
  *   getUiContextSnapshot: () => any,
- *   resolvePendingPoQuestion: (answers: any) => any,
+ *   resolvePendingClaudeQuestion: (answers: any) => any,
  *   captureNote: (args: any) => Promise<any>,
  *   findNoteByName: (args: any) => Promise<any>,
  *   mutateVaultNotes: (args: any) => Promise<any>,
@@ -68,7 +68,7 @@ export function createRunDispatch({
   // caller that does not distinguish the two keeps today's queueing.
   hasResidentSession = hasLiveStatefulSession,
   getUiContextSnapshot,
-  resolvePendingPoQuestion,
+  resolvePendingClaudeQuestion,
   captureNote,
   findNoteByName,
   mutateVaultNotes,
@@ -547,7 +547,7 @@ export function createRunDispatch({
       case "get_project_state":
         return getProjectState();
       case "answer_claude_question":
-        return resolvePendingPoQuestion(args.answers);
+        return resolvePendingClaudeQuestion(args.answers);
       case "set_verb_model":
         return setVerbModelTool(args);
       case "respond_to_task_review":

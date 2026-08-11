@@ -31,7 +31,7 @@
 // cannot drift apart. Nothing is written down; what Iris heard stays in the
 // voice session's own conversation, which is what the user asks against.
 import { GoogleGenAI } from "@google/genai";
-import { poBillingStatus } from "./po-session.mjs";
+import { claudeBillingStatus } from "./worker-env.mjs";
 import { buildLiveConfig } from "./live-config.mjs";
 import { LISTEN_ONLY_ENGAGE_REQUEST, LISTEN_ONLY_DISENGAGE_REQUEST } from "./gemini-prompts.mjs";
 import { createListenWindow, formatDuration } from "./listen-window.mjs";
@@ -258,14 +258,17 @@ export function createLiveSession({
     resumptionHandle = handle;
   }
 
-  function logPoBillingPathOnce() {
-    const billing = poBillingStatus();
-    if (billing.ok) {
-      console.log("[IRIS][po-auth] PO session will bill against the Claude subscription (CLAUDE_CODE_OAUTH_TOKEN set).");
+  function logClaudeBillingPathOnce() {
+    const billing = claudeBillingStatus();
+    if (billing.mode === "subscription") {
+      console.log("[IRIS][claude-auth] Runs will bill against the Claude subscription (CLAUDE_CODE_OAUTH_TOKEN set).");
+    } else if (billing.ok) {
+      console.log("[IRIS][claude-auth] Runs will bill per token against ANTHROPIC_API_KEY (no subscription token set).");
     } else {
       console.warn(
-        "[IRIS][po-auth] No CLAUDE_CODE_OAUTH_TOKEN found. PO turns will fail until you run `claude setup-token` " +
-          "and set CLAUDE_CODE_OAUTH_TOKEN (see .env.example). DEV is unaffected.",
+        "[IRIS][claude-auth] No Claude credential found. Every run will fail until you run `claude setup-token` and " +
+          "set CLAUDE_CODE_OAUTH_TOKEN, or set ANTHROPIC_API_KEY for metered billing (see .env.example). " +
+          "Voice conversation is unaffected.",
       );
     }
   }
@@ -525,7 +528,7 @@ export function createLiveSession({
     toggleListenOnly,
     getUserStopped,
     setResumptionHandle,
-    logPoBillingPathOnce,
+    logClaudeBillingPathOnce,
     startLive,
     connectLive,
     scheduleReconnect,

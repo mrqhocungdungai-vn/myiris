@@ -1,34 +1,42 @@
 // The wiring the prose-narration tests did not cover, and could not have: they
 // drove `handleClaudeStreamMessage`, which is the STATELESS path, while the
-// canvas conversation is resident and routes through po-session's own parser
+// canvas conversation is resident and routes through stateful-session's own parser
 // with callbacks assembled here. The feature was wired to nothing and the
 // suite was green — so this file drives the stateful path instead, and asserts
 // the callbacks a resident turn is actually given.
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const delivered = { calls: [] };
 
-vi.mock("./po-session.mjs", () => ({
-  poBillingStatus: () => ({ ok: true, mode: "subscription" }),
-  getOrCreatePoSession: vi.fn(() => ({ currentModel: "claude-opus-5", currentMcp: true, ended: false })),
-  getPoSessionState: vi.fn(() => null),
-  deliverPoTurn: vi.fn((_state, task, callbacks) => {
+vi.mock("./stateful-session.mjs", () => ({
+  getOrCreateStatefulSession: vi.fn(() => ({ currentModel: "claude-opus-5", currentMcp: true, ended: false })),
+  getStatefulSessionState: vi.fn(() => null),
+  deliverStatefulTurn: vi.fn((_state, task, callbacks) => {
     delivered.calls.push({ task, callbacks });
     return new Promise(() => {});
   }),
-  cancelPoTurn: vi.fn(),
-  setPoSessionModel: vi.fn(async () => {}),
-  setPoSessionMcpServers: vi.fn(async () => {}),
-  DEFAULT_PO_QUESTION_TIMEOUT_MS: 300000,
+  cancelStatefulTurn: vi.fn(),
+  setStatefulSessionModel: vi.fn(async () => {}),
+  setStatefulSessionMcpServers: vi.fn(async () => {}),
 }));
 
 // Cast to the mock shape: vi.mock above replaces the module at runtime, but
 // the real module's types do not carry `.mock`, exactly as
 // capabilities/canvas.test.mjs already does for its own mocks.
 /** @type {any} */
-const poSession = await import("./po-session.mjs");
+const statefulSession = await import("./stateful-session.mjs");
 const { createRunExec } = await import("./run-exec.mjs");
 const { resolveVerb } = await import("./verbs.mjs");
+
+// A resident turn refuses to start without a credential (claudeBillingStatus,
+// worker-env.mjs — real policy, deliberately not mocked). Stubbed rather than
+// inherited so the suite does not pass or fail on the developer's own .env.
+beforeEach(() => {
+  vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "test-token");
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 function makeExec(overrides = {}) {
   const workstream = { id: "ws1", cwd: "/tmp/project", agent_sessions: {}, label: "Project" };
@@ -119,8 +127,8 @@ describe("run-exec: what a resident turn is actually given", () => {
 describe("run-exec: warming a conversation before the first sentence", () => {
   beforeEach(() => {
     delivered.calls = [];
-    poSession.getOrCreatePoSession.mockClear();
-    poSession.getPoSessionState.mockReturnValue(null);
+    statefulSession.getOrCreateStatefulSession.mockClear();
+    statefulSession.getStatefulSessionState.mockReturnValue(null);
   });
 
   it("opens a session against the ACTIVE workstream", async () => {
@@ -135,8 +143,8 @@ describe("run-exec: warming a conversation before the first sentence", () => {
     const result = await exec.warmStatefulConversation("shape_on_canvas");
 
     expect(result).toEqual({ warmed: true, reason: null });
-    expect(poSession.getOrCreatePoSession).toHaveBeenCalledTimes(1);
-    expect(poSession.getOrCreatePoSession.mock.calls[0][0]).toBe(workstream);
+    expect(statefulSession.getOrCreateStatefulSession).toHaveBeenCalledTimes(1);
+    expect(statefulSession.getOrCreateStatefulSession.mock.calls[0][0]).toBe(workstream);
   });
 
   it("marks the session warm, so the review gate still sees no conversation", async () => {
@@ -144,7 +152,7 @@ describe("run-exec: warming a conversation before the first sentence", () => {
 
     await exec.warmStatefulConversation("shape_on_canvas");
 
-    expect(poSession.getOrCreatePoSession.mock.calls[0][1].warm).toBe(true);
+    expect(statefulSession.getOrCreateStatefulSession.mock.calls[0][1].warm).toBe(true);
   });
 
   it("delivers no turn — a warm is a transport, not a conversation", async () => {
@@ -158,13 +166,13 @@ describe("run-exec: warming a conversation before the first sentence", () => {
   it("does nothing when a conversation is already open", async () => {
     // Warming again would be a handoff, closing the very conversation it means
     // to have ready.
-    poSession.getPoSessionState.mockReturnValue({ ended: false });
+    statefulSession.getStatefulSessionState.mockReturnValue({ ended: false });
     const exec = makeExec({ activeWorkstream: () => ({ id: "ws1", cwd: "/tmp/project", agent_sessions: {} }) });
 
     const result = await exec.warmStatefulConversation("shape_on_canvas");
 
     expect(result).toEqual({ warmed: false, reason: "already-open" });
-    expect(poSession.getOrCreatePoSession).not.toHaveBeenCalled();
+    expect(statefulSession.getOrCreateStatefulSession).not.toHaveBeenCalled();
   });
 
   it("says why it did not warm when there is no workstream", async () => {
@@ -185,7 +193,7 @@ describe("run-exec: warming a conversation before the first sentence", () => {
 describe("run-exec: what a resident turn is told the user said", () => {
   beforeEach(() => {
     delivered.calls = [];
-    poSession.getPoSessionState.mockReturnValue(null);
+    statefulSession.getStatefulSessionState.mockReturnValue(null);
   });
 
   // The resident-turn path composes through `run-context.mjs` too, but task 1.5
@@ -239,7 +247,7 @@ describe("run-exec: what a resident turn is told the user said", () => {
 
 describe("run-exec: the warm is on the record", () => {
   beforeEach(() => {
-    poSession.getPoSessionState.mockReturnValue(null);
+    statefulSession.getStatefulSessionState.mockReturnValue(null);
   });
 
   it("says a conversation was standing ready before the first turn", async () => {

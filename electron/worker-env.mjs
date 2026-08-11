@@ -7,8 +7,8 @@ import { claudeHome } from "./app-paths.mjs";
 // worker runs with `bypassPermissions`, has shell and network access with no
 // approval prompt, and routinely processes content it did not author — any
 // secret sitting in its environment is one `echo $VAR` away from leaving the
-// machine. DEV's spawn (main.mjs) and PO's Agent SDK session
-// (po-session.mjs) both route through this so the two cannot drift apart.
+// machine. The stateless spawn (main.mjs) and the resident Agent SDK session
+// (stateful-session.mjs) both route through this so the two cannot drift apart.
 export function computeWorkerEnv(baseEnv, excludeKeys) {
   const env = { ...baseEnv };
   for (const key of excludeKeys) delete env[key];
@@ -74,6 +74,23 @@ export function computeClaudeWorkerEnv(baseEnv, { claudeHome = irisClaudeHome() 
   // Iris has no use for it, and its notes belong to the user's own sessions.
   env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = "1";
   return env;
+}
+
+// Which credential a run will bill against — the same two the strip rule above
+// reasons about, read here so callers can say so before a run starts. It lives
+// beside that rule rather than in a session module because it is one policy for
+// both run shapes, and the voice layer asking a session module which credential
+// pays was a coupling with no reason behind it.
+//
+// A subscription token is still the preferred path (it is what long-running
+// resident sessions are priced for), but an API key is a working credential and
+// no run may be refused for holding one: pipeline-probes.mjs accepts either, so
+// refusing one here would strand API-key-only users with a live pipeline whose
+// stateful turns all fail.
+export function claudeBillingStatus(env = process.env) {
+  if (String(env.CLAUDE_CODE_OAUTH_TOKEN || "").trim()) return { ok: true, mode: "subscription" };
+  if (String(env.ANTHROPIC_API_KEY || "").trim()) return { ok: true, mode: "api-key" };
+  return { ok: false, mode: "missing" };
 }
 
 // Ambient session capture (ambient-memory design D3): this variable can only

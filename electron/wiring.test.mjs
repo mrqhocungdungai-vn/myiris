@@ -1,8 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
 
-vi.mock("./po-session.mjs", () => ({
-  getPoSessionState: vi.fn(() => null),
-  cancelPoTurn: vi.fn(),
+vi.mock("./stateful-session.mjs", () => ({
+  getStatefulSessionState: vi.fn(() => null),
+  cancelStatefulTurn: vi.fn(),
 }));
 
 vi.mock("./run-queue.mjs", () => ({
@@ -45,7 +45,7 @@ vi.mock("./user-config.mjs", () => ({
     getFullConfig: vi.fn(),
     writeUserConfig: vi.fn(),
     setPromptReviewMode: vi.fn(),
-    savePoToken: vi.fn(),
+    saveClaudeToken: vi.fn(),
     testGeminiKey: vi.fn(),
     previewVoice: vi.fn(),
   })),
@@ -121,7 +121,7 @@ vi.mock("./run-stream.mjs", () => ({
     pushToolEnd: vi.fn(),
     handleClaudeStreamMessage: vi.fn(),
     askUserQuestionViaVoice: vi.fn(),
-    resolvePendingPoQuestion: vi.fn(),
+    resolvePendingClaudeQuestion: vi.fn(),
   })),
 }));
 

@@ -1,8 +1,8 @@
 // Which skills each kind of run can reach.
 //
-// Both roles used to pass `skills: "all"`, so DEV could invoke `iris:grilling`
-// and PO could invoke the `wiki-*` suite. A run's capability surface should be a
-// property of what it was asked to do; a constant surface means a run can reach
+// Both run shapes used to pass `skills: "all"`, so a build run could invoke
+// `iris:grilling` and a shaping run could invoke the `wiki-*` suite. A run's
+// capability surface should be a property of what it was asked to do; a constant surface means a run can reach
 // for a capability that has nothing to do with its job.
 //
 // **This is a behaviour change, not a refactor.** A skill omitted from a list is
@@ -63,8 +63,8 @@ export const SHAPING_SKILLS = [
   // Drawing belongs to `shape_on_canvas`, but it cannot be scoped to it. Both
   // shaping verbs share ONE resident session, and a session's skills are fixed
   // when it is created (`skills: verb.skills`, run-exec.mjs's
-  // statefulSessionOptions) — there is no `setPoSessionSkills` to repair it on a
-  // later turn the way `setPoSessionMcpServers` repairs the tool surface. A
+  // statefulSessionOptions) — there is no `setStatefulSessionSkills` to repair it on a
+  // later turn the way `setStatefulSessionMcpServers` repairs the tool surface. A
   // canvas-only list would therefore load this skill only when the user opens
   // the board BEFORE speaking, and silently omit it on the commoner path where
   // they talk first and move to the canvas when talking stops being enough
@@ -126,7 +126,7 @@ export const REVIEW_SKILLS = [
 // ORDINARY_SKILLS is: what this verb does is carried by prompt text and a
 // structural guard, not by a skill. The confirm-before-remove discipline lives
 // in the verb's clause and the `note` persona, and is backstopped by the
-// `guardOpenNoteWrites` seam (po-session.mjs's confirmWrite) — a discipline the
+// `guardOpenNoteWrites` seam (stateful-session.mjs's confirmWrite) — a discipline the
 // model may *optionally invoke* is not a discipline.
 //
 // It used to carry NOTE_SKILLS, the wiki suite. That suite is corpus curation —

@@ -196,10 +196,10 @@ describe("user-config: assertConfigValueIsSafe", () => {
   });
 });
 
-describe("user-config: savePoToken", () => {
+describe("user-config: saveClaudeToken", () => {
   it("writes the token to the resolved config path and never leaves it out of that file", () => {
     const config = make();
-    const result = config.savePoToken("sk-test-token-123");
+    const result = config.saveClaudeToken("sk-test-token-123");
     expect(result.ok).toBe(true);
 
     const written = fs.readFileSync(path.join(repoRoot, ".env"), "utf8");
@@ -209,8 +209,8 @@ describe("user-config: savePoToken", () => {
 
   it("removes the token line entirely rather than writing an empty value", () => {
     const config = make();
-    config.savePoToken("sk-test-token-123");
-    const result = config.savePoToken(null, { remove: true });
+    config.saveClaudeToken("sk-test-token-123");
+    const result = config.saveClaudeToken(null, { remove: true });
     expect(result.ok).toBe(true);
 
     const written = fs.readFileSync(path.join(repoRoot, ".env"), "utf8");
@@ -218,37 +218,53 @@ describe("user-config: savePoToken", () => {
     expect(process.env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
   });
 
-  it("refuses to save while a stateful turn is running", () => {
-    const config = make({ runQueue: { list: () => [{ agent: "po", status: "running" }] } });
-    const result = config.savePoToken("sk-test-token-123");
-    expect(result.ok).toBe(false);
-    expect(result.error).toMatch(/PO turn is running/);
+  // The guard used to read `run.agent === "po"` — a field no production code
+  // sets, so it never fired for a real run. It was kept green by a fixture that
+  // supplied the field. A run record is verb-keyed, and the reason the guard
+  // exists (a live session snapshots its env at creation) applies to every
+  // running run, so any of them is enough to refuse.
+  it("refuses to save while a run of either shape is in flight", () => {
+    for (const verb of ["shape_requirements", "execute"]) {
+      const config = make({
+        runQueue: { list: () => [{ run_id: "r1", verb, status: "running" }] },
+      });
+      const result = config.saveClaudeToken("sk-test-token-123");
+      expect(result.ok).toBe(false);
+      expect(result.error).toMatch(/in flight/i);
+    }
+  });
+
+  it("saves when the only runs on record are already over", () => {
+    const config = make({
+      runQueue: { list: () => [{ run_id: "r1", verb: "execute", status: "completed" }] },
+    });
+    expect(config.saveClaudeToken("sk-test-token-123").ok).toBe(true);
   });
 
   it("rejects an empty token when not removing", () => {
     const config = make();
-    const result = config.savePoToken("   ");
+    const result = config.saveClaudeToken("   ");
     expect(result.ok).toBe(false);
   });
 
   it("writes the metered API key when that credential is selected", () => {
     const config = make();
-    const result = config.savePoToken("sk-ant-api-key", { key: "ANTHROPIC_API_KEY" });
+    const result = config.saveClaudeToken("sk-ant-api-key", { key: "ANTHROPIC_API_KEY" });
     expect(result.ok).toBe(true);
 
     const written = fs.readFileSync(path.join(repoRoot, ".env"), "utf8");
     expect(written).toContain("ANTHROPIC_API_KEY=sk-ant-api-key");
     expect(written).not.toContain("CLAUDE_CODE_OAUTH_TOKEN");
     expect(result.config.anthropicApiKeySet).toBe(true);
-    expect(result.config.poTokenSet).toBe(false);
+    expect(result.config.claudeTokenSet).toBe(false);
   });
 
   it("removes only the credential it was asked to remove", () => {
     const config = make();
-    config.savePoToken("sk-test-token-123");
-    config.savePoToken("sk-ant-api-key", { key: "ANTHROPIC_API_KEY" });
+    config.saveClaudeToken("sk-test-token-123");
+    config.saveClaudeToken("sk-ant-api-key", { key: "ANTHROPIC_API_KEY" });
 
-    const result = config.savePoToken(null, { remove: true, key: "ANTHROPIC_API_KEY" });
+    const result = config.saveClaudeToken(null, { remove: true, key: "ANTHROPIC_API_KEY" });
     expect(result.ok).toBe(true);
     expect(process.env.ANTHROPIC_API_KEY).toBeUndefined();
     expect(process.env.CLAUDE_CODE_OAUTH_TOKEN).toBe("sk-test-token-123");
@@ -258,7 +274,7 @@ describe("user-config: savePoToken", () => {
     // The IPC payload is renderer-controlled, so an arbitrary key must not
     // become a write primitive into the user's .env.
     const config = make();
-    const result = config.savePoToken("value", { key: "GEMINI_API_KEY" });
+    const result = config.saveClaudeToken("value", { key: "GEMINI_API_KEY" });
     expect(result.ok).toBe(false);
     expect(result.error).toMatch(/not a Claude credential/);
   });
@@ -268,7 +284,7 @@ describe("user-config: savePoToken", () => {
     // chat-only mode until the user hit "Test" or restarted.
     const probePipelineAvailability = vi.fn(async () => ({ available: true }));
     const config = make({ probePipelineAvailability });
-    config.savePoToken("sk-test-token-123");
+    config.saveClaudeToken("sk-test-token-123");
     expect(probePipelineAvailability).toHaveBeenCalledTimes(1);
   });
 });

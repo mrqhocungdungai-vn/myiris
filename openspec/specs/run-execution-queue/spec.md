@@ -169,7 +169,7 @@ Only the run currently holding the slot SHALL be subject to the bound. A queued 
 
 While the active run is legitimately blocked waiting for a human answer, the idle bound SHALL be suspended and SHALL NOT accrue. It SHALL resume when the run is unblocked, regardless of how the block was resolved.
 
-This is required because a stateful turn paused on `AskUserQuestion` produces no progress signal for as long as `IRIS_PO_QUESTION_TIMEOUT_MS` allows. Without suspension the bound would terminate precisely those runs that are behaving correctly.
+This is required because a stateful turn paused on `AskUserQuestion` produces no progress signal for as long as `IRIS_CLAUDE_QUESTION_TIMEOUT_MS` allows. Without suspension the bound would terminate precisely those runs that are behaving correctly.
 
 #### Scenario: Turn paused on a question outlives the idle bound
 

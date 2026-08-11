@@ -33,7 +33,7 @@ export function StepIcon({ tool }: { tool: string }) {
   return <Cpu size={13} />;
 }
 
-// Shared tool-step timeline (used on the work card; PO and DEV render it
+// Shared tool-step timeline (used on the work card; both run shapes render it
 // identically since both flow through the same claude_task_update shape).
 export function StepTimeline({ steps }: { steps: NonNullable<TaskCard["steps"]> }) {
   return (

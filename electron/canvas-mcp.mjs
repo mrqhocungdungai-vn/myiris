@@ -1,7 +1,7 @@
 // The canvas-claude-mcp module: hosts one local MCP server (Streamable HTTP,
 // stateless, 127.0.0.1 + ephemeral port + bearer token) exposing read/write
 // tools over the drawing canvas to Claude. Mirrors the canvas-store.mjs /
-// po-session.mjs seams — dependencies (cache getter/setter/flush, an
+// stateful-session.mjs seams — dependencies (cache getter/setter/flush, an
 // apply-broadcast callback, and an image-request function) are injected so
 // the tool logic and the pure element builder below are unit-testable
 // without app/ipcMain/BrowserWindow. See
@@ -16,8 +16,8 @@ import { generateKeyBetween } from "fractional-indexing";
 export const DEFAULT_IMAGE_TIMEOUT_MS = 4000;
 
 // The one Iris-scoped McpHttpServerConfig-shaped record both wiring paths
-// share (design.md D6/5.1/5.2): the PO Agent SDK session gets it verbatim as
-// `options.mcpServers["iris-canvas"]`, and the DEV/plain spawn wraps it in
+// share (design.md D6/5.1/5.2): the resident Agent SDK session gets it verbatim as
+// `options.mcpServers["iris-canvas"]`, and the stateless run wraps it in
 // `{ mcpServers: { "iris-canvas": ... } }` for --mcp-config. One builder, so
 // the two paths can't drift into carrying different fields.
 export function buildMcpServerRecord(info) {

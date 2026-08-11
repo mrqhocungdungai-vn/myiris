@@ -151,11 +151,11 @@ export function createLiveWiring({
     handleRendererGone,
     handleSystemAudioUnavailable,
     toggleListenOnly,
-    logPoBillingPathOnce,
+    logClaudeBillingPathOnce,
     startLive,
     stopLive,
   } = liveSessionModule;
-  logPoBillingPathOnce();
+  logClaudeBillingPathOnce();
   setLiveSessionModule(liveSessionModule);
 
   // rendererSecurity is installed inside main.mjs's app.whenReady(), after

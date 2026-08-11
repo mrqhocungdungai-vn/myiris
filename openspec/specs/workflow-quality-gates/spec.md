@@ -156,11 +156,11 @@ contradicted its own requirement read as the contract and was implemented.
 term stopped naming something, so retiring a concept SHALL include registering its
 name in the check's term list. Each registered term SHALL carry its own matching rule,
 because a single global rule cannot be right for all of them: `PO` matches
-case-sensitively with word boundaries, since `IRIS_PO_QUESTION_TIMEOUT_MS` and
-`SYSTEM_EVENT_PO_QUESTION` are identifiers the code actually reads and a spec citing
-them is correct; the noun `role` matches case-insensitively, because a
-case-sensitive-only criterion is exactly what let 72 lowercase occurrences survive a
-sweep that reported zero.
+case-sensitively with word boundaries, since `IRIS_PO_MODEL` and the
+`IRIS_PO_QUESTION_TIMEOUT_MS` alias are legacy names the code still reads for
+back-compat and a spec citing them is correct; the noun `role` matches case-insensitively,
+because a case-sensitive-only criterion is exactly what let 72 lowercase
+occurrences survive a sweep that reported zero.
 
 **Placeholder text SHALL fail.** A `Purpose` reading `TBD`, or a note to a future reader
 such as "update after archive", is the source of truth declaring that it is not one.
@@ -188,8 +188,8 @@ typecheck gate, for the same reason `lint` and `scan:secrets` are kept out of it
 
 #### Scenario: An identifier containing a retired term still passes
 
-- **WHEN** a spec cites `IRIS_PO_QUESTION_TIMEOUT_MS` or `SYSTEM_EVENT_PO_QUESTION`
-- **THEN** the gate passes, because those are names the code reads and the spec is correct to use them
+- **WHEN** a spec cites `IRIS_PO_MODEL` or the legacy alias `IRIS_PO_QUESTION_TIMEOUT_MS`
+- **THEN** the gate passes, because those are names the code still reads and the spec is correct to use them
 
 #### Scenario: A placeholder Purpose fails the gate
 

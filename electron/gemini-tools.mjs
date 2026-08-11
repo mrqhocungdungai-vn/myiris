@@ -129,7 +129,7 @@ export function createGeminiTools({ getPipelineAvailable, modelChoices, envFlag,
       {
         name: "answer_claude_question",
         description:
-          "Answer the pending question(s) Claude asked after SYSTEM_EVENT_PO_QUESTION. Whichever run asked is " +
+          "Answer the pending question(s) Claude asked after SYSTEM_EVENT_CLAUDE_QUESTION. Whichever run asked is " +
           "paused waiting for this — a shaping conversation, a note-working session, or a build run that was " +
           "given no specification; call it only once you have collected every answer by voice, never before. A " +
           "destructive edit to a note and a build run's question are both asked here, on the same terms as any " +

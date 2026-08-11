@@ -48,7 +48,7 @@ function make(overrides = {}) {
     projectStateFor: () => ({ hasOpenChange: true, changes: ["add-thing"] }),
     hasLiveStatefulSession: () => false,
     getUiContextSnapshot: () => ({ uiMode: "deck" }),
-    resolvePendingPoQuestion: vi.fn(() => ({ status: "ok" })),
+    resolvePendingClaudeQuestion: vi.fn(() => ({ status: "ok" })),
     captureNote: vi.fn(async () => ({ status: "ok", message: "Saved to your notes.", file: "/vault/inbox/captures/x.md" })),
     findNoteByName: vi.fn(async () => ({ status: "ok", matches: [], count: 0 })),
     mutateVaultNotes: vi.fn(async () => ({ status: "ok", message: "Linked." })),
@@ -361,10 +361,10 @@ describe("run-dispatch: executeClaudeTool", () => {
   });
 
   it("routes answer_claude_question to the injected resolver", async () => {
-    const resolvePendingPoQuestion = vi.fn(() => ({ status: "ok" }));
-    const dispatchModule = make({ resolvePendingPoQuestion });
+    const resolvePendingClaudeQuestion = vi.fn(() => ({ status: "ok" }));
+    const dispatchModule = make({ resolvePendingClaudeQuestion });
     await dispatchModule.executeClaudeTool("answer_claude_question", { answers: [{ question: "Q", choice: "A" }] });
-    expect(resolvePendingPoQuestion).toHaveBeenCalledWith([{ question: "Q", choice: "A" }]);
+    expect(resolvePendingClaudeQuestion).toHaveBeenCalledWith([{ question: "Q", choice: "A" }]);
   });
 
   it("reports the project state rather than making the voice layer guess", async () => {
