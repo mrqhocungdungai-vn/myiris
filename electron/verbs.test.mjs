@@ -24,7 +24,20 @@ const shippedSkills = fs
   .filter((entry) => entry.isDirectory())
   .map((entry) => entry.name);
 
+// Derived, not enumerated: a verb naming a persona the bundle does not ship is a
+// run that fails at start, and hard-coding the pair here would have to be edited
+// every time a persona is added — which is the moment the check is worth having.
+const shippedPersonas = fs
+  .readdirSync(path.join(repoRoot, "resources", "personas"), { withFileTypes: true })
+  .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
+  .map((entry) => entry.name.slice(0, -".md".length));
+
 const WITH_CHANGE = { hasOpenChange: true, changes: ["add-thing"] };
+// `depth` selects `investigate`'s skills and model, and neither state above
+// carries one — so REVIEW_SKILLS resolved for no state any test ever iterated,
+// and had never been checked against the shipped bundle. Every all-verbs sweep
+// takes this third state too.
+const JUDGING = { hasOpenChange: true, changes: ["add-thing"], depth: "judge" };
 
 describe("the verb registry", () => {
   it("declares exactly the seven verbs the surface offers", () => {
@@ -55,7 +68,7 @@ describe("the verb registry", () => {
         expect(resolved.params.type).toBe("object");
         expect(typeof resolved.clause).toBe("string");
         expect(resolved.clause.length).toBeGreaterThan(0);
-        expect(["stateful", "stateless"]).toContain(resolved.basePersona);
+        expect(shippedPersonas).toContain(resolved.basePersona);
       }
     }
   });
@@ -111,7 +124,10 @@ describe("the verb registry", () => {
   it("gives work_on_note its own per-note session, distinct from the shared shaping one", () => {
     const resolved = resolveVerb("work_on_note");
     expect(resolved.stateful).toBe(true);
-    expect(resolved.basePersona).toBe("stateful");
+    // A live session, but not the shaping worker: the stateful body's spine
+    // ("you decide WHAT gets built… you do not write production code") is false
+    // for a verb whose job is writing to the open note.
+    expect(resolved.basePersona).toBe("note");
     expect(resolved.park).toBe(PARK.ON_OPEN);
     expect(resolved.vault).toBe(true);
     expect(resolved.structuredOutput).toBe(false);
@@ -254,7 +270,7 @@ describe("the verb registry", () => {
   // A name that matches nothing is worse than "all": it looks like scoping and
   // silently grants nothing.
   it("names only skills the bundled plugin actually ships", () => {
-    for (const resolved of [...resolveAllVerbs(), ...resolveAllVerbs(WITH_CHANGE)]) {
+    for (const resolved of [...resolveAllVerbs(), ...resolveAllVerbs(WITH_CHANGE), ...resolveAllVerbs(JUDGING)]) {
       for (const entry of resolved.skills) {
         expect(entry.startsWith("iris:")).toBe(true);
         expect(shippedSkills).toContain(entry.slice("iris:".length));
@@ -263,7 +279,7 @@ describe("the verb registry", () => {
   });
 
   // The scoping is the substance, the verb table is the vehicle: without it,
-  // eight verbs would be eight names for one agent.
+  // seven verbs would be seven names for one agent.
   it("keeps unrelated workflows out of each other's verbs", () => {
     const execute = resolveVerb("execute", WITH_CHANGE).skills;
     expect(execute).not.toContain("iris:grilling");
@@ -291,13 +307,13 @@ describe("the verb registry", () => {
   // Role vocabulary is what this change removes from the Claude- and
   // Gemini-facing surface; a description that still says "PO" would put it back.
   it("carries no role vocabulary in any declared text", () => {
-    for (const resolved of [...resolveAllVerbs(), ...resolveAllVerbs(WITH_CHANGE)]) {
+    for (const resolved of [...resolveAllVerbs(), ...resolveAllVerbs(WITH_CHANGE), ...resolveAllVerbs(JUDGING)]) {
       const text = `${resolved.description} ${resolved.clause} ${JSON.stringify(resolved.params)}`;
       expect(text).not.toMatch(/\bPO\b|\bDEV\b|Product Owner|submit_claude_task/);
     }
   });
 
-  it("resolves all eight verbs in declaration order", () => {
+  it("resolves all seven verbs in declaration order", () => {
     expect(resolveAllVerbs().map((resolved) => resolved.verb)).toEqual(VERB_NAMES);
   });
 

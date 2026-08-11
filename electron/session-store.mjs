@@ -28,11 +28,18 @@ const SESSION_STORE_SCHEMA_VERSION = 2;
 
 const MODEL_IDS = new Set(MODEL_CHOICES.map((choice) => choice.id));
 
-// Env defaults, one per persona group rather than one per verb: a user setting
-// a model in `.env` is expressing "how strong should the thinking work be",
-// which is exactly the stateful/stateless split. The role-named variables are
-// still accepted so an existing `.env` is not silently reinterpreted — the
-// same courtesy the review-mode flag extends to its previous boolean values.
+// Env defaults, one per RUN SHAPE rather than one per verb: a user setting a
+// model in `.env` is expressing "how strong should the thinking work be", which
+// is exactly the stateful/stateless split. The role-named variables are still
+// accepted so an existing `.env` is not silently reinterpreted — the same
+// courtesy the review-mode flag extends to its previous boolean values.
+//
+// Keyed off `stateful`, not off `basePersona`. Those coincided while there were
+// exactly two personas named for the two run shapes; `work_on_note` has its own
+// persona now (every-verb-earns-its-skills D1) while still being a stateful
+// run, and keying on the persona name would have silently dropped
+// `IRIS_STATEFUL_MODEL` for it — an env override going quiet with nothing
+// reporting it.
 const MODEL_ENV_VARS = {
   stateful: ["IRIS_STATEFUL_MODEL", "IRIS_PO_MODEL"],
   stateless: ["IRIS_STATELESS_MODEL", "IRIS_DEV_MODEL"],
@@ -82,7 +89,7 @@ export function createSessionStore({
     if (!isVerb(verb)) return null;
     const stored = workstream?.agent_models?.[verb];
     if (stored) return stored;
-    const group = resolveVerb(verb).basePersona;
+    const group = resolveVerb(verb).stateful ? "stateful" : "stateless";
     for (const name of MODEL_ENV_VARS[group] ?? []) {
       const envValue = String(process.env[name] || "").trim();
       if (envValue) return envValue;

@@ -12,9 +12,12 @@
 // it.
 //
 // Two measured facts (agent-sdk-conformance design.md D7):
-//   - `skills` really does scope the session. Identical one-word prompt, total
-//     input tokens: `"all"` (17 skills) 18 007, a two-skill list 16 056, `[]`
-//     15 934. Each skill costs ~120 tokens of listing.
+//   - `skills` really does scope the session. Measured 2026-08-04 against the
+//     bundle as it shipped then (17 skills): identical one-word prompt, total
+//     input tokens `"all"` 18 007, a two-skill list 16 056, `[]` 15 934 — about
+//     ~120 tokens of listing per skill. The figures are dated rather than
+//     restated as a current count: the bundle's size changes with every skill
+//     added, and nothing keeps a number in a comment true.
 //   - Plugin-qualified (`iris:grilling`) and bare (`grilling`) names behave
 //     identically — both scoped to exactly 16 056. Qualified names are used here
 //     because that is how the personas reference them, so the list and the
@@ -23,6 +26,18 @@
 // What this is NOT, per the SDK's own wording: a sandbox. Unlisted skills are
 // hidden from the model's listing and rejected by the Skill tool, but their
 // files stay on disk and remain readable via Read/Bash.
+//
+// **These lists bound the plugin's COMMANDS too**, and that is measured rather
+// than assumed (every-verb-earns-its-skills D5, four live runs 2026-08-11
+// against SDK 2.1.210). A model-invoked `/iris:opsx:*` command is not a
+// separate channel: it is a `Skill` tool call — `Skill {"skill":
+// "iris:opsx:explore"}` — and the SDK maps `skills: [...]` onto
+// `allowedTools: ["Skill(<entry>)"]`, so commands and skills are scoped by one
+// mechanism. With `["iris:wiki-lint"]` listed the runtime refused the command
+// by name; with `["iris:opsx:explore"]` listed it ran. Nothing here lists a
+// command entry, which is deliberate and is what run-skills.test.mjs pins: a
+// workflow is reached through its skill, and there is no second surface that
+// could grant one a verb's list withholds.
 //
 // The lists are now named for the **work**, not for a role, and the verb
 // registry (electron/verbs.mjs) is what binds a list to a verb. This module owns
@@ -84,18 +99,41 @@ export const CLOSEOUT_SKILLS = [
   q("openspec-sync-specs"), //      transitive: archive invokes it
 ];
 
-// `investigate`: read the project and answer. Exploring is what this is for, and
-// it is the only skill here because investigating must not modify (the verb also
-// carries Write/Edit in its `disallowedTools`).
-export const INVESTIGATION_SKILLS = [
-  q("openspec-explore"), //         /iris:opsx:explore — thinking-partner mode over an existing change
-];
+// `investigate`: read the project and answer. Deliberately empty, and this is a
+// correction rather than an omission. It used to carry `openspec-explore`, whose
+// own primary modes are asking clarifying questions and creating OpenSpec
+// artifacts — both structurally denied by this verb's `disallowedTools`
+// (`AskUserQuestion`, `Write`, `Edit`, `NotebookEdit`, verbs.mjs). A skill whose
+// central instructions run into denials produces churn, not capability. The
+// skill stays in SHAPING_SKILLS, where those modes are legal.
+//
+// Nothing replaces it: no shipped skill fits a read-and-answer one-shot, and the
+// verb's clause plus ordinary reads plus the `openspec` CLI (Bash is allowed
+// here) already cover status questions. An empty list is this module's
+// established way of saying "the prompt carries it" — see ORDINARY_SKILLS.
+export const INVESTIGATION_SKILLS = [];
 
-// `review`: judge work that already exists.
+// `investigate` at `depth: judge`: judge work that already exists. There is no
+// `review` verb — it was folded into this depth because two overlapping
+// descriptions are a routing contest with no error path, and the cheap verb won
+// every time. The list is what makes the depth mean something.
 export const REVIEW_SKILLS = [
   q("code-review"), //              the review pass itself
   q("diagnosing-bugs"), //          a review that finds a defect needs the diagnosis loop to characterize it
 ];
+
+// `work_on_note`: the ONE note open on screen. Empty, and for the same reason
+// ORDINARY_SKILLS is: what this verb does is carried by prompt text and a
+// structural guard, not by a skill. The confirm-before-remove discipline lives
+// in the verb's clause and the `note` persona, and is backstopped by the
+// `guardOpenNoteWrites` seam (po-session.mjs's confirmWrite) — a discipline the
+// model may *optionally invoke* is not a discipline.
+//
+// It used to carry NOTE_SKILLS, the wiki suite. That suite is corpus curation —
+// ingest `raw/`, lint the graph, add backlinks, across everything that has
+// accumulated — and this verb edits one open note. Zero overlap, ~720 tokens of
+// listing. The suite stays whole and stays with `capture_learning`.
+export const OPEN_NOTE_SKILLS = [];
 
 // `capture_learning`: the personal-knowledge-notes path. The six wiki skills each
 // cross-reference every other one, so they only work as a set — listing a subset

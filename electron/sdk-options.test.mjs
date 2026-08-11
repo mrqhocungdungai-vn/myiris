@@ -401,8 +401,11 @@ describe("the options work_on_note hands to query()", () => {
     getOrCreatePoSession(
       { id: `ws-${Math.random()}` },
       {
-        agent: "iris-stateful",
-        agentDefinition: { description: "stateful", prompt: "You are stateful." },
+        // Derived from the verb, like run-exec.mjs does it — a hard-coded
+        // "iris-stateful" here would keep passing after the registry moved the
+        // verb to its own persona.
+        agent: `iris-${noteVerb.basePersona}`,
+        agentDefinition: { description: noteVerb.basePersona, prompt: "You work on the open note." },
         plugins: [{ type: "local", path: "/bundle/iris-plugin" }],
         cwd: "/tmp/project",
         sessionKey: noteVerb.sessionKey,
@@ -438,9 +441,14 @@ describe("the options work_on_note hands to query()", () => {
     expect(noteVerb.sessionKey).toContain("note-1");
   });
 
-  it("is granted the vault and scoped to note-keeping skills, on the same terms as capture_learning", () => {
+  // The vault is still granted — the open note lives in it — but the skills are
+  // not capture_learning's. The wiki suite curates the whole corpus; this verb
+  // edits the one note on screen, and its discipline is prompt text plus the
+  // confirmWrite seam below, never a skill the model may optionally invoke.
+  it("is granted the vault, and carries no skills — the note discipline is not a skill", () => {
     expect(noteVerb.vault).toBe(true);
-    expect(noteVerb.skills).toEqual(resolveVerb("capture_learning").skills);
+    expect(noteVerb.skills).toEqual([]);
+    expect(noteVerb.skills).not.toEqual(resolveVerb("capture_learning").skills);
   });
 
   it("is not locked out of asking, and can hold a write via the injected confirmWrite seam", async () => {

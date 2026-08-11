@@ -38,6 +38,7 @@ import {
   CLOSEOUT_SKILLS,
   INVESTIGATION_SKILLS,
   REVIEW_SKILLS,
+  OPEN_NOTE_SKILLS,
   NOTE_SKILLS,
 } from "./run-skills.mjs";
 
@@ -80,11 +81,19 @@ const STRONGEST = "claude-opus-5";
 const FAST = "claude-sonnet-5";
 const CHEAPEST = "claude-haiku-4-5-20251001";
 
-// The two persona bodies. `stateful` may pause and ask; `stateless` never can.
-// Each verb adds one short clause naming its own job — see resources/personas/
-// and role-prompt.mjs, which is the only place prompt text is composed.
+// The persona bodies. Each verb adds one short clause naming its own job — see
+// resources/personas/ and role-prompt.mjs, which is the only place prompt text
+// is composed.
+//
+// `stateful` and `stateless` are named for the run shape. `note` is not a third
+// run shape: it is the live-session base with every OpenSpec and shaping section
+// removed. `work_on_note` runs a live session like the shaping verbs, but the
+// stateful body's spine — "You decide WHAT gets built… you do not write
+// production code… OpenSpec is the only spec surface" — is actively false for a
+// verb whose whole job is writing to one open note.
 const STATEFUL = "stateful";
 const STATELESS = "stateless";
+const NOTE = "note";
 
 // The two recurring `disallowedTools` values, named so a record states which
 // policy it takes rather than repeating a literal (ask-when-unspecified D1).
@@ -240,7 +249,9 @@ const VERBS = Object.freeze({
     sessionKey: noteSessionKey,
     model: STRONGEST,
     budget: "stateful",
-    skills: NOTE_SKILLS,
+    // Empty by decision, not by omission — see OPEN_NOTE_SKILLS. The wiki suite
+    // this used to carry is corpus curation; this verb edits one open note.
+    skills: OPEN_NOTE_SKILLS,
     mcpServers: [],
     // The vault lives outside the project, so it has to be GRANTED as a
     // working directory rather than described in prose (same as
@@ -260,7 +271,7 @@ const VERBS = Object.freeze({
     // canUseTool seam, wired in run-exec.mjs) applies only to this verb.
     guardOpenNoteWrites: true,
     params: THIN_PARAMS,
-    basePersona: STATEFUL,
+    basePersona: NOTE,
     clause:
       "Work on the ONE note currently open on screen (its identity, title, tags, and vault-relative path are in your " +
       "context below). When asked to hear it, read it back AS WRITTEN — do not summarize or condense it — and identify " +

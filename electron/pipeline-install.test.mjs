@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createPipelineInstall } from "./pipeline-install.mjs";
-import { VERB_NAMES } from "./verbs.mjs";
+import { VERB_NAMES, resolveVerb } from "./verbs.mjs";
 
 let homeDir;
 let repoRoot;
@@ -163,10 +163,18 @@ describe("pipeline-install", () => {
   });
 
   it("verbsSnapshot reports every verb with its model, and how far the change has got", () => {
-    writePersonas({
-      "stateful.md": "---\ndescription: Conversational\n---\nStateful body.",
-      "stateless.md": "---\ndescription: Autonomous\n---\nStateless body.",
-    });
+    // Every persona the registry names, not a hand-kept pair: `loadable` is
+    // per verb, so a verb whose persona is missing from this fixture reports
+    // false and the assertion below fails for a reason that has nothing to do
+    // with what this test is about.
+    writePersonas(
+      Object.fromEntries(
+        [...new Set(VERB_NAMES.map((verb) => resolveVerb(verb).basePersona))].map((base) => [
+          `${base}.md`,
+          `---\ndescription: The ${base} one\n---\n${base} body.`,
+        ]),
+      ),
+    );
 
     const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "iris-install-project-"));
     try {
