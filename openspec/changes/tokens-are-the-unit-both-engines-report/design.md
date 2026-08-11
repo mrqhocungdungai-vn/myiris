@@ -258,10 +258,12 @@ hold and fade cannot live in CSS either.
 
 They live where the ring's convergence and lock beat already live: pure functions
 of elapsed time in `src/lib/eye-hud.ts`, beside `acquireScale`, `lockSettle` and
-`panelReveal`, each with a test. Roughly 3.5s end to end — connector ~250ms,
-badge unfold ~350ms, hold ~1.9s, resolve ~1s — and the exact numbers are tunable
-in one place because they are constants in that file rather than durations spread
-across a stylesheet.
+`panelReveal`, each with a test. Roughly 5s end to end — connector ~250ms, badge
+unfold ~350ms, hold ~3.4s, resolve ~1s — and the exact numbers are tunable in one
+place because they are constants in that file rather than durations spread across
+a stylesheet. The hold started at 1.9s and was raised after the first run in the
+app: the badge exists to be read, and the honest lever is a longer hold rather
+than a bigger font, which would put it in competition with the panel.
 
 The **figure itself never animates**. No count-up, no rolling digits. It is a
 measured amount, and animating it would draw values that were never reported —

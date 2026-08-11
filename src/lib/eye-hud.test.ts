@@ -11,6 +11,7 @@ import {
   LOCK_STRETCH,
   PANEL_MS,
   READOUT_GEOMETRY,
+  TETHER_CORNER_REACH,
   TETHER_MS,
   VIEW_H,
   VIEW_W,
@@ -22,6 +23,7 @@ import {
   createAlertState,
   createReadoutLayout,
   dashPattern,
+  eyeCorner,
   gaugeTicks,
   lockSettle,
   panelReveal,
@@ -456,5 +458,59 @@ describe("the announcement's placement", () => {
       expect(knee).toBeLessThan(state.anchorX * VIEW_W);
       expect(knee).toBeGreaterThanOrEqual(center.x * VIEW_W);
     }
+  });
+});
+
+// Where a connector ATTACHES, which is not where its eye is. Anchored at the
+// iris center a connector runs across the iris to get out and parks its origin
+// dot on the pupil — it reads as stuck to the eyeball rather than as a callout
+// pointing at it.
+describe("eyeCorner", () => {
+  it("departs outward, away from the face's midline, on each side", () => {
+    const center = { x: 0.4, y: 0.5 };
+    expect(eyeCorner(center, 0.02, -1).x).toBeLessThan(center.x);
+    expect(eyeCorner(center, 0.02, 1).x).toBeGreaterThan(center.x);
+  });
+
+  it("clears the iris rather than grazing it, at every plausible eye size", () => {
+    for (const radius of [0.004, 0.01, 0.02, 0.05]) {
+      for (const direction of [-1, 1] as const) {
+        const corner = eyeCorner({ x: 0.5, y: 0.5 }, radius, direction);
+        expect(Math.abs(corner.x - 0.5)).toBeGreaterThan(radius);
+      }
+    }
+    expect(TETHER_CORNER_REACH).toBeGreaterThan(1);
+  });
+
+  it("stays level with the eye, so the connector leaves sideways and not over it", () => {
+    expect(eyeCorner({ x: 0.4, y: 0.31 }, 0.02, -1).y).toBe(0.31);
+  });
+
+  it("keeps the panel's tether clear of the iris for its whole run", () => {
+    // The tether runs leftward from the corner to the panel, so every point on
+    // it is left of the corner — which is already outside the iris.
+    const center = { x: 0.62, y: 0.45 };
+    const radius = 0.02;
+    const layout = resolveReadoutLayout(center, 10_000, createReadoutLayout());
+    const origin = eyeCorner(center, radius, -1);
+    const xs = tetherPath(origin, layout)
+      .match(/-?\d+(\.\d+)?/g)!
+      .map(Number)
+      .filter((_unused, index) => index % 2 === 0);
+    for (const x of xs) expect(x).toBeLessThanOrEqual(origin.x * VIEW_W + 1e-9);
+    expect(origin.x).toBeLessThan(center.x - radius);
+  });
+
+  it("keeps the badge's connector clear of the iris, mirrored", () => {
+    const center = { x: 0.4, y: 0.45 };
+    const radius = 0.02;
+    const state = resolveAlertLayout(center, 1_000, createAlertState());
+    const origin = eyeCorner(center, radius, 1);
+    const xs = alertPath(origin, state)
+      .match(/-?\d+(\.\d+)?/g)!
+      .map(Number)
+      .filter((_unused, index) => index % 2 === 0);
+    for (const x of xs) expect(x).toBeGreaterThanOrEqual(origin.x * VIEW_W - 1e-9);
+    expect(origin.x).toBeGreaterThan(center.x + radius);
   });
 });

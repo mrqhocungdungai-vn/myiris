@@ -245,31 +245,38 @@ export type ReadoutGeometry = {
  *   ------------------------------------
  *   content                    17.99em
  *
- * 0.78 gives an 18.87em box and **0.88em of slack**. The token block cost about
- * 5.7em; retiring the GPU meter paid ~1.56em of it (it was a segmented bar
- * restating the GPU percentage two rows above, while the network meter is
- * log-scaled across decades and stays), and the height carries the rest.
+ * That arithmetic put the box at 0.78, and THE RUNNING APP DISAGREED — as it
+ * has every time this number has been guessed. Observed in the deck dock: a
+ * wide, obviously empty band between the cache line and the foot. `.foot` has
+ * `margin-top: auto`, so all surplus height collects in exactly one visible
+ * place, which is what makes over-provisioning easy to see and
+ * under-provisioning silent. **0.70** closes that band, and the itemization
+ * above is kept as the starting point it was rather than as a measurement it
+ * never was.
+ *
+ * The token block cost about 5.7em; retiring the GPU meter paid ~1.56em of it
+ * (it was a segmented bar restating the GPU percentage two rows above, while
+ * the network meter is log-scaled across decades and stays), and the height
+ * carries the rest.
  *
  * THE COST, NAMED: `anchorY` is clamped to `[height/2, 1 - height/2]`, so the
- * panel's vertical travel falls from ±0.19 (at 0.62) to ±0.11 of the frame. It
+ * panel's vertical travel falls from ±0.19 (at 0.62) to ±0.15 of the frame. It
  * tracks its eye less far. Accepted deliberately — the panel has been clamped
  * since it was built, and the alternative is a token block somewhere outside the
  * camera frame, which would be a second answer to one question.
  *
- * The line above is ARITHMETIC FROM THE STYLESHEET, not a reading taken in the
- * running app, and the two have disagreed here before. Verify it the same way
- * the 0.62 figure was verified: sum the CHILDREN, not the last child's offset —
- * `.foot` has `margin-top: auto`, so its offset tracks the box and will
- * cheerfully report the box back to you as the content. Check it against the
- * DECK dock, never the HUD's larger frame, which clamps at the 10px ceiling and
- * has slack that hides the problem.
+ * Re-check it the way the 0.62 figure was checked, and in the DECK dock, never
+ * the HUD's larger frame — that one clamps at the 10px font ceiling and has
+ * slack that hides the problem. The two failure modes look nothing alike: too
+ * tall shows as the empty band above, too short clips the foot's bars away
+ * silently under `overflow: hidden`.
  *
  * ANY future row costs ~1.56em (row plus gap) and must be paid for here.
  */
 export const READOUT_GEOMETRY: ReadoutGeometry = {
   offset: 0.075,
   width: 0.3,
-  height: 0.78,
+  height: 0.7,
   rise: -0.08,
 };
 
@@ -317,14 +324,28 @@ export function resolveReadoutLayout(
 }
 
 /**
- * The tether: an origin dot at the eye, a diagonal run outward, a horizontal
- * run across, and a terminating tick at the panel's near (right) edge — in
- * viewBox units. `pathLength="1"` on the rendered path lets the draw-on be a
- * plain `stroke-dashoffset = 1 - tether`, with no length measurement anywhere.
+ * How far from the iris center, in iris radii, a connector attaches — the eye's
+ * OUTER CORNER rather than its pupil.
  *
- * The knee sits inboard of the anchor — i.e. to its right, since the panel is
- * always left of the eye — so the run bends toward the panel rather than away.
+ * The origin matters more than it looks. Anchored at the center, a connector
+ * runs *into* the eye: it crosses the iris to get out, and its origin dot sits
+ * on the pupil, which reads as something stuck to the eyeball rather than as a
+ * callout pointing at it. From the corner it leaves from the side already
+ * facing its element and touches nothing. Comfortably beyond 1 radius so it
+ * clears the iris edge rather than grazing it.
  */
+export const TETHER_CORNER_REACH = 1.6;
+
+/**
+ * The point on an eye a connector leaves from. `direction` is -1 for the
+ * frame's left (the panel's side) and +1 for its right (the badge's side), so
+ * each connector departs outward, away from the face's midline, and never
+ * crosses the eye it belongs to.
+ */
+export function eyeCorner(center: EyePoint, radius: number, direction: -1 | 1): EyePoint {
+  return { x: center.x + direction * radius * TETHER_CORNER_REACH, y: center.y };
+}
+
 // ---------------------------------------------------------------------------
 // The completed-run announcement (token-accounting / eye-tracking-hud). Same
 // frame-normalized coordinate system as the readout above, and the same
@@ -341,8 +362,17 @@ export function resolveReadoutLayout(
 export const ALERT_DRAW_MS = 250;
 /** Badge unfold, staggered to begin only once the connector has landed. */
 export const ALERT_UNFOLD_MS = 350;
-/** How long the figure is held, fully drawn, before it begins to resolve. */
-export const ALERT_HOLD_MS = 1900;
+/**
+ * How long the figure is held, fully drawn, before it begins to resolve.
+ *
+ * Measured in the running app at 1900ms and reported as too quick to read: by
+ * the time the eye has found the badge it is already folding. The badge exists
+ * to be read, so the honest lever is a longer hold rather than a bigger font
+ * (which would make it compete with the panel). At 3400 the whole envelope is
+ * ~5s, still comfortably a transient — it must never settle into something that
+ * reads as a second permanent readout.
+ */
+export const ALERT_HOLD_MS = 3400;
 /** The resolve, during which the arrival runs in reverse. */
 export const ALERT_RESOLVE_MS = 1000;
 /** Badge fold, within the resolve — the reverse of the stagger on the way in. */
@@ -449,30 +479,51 @@ export function resolveAlertLayout(
 }
 
 /**
- * The announcement's connector: an origin dot at the eye, a run outward, and a
- * terminating tick at the badge's near (left) edge — in viewBox units, and
- * carrying `pathLength="1"` on the rendered path so the draw-on is a plain
- * `stroke-dashoffset = 1 - connector` with no length measurement anywhere.
+ * The announcement's connector: an origin dot at the eye's outer corner, a run
+ * outward, and a terminating tick at the badge's near (left) edge — in viewBox
+ * units, and carrying `pathLength="1"` on the rendered path so the draw-on is a
+ * plain `stroke-dashoffset = 1 - connector` with no length measurement anywhere.
+ *
+ * `origin` is `eyeCorner(...)` here too, for the same reason and mirrored: the
+ * badge is right of the ring eye, so this one leaves from the right corner.
  *
  * The knee sits inboard of the anchor — i.e. to its LEFT, since the badge is
  * always right of the eye — so the run bends toward the badge rather than away.
  * The mirror of tetherPath, deliberately: this borrows the arrival idiom the
  * tether already established rather than inventing a second one.
  */
-export function alertPath(center: EyePoint, state: AlertState, elbow = 0.04): string {
-  const ex = center.x * VIEW_W;
-  const ey = center.y * VIEW_H;
+export function alertPath(origin: EyePoint, state: AlertState, elbow = 0.04): string {
+  const ex = origin.x * VIEW_W;
+  const ey = origin.y * VIEW_H;
   const ax = state.anchorX * VIEW_W;
   const ay = state.anchorY * VIEW_H;
-  const kneeX = ax - elbow * VIEW_W;
+  // Clamped at the origin, mirrored — same reason as tetherPath's.
+  const kneeX = Math.max(ax - elbow * VIEW_W, ex);
   return `M ${fmt(ex)} ${fmt(ey)} L ${fmt(kneeX)} ${fmt(ay)} L ${fmt(ax)} ${fmt(ay)}`;
 }
 
-export function tetherPath(center: EyePoint, layout: ReadoutLayout, elbow = 0.045): string {
-  const ex = center.x * VIEW_W;
-  const ey = center.y * VIEW_H;
+/**
+ * The tether: an origin dot at the eye's outer corner, a diagonal run outward, a
+ * horizontal run across, and a terminating tick at the panel's near (right)
+ * edge — in viewBox units. `pathLength="1"` on the rendered path lets the
+ * draw-on be a plain `stroke-dashoffset = 1 - tether`, with no length
+ * measurement anywhere.
+ *
+ * `origin` is `eyeCorner(...)`, NOT the iris center: see TETHER_CORNER_REACH.
+ *
+ * The knee sits inboard of the anchor — i.e. to its right, since the panel is
+ * always left of the eye — so the run bends toward the panel rather than away.
+ */
+export function tetherPath(origin: EyePoint, layout: ReadoutLayout, elbow = 0.045): string {
+  const ex = origin.x * VIEW_W;
+  const ey = origin.y * VIEW_H;
   const ax = layout.anchorX * VIEW_W;
   const ay = layout.anchorY * VIEW_H;
-  const kneeX = ax + elbow * VIEW_W;
+  // Clamped at the origin so the knee can never end up OUTBOARD of it. Moving
+  // the origin to the eye's corner narrowed the run to roughly the elbow's own
+  // length, and past that the line kinks backwards toward the eye before
+  // setting off — a small artifact, but one that undoes the reason the origin
+  // moved in the first place.
+  const kneeX = Math.min(ax + elbow * VIEW_W, ex);
   return `M ${fmt(ex)} ${fmt(ey)} L ${fmt(kneeX)} ${fmt(ay)} L ${fmt(ax)} ${fmt(ay)}`;
 }

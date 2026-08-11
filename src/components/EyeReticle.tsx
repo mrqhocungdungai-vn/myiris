@@ -12,6 +12,7 @@ import {
   VIEW_W,
   acquireScale,
   alertPath,
+  eyeCorner,
   arcPath,
   dashPattern,
   gaugeTicks,
@@ -211,13 +212,18 @@ export default function EyeReticle({
         const layout = resolveReadoutLayout(readoutEye.center, elapsed, layoutRef.current);
         const anchorX = layout.anchorX * VIEW_W;
         const anchorY = layout.anchorY * VIEW_H;
+        // The eye's outer corner, not its center: anchored at the center the
+        // tether runs across the iris to get out and parks its origin dot on
+        // the pupil, which reads as attached TO the eyeball rather than as a
+        // callout pointing at it. -1 because the panel is on the frame's left.
+        const tetherFrom = eyeCorner(readoutEye.center, readoutEye.radius, -1);
 
         // Both endpoints are recomputed here every frame — the eye end because
         // the head moves, the panel end because the panel hangs off the eye
         // (spec: "The connector tracks both ends").
-        tetherLineRef.current?.setAttribute("d", tetherPath(readoutEye.center, layout));
-        tetherDotRef.current?.setAttribute("cx", String(readoutEye.center.x * VIEW_W));
-        tetherDotRef.current?.setAttribute("cy", String(readoutEye.center.y * VIEW_H));
+        tetherLineRef.current?.setAttribute("d", tetherPath(tetherFrom, layout));
+        tetherDotRef.current?.setAttribute("cx", String(tetherFrom.x * VIEW_W));
+        tetherDotRef.current?.setAttribute("cy", String(tetherFrom.y * VIEW_H));
         const tick = tetherTickRef.current;
         if (tick) {
           tick.setAttribute("x1", String(anchorX));
@@ -283,9 +289,11 @@ export default function EyeReticle({
           if (alertGroup) alertGroup.style.opacity = "0";
         } else if (ringEye && alertGroup) {
           resolveAlertLayout(ringEye.center, alertElapsed, alert);
-          alertLineRef.current?.setAttribute("d", alertPath(ringEye.center, alert));
-          alertDotRef.current?.setAttribute("cx", String(ringEye.center.x * VIEW_W));
-          alertDotRef.current?.setAttribute("cy", String(ringEye.center.y * VIEW_H));
+          // Mirrored: +1, since the badge is on the frame's right.
+          const alertFrom = eyeCorner(ringEye.center, ringEye.radius, 1);
+          alertLineRef.current?.setAttribute("d", alertPath(alertFrom, alert));
+          alertDotRef.current?.setAttribute("cx", String(alertFrom.x * VIEW_W));
+          alertDotRef.current?.setAttribute("cy", String(alertFrom.y * VIEW_H));
           const alertAnchorX = alert.anchorX * VIEW_W;
           const alertAnchorY = alert.anchorY * VIEW_H;
           const alertTick = alertTickRef.current;

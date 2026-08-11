@@ -47,7 +47,7 @@ ring.** Both halves of the reading follow from a division the spec already made.
   rows above it.
 - **A finished run announces itself beside the ring eye.** A connector draws
   outward from that eye, a badge unfolds at its end carrying what that run
-  consumed, it holds, and both resolve away — around three and a half seconds,
+  consumed, it holds, and both resolve away — around five seconds,
   then nothing. It reuses the arrival the tether and panel already stage, so no
   element of the ring itself changes and the ring's own lock beat keeps its single
   meaning.

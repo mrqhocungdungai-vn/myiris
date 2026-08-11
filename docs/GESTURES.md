@@ -573,7 +573,7 @@ per-message**, and a rotated socket cannot make the total drop; see
 **The ring alerts, the panel reports.** When a run finishes while the overlays
 are rendering, a connector draws outward from the **ring's** eye — the frame's
 right — and a badge unfolds at its end carrying that run's figure, holds, and
-resolves away, about three and a half seconds end to end. One at a time, newest
+resolves away, about five seconds end to end. One at a time, newest
 replaces rather than queues, and it is **never replayed**: a run that finished
 with the camera off is not announced when the camera comes back on. Its tokens
 are already in the panel's totals, and presenting old work as news is worse than
