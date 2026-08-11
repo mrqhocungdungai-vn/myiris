@@ -112,20 +112,20 @@
 
 - [x] 5.1 `npm run build` (runs `plugin-sync`), `npm test`, `npm run lint`,
       `npm run scan:secrets`, `npm run spec:check` — or `/gates`.
-- [ ] 5.2 `npm run dev`, open the canvas, say *"vẽ luồng đăng nhập gồm 4 bước"*.
+- [x] 5.2 `npm run dev`, open the canvas, say *"vẽ luồng đăng nhập gồm 4 bước"*.
       Expect labels **inside** their boxes, connectors meeting box edges, even
       spacing, and narration while the drawing happens.
-- [ ] 5.3 Accented-text case, which is where the old width estimate failed:
+- [x] 5.3 Accented-text case, which is where the old width estimate failed:
       a label such as "Xác thực người dùng" must sit inside its box, not overflow
       it.
-- [ ] 5.4 **The regression case that matters** — talk to Iris by voice *first*,
+- [x] 5.4 **The regression case that matters** — talk to Iris by voice *first*,
       then open the canvas and ask for a drawing. This is the path a
       canvas-only skills list breaks (design.md D1); the drawing skill must be
       loaded here too. Check the `skills [...]` line in
       `~/.myiris/logs/iris.log` (`run-exec.mjs:329`).
-- [ ] 5.5 Confirm the token cost is the expected ~120 per session and nothing
+- [x] 5.5 Confirm the token cost is the expected ~120 per session and nothing
       more, via the token ledger.
 
 ## 6. Close out
 
-- [ ] 6.1 Archive the change so the two delta specs land in `openspec/specs/`.
+- [x] 6.1 Archive the change so the two delta specs land in `openspec/specs/`.
