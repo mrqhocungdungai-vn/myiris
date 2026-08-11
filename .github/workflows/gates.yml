@@ -1,0 +1,76 @@
+# The five quality gates, made binding.
+#
+# Until this existed they ran **only** in the maintainer's Claude Code hooks
+# (`.claude/settings.json`), so a commit made from a terminal, from another
+# editor, or by any other tool was completely ungated. This does not add a new
+# check — it makes the checks that already exist apply to every push and pull
+# request.
+#
+# Three things here are deliberate and worth not "simplifying" later:
+#
+#   1. **`npm run scan:secrets` is not used.** It only supports `--staged`, and
+#      CI has no staged content — it would scan nothing and pass. The gitleaks
+#      action scans the checkout instead, with `fetch-depth: 0` so it sees
+#      history rather than one commit.
+#   2. **`public/runtime/` is cached.** `npm run build` vendors ~48 MB of WASM
+#      and model assets, two of them fetched over the network. The cache key is
+#      the lockfile plus the vendoring script, so a dependency bump or a change
+#      to what gets vendored re-fetches, and nothing else does.
+#   3. **Node comes from `.nvmrc`.** `engines.node` is `>=24` with
+#      `engine-strict=true`; reading the file keeps CI on the same major the
+#      repo pins instead of a number duplicated here that could drift.
+name: gates
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+# A newer push to the same branch makes the older run irrelevant.
+concurrency:
+  group: gates-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gates:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # gitleaks needs history, not a shallow checkout.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - run: npm ci
+
+      # Vendored WASM/model assets: large, and two are fetched over the network.
+      - name: Cache vendored runtime assets
+        uses: actions/cache@v4
+        with:
+          path: public/runtime
+          key: runtime-${{ hashFiles('package-lock.json', 'scripts/vendor-runtime-assets.mjs') }}
+
+      # Gate 1. Also runs check-three-dedupe, check-types-node and plugin-sync,
+      # which are otherwise bound to no editing event at all.
+      - run: npm run build
+
+      # Gate 2.
+      - run: npm test
+
+      # Gate 3. Zero-warning, and it carries the file-size ratchet.
+      - run: npm run lint
+
+      # Gate 4. The living spec is the source of truth and this is the only
+      # thing that checks it.
+      - run: npm run spec:check
+
+      # Gate 5. `npm run scan:secrets` is staged-only and would pass vacuously
+      # here; this scans the checkout and its history instead.
+      - name: Scan for secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

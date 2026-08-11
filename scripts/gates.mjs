@@ -23,6 +23,7 @@ import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { checkDeadClaudeCss } from "./dead-claude-css.mjs";
+import { checkFileSizes } from "./check-file-size.mjs";
 import { checkSpecDrift } from "./check-spec-drift.mjs";
 
 const require = createRequire(import.meta.url);
@@ -223,10 +224,13 @@ export function runLint() {
 
   const oxlintOk = result.status === 0;
   const deadCss = checkDeadClaudeCss({ repoRoot: REPO_ROOT });
+  // The file-size ratchet rides the lint gate for the same reason the dead-CSS
+  // sweep does: it is a static read of the tree that needs no build.
+  const fileSize = checkFileSizes({ repoRoot: REPO_ROOT });
 
   return {
-    ok: oxlintOk && deadCss.ok,
-    output: [combined(result), deadCss.output].filter(Boolean).join("\n"),
+    ok: oxlintOk && deadCss.ok && fileSize.ok,
+    output: [combined(result), deadCss.output, fileSize.output].filter(Boolean).join("\n"),
   };
 }
 
