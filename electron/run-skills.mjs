@@ -45,6 +45,17 @@ export const SHAPING_SKILLS = [
   q("openspec-archive-change"), //  stateful.md, two call sites, plus /iris:opsx:archive
   q("openspec-sync-specs"), //      transitive: openspec-archive-change and the /opsx commands both invoke it
   q("openspec-explore"), //         /iris:opsx:explore ships as a command and shaping is when exploring happens
+  // Drawing belongs to `shape_on_canvas`, but it cannot be scoped to it. Both
+  // shaping verbs share ONE resident session, and a session's skills are fixed
+  // when it is created (`skills: verb.skills`, run-exec.mjs's
+  // statefulSessionOptions) — there is no `setPoSessionSkills` to repair it on a
+  // later turn the way `setPoSessionMcpServers` repairs the tool surface. A
+  // canvas-only list would therefore load this skill only when the user opens
+  // the board BEFORE speaking, and silently omit it on the commoner path where
+  // they talk first and move to the canvas when talking stops being enough
+  // (the-canvas-verb-learns-to-draw design.md D1). ~120 input tokens on voice
+  // turns is the price of the conversation genuinely being able to draw.
+  q("excalidraw-drawing"),
 ];
 
 // `execute` against a project that HAS an open change with unchecked tasks: the

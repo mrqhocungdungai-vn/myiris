@@ -22,6 +22,34 @@ under those same terms. The full license text for each is vendored alongside
 the skills: `claude-skills/LICENSE-mattpocock-skills`,
 `claude-skills/LICENSE-openspec`, and `claude-skills/LICENSE-vanillaflava-llm-wiki-skills`.
 
+## Adapted from, not a snapshot
+
+One skill here is **not** a vendored snapshot and must not be refreshed by the
+procedure below — refreshing it would overwrite Iris-authored content.
+
+| Skill | Adapted from | Version / commit | License |
+| --- | --- | --- | --- |
+| `excalidraw-drawing` | [Agents365-ai/excalidraw-skill](https://github.com/Agents365-ai/excalidraw-skill) | commit `00606e9fcb072e9644cbfbb3d49a9dafe8b98c25` | MIT (`LICENSE-agents365-excalidraw-skill`) |
+
+**Why adapted rather than snapshotted.** The upstream skill is written for a
+*file-based* workflow: the model hand-writes a `.excalidraw` file, invents
+`seed`/`id`/`version` fields, and shells out to Playwright, Kroki, or a CLI to
+render it. Iris's canvas is an **MCP server over a live board** — ids and
+ordering are assigned by `add_elements`, there is no file and no render step,
+and the model must read results and re-read the board between writes. Roughly
+40% of the upstream text is therefore wrong or meaningless here, and one of its
+rules is actively harmful: it instructs the model to compute connector endpoints
+at shape boundaries because bindings do not survive a static export, whereas
+this server clips bound endpoints itself and hand-computed ones forfeit the
+binding. The skill inverts that rule.
+
+What is genuinely inherited is the layout arithmetic — the spacing table, the
+box-size tiers, the font hierarchy, and the colour-role palette. Attribution is
+recorded here for that.
+
+Nothing is taken from `coleam00/excalidraw-diagram-skill`: it carries no license
+at all, so none of its text may enter this repository.
+
 ## Why bundled instead of fetched live
 
 Iris's "Install missing" action must work offline and without shelling out to

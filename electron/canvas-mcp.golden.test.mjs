@@ -75,6 +75,51 @@ describe("buildElement is a field-key superset of excalidraw's convertToExcalidr
     expectSuperset(keysOf(mine), keysOf(real), "arrow");
   });
 
+  // A labelled skeleton produces TWO elements from the real converter — the
+  // container and a bound text element — and the builder has to match both.
+  // This is the only mechanism tying the label's field set (fontFamily 5,
+  // containerId, autoResize, lineHeight...) to excalidraw's own; hand-written
+  // fixtures would only re-assert what we already believe.
+  it("labelled rectangle: container and its bound label", () => {
+    const skeleton = { type: "rectangle", id: "r", x: 10, y: 20, width: 200, height: 80, label: { text: "Auth Service" } };
+    const realAll = convertToExcalidrawElements([skeleton], { regenerateIds: false });
+    const realContainer = realAll.find((e) => e.id === "r");
+    const realLabel = realAll.find((e) => e.type === "text");
+
+    const labels = [];
+    const mine = buildElement(skeleton, { index: "a0", labels });
+    expect(labels).toHaveLength(1);
+    expectSuperset(keysOf(mine), keysOf(realContainer), "labelled rectangle");
+    expectSuperset(keysOf(labels[0]), keysOf(realLabel), "bound label");
+    expect(labels[0].containerId).toBe("r");
+    expect(labels[0].fontFamily).toBe(realLabel.fontFamily);
+  });
+
+  it("labelled arrow: connector and its bound label", () => {
+    const shapes = [
+      { type: "rectangle", id: "a", x: 0, y: 0, width: 50, height: 50 },
+      { type: "rectangle", id: "b", x: 300, y: 0, width: 50, height: 50 },
+    ];
+    const skeleton = { type: "arrow", id: "arr", start: { id: "a" }, end: { id: "b" }, label: { text: "yes" } };
+    const realAll = convertToExcalidrawElements([...shapes, skeleton], { regenerateIds: false });
+    const realArrow = realAll.find((e) => e.id === "arr");
+    const realLabel = realAll.find((e) => e.type === "text");
+
+    const lookup = new Map(shapes.map((s) => [s.id, buildElement(s, { index: "a0" })]));
+    const labels = [];
+    const mine = buildElement(skeleton, { index: "a1", lookup, labels });
+    expectSuperset(keysOf(mine), keysOf(realArrow), "labelled arrow");
+    expectSuperset(keysOf(labels[0]), keysOf(realLabel), "bound connector label");
+    expect(labels[0].containerId).toBe("arr");
+  });
+
+  it("elbowed arrow carries the extra fields an elbow arrow has", () => {
+    const skeleton = { type: "arrow", id: "m", x: 0, y: 0, points: [[0, 0], [50, 0], [50, 60], [120, 60]], elbowed: true };
+    const [real] = convertToExcalidrawElements([skeleton], { regenerateIds: false });
+    const mine = buildElement(skeleton, { index: "a0" });
+    expectSuperset(keysOf(mine), keysOf(real), "elbowed arrow");
+  });
+
   it("line", () => {
     const skeleton = { type: "line", x: 0, y: 0, points: [[0, 0], [40, 40]] };
     const [real] = convertToExcalidrawElements([skeleton], { regenerateIds: false });

@@ -100,6 +100,88 @@ describe("applyAddElements", () => {
     expect(arrow).toBeDefined();
     expect(arrow.startBinding).toBeNull();
   });
+
+  // design.md D5: the label is an element the caller never listed. If its id
+  // misses the results, changedIdsFrom won't name it, the renderer won't
+  // reconcile it, and the box appears on an open canvas with no caption while
+  // the persisted scene says otherwise.
+  it("binds a label inside its container and reports the label's own id so the open canvas reconciles it", () => {
+    const { scene, results } = applyAddElements(null, [
+      { id: "box", type: "rectangle", x: 10, y: 20, width: 200, height: 80, label: { text: "Auth Service" } },
+    ]);
+    const label = scene.elements.find((e) => e.type === "text");
+    expect(label.containerId).toBe("box");
+    expect(label.textAlign).toBe("center");
+    expect(label.verticalAlign).toBe("middle");
+    expect(label.fontFamily).toBe(5); // the bound-label family, not free-standing text's 1
+    expect(label.height).toBe(25); // fontSize * 1.25
+    expect(label.y).toBe(20 + (80 - 25) / 2); // centred in the container
+    expect(label.x).toBe(10 + (200 - label.width) / 2);
+
+    const box = scene.elements.find((e) => e.id === "box");
+    expect(box.boundElements).toEqual([{ id: label.id, type: "text" }]);
+
+    // Reported, but not as a second element the caller asked for.
+    expect(results).toEqual([
+      { id: "box", status: "applied" },
+      { id: label.id, status: "applied", boundTo: "box" },
+    ]);
+    expect(changedIdsFrom(results)).toEqual(["box", label.id]);
+  });
+
+  it("binds a label to a connector, centred on the route rather than on its first vertex", () => {
+    const { scene } = applyAddElements(null, [
+      { id: "a", type: "rectangle", x: 0, y: 0, width: 50, height: 50 },
+      { id: "b", type: "rectangle", x: 300, y: 0, width: 50, height: 50 },
+      { id: "arr", type: "arrow", start: { id: "a" }, end: { id: "b" }, label: { text: "yes" } },
+    ]);
+    const label = scene.elements.find((e) => e.type === "text");
+    expect(label.containerId).toBe("arr");
+    const arrow = scene.elements.find((e) => e.id === "arr");
+    expect(arrow.boundElements).toEqual([{ id: label.id, type: "text" }]);
+    // Sized to its own text, not to the connector — a label as wide as the
+    // arrow would mask the arrow (design.md D4).
+    expect(label.width).toBeLessThan(arrow.width);
+  });
+
+  it("stores roundness, groupIds and elbowed instead of replacing them with defaults", () => {
+    const { scene } = applyAddElements(null, [
+      { id: "box", type: "rectangle", x: 0, y: 0, width: 10, height: 10, roundness: { type: 3 }, groupIds: ["g1"] },
+      { id: "arr", type: "arrow", x: 0, y: 0, elbowed: true },
+    ]);
+    const box = scene.elements.find((e) => e.id === "box");
+    expect(box.roundness).toEqual({ type: 3 });
+    expect(box.groupIds).toEqual(["g1"]);
+    const arrow = scene.elements.find((e) => e.id === "arr");
+    expect(arrow.elbowed).toBe(true);
+    expect(arrow.fixedSegments).toEqual([]);
+  });
+
+  it("keeps every vertex of a multi-point route and sizes the connector to the whole route", () => {
+    const { scene } = applyAddElements(null, [
+      {
+        id: "arr",
+        type: "arrow",
+        x: 0,
+        y: 0,
+        points: [
+          [0, 0],
+          [50, 0],
+          [50, 60],
+          [120, 60],
+        ],
+      },
+    ]);
+    const arrow = scene.elements.find((e) => e.id === "arr");
+    expect(arrow.points).toEqual([
+      [0, 0],
+      [50, 0],
+      [50, 60],
+      [120, 60],
+    ]);
+    expect(arrow.width).toBe(120);
+    expect(arrow.height).toBe(60); // the route's extent, not the last vertex alone
+  });
 });
 
 describe("applyUpdateElements", () => {
@@ -114,6 +196,39 @@ describe("applyUpdateElements", () => {
   it("returns skipped: unknown-id for a missing id, without throwing", () => {
     const { results } = applyUpdateElements(null, [{ id: "ghost", x: 1 }]);
     expect(results).toEqual([{ id: "ghost", status: "skipped: unknown-id" }]);
+  });
+
+  // A container with two bound labels is the same silent damage as a dropped
+  // one: the model asked to change a caption, not to stack a second one on it.
+  it("rewrites the label already bound to a container rather than adding a rival one", () => {
+    const added = applyAddElements(null, [
+      { id: "box", type: "rectangle", x: 0, y: 0, width: 200, height: 80, label: { text: "Old" } },
+    ]);
+    const labelId = added.scene.elements.find((e) => e.type === "text").id;
+
+    const { scene, results } = applyUpdateElements(added.scene, [{ id: "box", x: 400, label: { text: "New" } }]);
+
+    expect(scene.elements.filter((e) => e.type === "text")).toHaveLength(1);
+    const label = scene.elements.find((e) => e.type === "text");
+    expect(label.id).toBe(labelId); // same element, patched in place
+    expect(label.text).toBe("New");
+    expect(label.x).toBe(400 + (200 - label.width) / 2); // re-centred on the moved container
+    expect(scene.elements.find((e) => e.id === "box").boundElements).toEqual([{ id: labelId, type: "text" }]);
+    expect(results).toEqual([
+      { id: "box", status: "applied" },
+      { id: labelId, status: "applied", boundTo: "box" },
+    ]);
+  });
+
+  it("gives a container that had no label one, rather than dropping the field", () => {
+    const existing = { type: "excalidraw", elements: [rect("a", 0, 0, 100, 40)], appState: {}, files: {} };
+    const { scene, results } = applyUpdateElements(existing, [{ id: "a", label: { text: "Hi" } }]);
+    const label = scene.elements.find((e) => e.type === "text");
+    expect(label.containerId).toBe("a");
+    expect(scene.elements.find((e) => e.id === "a").boundElements).toEqual([{ id: label.id, type: "text" }]);
+    expect(results[1]).toEqual({ id: label.id, status: "applied", boundTo: "a" });
+    // `label` is a second element, never a field smuggled onto the container.
+    expect(scene.elements.find((e) => e.id === "a").label).toBeUndefined();
   });
 });
 

@@ -67,10 +67,10 @@ function baseFields(skeleton, index) {
     strokeStyle: skeleton.strokeStyle ?? STYLE_DEFAULTS.strokeStyle,
     roughness: skeleton.roughness ?? STYLE_DEFAULTS.roughness,
     opacity: skeleton.opacity ?? STYLE_DEFAULTS.opacity,
-    groupIds: [],
+    groupIds: Array.isArray(skeleton.groupIds) ? [...skeleton.groupIds] : [],
     frameId: null,
     index,
-    roundness: null,
+    roundness: skeleton.roundness ?? null,
     seed: randInt32(),
     version: 1,
     versionNonce: randInt32(),
@@ -120,6 +120,70 @@ function centerOf(el) {
   return { x: el.x + el.width / 2, y: el.y + el.height / 2 };
 }
 
+// A linear element's x/y is its FIRST vertex, not the top-left of what it
+// covers — a route that turns upwards has negative offsets. Anything centring
+// on a container has to ask for the box, not read x/y/width/height.
+function boxOf(el) {
+  if (!Array.isArray(el.points) || el.points.length < 2) {
+    return { x: el.x, y: el.y, width: el.width, height: el.height };
+  }
+  const xs = el.points.map((p) => el.x + p[0]);
+  const ys = el.points.map((p) => el.y + p[1]);
+  const x = Math.min(...xs);
+  const y = Math.min(...ys);
+  return { x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y };
+}
+
+// Bound labels use excalidraw's dedicated label font family (5), NOT the 1
+// buildTextElement defaults to for free-standing text. Measured against the
+// real convertToExcalidrawElements, not read off the docs — see design.md D4
+// and the labelled cases in canvas-mcp.golden.test.mjs.
+const LABEL_FONT_FAMILY = 5;
+
+// The text element that IS a shape's/connector's label: excalidraw centres,
+// wraps and re-measures it against its container at render time, which is the
+// whole reason a bound label beats a free-standing one placed by arithmetic
+// (the width below is the same estimate buildTextElement uses, and is only a
+// starting point here). The container end of the link — its boundElements
+// entry — is added by the caller through addBoundElement.
+function buildBoundLabel(container, label, index) {
+  const text = String(label?.text ?? "");
+  const fontSize = Number(label?.fontSize) || 20;
+  const width = Math.max(20, text.length * fontSize * 0.6);
+  const height = Math.ceil(fontSize * 1.25);
+  const box = boxOf(container);
+  return {
+    ...baseFields({ strokeColor: label?.strokeColor }, index),
+    type: "text",
+    x: box.x + (box.width - width) / 2,
+    y: box.y + (box.height - height) / 2,
+    width,
+    height,
+    text,
+    originalText: text,
+    fontSize,
+    fontFamily: LABEL_FONT_FAMILY,
+    textAlign: "center",
+    verticalAlign: "middle",
+    containerId: container.id,
+    lineHeight: 1.25,
+    autoResize: true,
+  };
+}
+
+// A declared route, normalized to offsets from its own first vertex (which is
+// where the element sits). Fewer than two usable vertices is not a route.
+function routeOffsets(points) {
+  if (!Array.isArray(points)) return null;
+  const valid = points.filter(
+    (p) => Array.isArray(p) && Number.isFinite(Number(p[0])) && Number.isFinite(Number(p[1])),
+  );
+  if (valid.length < 2) return null;
+  const ox = Number(valid[0][0]);
+  const oy = Number(valid[0][1]);
+  return valid.map((p) => [Number(p[0]) - ox, Number(p[1]) - oy]);
+}
+
 // Clips the ray from (cx,cy) towards (tx,ty) to rect's boundary — used to
 // anchor an arrow's endpoint at the edge of a bound shape (facing the other
 // shape) rather than floating at its center.
@@ -148,6 +212,8 @@ function clipToRect(cx, cy, tx, ty, rect) {
 // `danglingRefs` (checked by the caller to decide the per-element result)
 // instead of throwing, per the "invalid write is reported" requirement.
 function buildLinearElement(skeleton, index, lookup, danglingRefs) {
+  const route = routeOffsets(skeleton.points);
+  const lastVertex = route ? route[route.length - 1] : null;
   const startEl = skeleton.start?.id ? lookup.get(skeleton.start.id) : null;
   const endEl = skeleton.end?.id ? lookup.get(skeleton.end.id) : null;
   if (skeleton.start?.id && !startEl) danglingRefs.push("start");
@@ -168,8 +234,8 @@ function buildLinearElement(skeleton, index, lookup, danglingRefs) {
     endBinding = { elementId: endEl.id, focus: 0, gap: 4 };
   } else if (startCenter) {
     startPoint = startCenter;
-    endPoint = Array.isArray(skeleton.points?.[1])
-      ? { x: startPoint.x + skeleton.points[1][0], y: startPoint.y + skeleton.points[1][1] }
+    endPoint = lastVertex
+      ? { x: startPoint.x + lastVertex[0], y: startPoint.y + lastVertex[1] }
       : { x: startPoint.x + 100, y: startPoint.y };
     startBinding = { elementId: startEl.id, focus: 0, gap: 4 };
   } else if (endCenter) {
@@ -181,30 +247,41 @@ function buildLinearElement(skeleton, index, lookup, danglingRefs) {
     endBinding = { elementId: endEl.id, focus: 0, gap: 4 };
   } else {
     startPoint = { x: Number(skeleton.x) || 0, y: Number(skeleton.y) || 0 };
-    endPoint = Array.isArray(skeleton.points?.[1])
-      ? { x: startPoint.x + skeleton.points[1][0], y: startPoint.y + skeleton.points[1][1] }
+    endPoint = lastVertex
+      ? { x: startPoint.x + lastVertex[0], y: startPoint.y + lastVertex[1] }
       : { x: startPoint.x + 100, y: startPoint.y };
   }
 
-  const points = [
-    [0, 0],
-    [endPoint.x - startPoint.x, endPoint.y - startPoint.y],
-  ];
+  // A declared route keeps every vertex it declared — its waypoints are what
+  // stop a connector cutting through the shapes between its ends. Only the
+  // first and last are the server's to place: they are where the bindings (or
+  // the caller's x/y) put them.
+  const tail = [endPoint.x - startPoint.x, endPoint.y - startPoint.y];
+  const points = route ? [...route.slice(0, -1), tail] : [[0, 0], tail];
+
+  const xs = points.map((p) => p[0]);
+  const ys = points.map((p) => p[1]);
 
   return {
     ...baseFields(skeleton, index),
     type: skeleton.type,
     x: startPoint.x,
     y: startPoint.y,
-    width: Math.abs(points[1][0]) || 1,
-    height: Math.abs(points[1][1]) || 1,
+    // The extent of the whole route, not of its last vertex — a route that
+    // turns is wider and taller than its endpoints alone say.
+    width: Math.max(...xs) - Math.min(...xs) || 1,
+    height: Math.max(...ys) - Math.min(...ys) || 1,
     points,
     lastCommittedPoint: null,
     startBinding,
     endBinding,
     startArrowhead: skeleton.startArrowhead ?? null,
     endArrowhead: skeleton.type === "arrow" ? (skeleton.endArrowhead ?? "arrow") : null,
-    elbowed: false,
+    elbowed: skeleton.elbowed === true,
+    // Elbow arrows are a distinct shape in excalidraw and carry three fields a
+    // straight one does not (measured against the real converter, design.md
+    // D4's method). Emitted only when elbowed, exactly as the converter does.
+    ...(skeleton.elbowed === true ? { fixedSegments: [], startIsSpecial: false, endIsSpecial: false } : {}),
   };
 }
 
@@ -214,11 +291,26 @@ const LINEAR_TYPES = new Set(["arrow", "line"]);
 // Single entry point used by both applyAddElements and the golden test
 // (canvas-mcp.golden.test.mjs) so there is exactly one builder to keep in
 // sync with excalidraw's real field set.
-export function buildElement(skeleton, { index = "a0", lookup = new Map(), danglingRefs = [] } = {}) {
-  if (SHAPE_TYPES.has(skeleton.type)) return buildShapeElement(skeleton, index);
-  if (skeleton.type === "text") return buildTextElement(skeleton, index);
-  if (LINEAR_TYPES.has(skeleton.type)) return buildLinearElement(skeleton, index, lookup, danglingRefs);
-  throw new Error(`Unsupported element type: ${skeleton.type}`);
+//
+// A skeleton carrying `label` produces TWO elements, exactly as excalidraw's
+// own converter does: the container is returned, and the bound text element is
+// pushed onto `labels` — an out-parameter, like `danglingRefs`, so the return
+// type stays "the element you asked for". Every caller must place what lands
+// in `labels` too; a label that never reaches the scene (or never reaches the
+// per-element results) is design.md D5's failure.
+export function buildElement(skeleton, { index = "a0", lookup = new Map(), danglingRefs = [], labels = [] } = {}) {
+  let el;
+  if (SHAPE_TYPES.has(skeleton.type)) el = buildShapeElement(skeleton, index);
+  else if (skeleton.type === "text") el = buildTextElement(skeleton, index);
+  else if (LINEAR_TYPES.has(skeleton.type)) el = buildLinearElement(skeleton, index, lookup, danglingRefs);
+  else throw new Error(`Unsupported element type: ${skeleton.type}`);
+
+  // Text cannot contain text: a label on a text element has no container to
+  // centre against, so it is not a thing the vocabulary offers.
+  if (skeleton.label?.text != null && el.type !== "text") {
+    labels.push(buildBoundLabel(el, skeleton.label, generateKeyBetween(index, null)));
+  }
+  return el;
 }
 
 function addBoundElement(elements, idIndex, elementId, boundId, boundType) {
@@ -251,20 +343,34 @@ export function applyAddElements(scene, skeletons) {
   let cursorIndex = elements.length ? elements[elements.length - 1].index ?? null : null;
   const added = [];
 
-  for (const sk of nonLinear) {
-    cursorIndex = generateKeyBetween(cursorIndex, null);
-    const el = buildElement(sk, { index: cursorIndex, lookup });
+  // A bound label is an element the caller never listed. It still has to be
+  // placed and still has to be reported — `changedIdsFrom` is what tells the
+  // open canvas which elements to reconcile, so a label missing from the
+  // results persists but never appears on screen (design.md D5). It is marked
+  // `boundTo` so it does not read as a second element the caller asked for.
+  function place(el, labels, status) {
     lookup.set(el.id, el);
     added.push(el);
-    results.push({ id: el.id, status: "applied" });
+    results.push({ id: el.id, status });
+    for (const label of labels) {
+      added.push(label);
+      results.push({ id: label.id, status: "applied", boundTo: el.id });
+      cursorIndex = label.index;
+    }
+  }
+
+  for (const sk of nonLinear) {
+    cursorIndex = generateKeyBetween(cursorIndex, null);
+    const labels = [];
+    const el = buildElement(sk, { index: cursorIndex, lookup, labels });
+    place(el, labels, "applied");
   }
   for (const sk of linear) {
     cursorIndex = generateKeyBetween(cursorIndex, null);
     const danglingRefs = [];
-    const el = buildElement(sk, { index: cursorIndex, lookup, danglingRefs });
-    lookup.set(el.id, el);
-    added.push(el);
-    results.push({ id: el.id, status: danglingRefs.length ? "rebound: dropped-binding" : "applied" });
+    const labels = [];
+    const el = buildElement(sk, { index: cursorIndex, lookup, danglingRefs, labels });
+    place(el, labels, danglingRefs.length ? "rebound: dropped-binding" : "applied");
   }
 
   const nextElements = elements.concat(added);
@@ -275,6 +381,9 @@ export function applyAddElements(scene, skeletons) {
     const linearEl = /** @type {any} */ (el);
     if (linearEl.startBinding) addBoundElement(nextElements, nextIdIndex, linearEl.startBinding.elementId, el.id, el.type);
     if (linearEl.endBinding) addBoundElement(nextElements, nextIdIndex, linearEl.endBinding.elementId, el.id, el.type);
+    // The other half of a label's binding: the container names its text, the
+    // same way it names an arrow that binds to it.
+    if (linearEl.containerId) addBoundElement(nextElements, nextIdIndex, linearEl.containerId, el.id, "text");
   }
 
   return { scene: { ...s, elements: nextElements }, results };
@@ -285,6 +394,36 @@ export function applyUpdateElements(scene, updates) {
   const elements = s.elements.map((e) => ({ ...e }));
   const idIndex = new Map(elements.map((e, i) => [e.id, i]));
   const results = [];
+  let cursorIndex = elements.length ? elements[elements.length - 1].index ?? null : null;
+
+  // `label` is not a stored field — it is a second element. Updating it means
+  // rewriting the text already bound to this container, never adding a rival
+  // one: a container with two bound labels is the same silent-damage class
+  // this change exists to close. A container that has no label yet gets one.
+  function applyLabel(container, label) {
+    const boundId = (container.boundElements || []).find((b) => b?.type === "text")?.id;
+    const j = boundId == null ? undefined : idIndex.get(boundId);
+    if (j !== undefined) {
+      const next = buildBoundLabel(container, label, elements[j].index);
+      elements[j] = {
+        ...elements[j],
+        ...next,
+        id: elements[j].id,
+        index: elements[j].index,
+        version: (elements[j].version ?? 1) + 1,
+        versionNonce: randInt32(),
+        updated: Date.now(),
+      };
+      results.push({ id: elements[j].id, status: "applied", boundTo: container.id });
+      return;
+    }
+    cursorIndex = generateKeyBetween(cursorIndex, null);
+    const text = buildBoundLabel(container, label, cursorIndex);
+    elements.push(text);
+    idIndex.set(text.id, elements.length - 1);
+    addBoundElement(elements, idIndex, container.id, text.id, "text");
+    results.push({ id: text.id, status: "applied", boundTo: container.id });
+  }
 
   for (const patch of updates || []) {
     const i = idIndex.get(patch?.id);
@@ -292,7 +431,7 @@ export function applyUpdateElements(scene, updates) {
       results.push({ id: patch?.id, status: "skipped: unknown-id" });
       continue;
     }
-    const { id, ...fields } = patch;
+    const { id, label, ...fields } = patch;
     elements[i] = {
       ...elements[i],
       ...fields,
@@ -302,6 +441,9 @@ export function applyUpdateElements(scene, updates) {
       updated: Date.now(),
     };
     results.push({ id, status: "applied" });
+    // After the patch, so the label re-centres against wherever the container
+    // now is and whatever size it now has.
+    if (label?.text != null && elements[i].type !== "text") applyLabel(elements[i], label);
   }
   return { scene: { ...s, elements }, results };
 }
@@ -317,6 +459,10 @@ export function applyDeleteElements(scene, ids) {
 
 // ===== MCP tool declarations =====
 
+// Naming a field here is a promise that the builders store it. The four at the
+// bottom were reaching the server already — `.passthrough()` validated them
+// and construction then dropped them, so a model that set `label` was told
+// `applied` about a label that never existed. Declared, they are honoured.
 const ELEMENT_SCHEMA = z
   .object({
     type: z.enum(["rectangle", "ellipse", "diamond", "text", "arrow", "line"]),
@@ -332,6 +478,12 @@ const ELEMENT_SCHEMA = z
     start: z.object({ id: z.string() }).optional(),
     end: z.object({ id: z.string() }).optional(),
     points: z.array(z.tuple([z.number(), z.number()])).optional(),
+    label: z
+      .object({ text: z.string(), fontSize: z.number().optional(), strokeColor: z.string().optional() })
+      .optional(),
+    roundness: z.object({ type: z.number() }).nullable().optional(),
+    groupIds: z.array(z.string()).optional(),
+    elbowed: z.boolean().optional(),
   })
   .passthrough();
 
@@ -477,7 +629,11 @@ function registerTools(server, deps) {
     "add_elements",
     {
       description:
-        "Add one or more elements (rectangle, ellipse, diamond, text, arrow, line) to the drawing canvas. Arrows/lines may set start/end to { id } to bind to an existing element or one added in this same call, expressing a relationship between shapes. Returns a per-element result: applied, or rebound: dropped-binding if a start/end reference didn't resolve.",
+        "Add one or more elements (rectangle, ellipse, diamond, text, arrow, line) to the drawing canvas. " +
+        "Give any shape or connector a label: { text } and the text is bound INSIDE it — centred, wrapped and re-measured against it by the canvas — which is how a box gets a caption; a free-standing text element is only for text that belongs to no shape. " +
+        "Arrows/lines may set start/end to { id } to bind to an existing element or one added in this same call, expressing a relationship between shapes; endpoints are clipped to the shapes' edges for you, so never compute them yourself. " +
+        "Also honoured: roundness ({ type: 3 } for rounded corners), groupIds (move shapes together), elbowed (right-angle routing), and points with more than two vertices to route a connector around what lies between its ends. " +
+        "Returns a per-element result: applied, or rebound: dropped-binding if a start/end reference didn't resolve. A generated label appears as its own result marked boundTo: <container id>.",
       inputSchema: { elements: z.array(ELEMENT_SCHEMA) },
     },
     async ({ elements }) => {
@@ -491,7 +647,10 @@ function registerTools(server, deps) {
     "update_elements",
     {
       description:
-        "Update one or more existing canvas elements by id (patch — only the given fields change). Returns skipped: unknown-id for any id not currently on the canvas.",
+        "Update one or more existing canvas elements by id (patch — only the given fields change). " +
+        "The same vocabulary as add_elements applies: label, roundness, groupIds, elbowed, points. " +
+        "Setting label on a container rewrites the label already bound to it (and re-centres it against the container's new position and size), rather than adding a second one. " +
+        "Returns skipped: unknown-id for any id not currently on the canvas.",
       inputSchema: { elements: z.array(ELEMENT_SCHEMA.extend({ id: z.string() })) },
     },
     async ({ elements }) => {
