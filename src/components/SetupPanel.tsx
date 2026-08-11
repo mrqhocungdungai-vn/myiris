@@ -3,10 +3,17 @@ import { Check, ChevronLeft, ChevronRight, Loader2, Play, Wand2, X } from "lucid
 import { acceleratorParts } from "../lib/accelerator-label";
 import Keycaps from "./Keycaps";
 import PermissionsStep from "./PermissionsStep";
-import { Section, ThemedSelect, type Option } from "./SetupControls";
+import ClaudeSection from "./ClaudeSection";
+import {
+  BooleanSetting,
+  Section,
+  TestBadge,
+  ThemedSelect,
+  type Option,
+  type TestState,
+} from "./SetupControls";
 
 type Mode = "onboarding" | "settings";
-type TestState = { status: "idle" | "testing" | "ok" | "error"; message?: string };
 
 type Draft = {
   GEMINI_API_KEY: string;
@@ -86,26 +93,7 @@ export default function SetupPanel({
   });
   const [step, setStep] = useState(0);
   const [gemini, setGemini] = useState<TestState>({ status: "idle" });
-  const [claude, setClaude] = useState<TestState & { billing?: string }>({ status: "idle" });
-  const [pipelinePrereqs, setPipelinePrereqs] = useState<ClaudeHealth | null>(null);
-  // Nothing here installs anything any more; the only write this panel can make
-  // outside `.env` is removing what an older Iris left in ~/.claude.
-  const [removingLegacy, setRemovingLegacy] = useState(false);
-  const [legacyReport, setLegacyReport] = useState<string | null>(null);
-  // Files an older Iris wrote into ~/.claude. Iris neither reads nor writes
-  // there now, so these are inert — offered for removal, never removed silently.
-  const [legacyArtifacts, setLegacyArtifacts] = useState<LegacyClaudeArtifacts | null>(null);
   const [geminiApiKeySet, setGeminiApiKeySet] = useState(config.geminiApiKeySet);
-  // The stored token never reaches the renderer, so the input is always empty
-  // and `claudeTokenSet` is the only thing we know about it.
-  const [claudeToken, setClaudeToken] = useState("");
-  const [claudeTokenSet, setClaudeTokenSet] = useState(config.claudeTokenSet);
-  const [claudeTokenBusy, setClaudeTokenBusy] = useState(false);
-  const [claudeTokenError, setClaudeTokenError] = useState<string | null>(null);
-  // The metered alternative, same presence-only contract as the token above.
-  // Either credential satisfies the pipeline gate.
-  const [apiKey, setApiKey] = useState("");
-  const [apiKeySet, setApiKeySet] = useState(config.anthropicApiKeySet);
   const [preview, setPreview] = useState<TestState>({ status: "idle" });
   const [micGranted, setMicGranted] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -128,13 +116,6 @@ export default function SetupPanel({
     };
   }, [step]);
 
-  // Probe the bundled runtime + credential once when the panel opens, so
-  // Settings shows current status without an extra click.
-  useEffect(() => {
-    checkClaude();
-    window.iris.getLegacyClaudeArtifacts().then(setLegacyArtifacts);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   async function testGemini() {
     setGemini({ status: "testing" });
@@ -142,92 +123,6 @@ export default function SetupPanel({
     setGemini(result.ok ? { status: "ok", message: "Key works." } : { status: "error", message: result.error });
   }
 
-  async function checkClaude() {
-    setClaude({ status: "testing" });
-    const health = await window.iris.testClaude();
-
-    // Which credential is actually in use, not just "a token exists" — the two
-    // bill differently and the user needs to know which one they're on.
-    const billing =
-      health.credentialKind === "subscription"
-        ? "Subscription token in use — runs bill against your Claude plan."
-        : health.credentialKind === "api-key"
-          ? "Anthropic API key in use — runs bill per token."
-          : health.billingError || "No Claude credential set yet.";
-
-    if (!health.reachable) {
-      // A packaging fault, not something the user can install around.
-      setClaude({
-        status: "error",
-        message: health.error || "Iris could not launch its bundled Claude binary.",
-        billing,
-      });
-    } else if (health.pipelineAvailable) {
-      // `claude --version` prints "2.1.210 (Claude Code)"; the suffix would read
-      // as "Claude 2.1.210 (Claude Code)" here.
-      const version = (health.version ?? "").replace(/\s*\(Claude Code\)\s*$/, "").trim();
-      setClaude({ status: "ok", message: version ? `Pipeline ready · Claude ${version}` : "Pipeline ready", billing });
-    } else {
-      // The binary is fine; the pipeline is off only because there's no
-      // credential. Reporting "Ready" here would contradict the panel's own
-      // "Pipeline off" line directly below it.
-      setClaude({ status: "idle", message: undefined, billing });
-    }
-    setPipelinePrereqs(health);
-  }
-
-  // Save/remove share one path across both credentials: on success clear the
-  // input, refresh the presence flags, and re-run the Claude check so the
-  // billing and availability lines update in place. On refusal (a run is
-  // running) keep what the user typed.
-  async function applyCredential(action: "save" | "remove", key: ClaudeCredentialKey) {
-    const value = key === "CLAUDE_CODE_OAUTH_TOKEN" ? claudeToken : apiKey;
-    setClaudeTokenBusy(true);
-    setClaudeTokenError(null);
-    try {
-      const result =
-        action === "save"
-          ? await window.iris.saveClaudeToken(value.trim(), key)
-          : await window.iris.removeClaudeToken(key);
-      if (!result.ok) {
-        setClaudeTokenError(result.error || "Could not update the credential.");
-        return;
-      }
-      if (key === "CLAUDE_CODE_OAUTH_TOKEN") setClaudeToken("");
-      else setApiKey("");
-      setClaudeTokenSet(result.config.claudeTokenSet);
-      setApiKeySet(result.config.anthropicApiKeySet);
-      onSaved(result.config);
-      await checkClaude();
-    } finally {
-      setClaudeTokenBusy(false);
-    }
-  }
-
-  function applyClaudeToken(action: "save" | "remove") {
-    return applyCredential(action, "CLAUDE_CODE_OAUTH_TOKEN");
-  }
-
-  // The exact command that mints a subscription token, pointed at Iris's own
-  // bundled binary so the user never has to install the CLI. Quoted because the
-  // path runs through "Iris.app/Contents/…" and contains spaces.
-  const claudeSetupTokenCommand = pipelinePrereqs?.binaryPath
-    ? `"${pipelinePrereqs.binaryPath}" setup-token`
-    : "claude setup-token";
-
-  async function removeLegacyArtifacts() {
-    setRemovingLegacy(true);
-    setLegacyReport(null);
-    try {
-      const result = await window.iris.removeLegacyClaudeArtifacts();
-      const parts = [`${result.removed.length} leftover file(s) removed from ~/.claude`];
-      if (result.errors.length) parts.push(`${result.errors.length} error(s): ${result.errors.join("; ")}`);
-      setLegacyReport(parts.join(", ") + ".");
-      setLegacyArtifacts(await window.iris.getLegacyClaudeArtifacts());
-    } finally {
-      setRemovingLegacy(false);
-    }
-  }
 
   async function doPreview() {
     setPreview({ status: "testing" });
@@ -302,188 +197,19 @@ export default function SetupPanel({
         </button>
         <TestBadge state={gemini} okLabel="Key works" />
       </div>
-      <label className="setup-field">
-        <span>Google Search</span>
-        <ThemedSelect
-          ariaLabel="Google Search"
-          value={draft.IRIS_ENABLE_GOOGLE_SEARCH}
-          options={[
-            { value: "false", label: "Off" },
-            { value: "true", label: "On" },
-          ]}
-          onChange={(value) => set("IRIS_ENABLE_GOOGLE_SEARCH", value)}
-        />
-        <small className="setup-note">
-          Lets Iris search the web directly for quick facts. Needs a paid Gemini key — on a free-tier key, enabling
-          this disconnects the live session with a 1011 quota error. Applies on the next reconnect (no need to
-          restart Iris).
-        </small>
-      </label>
+      <BooleanSetting
+        label="Google Search"
+        value={draft.IRIS_ENABLE_GOOGLE_SEARCH === "true"}
+        onChange={(next) => set("IRIS_ENABLE_GOOGLE_SEARCH", String(next))}
+        note="Lets Iris search the web directly for quick facts. Needs a paid Gemini key — on a free-tier key, enabling this disconnects the live session with a 1011 quota error. Applies on the next reconnect (no need to restart Iris)."
+      />
     </Section>
   );
 
-  const claudeSection = (
-    <Section
-      title="Claude pipeline (optional)"
-      hint="Iris talks to you with just a Gemini key. Claude Code ships inside Iris — adding a Claude credential below additionally unlocks the build pipeline. Recheck any time from here."
-    >
-      <div className="setup-actions">
-        <button className="setup-btn" onClick={checkClaude} disabled={claude.status === "testing"}>
-          {claude.status === "testing" ? <Loader2 size={14} className="spin" /> : null}
-          Re-check
-        </button>
-        <TestBadge state={claude} okLabel="Pipeline ready" />
-      </div>
-      {pipelinePrereqs ? (
-        <p className="setup-note">
-          {pipelinePrereqs.pipelineAvailable
-            ? "Pipeline enabled — the build pipeline and the Work Stream panel are active."
-            : pipelinePrereqs.reachable
-              ? "Pipeline off — chat-only mode. Add a Claude credential below to unlock the build pipeline."
-              : "Pipeline off — Iris could not launch its bundled Claude binary. Reinstalling the app should fix this."}
-        </p>
-      ) : null}
-      {claude.billing ? <p className="setup-note">{claude.billing}</p> : null}
-      {/* Credential entry is always available. It used to be hidden behind
-          `pipelinePrereqs?.reachable`, which meant the fields did not exist
-          until the probe returned — and would stay hidden forever on the one
-          machine where the probe fails, i.e. the user who most needs to act. */}
-      <>
-          <label className="setup-field">
-            <span>Subscription token</span>
-            <input
-              type="password"
-              value={claudeToken}
-              placeholder={
-                claudeTokenSet ? "Token saved — paste a new one to replace it" : "Paste the token the command below prints"
-              }
-              onChange={(event) => {
-                setClaudeToken(event.target.value);
-                setClaudeTokenError(null);
-              }}
-              autoComplete="off"
-              spellCheck={false}
-            />
-            <small className="setup-note">
-              Bills against your Claude subscription. Iris ships the Claude CLI, so you can generate this without
-              installing anything: run <code>{claudeSetupTokenCommand}</code> in Terminal and paste the result here.
-              Stored locally only, never shown again.
-            </small>
-          </label>
-          <div className="setup-actions">
-            <button
-              className="setup-btn"
-              onClick={() => applyClaudeToken("save")}
-              disabled={claudeTokenBusy || !claudeToken.trim()}
-            >
-              {claudeTokenBusy ? <Loader2 size={14} className="spin" /> : null}
-              Save token
-            </button>
-            {claudeTokenSet ? (
-              <button
-                className="setup-btn ghost"
-                data-no-dwell
-                onClick={() => applyClaudeToken("remove")}
-                disabled={claudeTokenBusy}
-              >
-                Remove
-              </button>
-            ) : null}
-          </div>
-          <label className="setup-field">
-            <span>Anthropic API key</span>
-            <input
-              type="password"
-              value={apiKey}
-              placeholder={apiKeySet ? "Key saved — paste a new one to replace it" : "sk-ant-…"}
-              onChange={(event) => {
-                setApiKey(event.target.value);
-                setClaudeTokenError(null);
-              }}
-              autoComplete="off"
-              spellCheck={false}
-            />
-            <small className="setup-note">
-              An alternative to the subscription token, for users without a Claude plan — billed per token from
-              console.anthropic.com. Either credential unlocks the pipeline; the subscription token wins when both
-              are set.
-            </small>
-          </label>
-          <div className="setup-actions">
-            <button
-              className="setup-btn"
-              onClick={() => applyCredential("save", "ANTHROPIC_API_KEY")}
-              disabled={claudeTokenBusy || !apiKey.trim()}
-            >
-              {claudeTokenBusy ? <Loader2 size={14} className="spin" /> : null}
-              Save key
-            </button>
-            {apiKeySet ? (
-              <button
-                className="setup-btn ghost"
-                data-no-dwell
-                onClick={() => applyCredential("remove", "ANTHROPIC_API_KEY")}
-                disabled={claudeTokenBusy}
-              >
-                Remove
-              </button>
-            ) : null}
-          </div>
-          {claudeTokenError ? <p className="setup-note">{claudeTokenError}</p> : null}
-      </>
-      {/* Everything below reports on the bundled runtime and the skills on
-          disk, so it only renders once the probe has actually returned. */}
-      {pipelinePrereqs ? (
-        <>
-          <div className="setup-perms">
-            <BundledRow label="Claude Code (bundled)" ok={pipelinePrereqs.reachable} detail={pipelinePrereqs.version} />
-            <BundledRow
-              label="OpenSpec (bundled)"
-              ok={pipelinePrereqs.openspecOk}
-              detail={pipelinePrereqs.openspecVersion}
-              brokenHint={pipelinePrereqs.openspecBrokenHint}
-            />
-            {/* One row per bundled component, and every row reports the same two
-                states: Bundled, or Damaged. There is no row the user can fix by
-                installing something — the credential above is the only genuinely
-                user-fixable item in this panel. Nor is there an "Iris agents" row:
-                the verb personas ship inside the app and are handed to the SDK by
-                value, so there is nothing that can be missing. A persona that fails
-                to load is a broken bundle, and surfaces as a run failure naming the
-                verb. */}
-            <BundledRow
-              label="Skills & /opsx commands (bundled plugin)"
-              ok={pipelinePrereqs.skillsOk}
-              detail={pipelinePrereqs.skillsDetail}
-              brokenHint={pipelinePrereqs.skillsBrokenHint}
-            />
-            <BundledRow
-              label="Second-brain notes (LLM-Wiki skills)"
-              ok={pipelinePrereqs.notesSkillsOk}
-              detail="in the bundled plugin"
-              brokenHint={pipelinePrereqs.notesSkillsBrokenHint}
-            />
-          </div>
-          {legacyArtifacts && legacyArtifacts.count > 0 ? (
-            <>
-              <p className="setup-note">
-                An older Iris copied {legacyArtifacts.count} file(s) into {legacyArtifacts.dir}. Iris no longer reads
-                or writes there — its skills and personas ship inside the app — so these are leftovers you can safely
-                remove. Nothing else in that folder is touched.
-              </p>
-              <div className="setup-actions">
-                <button className="setup-btn ghost" onClick={removeLegacyArtifacts} disabled={removingLegacy}>
-                  {removingLegacy ? <Loader2 size={14} className="spin" /> : null}
-                  Remove leftovers
-                </button>
-              </div>
-            </>
-          ) : null}
-          {legacyReport ? <p className="setup-note">{legacyReport}</p> : null}
-        </>
-      ) : null}
-    </Section>
-  );
+  // Everything about whether the pipeline can run — the runtime probe, both
+  // credentials, and the legacy-artifact cleanup — lives in ClaudeSection,
+  // which owns that state rather than receiving it.
+  const claudeSection = <ClaudeSection config={config} onSaved={onSaved} />;
 
   const youSection = (
     <Section title="You & voice" hint="How Iris addresses you and which voice it speaks with.">
@@ -532,22 +258,13 @@ export default function SetupPanel({
         />
         <small className="setup-note">Gemini Live model that powers realtime voice. Keep the default unless you have a reason to change it.</small>
       </label>
-      <label className="setup-field">
-        <span>Wake word — “Hey Iris”</span>
-        <ThemedSelect
-          ariaLabel="Wake word"
-          value={draft.IRIS_WAKE_WORD}
-          options={[
-            { value: "false", label: "Off" },
-            { value: "true", label: "On" },
-          ]}
-          onChange={(value) => set("IRIS_WAKE_WORD", value)}
-        />
-        <small className="setup-note">
-          When on, Iris listens locally for “Hey Iris” and wakes hands-free (same as pressing W). Runs fully on-device —
-          no audio leaves your machine. Needs microphone permission.
-        </small>
-      </label>
+      <BooleanSetting
+        label="Wake word — “Hey Iris”"
+        ariaLabel="Wake word"
+        value={draft.IRIS_WAKE_WORD === "true"}
+        onChange={(next) => set("IRIS_WAKE_WORD", String(next))}
+        note="When on, Iris listens locally for “Hey Iris” and wakes hands-free (same as pressing W). Runs fully on-device — no audio leaves your machine. Needs microphone permission."
+      />
       <label className="setup-field">
         <span>Wake-word sensitivity</span>
         <ThemedSelect
@@ -566,62 +283,32 @@ export default function SetupPanel({
           hand-edited value outside these three shows as Custom and is left alone unless you pick a level here.
         </small>
       </label>
-      <label className="setup-field">
-        <span>Interface sounds</span>
-        <ThemedSelect
-          ariaLabel="Interface sounds"
-          value={soundsEnabled ? "true" : "false"}
-          options={[
-            { value: "true", label: "On" },
-            { value: "false", label: "Off" },
-          ]}
-          onChange={(value) => {
-            if ((value === "true") !== soundsEnabled) onToggleSounds();
-          }}
-        />
-        <small className="setup-note">
-          Subtle audio cues for wake, sleep, task sent, and task done. Synthesized locally — quiet by design.
-        </small>
-      </label>
-      <label className="setup-field">
-        <span>WebGL quality</span>
-        <ThemedSelect
-          ariaLabel="WebGL quality"
-          value={webglHighFidelity ? "true" : "false"}
-          options={[
-            { value: "false", label: "Off" },
-            { value: "true", label: "On" },
-          ]}
-          onChange={(value) => {
-            if ((value === "true") !== webglHighFidelity) onToggleWebglQuality();
-          }}
-        />
-        <small className="setup-note">
-          On restores full visual effects (bloom, sharper rendering) at a materially higher GPU cost. Off by
-          default so Iris runs smoothly on a modest machine. Applies immediately — no Save, no relaunch.
-        </small>
-      </label>
+      <BooleanSetting
+        label="Interface sounds"
+        value={soundsEnabled}
+        onChange={(next) => {
+          if (next !== soundsEnabled) onToggleSounds();
+        }}
+        note="Subtle audio cues for wake, sleep, task sent, and task done. Synthesized locally — quiet by design."
+      />
+      <BooleanSetting
+        label="WebGL quality"
+        value={webglHighFidelity}
+        onChange={(next) => {
+          if (next !== webglHighFidelity) onToggleWebglQuality();
+        }}
+        note="On restores full visual effects (bloom, sharper rendering) at a materially higher GPU cost. Off by default so Iris runs smoothly on a modest machine. Applies immediately — no Save, no relaunch."
+      />
       {ambientCaptureForcedOff ? null : (
-        <label className="setup-field">
-          <span>Ambient session capture — retains a transcript of speech near the microphone, which may include other people</span>
-          <ThemedSelect
-            ariaLabel="Ambient session capture"
-            value={ambientCaptureEnabled ? "true" : "false"}
-            options={[
-              { value: "false", label: "Off" },
-              { value: "true", label: "On" },
-            ]}
-            onChange={(value) => {
-              if ((value === "true") !== ambientCaptureEnabled) onToggleAmbientCapture();
-            }}
-          />
-          <small className="setup-note">
-            Off by default. When on, ordinary conversation — text only, never audio, and only while Iris is awake
-            and listening — is saved into your second brain, so it accumulates from what you already talk about
-            instead of only from deliberate notes. A recording indicator with a stop button appears whenever this
-            is actually retaining. Applies immediately — no Save, no relaunch.
-          </small>
-        </label>
+        <BooleanSetting
+          label="Ambient session capture — retains a transcript of speech near the microphone, which may include other people"
+          ariaLabel="Ambient session capture"
+          value={ambientCaptureEnabled}
+          onChange={(next) => {
+            if (next !== ambientCaptureEnabled) onToggleAmbientCapture();
+          }}
+          note="Off by default. When on, ordinary conversation — text only, never audio, and only while Iris is awake and listening — is saved into your second brain, so it accumulates from what you already talk about instead of only from deliberate notes. A recording indicator with a stop button appears whenever this is actually retaining. Applies immediately — no Save, no relaunch."
+        />
       )}
     </Section>
   );
@@ -641,19 +328,13 @@ export default function SetupPanel({
 
   const advancedSection = (
     <Section title="Advanced" hint="Demo data lets you explore Iris without dispatching real Claude work.">
-      <label className="setup-field">
-        <span>Load demo / test data</span>
-        <ThemedSelect
-          ariaLabel="Load demo data"
-          value={draft.IRIS_LOAD_TEST_DATA}
-          options={[
-            { value: "false", label: "Off" },
-            { value: "true", label: "On" },
-          ]}
-          onChange={(value) => set("IRIS_LOAD_TEST_DATA", value)}
-        />
-        <small className="setup-note">Fills the Work Stream with sample task cards for exploring the UI. Turn off for normal use.</small>
-      </label>
+      <BooleanSetting
+        label="Load demo / test data"
+        ariaLabel="Load demo data"
+        value={draft.IRIS_LOAD_TEST_DATA === "true"}
+        onChange={(next) => set("IRIS_LOAD_TEST_DATA", String(next))}
+        note="Fills the Work Stream with sample task cards for exploring the UI. Turn off for normal use."
+      />
     </Section>
   );
 
@@ -800,59 +481,4 @@ export default function SetupPanel({
   );
 }
 
-function TestBadge({ state, okLabel }: { state: TestState; okLabel: string }) {
-  if (state.status === "ok") {
-    return (
-      <span className="setup-result ok">
-        <Check size={13} />
-        {state.message || okLabel}
-      </span>
-    );
-  }
-  if (state.status === "error") {
-    return (
-      <span className="setup-result err" title={state.message}>
-        <X size={13} />
-        {state.message || "Failed"}
-      </span>
-    );
-  }
-  return null;
-}
 
-// Status row for anything that ships *inside* the app — which is now everything
-// this panel reports except the credential. There is no command the user could
-// run to fix a failure here, so the row never offers one: a copyable "install"
-// hint for a bundled component would be actively misleading. A failure means a
-// damaged bundle, and the row says exactly that (Bundled / Damaged).
-//
-// This used to be one of two row components. The other reported the same
-// `skillsOk` field under a "Global skills" label and offered a "Copy install
-// command" button, from when skills really did live in the user's ~/.claude — so
-// the panel showed one state twice, once saying "install these" and once saying
-// "Bundled". This row is the only one now.
-function BundledRow({
-  label,
-  ok,
-  detail,
-  brokenHint,
-}: {
-  label: string;
-  ok: boolean;
-  detail?: string;
-  brokenHint?: string;
-}) {
-  return (
-    <div className={`setup-perm ${ok ? "granted" : "denied"}`}>
-      <span className="perm-label">
-        {label}
-        {ok && detail ? <em>{detail}</em> : null}
-        {!ok && brokenHint ? <em>{brokenHint}</em> : null}
-      </span>
-      <span className={`setup-result ${ok ? "ok" : "err"}`}>
-        {ok ? <Check size={13} /> : <X size={13} />}
-        {ok ? "Bundled" : "Damaged"}
-      </span>
-    </div>
-  );
-}

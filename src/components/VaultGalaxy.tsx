@@ -1,17 +1,39 @@
-import { Component, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import * as THREE from "three";
+import { useEffect, useRef, useState } from "react";
 import type { ForceGraph3DInstance } from "3d-force-graph";
 import type { HandState } from "../hooks/useHandControl";
 import { focusNeighborhood, type GalaxyNavNode } from "../lib/galaxy-nav";
-import { colorForNode } from "../lib/galaxy-colors";
+import { colorForNode, makeNodeColor, makeLinkColor, LINK_BASE_COLOR } from "../lib/galaxy-colors";
+import {
+  escapeHtml,
+  reconcile,
+  stepFlightTarget,
+  DWELL_THRESHOLD_PX,
+  DWELL_HOLD_MS,
+  ZOOM_MIN_RADIUS,
+  ZOOM_MAX_RADIUS,
+  ANCHOR_THRESHOLD_PX,
+  ORBIT_SENSITIVITY,
+  ZOOM_LOCK_HOLD_MS,
+  STEP_FLIGHT_MS,
+  STEP_FLIGHT_DISTANCE,
+  LABEL_MAX_DISTANCE,
+  LABEL_BUDGET_CEILING,
+  LABEL_WORLD_HEIGHT,
+  LABEL_Y_OFFSET,
+  SELECT_INTERVAL_MS,
+} from "../lib/galaxy-graph";
+import { addStarfield, addBloom } from "../lib/galaxy-scene";
+import { useGalaxyRail } from "../hooks/useGalaxyRail";
 import { useGalaxyCameraDrive } from "../hooks/useGalaxyCameraDrive";
 import { useGalaxyAnchor } from "../hooks/useGalaxyAnchor";
 import { selectLabels } from "../lib/galaxy-labels";
 import { createLabelPool, type LabelPool } from "../lib/galaxy-label-sprites";
 import { createRingPair, type AnchorRings } from "../lib/galaxy-anchor-rings";
-import { railNeighbours, railRoots, railEntriesFromMatches, RAIL_ISLAND_CLASS } from "../lib/galaxy-rail";
+import { RAIL_ISLAND_CLASS } from "../lib/galaxy-rail";
 import GalaxyStepRail from "./GalaxyStepRail";
+import GalaxyErrorBoundary from "./GalaxyErrorBoundary";
 import type { GalaxyNode, GalaxyLink, TrackballControlsLike } from "../lib/galaxy-types";
+import { readFlag, GESTURE_DEBUG_STORAGE_KEY } from "../lib/preferences";
 
 // second-brain-galaxy-view: 3d-force-graph is a vanilla (non-React) library
 // that attaches imperatively to a container element — it has no React
@@ -39,306 +61,16 @@ type ForceGraph3DFactory = () => (el: HTMLElement) => ForceGraph3DInstance<Galax
 // without importing the component that mounts them.
 export type { GalaxyNode } from "../lib/galaxy-types";
 
-// Escapes text before it reaches 3d-force-graph's built-in tooltip, which
-// assigns the `.nodeLabel()` accessor's return value to `innerHTML`
-// (design.md D9/H2) — an ingested note titled `<img src=x onerror=…>` would
-// otherwise execute in the privileged renderer. Escaped entities render as
-// literal text in the tooltip, exactly like the title itself.
-function escapeHtml(text: string): string {
-  return text.replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch] as string);
-}
 
-// second-brain-gesture-nav tuning constants (design.md R2/R3/5.1/6.x) — tuned
-// during the manual pass, not further pre-optimized.
-const DWELL_THRESHOLD_PX = 48;
-const DWELL_HOLD_MS = 300;
-// How close the dolly may get to the note it is flying to. 40, not the 8 this
-// briefly was (design.md D21): at radius 8 the camera sits about two node-radii
-// off the dot's surface, so the note fills the viewport as a wall of colour
-// with its own label clipped and no neighbours in frame — arriving, but with
-// nothing to arrive AT. Dwell accuracy does not improve past this point either,
-// since DWELL_THRESHOLD_PX measures from the node's projected centre, so an
-// enormous dot buys nothing; what helps is having no competing node within that
-// threshold. 40 sits just inside STEP_FLIGHT_DISTANCE (60, what a rail step
-// already parks at, for the same framing reason) — the note is unmistakably
-// the subject, its one-hop neighbours are still visible as context.
-const ZOOM_MIN_RADIUS = 40;
-const ZOOM_MAX_RADIUS = 2500;
-
-// galaxy-note-reachable-by-hand tuning constants, in the style of the galaxy's
-// existing ones — tuned during the manual pass, not further pre-optimized.
-//
-// How near the centre of the screen a node has to project before a grab takes
-// hold of it. Wider than DWELL_THRESHOLD_PX because the user aims this one with
-// the whole camera rather than with a fingertip, and the reticle marks exactly
-// where the query point is.
-// Widened from 90 after the manual pass: at 90 a grab over a sparse region
-// found nothing and silently kept the old anchor, which reads as the grab
-// having failed rather than as "there was nothing there". The reticle and the
-// candidate ring are what keep a wider radius predictable — the user can see
-// which node it has picked before committing.
-const ANCHOR_THRESHOLD_PX = 130;
-// Radians per pixel of hand travel for the fist orbit (design.md D25), matching
-// the orb loop's feel — the same value this carried before D20 removed the
-// drive, restored with it.
-const ORBIT_SENSITIVITY = 0.006;
-// How long a NEW note must stay under the sight before the camera commits to it
-// (design.md D23). This replaced a sight-movement dead-band, which asked the
-// wrong question: "has the hand travelled far enough" cannot separate a
-// deliberate move to another note from a hand wobbling between two of them in a
-// dense region, and the wobble is what made the camera jump note to note. "Has
-// the sight STAYED on it" separates them exactly.
-//
-// Acquiring a target when there is none stays instant — only SWITCHING costs
-// this. The acquiring ring closes over the same interval, so the wait is
-// visible; that is what lets it be this long without reading as lag. This is
-// the one number to change if it still feels twitchy, or now too slow.
-const ZOOM_LOCK_HOLD_MS = 1500;
-// A rail step's flight: long enough that the user sees where in the galaxy they
-// were taken (the spec requires the travel to be visible), short enough not to
-// feel like waiting.
-const STEP_FLIGHT_MS = 600;
-// How far from the destination note the flight parks. A little above
-// ZOOM_MIN_RADIUS, so a step frames the note and its immediate neighbours
-// rather than pressing right up against it.
-const STEP_FLIGHT_DISTANCE = 60;
-// How long the rail stays inert after a step (design.md D11). Must exceed the
-// universal dwell's own 300 ms hold, or a still-held hand would charge a fresh
-// dwell on the repopulated rail and fire a second step.
-const STEP_LOCK_MS = 700;
-// How long the find field waits before asking main (voice-finds-a-note D2).
-// Matching moved out of the renderer, so each query is now a local IPC round
-// trip rather than an array filter — short enough that typing still feels
-// answered, long enough that a fast typist does not fire one scan per
-// character. This is the number to change if the field ever reads as laggy;
-// the answer is never a second matcher in the renderer.
-const RAIL_SEARCH_DEBOUNCE_MS = 120;
-
-// add-galaxy-node-labels tuning constants (design.md D9, revised D11).
-// No distance cutoff: every eligible note's title is always a selection
-// candidate (design.md D11) — `sizeAttenuation` on the sprite material
-// already shrinks a distant title toward illegible-and-ignorable on its own,
-// the same way a distant node's dot is already small, so a second, hard
-// on/off gate on top of that added a failure mode (a note that never gets
-// close enough to the camera's orbit target never got named at all) without
-// actually improving readability. `Infinity` here reads as "no cutoff" at
-// every call site that squares or compares it, with no special-casing needed.
-const LABEL_MAX_DISTANCE = Infinity;
-// The number of label sprites is still a fixed pool sized once at mount
-// (design.md D2's cost argument stands — this is a ceiling, not a target).
-// Sized to the vault's own note count so a normal personal vault gets every
-// note titled with room to spare; capped so a pathologically large vault
-// (thousands of notes) can't allocate thousands of canvases up front. Raise
-// this if a real vault's note count exceeds it (design.md D11).
-const LABEL_BUDGET_CEILING = 500;
-// Text a bit above a default-sized node (radius ~4).
-const LABEL_WORLD_HEIGHT = 5;
-const LABEL_Y_OFFSET = 6;
-// A reveal is a threshold crossing during navigation, and 10Hz is
-// imperceptible for that — positions still update every frame (design.md D5).
-const SELECT_INTERVAL_MS = 100;
 
 // two-palm-galaxy-zoom design.md D7: a tuning instrument, not a shipped
 // surface — off by default, following the same localStorage preference
 // pattern App.tsx's own toggles use, but with no Settings UI of its own; a
 // developer flips it with `localStorage.setItem(...)` in devtools.
-const GESTURE_DEBUG_STORAGE_KEY = "iris.galaxyGestureDebug";
-
-function loadGestureDebugEnabled(): boolean {
-  try {
-    return window.localStorage.getItem(GESTURE_DEBUG_STORAGE_KEY) === "on";
-  } catch {
-    return false;
-  }
-}
-const DWELL_HIGHLIGHT_COLOR = "#fff2a8";
-// second-brain-focus 5.1: distinguishes a focused node from an ordinary one —
-// distinct from every TAG_COLORS entry, the ghost gray, and the dwell color,
-// so a focused node reads unambiguously regardless of its tag.
-const FOCUS_HIGHLIGHT_COLOR = "#39ff88";
-// A large galaxy converges into a dense mass as the vault grows, and
-// rotating in 3D to reach the cluster around whatever is focused is a real
-// cost (a shared-focus follow-on). Rather than changing what data is
-// simulated or positioned, everything outside the focus's one-hop
-// neighborhood (focusNeighborhood, galaxy-nav.ts) is dimmed near-invisible —
-// decluttering the view around a selection without moving or hiding a
-// single node.
-const DIM_NODE_ALPHA = 0.08;
-// Every link alpha below is the FINAL rendered opacity, because `linkOpacity` is
-// set to 1 (design.md D1b). three-forcegraph computes
-// `opacity = state.linkOpacity * colorAlpha(color)`, so a graph-wide
-// `linkOpacity` below 1 is a *ceiling* on every link, not just a default: with
-// the previous `linkOpacity(0.5)`, a highlight colour at 0.95 alpha rendered at
-// 0.475 and no link could ever exceed half opacity however bright its colour —
-// which is why the lit cluster did not read as lit. Moving that factor out of the
-// global and into these alphas leaves the resting graph pixel-identical
-// (0.5 x 0.35 = 0.175, 0.5 x 0.05 = 0.025) while freeing the lit colour to reach
-// near-full intensity.
-const DIM_LINK_ALPHA = 0.025;
-const LINK_BASE_COLOR = "rgba(140, 170, 255, 0.175)";
-// The links incident to whatever node is being pointed at, lifted from the
-// faint base colour to near-opaque so the cluster reads at a glance
-// (second-brain-galaxy-view: "The node being pointed at reveals its link
-// cluster"). Colour is the ONLY lever used, deliberately — in
-// three-forcegraph `useCylinder = !!linkWidth`, so a non-zero width switches
-// that link from a `Line` primitive to cylinder geometry, and changing the
-// `linkWidth` accessor clears `linkDataMapper` outright and rebuilds every
-// link object in the graph. Per hover. `linkColor` changes only update
-// materials — the same path the focus dimming below already takes.
-//
-// 0.98 rather than 1: three-forcegraph switches a link's material to
-// `transparent: false` / `depthWrite: true` at exactly `opacity >= 1`, so a lit
-// link at full alpha would flip rendering mode mid-hover. A hair under keeps
-// every link on the same transparent path.
-const LINK_HIGHLIGHT_COLOR = "rgba(255, 245, 190, 0.98)";
-
-// Both node and link colors above are CSS color strings, some already
-// carrying their own alpha (colorForNode's ghost gray, LINK_BASE_COLOR) —
-// three-forcegraph reads that alpha and multiplies it into the material's
-// final opacity (nodeOpacity/linkOpacity are a single graph-wide constant,
-// not a per-element accessor, so alpha-in-the-color-string is the only lever
-// for dimming one element differently from another). This re-expresses any
-// color as an rgba string at a new alpha, discarding whatever alpha it had.
-const alphaCache = new Map<string, string>();
-function withAlpha(color: string, alpha: number): string {
-  const key = `${color}|${alpha}`;
-  const cached = alphaCache.get(key);
-  if (cached) return cached;
-  const c = new THREE.Color(color);
-  const result = `rgba(${Math.round(c.r * 255)}, ${Math.round(c.g * 255)}, ${Math.round(c.b * 255)}, ${alpha})`;
-  alphaCache.set(key, result);
-  return result;
-}
-
-// Re-assigning `nodeColor` (rather than mutating a ref the existing accessor
-// closes over) is what forces 3d-force-graph to re-digest and repaint
-// (design.md D2/M6) — a fresh closure each call is simplest since the caller
-// only invokes this on an actual target change, already debounced by
-// nearestNodeAt's own dead-band (M14) and, for the mouse, coalesced to one
-// repaint per frame. The pointed-at highlight wins over the focus highlight
-// when both apply to the same node — being pointed at is a momentary
-// indicator, not a second selection state.
-//
-// `litIds` is the ONE set of nodes exempt from dimming, and the caller decides
-// what it is: the pointed-at node's one-hop cluster while something is pointed
-// at, otherwise the focus's, otherwise null (dim nothing). Collapsing "what the
-// focus keeps bright" and "what the pointer keeps bright" into a single set is
-// what makes a spotlight and the focus declutter the same mechanism instead of
-// two that have to be reconciled at every call site (design.md D7).
-//
-// A FOCUSED node is returned before the dimming is considered at all, so a
-// selection stays visible even while the spotlight is somewhere else — losing
-// sight of what you have selected because you pointed elsewhere would be a
-// worse trade than the spotlight is worth.
-function makeNodeColor(pointedAtId: string | null, focusIds: Set<string>, litIds: Set<string> | null) {
-  return (node: GalaxyNode) => {
-    if (node.id === pointedAtId) return DWELL_HIGHLIGHT_COLOR;
-    if (focusIds.has(node.id)) return FOCUS_HIGHLIGHT_COLOR;
-    const base = colorForNode(node);
-    if (litIds && !litIds.has(node.id)) return withAlpha(base, DIM_NODE_ALPHA);
-    return base;
-  };
-}
-
-// three-forcegraph mutates a link's source/target from the id string we
-// supply into a reference to the actual node object, once the simulation
-// initializes (documented in its own LinkObject type) — so an endpoint here
-// may be either shape depending on whether a tick has run yet.
-function linkEndpointId(endpoint: string | GalaxyNode): string {
-  return typeof endpoint === "string" ? endpoint : endpoint.id;
-}
-
-// Mirrors makeNodeColor's dimming for the edges themselves — otherwise a
-// dense mesh of undimmed link lines would still read as clutter even with
-// the nodes they connect dimmed. `litIds` is the same single set makeNodeColor
-// takes, so the nodes that stay bright and the links that stay bright can never
-// be computed from different sets.
-//
-// A link INCIDENT to the pointed-at node is drawn bright and outranks both the
-// base colour and the dimming — that brightening is the substance of "what is
-// this note connected to". Only incident links, not links among the
-// neighborhood: lighting the neighbors' own edges too would draw a blob rather
-// than a star, and the question being answered is what THIS node touches.
-function makeLinkColor(litIds: Set<string> | null, pointedAtId: string | null) {
-  return (link: GalaxyLink) => {
-    if (pointedAtId !== null) {
-      const source = linkEndpointId(link.source);
-      const target = linkEndpointId(link.target);
-      if (source === pointedAtId || target === pointedAtId) return LINK_HIGHLIGHT_COLOR;
-    }
-    if (!litIds) return LINK_BASE_COLOR;
-    const touchesLit = litIds.has(linkEndpointId(link.source)) || litIds.has(linkEndpointId(link.target));
-    return touchesLit ? LINK_BASE_COLOR : withAlpha(LINK_BASE_COLOR, DIM_LINK_ALPHA);
-  };
-}
+const loadGestureDebugEnabled = () => readFlag(GESTURE_DEBUG_STORAGE_KEY, false);
 
 
-// Deep-space backdrop mechanism (design.md D4, spike-resolved 3.2b): the
-// composer's UnrealBloomPass forces full-screen opacity, so the backdrop is
-// painted *inside* the graph scene (opaque `backgroundColor` + a starfield
-// of points) rather than as a CSS layer behind a transparent canvas.
-function addStarfield(scene: THREE.Scene) {
-  const count = 1200;
-  const positions = new Float32Array(count * 3);
-  for (let i = 0; i < count; i++) {
-    const radius = 400 + Math.random() * 1600;
-    const theta = Math.random() * Math.PI * 2;
-    const phi = Math.acos(2 * Math.random() - 1);
-    positions[i * 3] = radius * Math.sin(phi) * Math.cos(theta);
-    positions[i * 3 + 1] = radius * Math.sin(phi) * Math.sin(theta);
-    positions[i * 3 + 2] = radius * Math.cos(phi);
-  }
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-  const material = new THREE.PointsMaterial({ color: 0x9fb4ff, size: 1.4, sizeAttenuation: true, transparent: true, opacity: 0.7 });
-  scene.add(new THREE.Points(geometry, material));
-}
 
-async function addBloom(fg: ForceGraph3DInstance<GalaxyNode, GalaxyLink>) {
-  // fg.postProcessingComposer() already owns the EffectComposer 3d-force-graph
-  // created internally (see three-render-objects) — just add a pass to it.
-  const { UnrealBloomPass } = await import("three/addons/postprocessing/UnrealBloomPass.js");
-  const composer = fg.postProcessingComposer();
-  composer.addPass(new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.1, 0.6, 0.15));
-}
-
-// Renderer owns positions (design.md D3/H2): reconciles the incoming
-// position-free graph against `positionsRef`'s live node objects in place —
-// same references go back into `.graphData()` — and only reheats the sim
-// when the topology (not just metadata) actually changed (M-B).
-function reconcile(
-  nextGraph: VaultGraph,
-  positions: Map<string, GalaxyNode>,
-  lastTopologyKey: { current: string },
-): { nodes: GalaxyNode[]; links: GalaxyLink[]; topologyChanged: boolean } {
-  const nextIds = new Set(nextGraph.nodes.map((n) => n.id));
-  for (const id of Array.from(positions.keys())) {
-    if (!nextIds.has(id)) positions.delete(id);
-  }
-  let topologyChanged = false;
-  const nodes = nextGraph.nodes.map((n) => {
-    let obj = positions.get(n.id);
-    if (!obj) {
-      obj = { ...n };
-      positions.set(n.id, obj);
-      topologyChanged = true;
-    } else {
-      obj.title = n.title;
-      obj.tags = n.tags;
-      obj.ghost = n.ghost;
-      obj.malformed = n.malformed;
-    }
-    return obj;
-  });
-  const links: GalaxyLink[] = nextGraph.links.map((l) => ({ source: l.source, target: l.target }));
-  const topologyKey = JSON.stringify({
-    n: nextGraph.nodes.map((n) => n.id).sort(),
-    l: nextGraph.links.map((l) => `${l.source}>${l.target}`).sort(),
-  });
-  if (topologyKey !== lastTopologyKey.current) topologyChanged = true;
-  lastTopologyKey.current = topologyKey;
-  return { nodes, links, topologyChanged };
-}
 
 function GalaxyCanvas({
   graph,
@@ -428,95 +160,8 @@ function GalaxyCanvas({
   // both jobs at once, which is why orbiting always circled the middle of the
   // ball and why a fist thrown after a mouse pan threw the pan away.
   const anchor = useGalaxyAnchor({ fgRef, positionsRef });
-
-  // The note the step rail is currently showing the neighbours of (design.md
-  // D7/D12). React state, not a ref: the rail is ordinary DOM and has to
-  // re-render when it moves. Held in this component, which unmounts on every
-  // galaxy-close route (HudShell renders it under `secondBrainActive`), so the
-  // spec's "the note it was centred on SHALL be cleared" needs no separate
-  // clearing path — the same structural reason the note reader and the focus
-  // are cleared on those terms (5.7).
-  const [railCentreId, setRailCentreId] = useState<string | null>(null);
-  // Inert for a moment after a step, so a hand still held over the rail cannot
-  // step again (design.md D11).
-  const [railLocked, setRailLocked] = useState(false);
-  // The note-name search (design.md D16). No longer matched locally: which
-  // notes a name matches is decided once in `electron/note-name-match.mjs` and
-  // asked over IPC (voice-finds-a-note D2), because Iris's spoken lookup has to
-  // reach the same answer and has to work with the galaxy closed, where there
-  // is no renderer graph to filter. What arrives is already ordered; this
-  // component only colours it.
-  const [railQuery, setRailQuery] = useState("");
-  const [railMatches, setRailMatches] = useState<NoteNameMatchResult[]>([]);
-  const railLockTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => () => {
-    if (railLockTimerRef.current) clearTimeout(railLockTimerRef.current);
-  }, []);
-
-  // What Iris found when asked aloud (voice-finds-a-note D4), arriving on the
-  // capability's own channel. It lands in exactly the same state the typed
-  // field's matches do, so the rail offers them on identical terms — steppable
-  // by the universal point-and-hold, with no new gesture and no galaxy-specific
-  // pointing rule. That equivalence is the point of the feature: the hand can
-  // step the results of a search it has no way to start, and asking is what
-  // supplies the words.
-  //
-  // The query is mirrored into the field so the rail says what it is showing
-  // matches OF — a rail full of notes with an empty search box reads as the
-  // view having changed on its own.
-  // Matches that arrived already answered, so the effect below does not ask
-  // main the same question a second time. Without this, mirroring the spoken
-  // query into the field would trip the debounce and spend a second vault scan
-  // to be told what Iris just said — and a scan is a filesystem walk, not a
-  // cache read (design.md D6).
-  const voiceAnsweredQueryRef = useRef<string | null>(null);
-  useEffect(() => {
-    return window.iris.onSecondBrainNameMatches(({ query, matches: found }) => {
-      voiceAnsweredQueryRef.current = query;
-      setRailQuery(query);
-      setRailMatches(found);
-    });
-  }, []);
-
-  // Ask main for the matches, debounced (voice-finds-a-note D2). The trade this
-  // makes is explicit in the design: a local IPC round trip per debounced
-  // keystroke, in place of a synchronous array filter, bought with the
-  // guarantee that what the user hears from Iris and what the user sees in the
-  // rail cannot disagree. If it ever reads as laggy the answer is a shorter
-  // debounce, never a second matcher here.
-  //
-  // Re-runs on `graph` too, so a note written while the galaxy is open joins
-  // the matches for a query already typed rather than waiting for a keystroke.
-  useEffect(() => {
-    if (railQuery.trim().length === 0) {
-      setRailMatches([]);
-      return;
-    }
-    // This exact query has just been answered by the spoken lookup; typing
-    // anything else clears the claim and the field asks for itself again.
-    if (voiceAnsweredQueryRef.current === railQuery) {
-      voiceAnsweredQueryRef.current = null;
-      return;
-    }
-    let cancelled = false;
-    const timer = setTimeout(() => {
-      window.iris
-        .findSecondBrainNotes(railQuery)
-        .then((result) => {
-          // A late reply for a query the user has already moved past must not
-          // overwrite the current one: the effect's cleanup runs before the
-          // next one, so this flag is what makes the ordering safe.
-          if (!cancelled) setRailMatches(result.matches);
-        })
-        .catch(() => {
-          if (!cancelled) setRailMatches([]);
-        });
-    }, RAIL_SEARCH_DEBOUNCE_MS);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [railQuery, graph]);
+  // The step rail: what it lists, what is typed, where it is centred.
+  const rail = useGalaxyRail({ graph });
 
   // The node the HAND is pointing at — written by the gesture loop while the
   // pose is `dwell` or `inspect`, and null otherwise. The inspect pose needs no
@@ -895,16 +540,16 @@ function GalaxyCanvas({
     if (!fg) return;
     const node = positionsRef.current.get(id);
     if (!node || node.x === undefined) return;
-    const destination = new THREE.Vector3(node.x, node.y ?? 0, node.z ?? 0);
     const controls = fg.controls() as unknown as TrackballControlsLike;
     const aim = controls.target ?? anchor.centroidRef.current;
-    // Keep the camera's CURRENT viewing direction and change only distance, so
-    // a step reads as travelling to a note rather than as being spun to a new
-    // orientation as well. A degenerate direction (camera sitting exactly on
-    // its own target) falls back to the +Z axis rather than producing NaN.
-    const direction = fg.camera().position.clone().sub(aim);
-    if (direction.lengthSq() < 1e-6) direction.set(0, 0, 1);
-    const position = destination.clone().add(direction.normalize().multiplyScalar(STEP_FLIGHT_DISTANCE));
+    // The direction/distance decision, including the degenerate-camera guard,
+    // is `stepFlightTarget` in lib/galaxy-graph.ts, where it is tested.
+    const { position, destination } = stepFlightTarget(
+      { x: node.x, y: node.y ?? 0, z: node.z ?? 0 },
+      aim,
+      fg.camera().position,
+      STEP_FLIGHT_DISTANCE,
+    );
 
     // The one place a library transition is safe: no drive is engaged, so
     // nothing is writing the camera per frame, and `cameraPosition` animates
@@ -931,24 +576,9 @@ function GalaxyCanvas({
     // Navigation only: no focus is toggled, no note is opened, and nothing the
     // voice layer or a run reads is touched (5.8) — the rail navigates, it does
     // not select.
-    setRailCentreId(id);
-    setRailLocked(true);
-    if (railLockTimerRef.current) clearTimeout(railLockTimerRef.current);
-    railLockTimerRef.current = setTimeout(() => setRailLocked(false), STEP_LOCK_MS);
+    rail.markStepped(id);
   }
 
-  // Memoised (design.md D7): both derivations are O(nodes + links) and this
-  // component re-renders on every focus change. The entry points depend on the
-  // graph ALONE — they are deliberately the one part of the rail that stepping
-  // does not change, so they are not recomputed when the centre moves.
-  const roots = useMemo(() => railRoots({ nodes: graph.nodes, links: graph.links }), [graph]);
-  const neighbours = useMemo(
-    () => (railCentreId === null ? [] : railNeighbours({ centreId: railCentreId, nodes: graph.nodes, links: graph.links })),
-    [graph, railCentreId],
-  );
-  // Colouring only — the order arrived decided (voice-finds-a-note D2).
-  const matches = useMemo(() => railEntriesFromMatches(railMatches), [railMatches]);
-  const centreTitle = railCentreId === null ? null : graph.nodes.find((n) => n.id === railCentreId)?.title ?? railCentreId;
 
   return (
     <>
@@ -962,13 +592,13 @@ function GalaxyCanvas({
       {handControl && running && !readerOpen ? <div ref={reticleRef} className="hud-galaxy-reticle" /> : null}
       <GalaxyStepRail
         className={RAIL_ISLAND_CLASS}
-        roots={roots}
-        neighbours={neighbours}
-        matches={matches}
-        query={railQuery}
-        onQueryChange={setRailQuery}
-        centreTitle={centreTitle}
-        locked={railLocked}
+        roots={rail.roots}
+        neighbours={rail.neighbours}
+        matches={rail.matches}
+        query={rail.query}
+        onQueryChange={rail.setQuery}
+        centreTitle={rail.centreTitle}
+        locked={rail.locked}
         onStep={stepToNote}
       />
       {debugEnabled && <pre ref={debugRef} className="hud-galaxy-gesture-debug" />}
@@ -976,25 +606,6 @@ function GalaxyCanvas({
   );
 }
 
-class GalaxyErrorBoundary extends Component<{ onCrash: () => void; children: ReactNode }, { crashed: boolean }> {
-  state = { crashed: false };
-  static getDerivedStateFromError() {
-    return { crashed: true };
-  }
-  componentDidCatch(error: unknown) {
-    // A crashed WebGL layer must not leave the fullscreen click-through-
-    // disabled overlay trapping desktop clicks (design.md D9/L3) — force the
-    // whole galaxy closed, same as Esc. Logged (not swallowed silently) so a
-    // regression like the d3AlphaTarget bug above is visible in devtools
-    // instead of just "the galaxy closed for no apparent reason".
-    console.error("[second-brain-galaxy-view] galaxy layer crashed, force-closing:", error);
-    this.props.onCrash();
-  }
-  render() {
-    if (this.state.crashed) return null;
-    return this.props.children;
-  }
-}
 
 // Toggled on/off by HudShell exactly like DrawingCanvas — mount fetches the
 // current graph and starts the main-process watcher; unmount stops it
