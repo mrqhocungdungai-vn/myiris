@@ -7,7 +7,6 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import matter from "gray-matter";
 import { createVaultGraph } from "../vault-graph.mjs";
 import { matchNotesByName } from "../note-name-match.mjs";
 import { appendRunRecord, inboxBacklog } from "../run-inbox.mjs";
@@ -21,9 +20,25 @@ import {
   writeVaultNote,
 } from "../vault-write.mjs";
 import { INITIAL_FOCUS, FOCUS_PROMPT_BOUND, toggle as toggleFocusId, clear as clearFocusState, resolve as resolveFocus } from "../focus.mjs";
-import { fenceUntrustedText } from "../untrusted-text.mjs";
-import { createSessionCapture } from "../session-capture.mjs";
-import { ambientCaptureForcedOff } from "../worker-env.mjs";
+import { createAmbientCapture } from "./ambient-capture.mjs";
+// The three tool declarations live in second-brain-declarations.mjs — data,
+// not behavior, and long enough to crowd this module.
+import {
+  CAPTURE_NOTE_DECLARATION,
+  MUTATE_VAULT_NOTES_DECLARATION,
+  FIND_NOTE_DECLARATION,
+} from "./second-brain-declarations.mjs";
+// Vault setup — the directory, the seeded config/schema and welcome note, and
+// the skills check. All idempotent; see the module for why.
+import { createVaultSetup } from "./second-brain-vault-setup.mjs";
+import { createNotePathResolver, isNoteId } from "./second-brain-note-path.mjs";
+import {
+  focusLine,
+  openNoteLine,
+  noteOpenedMessage,
+  noteEditedMessage,
+  focusUpdateMessage,
+} from "./second-brain-announcements.mjs";
 
 // Personal-knowledge-notes capability (see openspec/changes/llm-wiki/): the
 // LLM-Wiki vault is pinned to this fixed, user-level path, independent of any
@@ -86,128 +101,6 @@ const INBOX_OFFER_THRESHOLD = 8;
 // doing the real LLM-Wiki workflow.
 const NOTES_SKILLS = ["wiki-config", "wiki-ingest", "wiki-query", "wiki-lint", "wiki-integrate", "wiki-crystallize"];
 
-// Capture's own declaration (vault-write-path design D4): it is NOT a verb —
-// it starts no Claude run, so it does not belong in the registry that
-// `capture_learning` (curation) is defined in. Declared unconditionally
-// (gemini-tools.mjs concatenates every capability's toolDeclarations outside
-// the pipelineAvailable gate), so it survives chat-only mode.
-const CAPTURE_NOTE_DECLARATION = {
-  name: "capture_note",
-  description:
-    "Save a thought directly to the user's personal notes vault, right now — a plain file write: no Claude run, no tokens, " +
-    "no execution slot, and it works even with no Claude credential configured. Use for 'note this down', 'save that', " +
-    "'ghi chú lại: …'. This creates a REAL note the user can open, search and see in the galaxy immediately — it is not a " +
-    "queue. Confirm only after this reports status 'ok', and say the title it reports back; if it reports an error, tell " +
-    "the user it was not saved. For weaving many existing notes into a linked wiki page, retrieving from notes, or an " +
-    "explicit 'write this up as a page' request, use the capture_learning verb instead.",
-  parameters: {
-    type: "object",
-    properties: {
-      text: {
-        type: "string",
-        description: "The thought to capture, in the user's own words, as close to verbatim as you can manage.",
-      },
-      title: {
-        type: "string",
-        description:
-          "A short title. This becomes the note's filename and is how the user finds it again, so give one whenever the " +
-          "thought has an obvious subject. Omit it only when it genuinely has none — the first line is used instead.",
-      },
-      tags: { type: "string", description: "Comma-separated tags, only if obvious from context. Optional." },
-    },
-    required: ["text"],
-  },
-};
-
-// Structural vault edits (personal-knowledge-notes: "direct writes on the
-// same terms as capture" — no run, no tokens, no execution slot). NOT a verb,
-// for the identical reason capture_note is not one: a text transform over
-// markdown has no judgement in it, so routing it through a worker would give
-// an instant, deterministic edit a run's latency and cost. Defaults to
-// whatever is currently focused in the galaxy — the shared-focus thesis
-// ("voice supplies the verb, the hand supplies the noun") — but also accepts
-// note titles by name for a request with nothing pointed at.
-const MUTATE_VAULT_NOTES_DECLARATION = {
-  name: "mutate_vault_notes",
-  description:
-    "Link two existing vault notes to each other, unlink them, or set a note's tags — a direct file write: no Claude run, " +
-    "no tokens. When note_titles is omitted, defaults to the note currently open in the reader if one is open, otherwise " +
-    "to whatever is focused/selected in the second-brain galaxy (pointed at with their hand, or clicked) — use this for " +
-    "'tag this', 'connect these two', 'unlink these'. " +
-    "Pass note_titles only when the user named specific notes by title instead of pointing at them. link/unlink need " +
-    "exactly two notes (focused or named); set_tags needs exactly one. If this reports an error, tell the user the edit " +
-    "did not happen rather than confirming it.",
-  parameters: {
-    type: "object",
-    properties: {
-      operation: {
-        type: "string",
-        enum: ["link", "unlink", "set_tags"],
-        description: "link: connect two notes both ways. unlink: remove that connection. set_tags: replace a note's tags.",
-      },
-      note_titles: {
-        type: "string",
-        description:
-          "Comma-separated note titles, ONLY if the user named specific notes rather than pointing at them. Omit to use " +
-          "whatever is currently focused in the galaxy.",
-      },
-      tags: { type: "string", description: "Comma-separated tags, for the set_tags operation. Replaces the note's existing tags." },
-    },
-    required: ["operation"],
-  },
-};
-
-// Finding a note by NAME (personal-knowledge-notes: "A note is findable by
-// name, spoken, without spending a run"). NOT a verb, for the same reason
-// capture_note is not one read the other way: comparing what the user said
-// against a list of titles needs no model, so routing it through a worker would
-// make the cheapest question this capability can answer the slowest, the only
-// one that could fail for reasons unrelated to the vault, and the only one a
-// user without a Claude credential could not ask.
-//
-// The description carries the boundary against `capture_learning` (design.md
-// D3, mechanism 2), on the pattern capture_note's already uses against the same
-// verb. This is the change's central hazard: "find my note about the deployment"
-// and "what do my notes say about the deployment" are one word apart and route
-// to completely different machinery, and choosing wrong is not symmetrical —
-// answering a contents question from a filename is a confident wrong answer,
-// which is worse than the slower correct one.
-//
-// The parameter is `name`, not `query`/`subject`/`question` (mechanism 1): a
-// schema is a contract the calling interface enforces, where prose is only
-// advice, so the strongest statement of "this takes a name" is the name of the
-// thing it takes.
-const FIND_NOTE_DECLARATION = {
-  name: "find_note_by_name",
-  description:
-    "Find the user's notes whose TITLE matches a name they said — an instant local lookup: no Claude run, no tokens, " +
-    "no execution slot, and it works even with no Claude credential configured. Use for 'find my note called X', " +
-    "'which note is X', 'open my X note', 'tìm ghi chú tên là X'. Matching ignores case and accents. Returns the " +
-    "matching titles: when several match, name them and let the user choose rather than picking one; when none match, " +
-    "say so rather than offering an unrelated note. " +
-    "Do NOT use this to answer what the user's notes SAY about a subject, to summarise or synthesise across notes, or " +
-    "for 'what do my notes say about X' / 'what do I know about X' — that is retrieval, it reads the notes' contents, " +
-    "and it is the capture_learning verb, not this lookup. This only ever sees titles, so answering a question about " +
-    "contents from it would be guessing from a filename.",
-  parameters: {
-    type: "object",
-    properties: {
-      name: {
-        type: "string",
-        description:
-          "The note's name, as the user said it — a title or part of one, NOT a subject, question, or description of " +
-          "what the note is about.",
-      },
-      open: {
-        type: "boolean",
-        description:
-          "True only when the user asked to OPEN the note as well as find it ('open my X note'). Opens it when exactly " +
-          "one note matches. Omit for a plain lookup.",
-      },
-    },
-    required: ["name"],
-  },
-};
 
 // Loose heuristic for the vault-write backstop below — matches common
 // English/Vietnamese phrasing for "save/capture a note" (mirrors the example
@@ -257,128 +150,15 @@ export function createSecondBrainCapability({
    */
   openPathExternally = async () => {},
 }) {
-  // The wiki skills ship in the Iris plugin, so this checks the app bundle —
-  // never ~/.claude, which Iris no longer reads or writes. It still gates the
-  // append-system-prompt directive (startDevRun) and the SetupPanel row, but
-  // "missing" now means a damaged bundle rather than a skipped install step.
-  function checkNotesSkillsStatus() {
-    const pluginDir = irisPluginDir();
-    if (!pluginDir) return { ok: false, missing: NOTES_SKILLS, skillsDir: null };
-    const skillsDir = path.join(pluginDir, "skills");
-    const missing = NOTES_SKILLS.filter((name) => !fs.existsSync(path.join(skillsDir, name)));
-    return { ok: missing.length === 0, missing, skillsDir };
-  }
-
-  // Adapts the vendored wiki-config template's frontmatter for this
-  // single-purpose, macOS-only vault (design.md D5): the template ships
-  // `blacklist` as placeholder prose ("Folder(s) where the wiki should not
-  // write"), not real folder names — wiki-config's own Validate step flags
-  // leftover placeholder text, and since nothing but wiki content ever lives
-  // under ~/iris-second-brain, an empty list is the correct config, not a
-  // stub. `index_excludes`/`templates_folder` ship with the template's
-  // Windows-style trailing backslash; this app is macOS-only, so those
-  // become forward slashes. Everything else (ingested_folder,
-  // ingested_subdirs, log_format, and all prose below the frontmatter) is
-  // left exactly as vendored.
-  function renderNotesVaultConfig(templateText) {
-    const match = templateText.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
-    if (!match) return templateText; // unexpected shape — copy verbatim rather than risk corrupting it
-    const [, frontmatter, body] = match;
-    const adapted = frontmatter
-      .replace(/^blacklist:\n(?:  - .*\n)+/m, "blacklist: []\n")
-      .replace(/^(\s*- (?:raw|archive|ingested))\\$/gm, "$1/")
-      .replace(/^templates_folder: templates\\$/m, "templates_folder: templates/");
-    return `---\n${adapted}\n---\n${body}`;
-  }
-
-  // A real, user-visible note — unlike wiki-config.md/wiki-schema.md, which
-  // are system files excluded from the galaxy graph (NOTES_SYSTEM_FILES) —
-  // pre-seeded once so a first-ever open of the galaxy isn't an empty graph
-  // with no explanation of what this vault is or how to use it. Static and
-  // Iris-authored rather than generated by a run: the same "a direct write
-  // needs no worker" reasoning as capture_note, and it exists from the very
-  // first boot rather than only after some later capture_learning call.
-  const WELCOME_NOTE_TITLE = "Welcome to your Second Brain";
-  const WELCOME_NOTE_TAGS = ["iris", "getting-started"];
-  const WELCOME_NOTE_BODY = `This vault is your personal second brain — plain markdown files, readable in Obsidian or any editor, that Iris helps you build up over time.
-
-## Adding to it
-
-- **"Note this down" / "ghi chú lại: ..."** — saves a thought right now: no Claude run, no tokens.
-- **"Write this up as a page"** — turns accumulated captures into a linked wiki page.
-- **"What do my notes say about X"** — retrieves from what's already here.
-- **"Weave in what we've learned"** — processes everything waiting in the inbox since last time.
-
-## The galaxy view
-
-Toggle the network icon in the HUD to fly through your notes as a 3D graph.
-
-- Point and hold over a node to open it.
-- A quick pinch-and-release on a node selects it (or click it with your mouse) — selected notes ring and are named in a chip, so you can say **"connect these two"** or **"tag these"** and Iris acts on exactly what you pointed at.
-- A held pinch zooms the camera instead.
-- Clear the selection any time from the control island.
-
-This note is just a starting point — edit it, retag it, or delete it whenever you like.
-`;
-
-  // Idempotent: never overwrites once present, so an edit or a deletion is
-  // the user's own choice, respected on every later boot.
-  function seedWelcomeNote() {
-    const target = path.join(NOTES_VAULT_DIR, `${WELCOME_NOTE_TITLE}.md`);
-    if (fs.existsSync(target)) return;
-    try {
-      fs.writeFileSync(
-        target,
-        matter.stringify(WELCOME_NOTE_BODY, { title: WELCOME_NOTE_TITLE, tags: WELCOME_NOTE_TAGS, date: new Date().toISOString() }),
-      );
-    } catch (error) {
-      emitEvent({ type: "log", level: "warn", message: `Could not pre-seed the welcome note: ${error.message}` });
-    }
-  }
-
-  // Ensures the vault directory exists and, on first use, pre-seeds
-  // wiki-config.md + wiki-schema.md from the vendored wiki-config skill's own
-  // bundled templates, plus the welcome note above. Without the config/schema
-  // seed, the operational wiki skills' "Config Discovery" step finds no
-  // config on a genuinely first-ever run and ends the turn asking the user to
-  // run an interactive /wiki-config setup — a question a one-shot `claude -p`
-  // run has no way to answer (design.md D5 of the llm-wiki change). Every
-  // seeded file is idempotent: never overwritten once present, so user edits
-  // or a missing bundle (irisPluginDir() unresolved) are safe — the directory
-  // alone still gets created either way.
-  function ensureNotesVaultReady() {
-    try {
-      fs.mkdirSync(NOTES_VAULT_DIR, { recursive: true });
-    } catch (error) {
-      emitEvent({ type: "log", level: "warn", message: `Could not create notes vault at ${NOTES_VAULT_DIR}: ${error.message}` });
-      return;
-    }
-
-    seedWelcomeNote();
-
-    const configTarget = path.join(NOTES_VAULT_DIR, "wiki-config.md");
-    const schemaTarget = path.join(NOTES_VAULT_DIR, "wiki-schema.md");
-    if (fs.existsSync(configTarget) && fs.existsSync(schemaTarget)) return;
-
-    const pluginDir = irisPluginDir();
-    if (!pluginDir) return; // bundle not present — the directory alone is still created above
-    const assetsDir = path.join(pluginDir, "skills", "wiki-config", "assets");
-
-    try {
-      if (!fs.existsSync(schemaTarget)) {
-        const schemaSource = path.join(assetsDir, "wiki-schema.md");
-        if (fs.existsSync(schemaSource)) fs.copyFileSync(schemaSource, schemaTarget);
-      }
-      if (!fs.existsSync(configTarget)) {
-        const configSource = path.join(assetsDir, "wiki-config-template.md");
-        if (fs.existsSync(configSource)) {
-          fs.writeFileSync(configTarget, renderNotesVaultConfig(fs.readFileSync(configSource, "utf8")));
-        }
-      }
-    } catch (error) {
-      emitEvent({ type: "log", level: "warn", message: `Could not pre-seed notes vault config: ${error.message}` });
-    }
-  }
+  // Vault setup (directory, seeded config/schema, the welcome note) and the
+  // skills check — see second-brain-vault-setup.mjs.
+  const vaultSetup = createVaultSetup({
+    vaultDir: NOTES_VAULT_DIR,
+    skills: NOTES_SKILLS,
+    irisPluginDir,
+    emitEvent,
+  });
+  const { checkNotesSkillsStatus, ensureNotesVaultReady } = vaultSetup;
 
   // Second-brain galaxy view (second-brain-galaxy-view): reads the same
   // NOTES_VAULT_DIR the notes capability writes, purely for viewing — never
@@ -418,97 +198,21 @@ This note is just a starting point — edit it, retag it, or delete it whenever 
   // routes today, independent of this change.
   let galaxyActive = false;
 
-  // The resolved focus, rendered as a bounded bullet list — shared by the
-  // static promptFragment() line and the live SYSTEM_EVENT push below, so the
-  // two descriptions of "what is focused" can never say different things.
-  // Titles/tags are untrusted (second-brain-focus: "vault content may
-  // originate from the web"), fenced on the same terms as everything else
-  // that reaches a model without Iris having authored it.
-  function focusLine(notes) {
-    const bullets = notes
-      .map((n) => `- ${n.title}${n.tags.length ? ` (tags: ${n.tags.join(", ")})` : ""}`)
-      .join("\n");
-    return fenceUntrustedText(bullets, "titles/tags of the notes currently focused in the second-brain galaxy");
-  }
-
-  // The open note's own line (open-note-session: "identity, title, and tags —
-  // not its body"), fenced on the same terms as focusLine — titles/tags are
-  // untrusted because vault content may originate from the web.
-  function openNoteLine(note) {
-    const bullet = `- ${note.title}${note.tags.length ? ` (tags: ${note.tags.join(", ")})` : ""}`;
-    return fenceUntrustedText(bullet, "title/tags of the note currently open in the reader");
-  }
-
-  // Live push mirroring announceFocusUpdate (open-note-session: "The voice
-  // layer SHALL be told when the open note changes, rather than only at
-  // connect"), fired on open, on close, and on switch. A close tells Gemini
-  // the referent is gone rather than leaving it believing a note that no
-  // longer exists is still open — the focus (if any) becomes the referent
-  // again the instant this fires with nothing open.
+  // The three SYSTEM_EVENT pushes and the two fenced content lines are pure
+  // builders in second-brain-announcements.mjs, where the fencing of untrusted
+  // titles/tags and the "announce the gone case too" rule are both asserted.
   function announceNoteOpened() {
-    const note = resolveOpenNote();
-    if (note) {
-      notifyIris([
-        "SYSTEM_EVENT_NOTE_OPENED",
-        openNoteLine(note),
-        "instructions_to_iris:",
-        "- Silently remember this as the note currently open in the reader. Do NOT speak or respond to this message.",
-        '- While a note is open, a deictic request ("this", "this note") refers to it, not to whatever is focused in the second-brain galaxy.',
-      ]);
-    } else {
-      notifyIris([
-        "SYSTEM_EVENT_NOTE_CLOSED",
-        "No note is open in the reader anymore.",
-        "instructions_to_iris:",
-        "- Silently forget the open note as a deictic referent. Do NOT speak or respond to this message.",
-        "- A deictic request now resolves against whatever is focused in the second-brain galaxy, if anything.",
-      ]);
-    }
+    notifyIris(noteOpenedMessage(resolveOpenNote()));
   }
 
-  // open-note-session "A hand edit to the open note invalidates the session's
-  // reading of it": a note now has two writers, and the session's value is that
-  // a reading and the edits referring to it come from one context. A hand edit
-  // between the two changes the text under the session's paragraph division, so
-  // "drop the second one" resolves against text that is no longer there — the
-  // same failure read-back-verbatim exists to prevent, reintroduced by a
-  // different route. Iris deliberately does NOT try to reconcile the old
-  // reading with the new text (there is no correct way to do that from outside
-  // the session); it says the reading is superseded and lets the session
-  // re-read. Silent and run-free, on exactly announceNoteOpened's terms.
   function announceNoteEdited() {
     const note = resolveOpenNote();
     if (!note) return;
-    notifyIris([
-      "SYSTEM_EVENT_NOTE_EDITED",
-      openNoteLine(note),
-      "The user just edited this note by hand in the reader, so its text has changed.",
-      "instructions_to_iris:",
-      "- Silently remember that any earlier reading of this note is superseded. Do NOT speak or respond to this message.",
-      "- Before changing a named part of it, have the note read again — a part named against the earlier reading may no longer be the same text.",
-    ]);
+    notifyIris(noteEditedMessage(note));
   }
 
-  // Live push (mirrors announceWorkspaceUpdate, for the identical reason: the
-  // Gemini Live system instruction is built once at connect and does not
-  // itself update mid-session, so a fact that changes constantly — the focus
-  // changes on every tap/click — needs its own SYSTEM_EVENT rather than
-  // relying solely on promptFragment(), which only describes the focus as of
-  // the last connect). Fires on every toggle/clear while the galaxy is
-  // active; a clear is announced too, so Gemini drops a stale referent
-  // rather than keep believing something is still focused (second-brain-
-  // focus: "No focus, no focus talk").
   function announceFocusUpdate() {
-    const notes = resolveFocus(focusState, latestGraph, FOCUS_PROMPT_BOUND);
-    notifyIris([
-      "SYSTEM_EVENT_FOCUS_UPDATE",
-      notes.length
-        ? focusLine(notes)
-        : "Nothing is focused in the second-brain galaxy right now.",
-      "instructions_to_iris:",
-      "- Silently remember this as the currently focused vault notes. Do NOT speak or respond to this message.",
-      "- If nothing is focused, forget any notes you previously heard about this way — a deictic request ('these', 'this one') now has nothing to resolve against, so ask what the user means rather than guessing.",
-    ]);
+    notifyIris(focusUpdateMessage(resolveFocus(focusState, latestGraph, FOCUS_PROMPT_BOUND)));
   }
 
   // Gated purely on the vault existing, independent of pipelineAvailable
@@ -603,89 +307,16 @@ This note is just a starting point — edit it, retag it, or delete it whenever 
   }
 
 
-  // Ambient session capture (ambient-memory): the opt-in retention of
-  // conversation text into NOTES_SESSIONS_DIR. Two independent gates decide
-  // whether it is actually LIVE right now — the user's persisted preference
-  // (renderer -> ambient-capture:set-enabled) and whether Iris is awake and
-  // listening (main's own onAwake/onAsleep hooks, wired from the live
-  // session) — and either one being false means nothing is retained (design
-  // D1/spec "Capture follows the microphone and stops with it"). `sessionCapture`
-  // itself starts disabled (D1) and is the single thing that ever writes.
-  const sessionCapture = createSessionCapture();
-  let ambientPreferenceEnabled = false;
-  let ambientAwake = false;
-  let ambientFlushTimer = null;
-
-  function ambientCaptureLive() {
-    // Ambient capture stands aside for the whole span listen-only mode is
-    // engaged (ambient-session-capture). The reason is the CONSENT, not a
-    // competing writer: this preference is consent to retain the user's own
-    // conversations with Iris, and while that mode is engaged what she hears
-    // widens to whatever the machine is playing — remote participants, a video,
-    // people who never agreed to anything. That span is now retained by nobody,
-    // which is the correct outcome and not a gap. Going not-live flushes what
-    // accumulated, and coming back live re-enables with a fresh watermark, so
-    // the span is neither duplicated nor back-filled.
-    return ambientPreferenceEnabled && ambientAwake && !isListenOnlyEngaged() && !ambientCaptureForcedOff();
-  }
-
-  async function flushAmbientCapture() {
-    return sessionCapture.flush({
-      utterances: recentUtterances(),
-      dir: NOTES_SESSIONS_DIR,
-      onError: (error) => {
-        emitEvent({ type: "log", level: "warn", message: `Could not flush the ambient session capture: ${error.message}` });
-      },
-    });
-  }
-
-  function startAmbientFlushTimer() {
-    if (ambientFlushTimer) return;
-    ambientFlushTimer = setInterval(() => {
-      flushAmbientCapture();
-    }, AMBIENT_FLUSH_INTERVAL_MS);
-    ambientFlushTimer.unref?.();
-  }
-
-  function stopAmbientFlushTimer() {
-    if (!ambientFlushTimer) return;
-    clearInterval(ambientFlushTimer);
-    ambientFlushTimer = null;
-  }
-
-  // The single mutation point for the live/not-live transition (mirrors
-  // probeSecondBrainAvailability's shape above): acts only on a real flip, so
-  // repeated calls with the same inputs — the renderer re-sending its
-  // preference, a second onAwake while already awake — cost nothing and, more
-  // importantly, never reset the watermark or re-flush needlessly. Turning
-  // live OFF flushes what accumulated under the consent already given, before
-  // disabling (spec "Sleep stops retention... what accumulated is flushed
-  // rather than dropped" / "Disabling stops retention immediately").
-  async function syncAmbientCaptureState() {
-    const live = ambientCaptureLive();
-    if (live === sessionCapture.isEnabled()) return;
-    if (live) {
-      sessionCapture.enable(Date.now());
-      startAmbientFlushTimer();
-    } else {
-      stopAmbientFlushTimer();
-      await flushAmbientCapture();
-      sessionCapture.disable();
-    }
-    emitToRenderer("ambient-capture:state", { live });
-  }
-
-  /** Called on the renderer's persisted-preference message (ambient-capture:set-enabled). */
-  function setAmbientCapturePreference(enabled) {
-    ambientPreferenceEnabled = Boolean(enabled);
-    return syncAmbientCaptureState();
-  }
-
-  /** Called from the live session's own wake/sleep hooks — never by the renderer directly. */
-  function setAmbientCaptureAwake(awake) {
-    ambientAwake = Boolean(awake);
-    return syncAmbientCaptureState();
-  }
+  // Ambient session capture lives in ambient-capture.mjs — a self-contained
+  // machine whose state is used nowhere else here.
+  const ambient = createAmbientCapture({
+    sessionsDir: NOTES_SESSIONS_DIR,
+    flushIntervalMs: AMBIENT_FLUSH_INTERVAL_MS,
+    recentUtterances,
+    isListenOnlyEngaged,
+    emitEvent,
+    emitToRenderer,
+  });
 
   // What is waiting to be synthesized. Read by the voice layer's prose below so
   // Iris can offer — never so it can act. Counts both spools (design D3): a
@@ -801,30 +432,12 @@ This note is just a starting point — edit it, retag it, or delete it whenever 
     return resolveOpenNote()?.absolutePath ?? null;
   }
 
-  // Resolves a renderer- or model-supplied note **identity** to a real,
-  // in-vault file path — never a supplied path itself (personal-knowledge-
-  // notes: "SHALL NOT accept a filesystem path from the renderer or from a
-  // model"). Type/bound-checks `id` exactly as the original read-note check
-  // did (an XSS-in-renderer, or a model, could pass anything), resolves it
-  // against the single graph cache (never a ghost, never an unknown id), then
-  // re-asserts — after resolving symlinks — that the file is inside the vault
-  // before the caller may read OR write it. Shared by read-note and the
-  // structural-edit surface below so the guard exists in exactly one place.
-  function resolveVaultNotePath(id) {
-    if (typeof id !== "string" || id.length === 0 || id.length > 512) return null;
-    const notePath = notesVaultGraph.resolveNotePath(id);
-    if (!notePath) return null; // ghost node, unknown id, or since-removed file
-    let realNotePath;
-    let realVaultDir;
-    try {
-      realNotePath = fs.realpathSync(notePath);
-      realVaultDir = fs.realpathSync(NOTES_VAULT_DIR);
-    } catch {
-      return null;
-    }
-    const withinVault = realNotePath === realVaultDir || realNotePath.startsWith(realVaultDir + path.sep);
-    return withinVault ? realNotePath : null;
-  }
+  // Resolving a note identity to a real, in-vault path — a security boundary,
+  // now in second-brain-note-path.mjs where it is tested.
+  const resolveVaultNotePath = createNotePathResolver({
+    vaultDir: NOTES_VAULT_DIR,
+    resolveNotePath: (id) => notesVaultGraph.resolveNotePath(id),
+  });
 
   // Late-resolves the open note against the live graph, mirroring resolveFocus
   // (open-note-session spec: "resolved to a title, tags, and a file at the
@@ -1190,7 +803,7 @@ This note is just a starting point — edit it, retag it, or delete it whenever 
       channel: "secondbrain:set-focus",
       kind: "handle",
       fn: (_event, id) => {
-        if (typeof id !== "string" || id.length === 0 || id.length > 512) return { ok: false };
+        if (!isNoteId(id)) return { ok: false };
         focusState = toggleFocusId(focusState, id, latestGraph);
         announceFocusUpdate();
         return { ok: true, ids: focusState.ids, notes: resolveFocus(focusState, latestGraph) };
@@ -1226,7 +839,7 @@ This note is just a starting point — edit it, retag it, or delete it whenever 
       channel: "secondbrain:note-opened",
       kind: "on",
       fn: (_event, id) => {
-        if (typeof id !== "string" || id.length === 0 || id.length > 512) return;
+        if (!isNoteId(id)) return;
         openNoteId = id;
         announceNoteOpened();
       },
@@ -1240,26 +853,9 @@ This note is just a starting point — edit it, retag it, or delete it whenever 
         announceNoteOpened();
       },
     },
-    // Ambient session capture (ambient-memory): the renderer's persisted
-    // preference (localStorage, same as its sibling toggles) is the only way
-    // this ever turns on — main defaults to off and stays off until this
-    // arrives (design D1). Fire-and-forget from the renderer's point of view;
-    // the live/not-live result reaches it over "ambient-capture:state".
-    {
-      channel: "ambient-capture:set-enabled",
-      kind: "on",
-      fn: (_event, payload) => {
-        setAmbientCapturePreference(Boolean(payload?.enabled));
-      },
-    },
-    // Boot-time/HUD-open pull, mirroring listen-only:query — the renderer's
-    // indicator needs the current state on mount, before any transition has
-    // fired the push above.
-    {
-      channel: "ambient-capture:query",
-      kind: "handle",
-      fn: () => ({ enabled: ambientPreferenceEnabled, live: ambientCaptureLive(), forcedOff: ambientCaptureForcedOff() }),
-    },
+    // The ambient-capture channels are declared by that module, beside the
+    // state they touch.
+    ...ambient.ipcHandlers,
   ];
 
   async function teardown() {
@@ -1269,8 +865,8 @@ This note is just a starting point — edit it, retag it, or delete it whenever 
     // periodic flush must not be lost to a clean shutdown any more than to a
     // crash. A no-op when capture was never live (sessionCapture.flush is
     // itself a no-op while disabled).
-    stopAmbientFlushTimer();
-    await flushAmbientCapture();
+    ambient.stopTimer();
+    await ambient.flush();
   }
 
   return {
@@ -1302,15 +898,15 @@ This note is just a starting point — edit it, retag it, or delete it whenever 
     // called from the live session's own wake/sleep hooks (wiring-live.mjs),
     // never by the renderer — the preference arrives only through the IPC
     // channel above.
-    setAmbientCaptureAwake,
-    isAmbientCaptureLive: ambientCaptureLive,
+    setAmbientCaptureAwake: ambient.setAwake,
+    isAmbientCaptureLive: ambient.isLive,
     // Re-evaluates whether capture is live, for a caller that changed something
     // ambientCaptureLive() reads but this module does not own — today that is
     // the live session's listen-only transitions (wiring-live.mjs). It hands
     // nothing over; it only makes the yield happen at the mode's own edge,
     // flushing as it engages and resuming with a fresh watermark as it ends,
     // rather than at whatever unrelated flip happens to come next.
-    syncAmbientCaptureState,
+    syncAmbientCaptureState: ambient.sync,
     ipcHandlers,
     teardown,
   };
