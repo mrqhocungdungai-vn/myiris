@@ -791,7 +791,7 @@
   gap: 0.45em;
   padding: 0.25em 0.5em;
   font-family: var(--font-mono);
-  font-size: clamp(6.5px, 3.1cqw, 10px);
+  font-size: clamp(6.5px, 3.1cqw, 13px);
   line-height: 1.25;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -826,7 +826,25 @@
 /* `container-type: inline-size` makes the panel's type scale with whatever
    frame it is drawn in — deck, HUD standard, HUD enlarged — instead of being
    a px value tuned for one of the three and cramped or lost in the others
-   (design D12). Clamped at both ends so it never leaves the legible band. */
+   (design D12). Clamped at both ends so it never leaves the legible band.
+
+   THE UPPER CLAMP IS COUPLED TO READOUT_GEOMETRY.height, and the coupling is
+   easy to miss. The panel's box is a fraction of the FRAME, while its content is
+   a multiple of the FONT — so the two only stay in proportion while the font is
+   in its fluid band. Once the font clamps, the box keeps growing and the content
+   does not, and the surplus lands as one visible empty band above the foot
+   (`.foot` has `margin-top: auto`).
+
+   That is exactly what happened at 10px: the enlarged HUD frame is 405px, where
+   3.1cqw is 12.6px, so the font pinned at 10px and a box sized for ~17em was
+   drawn at ~21.3em. The deck (256px → 7.9px) and the standard HUD (300px →
+   9.3px) were both inside the band and looked right, which is why it read as an
+   HUD-only fault rather than as a clamp.
+
+   13px clears 405px with room to spare, so every current surface is fluid and
+   one `height` is correct in all of them. **A frame wider than ~420px brings the
+   band back** — raise this ceiling with it, or the panel will look
+   over-reserved again. */
 .eye-readout-layer {
   position: absolute;
   inset: 0;
@@ -849,7 +867,7 @@
   gap: 0.3em;
   padding: 0.7em 0.75em;
   font-family: var(--font-mono);
-  font-size: clamp(6.5px, 3.1cqw, 10px);
+  font-size: clamp(6.5px, 3.1cqw, 13px);
   line-height: 1.25;
   letter-spacing: 0.1em;
   text-transform: uppercase;

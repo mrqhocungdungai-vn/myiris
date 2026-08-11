@@ -219,9 +219,18 @@ export type ReadoutGeometry = {
  * read, so it is where the panel's content has to be paid for.
  *
  * The arithmetic. In the deck's camera dock the frame is ~256px, which puts
- * `font-size: clamp(6.5px, 3.1cqw, 10px)` in its fluid band — so font is
+ * `font-size: clamp(6.5px, 3.1cqw, 13px)` in its fluid band — so font is
  * 0.031·frameW and the panel's height in em is a constant
  * `height × 0.75 / 0.031 = height × 24.19`.
+ *
+ * **THAT CONSTANT ONLY HOLDS WHILE THE FONT IS FLUID**, and it is the coupling
+ * to remember: the box is a fraction of the FRAME, the content a multiple of the
+ * FONT. Once the font clamps, the box keeps scaling and the content stops, and
+ * the surplus appears as one empty band above the foot. The ceiling was 10px,
+ * which the enlarged HUD frame (405px → 12.6px) exceeded — so this height was
+ * right in the deck and in the standard HUD and visibly over-reserved in the
+ * enlarged one. The ceiling is now 13px, which clears every current surface.
+ * See the note on `.eye-readout`'s `font-size` in src/styles/claude.css.
  *
  * At the original 0.52 the box was 12.6em holding 13.83em of content — the
  * panel had been overflowing since it was built, silently, because
