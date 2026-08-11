@@ -1,4 +1,5 @@
 import type { TaskCard, TaskStep, TaskUsage } from "../types";
+import { isVerb } from "./verbs";
 
 // "limited" is a run that reached its turn or spend ceiling — over, but not
 // failed (see electron/run-budget.mjs). "unanswered" is a run that asked a
@@ -260,4 +261,133 @@ export function findTaskMatches(
   return scored
     .sort((a, b) => b.score - a.score || b.task.updatedAt - a.task.updatedAt)
     .slice(0, 3);
+}
+
+// The task-card reduction: one `claude_task_update` event folded into the
+// current card list. Pure and total — it reads nothing but its arguments and
+// returns the next list, so the whole step/merge/cap policy below is testable
+// without a React tree (this lived inside `App.tsx`'s event handler, where it
+// was 70 lines of untested branching).
+//
+// Three rules are load-bearing and easy to break by accident:
+//
+//   * **A run is identified by `run_id`, falling back to a key derived from the
+//     task text.** The fallback exists because the first update for a run can
+//     arrive before an id does; the placeholder card it created must then be
+//     replaced rather than left beside the real one.
+//   * **An absent field never overwrites a recorded one.** Terminal figures in
+//     particular (`usage`, `verb`, `model`, the session id) arrive once and are
+//     absent from every other update, so a plain assignment would erase them.
+//   * **Steps are keyed by Claude's own `tool_use` id**, so a `tool_end` closes
+//     exactly the step its `tool_start` opened even when calls interleave.
+export const MAX_TASK_STEPS = 40;
+export const MAX_TASK_CARDS = 20;
+
+/** Folds a `tool_start` / `tool_end` phase into a card's step timeline. */
+export function applyStepPhase(
+  steps: TaskStep[] | undefined,
+  event: SidecarEvent,
+  now: number,
+): TaskStep[] | undefined {
+  const phase = readString(event.phase);
+  const toolId = readString(event.tool_id);
+  if (phase === "tool_start" && toolId) {
+    const step: TaskStep = {
+      id: toolId,
+      tool: readString(event.tool, "tool"),
+      preview: readString(event.detail) || undefined,
+      status: "running",
+      ts: now,
+    };
+    return [...(steps ?? []), step].slice(-MAX_TASK_STEPS);
+  }
+  if (phase === "tool_end" && toolId && steps) {
+    const isError = event.error === true;
+    const duration = typeof event.duration === "number" ? event.duration : undefined;
+    return steps.map((step) =>
+      step.id === toolId ? { ...step, status: isError ? "error" : "done", duration } : step,
+    );
+  }
+  // Plain activity and terminal updates leave the timeline untouched.
+  return steps;
+}
+
+/**
+ * Folds one `claude_task_update` event into the card list, newest first.
+ *
+ * The updated card moves to the front and both its real id and its
+ * text-derived placeholder id are filtered out of the tail, so a run that
+ * gained an id part-way through does not appear twice.
+ */
+export function applyTaskUpdate(current: TaskCard[], event: SidecarEvent): TaskCard[] {
+  const task = readString(event.task, "Claude task");
+  const rawRunId = readString(event.run_id);
+  const runId = rawRunId || taskKeyFor(task);
+  const placeholderId = taskKeyFor(task);
+  const existing = current.find((item) => item.id === runId);
+  const now = eventTime(event);
+
+  const next: TaskCard = {
+    id: runId,
+    task,
+    status: readString(event.status, "unknown"),
+    output: resolveMergedString(event.output, existing?.output),
+    error: resolveMergedString(event.error, existing?.error),
+    verb: (isVerb(event.verb) ? event.verb : null) ?? existing?.verb ?? null,
+    model: (typeof event.model === "string" ? event.model : null) ?? existing?.model ?? null,
+    claudeSessionId: readString(event.claude_session_id) || existing?.claudeSessionId || null,
+    usage: readTaskUsage(event.usage) ?? existing?.usage ?? null,
+    updatedAt: now,
+    steps: applyStepPhase(existing?.steps, event, now),
+  };
+
+  return [next, ...current.filter((item) => item.id !== runId && item.id !== placeholderId)].slice(
+    0,
+    MAX_TASK_CARDS,
+  );
+}
+
+/**
+ * Newest-first, but **active runs first of all**.
+ *
+ * A finished run that updated a second ago is less interesting than one still
+ * working, so terminal status outranks recency. Within each group the most
+ * recently updated leads.
+ *
+ * `TERMINAL` is compared case-insensitively because the status arrives from the
+ * runtime as free text.
+ */
+export function sortTasks(tasks: TaskCard[]): TaskCard[] {
+  const isActive = (task: TaskCard) => !TERMINAL.has(task.status.toLowerCase());
+  return [...tasks].sort((a, b) => {
+    const activeDelta = Number(isActive(b)) - Number(isActive(a));
+    if (activeDelta !== 0) return activeDelta;
+    return b.updatedAt - a.updatedAt;
+  });
+}
+
+/**
+ * The most recent task that actually produced something to read.
+ *
+ * Takes an already-sorted list. A run that finished with neither output nor an
+ * error has nothing to open, so it is skipped rather than offered.
+ */
+export function latestWithResult(sorted: TaskCard[]): TaskCard | null {
+  return sorted.find((task) => Boolean(task.output || task.error)) ?? null;
+}
+
+/**
+ * Closes any step still marked running on a run that has finished.
+ *
+ * A run can end while a tool call is open — the process exits, or the run is
+ * cancelled — and the `tool_end` that would have closed the step never arrives.
+ * Without this the timeline keeps a spinner forever on a run that is visibly
+ * over.
+ */
+export function closeRunningSteps(tasks: TaskCard[], runId: string): TaskCard[] {
+  return tasks.map((item) =>
+    item.id === runId && item.steps
+      ? { ...item, steps: item.steps.map((step) => (step.status === "running" ? { ...step, status: "done" } : step)) }
+      : item,
+  );
 }
