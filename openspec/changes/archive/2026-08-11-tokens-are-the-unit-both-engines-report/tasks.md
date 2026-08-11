@@ -66,14 +66,14 @@
 
 ## 8. Verify in the running app (needs a live session, a camera and a Claude credential)
 
-- [ ] 8.1 `npm run dev`, camera on. The panel shows `GEM` climbing while you talk — audio is billed by the second, so it should move continuously — and `CLD` absent until a run finishes
-- [ ] 8.2 Ask for real work. When the run finishes: the connector draws outward from the **right** eye, the badge unfolds with that run's figure, holds, and resolves — and the panel's `CLD` total steps by the same amount. Cross-check the work card's dollar figure: same run, same result message
-- [ ] 8.3 Confirm the ring does **not** flash, pulse, or replay its acquire beat when the badge appears (design D12). If it does, the connector was wired into a ring element
-- [ ] 8.4 Fire a second run while a badge is still visible: the badge shows the newer figure and its lifetime restarts; the two are never on screen together
-- [ ] 8.5 Turn the camera off, run something, turn the camera back on: **no badge appears**, and the panel's total includes that run (design D14 — this is the trap task 4.2 exists for)
-- [ ] 8.6 Talk for a while with the camera **off**, then turn it on: `GEM` shows the whole conversation, not a fresh start (spec: "A panel opened late shows the session so far")
-- [ ] 8.7 Talk continuously for a minute: **no badge ever appears** for voice (spec: "Continuous consumption is not announced")
-- [ ] 8.8 Leave a long Live conversation running until the socket rotates (`[IRIS][goAway]` in the log). The total must keep climbing and **never drop** — this is design D3's whole reason
-- [ ] 8.9 Move your head while a badge is visible: it tracks the eye throughout, and near the frame's right edge it is clipped rather than jumping to the other side
-- [ ] 8.10 Watch the panel in the **deck** dock, not the HUD, and confirm the foot's twenty CPU bars are still fully visible. `overflow: hidden` means a mis-measured height clips silently
-- [ ] 8.11 Under load, confirm the amber accent still appears on a host row and never on a token row
+- [x] 8.1 `npm run dev`, camera on. The panel shows `GEM` climbing while you talk — audio is billed by the second, so it should move continuously — and `CLD` absent until a run finishes
+- [x] 8.2 Ask for real work. When the run finishes: the connector draws outward from the **right** eye, the badge unfolds with that run's figure, holds, and resolves — and the panel's `CLD` total steps by the same amount. Cross-check the work card's dollar figure: same run, same result message
+- [x] 8.3 Confirm the ring does **not** flash, pulse, or replay its acquire beat when the badge appears (design D12). If it does, the connector was wired into a ring element
+- [x] 8.4 Fire a second run while a badge is still visible: the badge shows the newer figure and its lifetime restarts; the two are never on screen together
+- [x] 8.5 Turn the camera off, run something, turn the camera back on: **no badge appears**, and the panel's total includes that run (design D14 — this is the trap task 4.2 exists for)
+- [x] 8.6 Talk for a while with the camera **off**, then turn it on: `GEM` shows the whole conversation, not a fresh start (spec: "A panel opened late shows the session so far")
+- [x] 8.7 Talk continuously for a minute: **no badge ever appears** for voice (spec: "Continuous consumption is not announced")
+- [x] 8.8 Leave a long Live conversation running until the socket rotates (`[IRIS][goAway]` in the log). The total must keep climbing and **never drop** — this is design D3's whole reason
+- [x] 8.9 Move your head while a badge is visible: it tracks the eye throughout, and near the frame's right edge it is clipped rather than jumping to the other side
+- [x] 8.10 Watch the panel in the **deck** dock, not the HUD, and confirm the foot's twenty CPU bars are still fully visible. `overflow: hidden` means a mis-measured height clips silently
+- [x] 8.11 Under load, confirm the amber accent still appears on a host row and never on a token row
