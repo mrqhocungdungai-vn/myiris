@@ -50,6 +50,7 @@ export function utteranceBoundaryDelayMs({
  *   executeClaudeTool: (name: string, args: any) => Promise<any>,
  *   submitClaudeTask: (params: any) => any,
  *   isListenOnlyEngaged: () => boolean,
+ *   recordGeminiUsage?: (usageMetadata: any) => void,
  * }} deps
  */
 export function createLiveMessages({
@@ -63,6 +64,11 @@ export function createLiveMessages({
   executeClaudeTool,
   submitClaudeTask,
   isListenOnlyEngaged,
+  // token-accounting: the voice engine's own report of what it consumed.
+  // Optional so every existing test constructing this module keeps working —
+  // an unwired recorder counts nothing, which is exactly the pre-change
+  // behaviour rather than a silent half-state.
+  recordGeminiUsage = () => {},
 }) {
   // The open utterance's own clock, used ONLY while the mode is engaged (see
   // UTTERANCE_IDLE_MS above). Outside the mode nothing here arms, so ordinary
@@ -182,6 +188,17 @@ export function createLiveMessages({
       if (resumable && newHandle) {
         setResumptionHandle(newHandle);
       }
+    }
+
+    // token-accounting: the voice engine reports its usage HERE, and this
+    // branch's POSITION is the substance of it. A usage-only message carries no
+    // `serverContent` at all, so anything placed below the
+    // `if (!content) return;` early return further down would never run — and
+    // the failure would be silent, with a plausible-looking but understated
+    // total. Non-returning, like `goAway` below: one message can carry
+    // `usageMetadata` AND a tool call AND content.
+    if (message.usageMetadata) {
+      recordGeminiUsage(message.usageMetadata);
     }
 
     if (message.goAway) {

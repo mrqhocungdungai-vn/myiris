@@ -220,4 +220,17 @@ contextBridge.exposeInMainWorld("iris", {
     ipcRenderer.on("hud-telemetry:sample", handler);
     return () => ipcRenderer.removeListener("hud-telemetry:sample", handler);
   },
+  // token-accounting: what each engine has reported consuming this session.
+  // A pull AND a push, unlike the telemetry block above — counting runs from
+  // app start regardless of the camera, so a panel opened mid-session must be
+  // able to ask for the figures as they already stand rather than waiting for
+  // the next change. Read-only in this direction: nothing here sets, gates or
+  // resets anything main owns.
+  getTokenUsage: () => ipcRenderer.invoke("token-usage:snapshot"),
+  subscribeTokenUsage: () => ipcRenderer.send("token-usage:subscribe"),
+  onTokenUsage: (callback) => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on("token-usage:update", handler);
+    return () => ipcRenderer.removeListener("token-usage:update", handler);
+  },
 });

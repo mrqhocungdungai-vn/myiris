@@ -13,7 +13,6 @@ import {
   focusNeighborhood,
   isHandLowered,
   aimPoint,
-  preferredHand,
   zoomSpan,
   drivingHands,
   driveIsLowered,

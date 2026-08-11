@@ -218,31 +218,58 @@ export type ReadoutGeometry = {
  * `height` is the one knob the panel's drawn box and its placement math both
  * read, so it is where the panel's content has to be paid for.
  *
- * The arithmetic, measured rather than estimated. In the deck's camera dock the
- * frame is ~256px, which puts `font-size: clamp(6.5px, 3.1cqw, 10px)` in its
- * fluid band — so font is 0.031·frameW and the panel's height in em is a
- * constant `height × 0.75 / 0.031 = height × 24.19`. The readout's content
- * measures **13.83em**: a 1.51em header, seven 1.26em rows, seven 0.3em gaps and
- * 1.4em of padding.
+ * The arithmetic. In the deck's camera dock the frame is ~256px, which puts
+ * `font-size: clamp(6.5px, 3.1cqw, 10px)` in its fluid band — so font is
+ * 0.031·frameW and the panel's height in em is a constant
+ * `height × 0.75 / 0.031 = height × 24.19`.
  *
- * At the original 0.52 that is a 12.6em box holding 13.83em of content — the
- * panel has been overflowing since it was built, silently, because
+ * At the original 0.52 the box was 12.6em holding 13.83em of content — the
+ * panel had been overflowing since it was built, silently, because
  * `overflow: hidden` clipped a decorative glyph line and nothing was lost. The
- * foot now carries twenty real measurements, so it has to fit: 0.62 gives a
- * 15.0em box and 1.16em of slack, measured in the running app.
+ * foot then took on real measurements, so it had to fit: 0.62 gave a 15.0em box
+ * and 1.16em of slack, measured in the running app.
  *
- * Measure it the same way if you change it: sum the CHILDREN, not the last
- * child's offset — `.foot` has `margin-top: auto`, so its offset tracks the box
- * and will cheerfully report the box back to you as the content.
+ * The panel now carries a second reading — the token account
+ * (token-accounting) — and the content has been re-totalled item by item
+ * against the stylesheet:
  *
- * ANY future row costs ~1.56em (row plus gap) and must be paid for here. Check
- * it against the DECK dock, never the HUD's larger frame, which clamps at the
- * 10px ceiling and has slack that hides the problem.
+ *   header               1.51
+ *   4 host rows       4×1.26 = 5.04
+ *   1 meter              1.26   (the GPU meter is retired; see below)
+ *   APP rule             0.90   (`.rule` carries an explicit height)
+ *   2 engine rows     2×1.26 = 2.52
+ *   cache line           1.10   (`.row.cache` carries an explicit height)
+ *   foot                 1.26
+ *   10 gaps          10×0.30 = 3.00
+ *   padding                     1.40
+ *   ------------------------------------
+ *   content                    17.99em
+ *
+ * 0.78 gives an 18.87em box and **0.88em of slack**. The token block cost about
+ * 5.7em; retiring the GPU meter paid ~1.56em of it (it was a segmented bar
+ * restating the GPU percentage two rows above, while the network meter is
+ * log-scaled across decades and stays), and the height carries the rest.
+ *
+ * THE COST, NAMED: `anchorY` is clamped to `[height/2, 1 - height/2]`, so the
+ * panel's vertical travel falls from ±0.19 (at 0.62) to ±0.11 of the frame. It
+ * tracks its eye less far. Accepted deliberately — the panel has been clamped
+ * since it was built, and the alternative is a token block somewhere outside the
+ * camera frame, which would be a second answer to one question.
+ *
+ * The line above is ARITHMETIC FROM THE STYLESHEET, not a reading taken in the
+ * running app, and the two have disagreed here before. Verify it the same way
+ * the 0.62 figure was verified: sum the CHILDREN, not the last child's offset —
+ * `.foot` has `margin-top: auto`, so its offset tracks the box and will
+ * cheerfully report the box back to you as the content. Check it against the
+ * DECK dock, never the HUD's larger frame, which clamps at the 10px ceiling and
+ * has slack that hides the problem.
+ *
+ * ANY future row costs ~1.56em (row plus gap) and must be paid for here.
  */
 export const READOUT_GEOMETRY: ReadoutGeometry = {
   offset: 0.075,
   width: 0.3,
-  height: 0.62,
+  height: 0.78,
   rise: -0.08,
 };
 
@@ -298,6 +325,149 @@ export function resolveReadoutLayout(
  * The knee sits inboard of the anchor — i.e. to its right, since the panel is
  * always left of the eye — so the run bends toward the panel rather than away.
  */
+// ---------------------------------------------------------------------------
+// The completed-run announcement (token-accounting / eye-tracking-hud). Same
+// frame-normalized coordinate system as the readout above, and the same
+// no-CSS-animation rule for exactly the reason EyeReticle.tsx:113-116 records:
+// a transition or @keyframes on a transform this loop rewrites is cancelled by
+// the next frame's write. The whole envelope is therefore pure functions of
+// elapsed time here, testable, and tunable in one place.
+//
+// READOUT_GEOMETRY is NOT affected by any of this: the badge hangs outside the
+// panel, on the other eye, so the panel's height budget is untouched.
+// ---------------------------------------------------------------------------
+
+/** Connector draw-on. */
+export const ALERT_DRAW_MS = 250;
+/** Badge unfold, staggered to begin only once the connector has landed. */
+export const ALERT_UNFOLD_MS = 350;
+/** How long the figure is held, fully drawn, before it begins to resolve. */
+export const ALERT_HOLD_MS = 1900;
+/** The resolve, during which the arrival runs in reverse. */
+export const ALERT_RESOLVE_MS = 1000;
+/** Badge fold, within the resolve — the reverse of the stagger on the way in. */
+export const ALERT_FOLD_MS = 600;
+/** End to end. After this the announcement is gone and leaves nothing behind. */
+export const ALERT_TOTAL_MS = ALERT_DRAW_MS + ALERT_UNFOLD_MS + ALERT_HOLD_MS + ALERT_RESOLVE_MS;
+
+const ALERT_RESOLVE_AT = ALERT_DRAW_MS + ALERT_UNFOLD_MS + ALERT_HOLD_MS;
+
+/** 0..1 draw-on/retract for the connector, across the whole envelope. */
+export function alertConnector(elapsedMs: number): number {
+  if (elapsedMs <= 0) return 0;
+  if (elapsedMs < ALERT_DRAW_MS) return elapsedMs / ALERT_DRAW_MS;
+  if (elapsedMs < ALERT_RESOLVE_AT) return 1;
+  if (elapsedMs < ALERT_TOTAL_MS) return 1 - (elapsedMs - ALERT_RESOLVE_AT) / ALERT_RESOLVE_MS;
+  return 0;
+}
+
+/** 0..1 unfold/fold for the badge, staggered after the connector in both directions. */
+export function alertBadge(elapsedMs: number): number {
+  if (elapsedMs <= ALERT_DRAW_MS) return 0;
+  if (elapsedMs < ALERT_DRAW_MS + ALERT_UNFOLD_MS) return (elapsedMs - ALERT_DRAW_MS) / ALERT_UNFOLD_MS;
+  if (elapsedMs < ALERT_RESOLVE_AT) return 1;
+  if (elapsedMs < ALERT_RESOLVE_AT + ALERT_FOLD_MS) return 1 - (elapsedMs - ALERT_RESOLVE_AT) / ALERT_FOLD_MS;
+  return 0;
+}
+
+export type AlertGeometry = {
+  /** Gap between the eye and the badge's near (left) edge, in frame widths. */
+  offset: number;
+  /** Badge width, in frame widths. */
+  width: number;
+  /** How far the badge's center sits above its eye, in frame heights. */
+  rise: number;
+};
+
+/**
+ * Smaller than the panel in every dimension, and that is the point: this is a
+ * momentary mark, not a second readout. The rule fixing one persistent element
+ * per eye is not broken by it, and it must not drift into something that looks
+ * like it could be.
+ */
+export const ALERT_GEOMETRY: AlertGeometry = {
+  offset: 0.07,
+  width: 0.2,
+  rise: -0.1,
+};
+
+/**
+ * The announcement's whole runtime state, in one object shared between the
+ * component that resolves it (EyeReticle, which owns the frame) and the one
+ * that draws the badge — the same arrangement ReadoutLayout already uses, so
+ * neither component measures the other.
+ *
+ * `shownAt` is a `performance.now()` stamp; `at` is the LEDGER timestamp the
+ * envelope belongs to, kept so a second completion can be recognized as a
+ * different event rather than as the same one.
+ */
+export type AlertState = {
+  shownAt: number | null;
+  at: number | null;
+  tokens: number | null;
+  /** Frame-normalized: the badge's LEFT edge, vertically centered. */
+  anchorX: number;
+  anchorY: number;
+  connector: number;
+  badge: number;
+};
+
+export function createAlertState(): AlertState {
+  return { shownAt: null, at: null, tokens: null, anchorX: 0, anchorY: 0, connector: 0, badge: 0 };
+}
+
+/**
+ * Resolves the announcement for one frame, in place.
+ *
+ * The badge hangs RIGHT of the ring eye and never anywhere else — outward, on
+ * the side of the frame that eye appears on, mirroring the panel's leftward
+ * rule. The two instruments therefore stay in their own halves of the frame and
+ * cannot collide, whatever the head does.
+ *
+ * `anchorX` is the badge's LEFT edge and is always strictly right of the eye by
+ * `offset`, so no part of the badge can cover the eye at any head pose. The
+ * frame's right edge CLIPS it rather than moving it, for the reason already
+ * recorded for the panel: an element that changes side mid-appearance reads as
+ * malfunctioning, and relocation while the user turns their head is worse than
+ * truncation.
+ *
+ * Vertical placement clamps, as the panel's does — there is no second vertical
+ * position to move to, so a clamp cannot oscillate. Clamping moves only `y`, so
+ * it cannot bring the badge back across the eye.
+ */
+export function resolveAlertLayout(
+  center: EyePoint,
+  elapsedMs: number,
+  state: AlertState,
+  geom: AlertGeometry = ALERT_GEOMETRY,
+): AlertState {
+  state.anchorX = center.x + geom.offset;
+  state.anchorY = Math.max(0.02, Math.min(0.98, center.y + geom.rise));
+  state.connector = alertConnector(elapsedMs);
+  state.badge = alertBadge(elapsedMs);
+  return state;
+}
+
+/**
+ * The announcement's connector: an origin dot at the eye, a run outward, and a
+ * terminating tick at the badge's near (left) edge — in viewBox units, and
+ * carrying `pathLength="1"` on the rendered path so the draw-on is a plain
+ * `stroke-dashoffset = 1 - connector` with no length measurement anywhere.
+ *
+ * The knee sits inboard of the anchor — i.e. to its LEFT, since the badge is
+ * always right of the eye — so the run bends toward the badge rather than away.
+ * The mirror of tetherPath, deliberately: this borrows the arrival idiom the
+ * tether already established rather than inventing a second one.
+ */
+export function alertPath(center: EyePoint, state: AlertState, elbow = 0.04): string {
+  const ex = center.x * VIEW_W;
+  const ey = center.y * VIEW_H;
+  const ax = state.anchorX * VIEW_W;
+  const ay = state.anchorY * VIEW_H;
+  const kneeX = ax - elbow * VIEW_W;
+  return `M ${fmt(ex)} ${fmt(ey)} L ${fmt(kneeX)} ${fmt(ay)} L ${fmt(ax)} ${fmt(ay)}`;
+}
+
 export function tetherPath(center: EyePoint, layout: ReadoutLayout, elbow = 0.045): string {
   const ex = center.x * VIEW_W;
   const ey = center.y * VIEW_H;

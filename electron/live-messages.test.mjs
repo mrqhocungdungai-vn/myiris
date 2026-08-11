@@ -50,6 +50,42 @@ describe("live-messages: handleLiveMessage goAway", () => {
   });
 });
 
+describe("live-messages: handleLiveMessage usage reporting (token-accounting)", () => {
+  it("records a usage-only message that carries no serverContent at all", () => {
+    // The regression the branch's POSITION exists for. A usage report arrives
+    // with no serverContent, so a branch placed below the `if (!content)
+    // return;` would never run — and the failure is silent: the total is
+    // simply understated, and looks entirely plausible.
+    const recordGeminiUsage = vi.fn();
+    const messages = make({ recordGeminiUsage });
+    messages.handleLiveMessage({ usageMetadata: { totalTokenCount: 412 } });
+    expect(recordGeminiUsage).toHaveBeenCalledTimes(1);
+    expect(recordGeminiUsage).toHaveBeenCalledWith({ totalTokenCount: 412 });
+  });
+
+  it("records once and still dispatches a tool call carried in the same message", async () => {
+    const session = makeLiveSession();
+    const executeClaudeTool = vi.fn(async () => ({ status: "ok" }));
+    const recordGeminiUsage = vi.fn();
+    const messages = make({ getLiveSession: () => session, executeClaudeTool, recordGeminiUsage });
+    messages.handleLiveMessage({
+      usageMetadata: { totalTokenCount: 900 },
+      toolCall: { functionCalls: [{ id: "c1", name: "get_ui_context", args: {} }] },
+    });
+    await vi.waitFor(() => expect(session.sendToolResponse).toHaveBeenCalled());
+    expect(recordGeminiUsage).toHaveBeenCalledTimes(1);
+    expect(executeClaudeTool).toHaveBeenCalledWith("get_ui_context", {});
+  });
+
+  it("records nothing for a message with no usageMetadata", () => {
+    const recordGeminiUsage = vi.fn();
+    const messages = make({ recordGeminiUsage });
+    messages.handleLiveMessage({ serverContent: { turnComplete: true } });
+    messages.handleLiveMessage({ goAway: { timeLeft: "10s" } });
+    expect(recordGeminiUsage).not.toHaveBeenCalled();
+  });
+});
+
 describe("live-messages: handleLiveMessage tool calls", () => {
   it("executes a tool call and sends the response back on the live session", async () => {
     const session = makeLiveSession();

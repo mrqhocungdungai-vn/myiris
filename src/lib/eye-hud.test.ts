@@ -1,6 +1,12 @@
 import { describe, it, expect } from "vitest";
 import {
   ACQUIRE_MS,
+  ALERT_DRAW_MS,
+  ALERT_FOLD_MS,
+  ALERT_GEOMETRY,
+  ALERT_HOLD_MS,
+  ALERT_TOTAL_MS,
+  ALERT_UNFOLD_MS,
   LOCK_MS,
   LOCK_STRETCH,
   PANEL_MS,
@@ -9,13 +15,18 @@ import {
   VIEW_H,
   VIEW_W,
   acquireScale,
+  alertBadge,
+  alertConnector,
+  alertPath,
   arcPath,
+  createAlertState,
   createReadoutLayout,
   dashPattern,
   gaugeTicks,
   lockSettle,
   panelReveal,
   polarPoint,
+  resolveAlertLayout,
   resolveReadoutLayout,
   segmentRing,
   tetherPath,
@@ -327,6 +338,123 @@ describe("tetherPath", () => {
       const knee = Number(tetherPath(center, layout).match(/-?\d+(\.\d+)?/g)![2]);
       expect(knee).toBeGreaterThan(layout.anchorX * VIEW_W);
       expect(knee).toBeLessThanOrEqual(center.x * VIEW_W);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The completed-run announcement (token-accounting). Bounded, self-dismissing,
+// and never over the eye it belongs to.
+// ---------------------------------------------------------------------------
+
+describe("the announcement's envelope", () => {
+  it("is bounded to 0..1 across and beyond its whole span", () => {
+    for (let t = -500; t <= ALERT_TOTAL_MS + 2000; t += 7) {
+      expect(alertConnector(t)).toBeGreaterThanOrEqual(0);
+      expect(alertConnector(t)).toBeLessThanOrEqual(1);
+      expect(alertBadge(t)).toBeGreaterThanOrEqual(0);
+      expect(alertBadge(t)).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it("resolves itself and stays resolved — it is a notification, not a readout", () => {
+    expect(alertConnector(ALERT_TOTAL_MS)).toBe(0);
+    expect(alertBadge(ALERT_TOTAL_MS)).toBe(0);
+    expect(alertConnector(ALERT_TOTAL_MS + 60_000)).toBe(0);
+    expect(alertBadge(ALERT_TOTAL_MS + 60_000)).toBe(0);
+  });
+
+  it("draws the connector on monotonically, then holds it", () => {
+    let previous = -1;
+    for (let t = 0; t <= ALERT_DRAW_MS; t += 5) {
+      const value = alertConnector(t);
+      expect(value).toBeGreaterThanOrEqual(previous);
+      previous = value;
+    }
+    expect(alertConnector(ALERT_DRAW_MS)).toBe(1);
+    expect(alertConnector(ALERT_DRAW_MS + ALERT_UNFOLD_MS + ALERT_HOLD_MS - 1)).toBe(1);
+  });
+
+  it("staggers the badge behind the connector, on the way in and on the way out", () => {
+    // Nothing of the badge exists until the connector has landed.
+    expect(alertBadge(ALERT_DRAW_MS)).toBe(0);
+    expect(alertBadge(ALERT_DRAW_MS - 1)).toBe(0);
+    expect(alertConnector(ALERT_DRAW_MS)).toBe(1);
+    expect(alertBadge(ALERT_DRAW_MS + ALERT_UNFOLD_MS)).toBe(1);
+    // And on the way out the arrival runs in reverse: the badge folds away
+    // first, and the connector is still retracting after it has gone.
+    const resolveAt = ALERT_DRAW_MS + ALERT_UNFOLD_MS + ALERT_HOLD_MS;
+    expect(alertBadge(resolveAt + ALERT_FOLD_MS)).toBe(0);
+    expect(alertConnector(resolveAt + ALERT_FOLD_MS)).toBeGreaterThan(0);
+  });
+
+  it("falls monotonically through the resolve, on both elements", () => {
+    const resolveAt = ALERT_DRAW_MS + ALERT_UNFOLD_MS + ALERT_HOLD_MS;
+    let connector = 2;
+    let badge = 2;
+    for (let t = resolveAt; t <= ALERT_TOTAL_MS; t += 5) {
+      expect(alertConnector(t)).toBeLessThanOrEqual(connector);
+      expect(alertBadge(t)).toBeLessThanOrEqual(badge);
+      connector = alertConnector(t);
+      badge = alertBadge(t);
+    }
+  });
+});
+
+describe("the announcement's placement", () => {
+  it("never places the badge across the eye's center, at any head pose", () => {
+    // It hangs OUTWARD from the ring eye — toward the frame's right — and
+    // `anchorX` is its left edge, so the whole badge is right of the eye.
+    for (const x of [0, 0.05, 0.33, 0.5, 0.78, 0.95, 1]) {
+      for (const y of [0, 0.2, 0.5, 0.9, 1]) {
+        const state = resolveAlertLayout({ x, y }, 1_000, createAlertState());
+        expect(state.anchorX).toBeGreaterThan(x);
+        expect(state.anchorX).toBeCloseTo(x + ALERT_GEOMETRY.offset, 12);
+      }
+    }
+  });
+
+  it("is clipped at the frame's right edge rather than relocated to the other side", () => {
+    // An element that changes side mid-appearance reads as malfunctioning, and
+    // relocation while the user turns their head is worse than truncation.
+    const state = resolveAlertLayout({ x: 0.97, y: 0.5 }, 1_000, createAlertState());
+    expect(state.anchorX).toBeGreaterThan(0.97);
+    expect(state.anchorX + ALERT_GEOMETRY.width).toBeGreaterThan(1);
+  });
+
+  it("clamps vertically without ever moving horizontally", () => {
+    const high = resolveAlertLayout({ x: 0.5, y: 0 }, 1_000, createAlertState());
+    const low = resolveAlertLayout({ x: 0.5, y: 1 }, 1_000, createAlertState());
+    expect(high.anchorY).toBeGreaterThanOrEqual(0);
+    expect(low.anchorY).toBeLessThanOrEqual(1);
+    expect(high.anchorX).toBeCloseTo(low.anchorX, 12);
+  });
+
+  it("tracks its eye: the resolved anchor follows the eye exactly", () => {
+    const state = createAlertState();
+    for (const x of [0.3, 0.31, 0.5]) {
+      resolveAlertLayout({ x, y: 0.4 }, 1_000, state);
+      expect(state.anchorX).toBeCloseTo(x + ALERT_GEOMETRY.offset, 12);
+    }
+  });
+
+  it("starts its connector at the tracked eye and ends it exactly at the badge's anchor", () => {
+    const center = { x: 0.6, y: 0.45 };
+    const state = resolveAlertLayout(center, 1_000, createAlertState());
+    const numbers = alertPath(center, state).match(/-?\d+(\.\d+)?/g)!.map(Number);
+    expect(numbers[0]).toBeCloseTo(center.x * VIEW_W, 2);
+    expect(numbers[1]).toBeCloseTo(center.y * VIEW_H, 2);
+    expect(numbers[numbers.length - 2]).toBeCloseTo(state.anchorX * VIEW_W, 2);
+    expect(numbers[numbers.length - 1]).toBeCloseTo(state.anchorY * VIEW_H, 2);
+  });
+
+  it("bends its elbow inboard of the anchor, toward the eye it came from", () => {
+    for (const x of [0.25, 0.5, 0.8]) {
+      const center = { x, y: 0.45 };
+      const state = resolveAlertLayout(center, 1_000, createAlertState());
+      const knee = Number(alertPath(center, state).match(/-?\d+(\.\d+)?/g)![2]);
+      expect(knee).toBeLessThan(state.anchorX * VIEW_W);
+      expect(knee).toBeGreaterThanOrEqual(center.x * VIEW_W);
     }
   });
 });

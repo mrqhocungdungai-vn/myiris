@@ -512,6 +512,9 @@ A failed model load degrades to "no overlays" with nothing shown to the user.
 | Value formatting, meter scales, the display ease, the load ladder | `src/lib/telemetry-format.ts` |
 | Host sampling (main process) | `electron/system-telemetry.mjs`, `electron/capabilities/hud-telemetry.mjs` |
 | The renderer's subscription | `src/hooks/useSystemTelemetry.ts` |
+| Token counting (main process) | `electron/token-ledger.mjs`, `electron/capabilities/token-usage.mjs` |
+| The renderer's token subscription | `src/hooks/useTokenLedger.ts` |
+| The completed-run announcement's badge | `src/components/EyeTokenAlert.tsx` |
 | Styling | `src/styles/claude.css` |
 
 **Which eye gets what is fixed.** The ring is driven by MediaPipe's
@@ -534,12 +537,50 @@ the panel legible this placement rule has to be re-opened.
 
 ### What the panel shows
 
+Two readings, and the panel says which is which: the rows under **SYS** report
+the machine, the rows under **APP** report what this app has spent.
+
 **The real host** (`hud-readout-shows-real-telemetry`): processor utilization,
 graphics utilization, and network throughput in each direction, measured in the
 main process **once a second, and only while the camera is on**. There is no
-separate switch, nothing is sampled in the background, nothing is written to
-disk, and nothing outside these two overlay components may read the numbers —
-no verb, no prompt, no run.
+separate switch, nothing is sampled in the background, and nothing is written to
+disk. **No host measurement may be read outside the camera overlays** — no verb,
+no prompt, no run.
+
+**The app's token consumption** (`token-accounting`): what each of the two paid
+engines has reported consuming this app session — `GEM` for the voice engine,
+`CLD` for the build engine — each with its session total and what the most
+recent call added, plus Claude's cache-read figure on its own `↺` line, never
+folded into its headline. Tokens rather than dollars, because Gemini Live
+reports tokens and never a price: a monetary figure for it would mean Iris
+holding a price table and multiplying, which is an estimate. The per-run dollar
+figure on the work card comes from the runtime and is untouched by this.
+
+**The split between the two is the camera gate, and only that.** Host
+measurement is gated because each probe spawns a subprocess; counting is not,
+because the figures arrive inside messages the app has already received and
+parsed. So the account runs from app start whether or not anything is displaying
+it, and a panel opened after an hour of conversation asks for the session so far
+rather than showing an apparent fresh start. Nothing downstream acts on the
+counts either — no prompt, no verb, no spoken answer, no note — and the one
+thing written to disk for them is a line per counted run in
+`~/.myiris/logs/iris.log`, since the panel exists only while the camera is on.
+
+The voice engine's counter is **correct whether its figures are cumulative or
+per-message**, and a rotated socket cannot make the total drop; see
+`docs/REFERENCE.md`.
+
+**The ring alerts, the panel reports.** When a run finishes while the overlays
+are rendering, a connector draws outward from the **ring's** eye — the frame's
+right — and a badge unfolds at its end carrying that run's figure, holds, and
+resolves away, about three and a half seconds end to end. One at a time, newest
+replaces rather than queues, and it is **never replayed**: a run that finished
+with the camera off is not announced when the camera comes back on. Its tokens
+are already in the panel's totals, and presenting old work as news is worse than
+not presenting it. Nothing fires for the voice engine at all — its usage arrives
+several times a second while anyone is talking, and flashing on it would be a
+strobe beside the user's face. No element of the ring changes when the badge
+appears, which is what keeps the ring's lock beat meaning exactly one thing.
 
 Everything comes from the platform without elevated privileges: the processor
 from `os.cpus()` deltas (no subprocess at all), graphics from `ioreg`, network

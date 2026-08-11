@@ -111,11 +111,12 @@ describe("wiring-capabilities: createCapabilitiesWiring", () => {
 
   it("returns every capability in the capabilities array, in registration order", () => {
     const result = createCapabilitiesWiring(makeDeps());
-    expect(result.capabilities).toHaveLength(4);
+    expect(result.capabilities).toHaveLength(5);
     expect(result.capabilities[0]).toBe(result.canvasCapability);
     expect(result.capabilities[1]).toBe(result.secondBrainCapability);
     expect(result.capabilities[2]).toBe(result.hudTelemetryCapability);
-    expect(result.capabilities[3]).toBe(result.preparedAnswersCapability);
+    expect(result.capabilities[3]).toBe(result.tokenUsageCapability);
+    expect(result.capabilities[4]).toBe(result.preparedAnswersCapability);
   });
 
   // iris-answers-from-the-open-folder: the folder the lookup searches is the one

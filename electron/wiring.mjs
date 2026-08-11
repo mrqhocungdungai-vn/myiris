@@ -97,6 +97,10 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
   // Same forward reference, for the same reason: runDispatch below needs the
   // prepared-answer lookup, and this capability is constructed with the others.
   let preparedAnswersCapability;
+  // And again, for the token account: runQueue's onFinalized below records
+  // every finished run's tokens through it, and the Live wiring further down
+  // hands its Gemini recorder to the message handler (token-accounting).
+  let tokenUsageCapability;
 
   // One task at a time, globally — see electron/run-queue.mjs. startClaudeRun
   // comes from wiring-capabilities.mjs's runExec, constructed later in this
@@ -129,6 +133,21 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
       // block) rather than a direct reference — same late-binding reason as
       // startRun/emit above.
       runStream.cancelActivityThrottle(run);
+      // token-accounting: this run's tokens, counted once. `onFinalized` is
+      // the seam precisely because it is documented as firing once per run
+      // after a terminal update, and `run.usage` is set by then on both the
+      // one-shot and resident paths — hooking the two assignment sites would
+      // invite divergence, and hooking toUpdateEvent would double-count,
+      // since that projection re-emits `run.usage` on every later event
+      // (design D4).
+      //
+      // Unconditional, and deliberately ABOVE the started_at gate: a run that
+      // never started has no usage and this is a no-op, whereas placing it
+      // below would silently skip nothing today and something tomorrow.
+      // Counted whatever the terminal status is — a `limited`, `unanswered`
+      // or `failed` run spent tokens too. Through the same thunk shape as
+      // startRun/emit above: caps is constructed further down this function.
+      tokenUsageCapability?.recordClaudeRun?.(run);
       // A run that never started (rejected at a gate before dispatch, e.g. a
       // missing agent) has no result worth speaking — the exact rule
       // run-queue.mjs's queued-cancel path already applies ("a queued run
@@ -259,6 +278,10 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     // up this block, but the thunk keeps this consistent with every other
     // cross-module call here.
     probePipelineAvailability: () => probePipelineAvailability(),
+    // token-accounting: the voice preview's throwaway Live session spends real
+    // tokens and is counted through the same recorder (design D3). Through a
+    // thunk — caps is constructed well below this call.
+    recordGeminiUsage: (usageMetadata) => tokenUsageCapability?.recordGeminiUsage?.(usageMetadata),
   });
   const {
     getPromptReviewMode,
@@ -413,6 +436,7 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
   canvasCapability = caps.canvasCapability;
   secondBrainCapability = caps.secondBrainCapability;
   preparedAnswersCapability = caps.preparedAnswersCapability;
+  tokenUsageCapability = caps.tokenUsageCapability;
   const { startClaudeRun, geminiTools, geminiPrompts } = caps;
   const CAPABILITIES = caps.capabilities;
 
@@ -443,6 +467,9 @@ export function createWiring({ repoRoot, appIcon, iconPath, canvasStoreFile, env
     geminiTools,
     geminiPrompts,
     secondBrainCapability,
+    // token-accounting: no thunk needed here — caps is constructed above this
+    // call, unlike the runQueue seam further up.
+    recordGeminiUsage: (usageMetadata) => tokenUsageCapability.recordGeminiUsage(usageMetadata),
     setWindowModule,
     setLiveSessionModule,
   });

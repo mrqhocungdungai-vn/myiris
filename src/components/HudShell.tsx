@@ -27,13 +27,15 @@ import ContextSupplementInput from "./ContextSupplementInput";
 import { HandSkeleton } from "./CameraDock";
 import EyeReticle from "./EyeReticle";
 import EyeReadout from "./EyeReadout";
+import EyeTokenAlert from "./EyeTokenAlert";
+import type { TokenAlertSeenRef, TokenLedgerRef } from "../hooks/useTokenLedger";
 import CameraLog from "./CameraLog";
 import DrawingCanvas from "./DrawingCanvas";
 import VaultGalaxy, { type GalaxyNode } from "./VaultGalaxy";
 import type { HandoffTone, LogLine, ReactorState, TaskCard, TranscriptLine } from "../types";
 import type { HandState } from "../hooks/useHandControl";
 import type { EyeState } from "../hooks/useEyeTracking";
-import { createReadoutLayout } from "../lib/eye-hud";
+import { createAlertState, createReadoutLayout } from "../lib/eye-hud";
 import { formatRecStamp } from "../lib/rec-clock";
 import { acceptedKey } from "../lib/tasks";
 import { HUD_CHROME_CLASS } from "../lib/hudChrome";
@@ -45,6 +47,8 @@ function HudCamera({
   eye,
   eyeRef,
   telemetryRef,
+  ledgerRef,
+  alertSeenRef,
   logs,
   actionLabel,
   actionTone,
@@ -57,6 +61,10 @@ function HudCamera({
   eye: EyeState;
   eyeRef: { current: EyeState };
   telemetryRef: { current: TelemetrySample };
+  /** token-accounting: the app's own spend, on its own channel and never gated on the camera. */
+  ledgerRef: TokenLedgerRef;
+  /** Which completed run has already been announced beside the ring. */
+  alertSeenRef: TokenAlertSeenRef;
   logs: LogLine[];
   actionLabel: string;
   actionTone: string;
@@ -69,6 +77,9 @@ function HudCamera({
   // Per-surface, for the same reason as CameraDock's: the eye readout's layout
   // is resolved by the reticle and read by the panel within the same frame.
   const readoutLayoutRef = useRef(createReadoutLayout());
+  // Per-surface too, and for the same reason: the reticle resolves the
+  // announcement's position and the badge reads it within the same frame.
+  const alertLayoutRef = useRef(createAlertState());
 
   const [stamp, setStamp] = useState("");
 
@@ -94,8 +105,26 @@ function HudCamera({
         <video ref={videoRef} autoPlay playsInline muted />
         <div className="cam-scan" />
         <HandSkeleton hands={hand.hands} handsRef={handRef} />
-        <EyeReticle eye={eye} eyeRef={eyeRef} telemetryRef={telemetryRef} layoutRef={readoutLayoutRef} />
-        <EyeReadout eye={eye} eyeRef={eyeRef} telemetryRef={telemetryRef} layoutRef={readoutLayoutRef} />
+        <EyeReticle
+          eye={eye}
+          eyeRef={eyeRef}
+          telemetryRef={telemetryRef}
+          ledgerRef={ledgerRef}
+          alertSeenRef={alertSeenRef}
+          layoutRef={readoutLayoutRef}
+          alertRef={alertLayoutRef}
+        />
+        <EyeReadout
+          eye={eye}
+          eyeRef={eyeRef}
+          telemetryRef={telemetryRef}
+          ledgerRef={ledgerRef}
+          layoutRef={readoutLayoutRef}
+        />
+        {/* The same element in every surface that shows the camera preview,
+            never specialized per surface: its size follows the frame, like
+            every other overlay here. */}
+        <EyeTokenAlert eye={eye} eyeRef={eyeRef} alertRef={alertLayoutRef} />
         <CameraLog logs={logs} />
         {/* Top-left, the one corner not already taken: `.cam-status` is
             top-right and `.gesture-chip` bottom-left (design D2). The
@@ -174,6 +203,8 @@ export default function HudShell({
   eye,
   eyeRef,
   telemetryRef,
+  ledgerRef,
+  alertSeenRef,
   logs,
   handStream,
   handActionLabel,
@@ -250,6 +281,10 @@ export default function HudShell({
   eye: EyeState;
   eyeRef: { current: EyeState };
   telemetryRef: { current: TelemetrySample };
+  /** token-accounting: the app's own spend, on its own channel and never gated on the camera. */
+  ledgerRef: TokenLedgerRef;
+  /** Which completed run has already been announced beside the ring. */
+  alertSeenRef: TokenAlertSeenRef;
   /** camera-activity-log: the app's own log store, newest first. */
   logs: LogLine[];
   handStream: MediaStream | null;
@@ -476,6 +511,8 @@ export default function HudShell({
               eye={eye}
               eyeRef={eyeRef}
               telemetryRef={telemetryRef}
+              ledgerRef={ledgerRef}
+              alertSeenRef={alertSeenRef}
               logs={logs}
               actionLabel={handActionLabel}
               actionTone={handActionTone}

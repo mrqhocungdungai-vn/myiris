@@ -519,6 +519,14 @@ type IrisApi = {
   startSystemTelemetry: () => void;
   stopSystemTelemetry: () => void;
   onSystemTelemetrySample: (callback: (sample: TelemetrySample) => void) => () => void;
+  // token-accounting: what each paid engine has reported consuming this app
+  // session. A pull as well as a push, because counting is never gated on the
+  // camera — only the delivery is, so a panel opening late has to be able to
+  // ask for the session so far. Nothing outside the camera overlays reads these
+  // figures, and nothing in the app acts on them.
+  getTokenUsage: () => Promise<TokenUsageSnapshot>;
+  subscribeTokenUsage: () => void;
+  onTokenUsage: (callback: (snapshot: TokenUsageSnapshot) => void) => () => void;
 };
 
 /**
@@ -536,6 +544,34 @@ type TelemetrySample = {
   gpu: number | null;
   netRx: number | null;
   netTx: number | null;
+};
+
+/**
+ * The token account, per app session: one figure set per paid engine, never a
+ * combined total across the two. `total` is the session's running total, `last`
+ * what the most recent call added, `at` when that account last CHANGED — which
+ * is also the event signal the ring's alert detects a finished run by, so it is
+ * never restamped when nothing changed.
+ *
+ * `null` is absence throughout, on the same rule as TelemetrySample and for a
+ * sharper reason here: a reported zero is a real value (an exchange that
+ * consumed nothing countable), while absence means the engine has not been used
+ * or is not configured at all — the ordinary state of the build engine with no
+ * Claude credential.
+ *
+ * `cacheRead` is Claude's alone and is never added into its `total`: cached
+ * reads routinely exceed everything else by an order of magnitude while costing
+ * a fraction per token.
+ */
+type TokenUsageAccount = {
+  total: number | null;
+  last: number | null;
+  at: number | null;
+};
+
+type TokenUsageSnapshot = {
+  gemini: TokenUsageAccount;
+  claude: TokenUsageAccount & { cacheRead: number | null };
 };
 
 interface Window {

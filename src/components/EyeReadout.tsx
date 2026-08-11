@@ -1,16 +1,17 @@
 import { useEffect, useRef } from "react";
 import { EYE_READOUT, type EyeState } from "../hooks/useEyeTracking";
 import { READOUT_GEOMETRY, type ReadoutLayout } from "../lib/eye-hud";
+import type { TokenLedgerRef } from "../hooks/useTokenLedger";
 import {
   BAR_CLASS,
   HISTORY_BUCKETS,
   easeToward,
   formatPercent,
   formatRate,
+  formatTokens,
   higherOf,
   historyLevel,
   logMeterLevel,
-  meterLevel,
   nextLoadBand,
   quantize,
   type LoadBand,
@@ -23,10 +24,25 @@ import {
 // element whose transform is written every frame by a rAF loop, mounted or not
 // by semantically-gated React state.
 //
-// Its content is the REAL HOST (hud-readout-shows-real-telemetry): processor,
-// graphics and network, measured in the main process once a second. There is no
-// churn tick and no generated motion — every figure here was measured, and the
-// panel's liveliness comes from the machine rather than from a sine wave.
+// Its content is TWO readings, and the panel says which is which. The rows
+// under SYS are the REAL HOST (hud-readout-shows-real-telemetry): processor,
+// graphics and network, measured in the main process once a second. The rows
+// under APP are what the app's two paid engines have reported consuming
+// (token-accounting). There is no churn tick and no generated motion — every
+// figure here was measured or reported, and the panel's liveliness comes from
+// the machine rather than from a sine wave.
+//
+// The two halves obey different rules, and conflating them is the mistake to
+// avoid here. A host measurement is a sample of a present condition: it eases,
+// it goes STALE, and it can wear the panel's one warning tone. A token count is
+// none of those. It STEPS (easing would draw counts that were never reached,
+// and an ease toward a lower value would render a decrease that cannot happen),
+// it never goes stale (silence means nothing was spent, not that the reading
+// aged out), and it NEVER wears the accent at any magnitude — there is no level
+// at which an amount consumed is a fault, and marking one would imply a limit
+// this panel does not enforce. What the app enforces about spend is a per-run
+// ceiling, applied in the run's own configuration and reported as that run's
+// terminal status.
 
 const METER_CELLS = 14;
 /** Top cells set off as a printed redline. Colour-free on purpose — the panel's one warning tone is spent on the accent row. */
@@ -79,16 +95,42 @@ const ROWS: Array<{ key: string; label: string; field: Field; kind: "level" | "r
 
 const BAND_TOKEN: Record<LoadBand, string> = { nom: "NOM", elv: "ELV", sat: "SAT" };
 
+/**
+ * The five token figures, in render order. Indices into `display.tokenLast` and
+ * `tokenValueRefs` — one array rather than five named refs, so the frame path
+ * is a single loop with no branching per figure.
+ *
+ * `signed` marks the two "what the most recent call added" figures. `cacheRead`
+ * is Claude's alone and is deliberately NOT summed into its headline: cached
+ * reads routinely exceed everything else by an order of magnitude while costing
+ * a fraction per token, so folding them in would make the headline climb far
+ * faster than consumption actually rises.
+ */
+const TOKEN_FIGURES: Array<{ key: string; signed: boolean; read: (snapshot: TokenUsageSnapshot) => number | null }> = [
+  { key: "gemTotal", signed: false, read: (s) => s.gemini.total },
+  { key: "gemLast", signed: true, read: (s) => s.gemini.last },
+  { key: "cldTotal", signed: false, read: (s) => s.claude.total },
+  { key: "cldLast", signed: true, read: (s) => s.claude.last },
+  { key: "cacheRead", signed: false, read: (s) => s.claude.cacheRead },
+];
+
 export default function EyeReadout({
   eye,
   eyeRef,
   telemetryRef,
+  ledgerRef,
   layoutRef,
 }: {
   eye: EyeState;
   eyeRef: { current: EyeState };
   /** Latest host measurement (useSystemTelemetry's sampleRef). Read, never written. */
   telemetryRef: { current: TelemetrySample };
+  /**
+   * The token account (useTokenLedger's ledgerRef). Read, never written, and on
+   * a different channel from `telemetryRef` — which is the whole reason these
+   * figures do not fall to absent when host sampling stops.
+   */
+  ledgerRef: TokenLedgerRef;
   /**
    * Resolved by EyeReticle earlier in the same frame — the one shared
    * frame-normalized position the tether's far end also derives from, so the
@@ -101,7 +143,12 @@ export default function EyeReadout({
   const tokenRef = useRef<HTMLSpanElement | null>(null);
   const rowRefs = useRef<Array<HTMLDivElement | null>>([]);
   const valueRefs = useRef<Array<HTMLSpanElement | null>>([]);
-  const meterRefs = useRef<Array<Array<HTMLSpanElement | null>>>([[], []]);
+  const tokenValueRefs = useRef<Array<HTMLSpanElement | null>>([]);
+  // ONE meter, not two. The GPU meter was a segmented bar restating the GPU
+  // percentage printed directly above it; the network meter is log-scaled
+  // across decades, which is a reading the two rate rows genuinely do not give
+  // at a glance. The spec requires *a* graduated segmented meter, singular.
+  const meterRefs = useRef<Array<HTMLSpanElement | null>>([]);
   const tickRefs = useRef<Array<HTMLSpanElement | null>>([]);
   const barRefs = useRef<Array<HTMLSpanElement | null>>([]);
   // The frame's pixel size, kept by a ResizeObserver rather than measured each
@@ -119,11 +166,19 @@ export default function EyeReadout({
     lastInt: new Int32Array(ROWS.length).fill(-1),
     /** Whether each eased row currently holds a real value; a gap must snap, not ease. */
     present: [false, false],
-    meterEased: new Float32Array(2),
-    meterLast: new Int32Array(2).fill(-1),
-    meterPeak: new Float32Array(2),
-    meterPeakAge: new Int32Array(2),
-    meterPeakCell: new Int32Array(2).fill(-1),
+    meterEased: 0,
+    meterLast: -1,
+    meterPeak: 0,
+    meterPeakAge: 0,
+    meterPeakCell: -1,
+    /**
+     * Last RENDERED token figure per slot. Float64, not Int32: a session total
+     * passes 2^31 long before it passes anything interesting. `-1` means "the
+     * absent form is on screen", which is both the initial DOM text and what a
+     * `null` renders as — so the two cases collapse correctly into one sentinel
+     * and no real count (always ≥ 0) can collide with it.
+     */
+    tokenLast: new Float64Array(TOKEN_FIGURES.length).fill(-1),
     history: new Uint8Array(HISTORY_BUCKETS),
     historyHead: 0,
     band: "nom" as LoadBand,
@@ -178,13 +233,11 @@ export default function EyeReadout({
         if (cell) cell.className = i === display.tickPhase ? "cell lit" : "cell";
       }
 
-      const rawMeters = [meterLevel(sample.gpu), logMeterLevel((sample.netRx ?? 0) + (sample.netTx ?? 0))];
-      for (let m = 0; m < 2; m += 1) {
-        display.meterPeakAge[m] += 1;
-        if (rawMeters[m] >= display.meterPeak[m] || display.meterPeakAge[m] > PEAK_HOLD_SAMPLES) {
-          display.meterPeak[m] = rawMeters[m];
-          display.meterPeakAge[m] = 0;
-        }
+      const rawMeter = logMeterLevel((sample.netRx ?? 0) + (sample.netTx ?? 0));
+      display.meterPeakAge += 1;
+      if (rawMeter >= display.meterPeak || display.meterPeakAge > PEAK_HOLD_SAMPLES) {
+        display.meterPeak = rawMeter;
+        display.meterPeakAge = 0;
       }
 
       const load = higherOf(sample.cpu, sample.gpu);
@@ -290,32 +343,52 @@ export default function EyeReadout({
           }
         }
 
-        for (let m = 0; m < 2; m += 1) {
-          const target = fresh ? (m === 0 ? meterLevel(sample.gpu) : logMeterLevel((sample.netRx ?? 0) + (sample.netTx ?? 0))) : 0;
-          display.meterEased[m] = easeToward(display.meterEased[m], target, dt, 220);
-          const lit = quantize(display.meterEased[m], METER_CELLS);
+        {
+          const target = fresh ? logMeterLevel((sample.netRx ?? 0) + (sample.netTx ?? 0)) : 0;
+          display.meterEased = easeToward(display.meterEased, target, dt, 220);
+          const lit = quantize(display.meterEased, METER_CELLS);
           // Peak reads the RAW sample, not the ease — a marker that lags the
           // value it marks is not a peak.
-          const peakCell = fresh ? quantize(display.meterPeak[m], METER_CELLS) : -1;
-          if (lit === display.meterLast[m] && peakCell === display.meterPeakCell[m]) continue;
-          display.meterLast[m] = lit;
-          display.meterPeakCell[m] = peakCell;
-          const cells = meterRefs.current[m];
-          for (let i = 0; i < METER_CELLS; i += 1) {
-            const cell = cells[i];
-            if (!cell) continue;
-            const zone = i >= METER_CELLS - METER_ZONE_CELLS ? " zone" : "";
-            const state = i < lit ? " lit" : i + 1 === peakCell ? " peak" : "";
-            const next = `cell${zone}${state}`;
-            if (cell.className !== next) cell.className = next;
+          const peakCell = fresh ? quantize(display.meterPeak, METER_CELLS) : -1;
+          if (lit !== display.meterLast || peakCell !== display.meterPeakCell) {
+            display.meterLast = lit;
+            display.meterPeakCell = peakCell;
+            for (let i = 0; i < METER_CELLS; i += 1) {
+              const cell = meterRefs.current[i];
+              if (!cell) continue;
+              const zone = i >= METER_CELLS - METER_ZONE_CELLS ? " zone" : "";
+              const state = i < lit ? " lit" : i + 1 === peakCell ? " peak" : "";
+              const next = `cell${zone}${state}`;
+              if (cell.className !== next) cell.className = next;
+            }
           }
+        }
+
+        // ---- the token figures. A THIRD kind of row, and every rule above is
+        // deliberately absent here: no ease (a count steps — easing would draw
+        // amounts that were never reported), no `fresh` gate (these arrive on
+        // their own channel, and silence on it means nothing was spent rather
+        // than that a reading aged out), and no contribution to the band or the
+        // accent (there is no magnitude at which a count is a warning).
+        //
+        // Allocation-free on the same terms as the percent rows: compare the
+        // raw number, and call the formatter only inside the branch where the
+        // rendered figure actually changed.
+        const ledger = ledgerRef.current;
+        for (let i = 0; i < TOKEN_FIGURES.length; i += 1) {
+          const raw = TOKEN_FIGURES[i].read(ledger);
+          const next = raw === null || !Number.isFinite(raw) ? -1 : raw;
+          if (next === display.tokenLast[i]) continue;
+          display.tokenLast[i] = next;
+          const node = tokenValueRefs.current[i];
+          if (node) node.textContent = formatTokens(raw, { signed: TOKEN_FIGURES[i].signed });
         }
       }
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [eyeRef, layoutRef, telemetryRef, display]);
+  }, [eyeRef, layoutRef, telemetryRef, ledgerRef, display]);
 
   if (!eye.present) return null;
 
@@ -381,25 +454,81 @@ export default function EyeReadout({
         ))}
 
         {/* Segmented, never a smooth fill — a smooth progress bar is the most
-            recognizably-generic-UI element available (design D9). The network
-            meter is logarithmic: linear against any sane ceiling would sit at
-            zero for everything below a megabit. */}
-        {["GPU", "NET"].map((label, meter) => (
-          <div className="meter" key={label}>
-            <span className="label">{label}</span>
-            <span className="cells">
-              {Array.from({ length: METER_CELLS }, (_unused, index) => (
-                <span
-                  className={index >= METER_CELLS - METER_ZONE_CELLS ? "cell zone" : "cell"}
-                  key={index}
-                  ref={(el) => {
-                    meterRefs.current[meter][index] = el;
-                  }}
-                />
-              ))}
+            recognizably-generic-UI element available (design D9). ONE meter:
+            the network one, because it is logarithmic and linear against any
+            sane ceiling would sit at zero for everything below a megabit. The
+            GPU meter that stood beside it restated the percentage printed two
+            rows above, and its ~1.56em is what pays for the token block below
+            (design D8). */}
+        <div className="meter">
+          <span className="label">NET</span>
+          <span className="cells">
+            {Array.from({ length: METER_CELLS }, (_unused, index) => (
+              <span
+                className={index >= METER_CELLS - METER_ZONE_CELLS ? "cell zone" : "cell"}
+                key={index}
+                ref={(el) => {
+                  meterRefs.current[index] = el;
+                }}
+              />
+            ))}
+          </span>
+        </div>
+
+        {/* The panel's second reading begins here, and the rule plus the APP
+            tag is how the panel says so — the rows above report the machine,
+            the rows below report what this app has spent. Without the break
+            they would read as one undifferentiated list, which invites the
+            reading that a token count is a utilization. */}
+        <div className="rule">
+          <span className="tag">APP</span>
+          <span className="line" />
+        </div>
+
+        {/* One row per engine, never a combined figure: two different models at
+            different prices per token, one dominated by audio frames and the
+            other by file contents. A sum of the two would move for reasons the
+            user could not attribute and could not act on. */}
+        {[
+          { key: "gem", label: "GEM", total: 0, last: 1 },
+          { key: "cld", label: "CLD", total: 2, last: 3 },
+        ].map((engine) => (
+          <div className="row tokens" key={engine.key}>
+            <span className="label">{engine.label}</span>
+            <span
+              className="value"
+              ref={(el) => {
+                tokenValueRefs.current[engine.total] = el;
+              }}
+            >
+              {formatTokens(null)}
+            </span>
+            {/* What the most recent call added. A total alone hides an
+                expensive single call; a per-call figure alone hides an
+                accumulation of cheap ones. */}
+            <span
+              className="delta"
+              ref={(el) => {
+                tokenValueRefs.current[engine.last] = el;
+              }}
+            >
+              {formatTokens(null, { signed: true })}
             </span>
           </div>
         ))}
+
+        {/* Cached input, on its own line and never inside CLD's headline. */}
+        <div className="row tokens cache">
+          <span className="label">↺</span>
+          <span
+            className="value"
+            ref={(el) => {
+              tokenValueRefs.current[4] = el;
+            }}
+          >
+            {formatTokens(null)}
+          </span>
+        </div>
 
         {/* The only element in the HUD with a time axis: twenty real processor
             samples, one per bar, never interpolated. Discrete DOM bars rather

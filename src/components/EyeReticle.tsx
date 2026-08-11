@@ -1,7 +1,9 @@
 import { useEffect, useRef } from "react";
 import { EYE_READOUT, EYE_RING, type EyeState } from "../hooks/useEyeTracking";
+import type { TokenAlertSeenRef, TokenLedgerRef } from "../hooks/useTokenLedger";
 import {
   ACQUIRE_MS,
+  ALERT_TOTAL_MS,
   EYE_RING_BOOST,
   LOCK_MS,
   LOCK_STRETCH,
@@ -9,16 +11,19 @@ import {
   VIEW_H,
   VIEW_W,
   acquireScale,
+  alertPath,
   arcPath,
   dashPattern,
   gaugeTicks,
   lockSettle,
   polarPoint,
+  resolveAlertLayout,
   resolveReadoutLayout,
   segmentRing,
   tetherPath,
   tickLine,
   wingPath,
+  type AlertState,
   type ReadoutLayout,
 } from "../lib/eye-hud";
 
@@ -69,7 +74,10 @@ export default function EyeReticle({
   eye,
   eyeRef,
   telemetryRef,
+  ledgerRef,
+  alertSeenRef,
   layoutRef,
+  alertRef,
 }: {
   eye: EyeState;
   /** Per-frame eye data (useEyeTracking's stateRef) — drives every transform below. */
@@ -87,6 +95,25 @@ export default function EyeReticle({
    * frame-normalized position, never one element measured off the other).
    */
   layoutRef: { current: ReadoutLayout };
+  /**
+   * The token account. Read for ONE thing here — whether a run has finished
+   * since the last frame — and for nothing else. The ring's dial keeps reading
+   * the host measurement above; a token figure never drives any ring element.
+   */
+  ledgerRef: TokenLedgerRef;
+  /**
+   * Which completion has already been announced. App-level, so it survives the
+   * remounts a blink causes, and re-armed on every mount below — an alert is a
+   * notification, not a record, and work that finished while nothing was
+   * rendering is not announced afterwards.
+   */
+  alertSeenRef: TokenAlertSeenRef;
+  /**
+   * Shared with EyeTokenAlert, on exactly the terms layoutRef is shared with
+   * EyeReadout: this component OWNS it, resolves it early in the frame, and the
+   * badge reads the value this same frame rather than the previous one.
+   */
+  alertRef: { current: AlertState };
 }) {
   const ringRef = useRef<SVGGElement | null>(null);
   const accentRef = useRef<SVGGElement | null>(null);
@@ -100,9 +127,19 @@ export default function EyeReticle({
   // Last painted lit count, so only the ticks that actually changed are
   // rewritten — a handful of attribute writes a second, not 24 per frame.
   const litTicksRef = useRef(-1);
+  const alertGroupRef = useRef<SVGGElement | null>(null);
+  const alertLineRef = useRef<SVGPathElement | null>(null);
+  const alertDotRef = useRef<SVGCircleElement | null>(null);
+  const alertTickRef = useRef<SVGLineElement | null>(null);
 
   useEffect(() => {
     let raf = 0;
+
+    // Whatever ran before this overlay existed is ALREADY SEEN. This component
+    // mounts on face acquisition, so without this line every re-acquire — every
+    // blink, every camera-on — would announce the last run again, possibly an
+    // hour old. Presenting old work as news is worse than not presenting it.
+    alertSeenRef.current = ledgerRef.current.claude.at;
     const loop = () => {
       const live = eyeRef.current;
       const now = performance.now();
@@ -194,11 +231,80 @@ export default function EyeReticle({
         tetherLineRef.current?.style.setProperty("stroke-dashoffset", String(1 - layout.tether));
       }
 
+      // ---- the completed-run announcement (token-accounting).
+      //
+      // Everything above this line belongs to the ring and to the panel's
+      // tether, and NONE of it is touched here: not the crosshair, not the
+      // core, not the dial, not lockSettle. That beat already means "the target
+      // is held", and one signal must not carry two meanings — a user cannot
+      // tell "I have been locked onto" from "a run finished" if both are drawn
+      // with the same elements. This borrows the OTHER established arrival, the
+      // tether's staged reveal, which is why the block below is a near-mirror
+      // of the one above it.
+      const alert = alertRef.current;
+      const claude = ledgerRef.current.claude;
+      // The trigger is a change in the account's own timestamp. Nothing fires
+      // for the voice engine at all: its usage arrives several times a second
+      // while anyone is talking, there is no unit boundary in that stream that
+      // would not be invented, and flashing on it would put a strobe beside the
+      // user's face. Its figure is on the panel continuously instead.
+      if (claude.at !== null && claude.at !== alertSeenRef.current) {
+        // Marked seen either way. With no ring eye there is nothing to announce
+        // beside, and the announcement is NOT deferred until one appears — an
+        // alert is a notification, not a record, and the tokens are already in
+        // the panel's totals.
+        alertSeenRef.current = claude.at;
+        if (ringEye) {
+          // ONE SLOT, newest wins: a second completion replaces the visible
+          // badge and restarts the envelope rather than queueing behind it. A
+          // queued figure would still be on screen after the panel's total had
+          // moved past it, which is a readout disagreeing with itself.
+          alert.shownAt = now;
+          alert.at = claude.at;
+          alert.tokens = claude.last;
+        }
+      }
+
+      const alertGroup = alertGroupRef.current;
+      if (alert.shownAt !== null) {
+        const alertElapsed = now - alert.shownAt;
+        // The expiry is checked UNCONDITIONALLY, outside the ringEye/alertGroup
+        // guard below. Gated behind them, an announcement whose face was lost
+        // mid-envelope would keep its state forever and flash a stale figure for
+        // one frame the moment the face came back — a bounded lifetime has to
+        // hold whether or not anything is drawing it.
+        if (alertElapsed >= ALERT_TOTAL_MS) {
+          // Cleared rather than left at zero so nothing of it remains, and so
+          // the badge's own loop can tell "gone" from "not yet".
+          alert.shownAt = null;
+          alert.tokens = null;
+          alert.connector = 0;
+          alert.badge = 0;
+          if (alertGroup) alertGroup.style.opacity = "0";
+        } else if (ringEye && alertGroup) {
+          resolveAlertLayout(ringEye.center, alertElapsed, alert);
+          alertLineRef.current?.setAttribute("d", alertPath(ringEye.center, alert));
+          alertDotRef.current?.setAttribute("cx", String(ringEye.center.x * VIEW_W));
+          alertDotRef.current?.setAttribute("cy", String(ringEye.center.y * VIEW_H));
+          const alertAnchorX = alert.anchorX * VIEW_W;
+          const alertAnchorY = alert.anchorY * VIEW_H;
+          const alertTick = alertTickRef.current;
+          if (alertTick) {
+            alertTick.setAttribute("x1", String(alertAnchorX));
+            alertTick.setAttribute("x2", String(alertAnchorX));
+            alertTick.setAttribute("y1", String(alertAnchorY - 6));
+            alertTick.setAttribute("y2", String(alertAnchorY + 6));
+          }
+          alertGroup.style.opacity = String(alert.connector);
+          alertLineRef.current?.style.setProperty("stroke-dashoffset", String(1 - alert.connector));
+        }
+      }
+
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [eyeRef, layoutRef, telemetryRef]);
+  }, [eyeRef, layoutRef, telemetryRef, ledgerRef, alertSeenRef, alertRef]);
 
   if (!eye.present) return null;
 
@@ -222,6 +328,18 @@ export default function EyeReticle({
         <path ref={tetherLineRef} pathLength={1} strokeDasharray="1" style={{ strokeDashoffset: 1 }} />
         <circle ref={tetherDotRef} className="eye-tether-origin" r={2.6} />
         <line ref={tetherTickRef} className="eye-tether-tick" />
+      </g>
+
+      {/* The announcement's connector, in the ring's own coordinate system and
+          drawn with the same pathLength trick as the tether — but running the
+          other way, outward from the RING eye toward the frame's right, so the
+          two instruments stay in their own halves of the frame and cannot
+          collide whatever the head does. Nothing inside `.eye-ring` below is
+          touched by it. */}
+      <g className="eye-alert-tether" ref={alertGroupRef} style={{ opacity: 0 }}>
+        <path ref={alertLineRef} pathLength={1} strokeDasharray="1" style={{ strokeDashoffset: 1 }} />
+        <circle ref={alertDotRef} className="eye-alert-origin" r={2.2} />
+        <line ref={alertTickRef} className="eye-alert-tick" />
       </g>
 
       <g className="eye-ring" ref={ringRef}>

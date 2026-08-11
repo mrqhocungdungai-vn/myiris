@@ -39,6 +39,7 @@ import { systemAudioEnabled, systemAudioGain, listenWindowMs } from "./user-conf
  *     setAmbientCaptureAwake: (awake: boolean) => Promise<void>,
  *     syncAmbientCaptureState: () => Promise<void>,
  *   },
+ *   recordGeminiUsage?: (usageMetadata: any) => void,
  *   setWindowModule: (mod: any) => void,
  *   setLiveSessionModule: (mod: any) => void,
  *   recordLog?: (record: { level: string, src: string, msg: string, [key: string]: any }) => void,
@@ -67,6 +68,9 @@ export function createLiveWiring({
   geminiTools,
   geminiPrompts,
   secondBrainCapability,
+  // token-accounting: handed straight to the message handler, which is where
+  // the voice engine's usage arrives. Nothing else here reads it.
+  recordGeminiUsage = () => {},
   setWindowModule,
   setLiveSessionModule,
 }) {
@@ -91,6 +95,7 @@ export function createLiveWiring({
     executeClaudeTool,
     submitClaudeTask,
     isListenOnlyEngaged: () => liveSessionModule.getListenOnlyEngaged(),
+    recordGeminiUsage,
   });
   const { handleLiveMessage, sendAudioChunk, sendCommand } = liveMessages;
 

@@ -21,6 +21,7 @@ import { useHandoffFx } from "./hooks/useHandoffFx";
 import { useHandControl, SYSTEM_DEFAULT_CAMERA, type HandPoint } from "./hooks/useHandControl";
 import { useEyeTracking } from "./hooks/useEyeTracking";
 import { useSystemTelemetry } from "./hooks/useSystemTelemetry";
+import { useTokenLedger } from "./hooks/useTokenLedger";
 import { useWakeWord } from "./hooks/useWakeWord";
 import { SYSTEM_DEFAULT_MIC } from "./lib/mic-device";
 import { wakeCaption } from "./lib/wake-caption";
@@ -1474,6 +1475,13 @@ export default function App() {
   // observation before it can report a rate at all.
   const { sampleRef: liveTelemetryRef } = useSystemTelemetry(handControl);
 
+  // The token account (token-accounting), here for the same "called once, read
+  // by both surfaces" reason — but deliberately NOT gated on handControl.
+  // Counting runs in main from app start whether or not anything is displaying
+  // it, and subscribing only while the camera was on would show a panel opened
+  // late an apparent fresh start.
+  const { ledgerRef: liveTokenLedgerRef, alertSeenRef: tokenAlertSeenRef } = useTokenLedger();
+
   useEffect(() => {
     if (handError) pushLog("error", `Hand control: ${handError}`);
   }, [handError]);
@@ -1964,6 +1972,8 @@ export default function App() {
           eye={eye}
           eyeRef={liveEyeRef}
           telemetryRef={liveTelemetryRef}
+          ledgerRef={liveTokenLedgerRef}
+          alertSeenRef={tokenAlertSeenRef}
           logs={logs}
           handStream={handStream}
           handActionLabel={handAction.label}
@@ -2034,6 +2044,8 @@ export default function App() {
               eye={eye}
               eyeRef={liveEyeRef}
               telemetryRef={liveTelemetryRef}
+              ledgerRef={liveTokenLedgerRef}
+              alertSeenRef={tokenAlertSeenRef}
               logs={logs}
               stream={handStream}
               actionLabel={handAction.label}

@@ -4,8 +4,10 @@ import type { HandState } from "../hooks/useHandControl";
 import type { EyeState } from "../hooks/useEyeTracking";
 import EyeReticle from "./EyeReticle";
 import EyeReadout from "./EyeReadout";
+import EyeTokenAlert from "./EyeTokenAlert";
+import type { TokenAlertSeenRef, TokenLedgerRef } from "../hooks/useTokenLedger";
 import CameraLog from "./CameraLog";
-import { createReadoutLayout } from "../lib/eye-hud";
+import { createAlertState, createReadoutLayout } from "../lib/eye-hud";
 import type { LogLine } from "../types";
 
 const HAND_CONNECTIONS = [
@@ -109,6 +111,8 @@ export default function CameraDock({
   eye,
   eyeRef,
   telemetryRef,
+  ledgerRef,
+  alertSeenRef,
   logs,
   stream,
   actionLabel,
@@ -123,6 +127,10 @@ export default function CameraDock({
   eyeRef: { current: EyeState };
   /** Latest host measurement (useSystemTelemetry's sampleRef) — feeds the readout and the ring's dial. */
   telemetryRef: { current: TelemetrySample };
+  /** token-accounting: the app's own spend, on its own channel and never gated on the camera. */
+  ledgerRef: TokenLedgerRef;
+  /** Which completed run has already been announced beside the ring. */
+  alertSeenRef: TokenAlertSeenRef;
   /** camera-activity-log: the app's own log store, newest first. Filtered for display, never here. */
   logs: LogLine[];
   stream: MediaStream | null;
@@ -136,6 +144,9 @@ export default function CameraDock({
   // reads it. Held per surface because it carries the panel's side across
   // frames, which is what makes its flip hysteretic (design D10).
   const readoutLayoutRef = useRef(createReadoutLayout());
+  // Per-surface too, and for the same reason: the reticle resolves the
+  // announcement's position and the badge reads it within the same frame.
+  const alertLayoutRef = useRef(createAlertState());
   useEffect(() => {
     if (videoRef.current) videoRef.current.srcObject = stream;
   }, [stream, handControl]);
@@ -151,8 +162,26 @@ export default function CameraDock({
           <video ref={videoRef} autoPlay playsInline muted />
           <div className="cam-scan" />
           <HandSkeleton hands={hand.hands} handsRef={handRef} />
-          <EyeReticle eye={eye} eyeRef={eyeRef} telemetryRef={telemetryRef} layoutRef={readoutLayoutRef} />
-          <EyeReadout eye={eye} eyeRef={eyeRef} telemetryRef={telemetryRef} layoutRef={readoutLayoutRef} />
+          <EyeReticle
+            eye={eye}
+            eyeRef={eyeRef}
+            telemetryRef={telemetryRef}
+            ledgerRef={ledgerRef}
+            alertSeenRef={alertSeenRef}
+            layoutRef={readoutLayoutRef}
+            alertRef={alertLayoutRef}
+          />
+          <EyeReadout
+            eye={eye}
+            eyeRef={eyeRef}
+            telemetryRef={telemetryRef}
+            ledgerRef={ledgerRef}
+            layoutRef={readoutLayoutRef}
+          />
+          {/* The same element in every surface that shows the camera preview,
+              never specialized per surface: its size follows the frame, like
+              every other overlay here. */}
+          <EyeTokenAlert eye={eye} eyeRef={eyeRef} alertRef={alertLayoutRef} />
           <CameraLog logs={logs} />
           <span className="cam-status">
             <i />

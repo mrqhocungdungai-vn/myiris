@@ -9,9 +9,12 @@ import {
   RATE_METER_CEILING,
   RATE_METER_FLOOR,
   RATE_WIDTH,
+  TOKEN_SIGNED_WIDTH,
+  TOKEN_WIDTH,
   easeToward,
   formatPercent,
   formatRate,
+  formatTokens,
   higherOf,
   historyLevel,
   logMeterLevel,
@@ -120,6 +123,66 @@ describe("formatRate", () => {
 
   it("shows absence rather than zero", () => {
     expect(formatRate(null)).not.toContain("0");
+  });
+});
+
+describe("formatTokens", () => {
+  it("is exactly TOKEN_WIDTH characters across every magnitude, in both directions", () => {
+    // Sweeping multiplicatively covers every decade, and the descending pass
+    // covers the boundaries from above as well as from below — a formatter can
+    // be correct crossing 1000 upward and wrong crossing it downward.
+    for (let value = 0; value < 2_000_000_000; value = value === 0 ? 1 : Math.ceil(value * 1.07)) {
+      expect(formatTokens(value)).toHaveLength(TOKEN_WIDTH);
+    }
+    for (let value = 2_000_000_000; value >= 1; value = Math.floor(value / 1.07)) {
+      expect(formatTokens(value)).toHaveLength(TOKEN_WIDTH);
+    }
+  });
+
+  it("is exactly TOKEN_WIDTH characters at every boundary the naive bounds get wrong", () => {
+    // 999.5 rounds to 1000 and 9.96 fixes to "10.0" — either would widen the
+    // string at one value in a thousand, silently.
+    for (const value of [0, 1, 999, 999.4, 999.5, 1000, 9949, 9950, 9951, 999_499, 999_500, 1_000_000]) {
+      expect(formatTokens(value)).toHaveLength(TOKEN_WIDTH);
+    }
+  });
+
+  it("is exactly TOKEN_WIDTH characters when absent", () => {
+    expect(formatTokens(null)).toHaveLength(TOKEN_WIDTH);
+    expect(formatTokens(Number.NaN)).toHaveLength(TOKEN_WIDTH);
+    // Absence is a dash, never a zero: an engine that has reported nothing has
+    // not reported zero.
+    expect(formatTokens(null).trim()).not.toBe("0");
+  });
+
+  it("renders the magnitudes the panel actually shows", () => {
+    expect(formatTokens(412).trimStart()).toBe("412");
+    expect(formatTokens(412_000)).toBe("412k");
+    expect(formatTokens(1_800_000)).toBe("1.8M");
+    expect(formatTokens(0).trimStart()).toBe("0");
+  });
+
+  it("pads with FIGURE_SPACE, which textContent does not collapse", () => {
+    expect(formatTokens(412).startsWith(FIGURE_SPACE)).toBe(true);
+  });
+
+  it("signs the delta and holds TOKEN_SIGNED_WIDTH across the range", () => {
+    expect(formatTokens(3_100, { signed: true })).toBe("+3.1k");
+    for (let value = 0; value < 2_000_000_000; value = value === 0 ? 1 : Math.ceil(value * 1.07)) {
+      expect(formatTokens(value, { signed: true })).toHaveLength(TOKEN_SIGNED_WIDTH);
+    }
+    expect(formatTokens(null, { signed: true })).toHaveLength(TOKEN_SIGNED_WIDTH);
+  });
+
+  it("never decreases as the count rises", () => {
+    // A formatter is not the place a monotone quantity stops looking monotone.
+    let previous = -1;
+    for (let value = 0; value < 5_000_000; value = value === 0 ? 1 : Math.ceil(value * 1.3)) {
+      const parsed = Number.parseFloat(formatTokens(value).trim());
+      const scale = formatTokens(value).includes("M") ? 1e6 : formatTokens(value).includes("k") ? 1e3 : 1;
+      expect(parsed * scale).toBeGreaterThanOrEqual(previous);
+      previous = parsed * scale;
+    }
   });
 });
 

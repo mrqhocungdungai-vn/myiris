@@ -193,6 +193,7 @@ function ensureIncludes(list, value) {
  *   getLiveSession: () => any,
  *   runQueue: { list: () => Array<{ agent: string, status: string }> },
  *   probePipelineAvailability?: () => Promise<any>,
+ *   recordGeminiUsage?: (usageMetadata: any) => void,
  * }} deps
  */
 export function createUserConfig({
@@ -203,6 +204,12 @@ export function createUserConfig({
   getLiveSession,
   runQueue,
   probePipelineAvailability,
+  // token-accounting, design D3's "one account, no exceptions": the voice
+  // preview opens a second, short-lived Live session and it spends real
+  // tokens, so it is counted through the same recorder as the main session. A
+  // capability that quietly excludes one caller is a capability whose number
+  // cannot be trusted.
+  recordGeminiUsage = () => {},
 }) {
   // Pre-dispatch review gate (prompt-review-gate spec), now three-valued:
   //
@@ -443,6 +450,10 @@ export function createUserConfig({
         }),
         callbacks: {
           onmessage(message) {
+            // Above the serverContent early return, for the same reason
+            // live-messages.mjs puts it there: a usage-only message carries no
+            // serverContent, so a branch below this line never runs.
+            if (message.usageMetadata) recordGeminiUsage(message.usageMetadata);
             const content = message.serverContent;
             if (!content) return;
             for (const part of content.modelTurn?.parts || []) {

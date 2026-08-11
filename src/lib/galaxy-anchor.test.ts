@@ -85,12 +85,6 @@ describe("anchorsEqual", () => {
   });
 });
 
-/** Where a node lands horizontally, in the same window pixels `pickZoomTarget` works in. */
-function screenXOf(camera: THREE.Camera, node: GalaxyNavNode): number {
-  const v = new THREE.Vector3(node.x, node.y ?? 0, node.z ?? 0).project(camera);
-  return RECT.left + ((v.x + 1) * RECT.width) / 2;
-}
-
 describe("pickZoomTarget", () => {
 
 

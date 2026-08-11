@@ -745,6 +745,82 @@
   stroke: none;
 }
 
+/* ----- The completed-run announcement: connector and badge -----
+   The ring's palette, not the panel's: the ring is this capability's ALERTING
+   instrument and this is its element, so amber rather than the panel's
+   informational cyan. Thinner than the tether throughout — this is a momentary
+   mark, and it must not read as a second permanent attachment.
+
+   NOTHING here may carry a `transition` or an `@keyframes` on transform or
+   opacity. The rAF loop rewrites both every frame, so a declarative animation
+   on them is cancelled on the very next frame — it fails SILENTLY rather than
+   loudly, which is why it has already happened twice in this file's history.
+   The whole envelope lives in src/lib/eye-hud.ts as pure functions of elapsed
+   time. */
+.eye-alert-tether path {
+  stroke: rgba(var(--amber-rgb), 0.8);
+  stroke-width: 1;
+  stroke-linejoin: round;
+  fill: none;
+}
+
+.eye-reticle .eye-alert-origin {
+  fill: rgba(var(--amber-rgb), 0.9);
+  stroke: none;
+}
+
+.eye-reticle .eye-alert-tick {
+  stroke: rgba(var(--amber-rgb), 0.9);
+  stroke-width: 1;
+}
+
+.eye-alert-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+  container-type: inline-size;
+}
+
+.eye-alert {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.45em;
+  padding: 0.25em 0.5em;
+  font-family: var(--font-mono);
+  font-size: clamp(6.5px, 3.1cqw, 10px);
+  line-height: 1.25;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  background: linear-gradient(160deg, rgba(24, 12, 4, 0.62), rgba(24, 12, 4, 0.42));
+  box-shadow: inset 0 0 0 1px rgba(var(--amber-rgb), 0.45);
+  /* One chamfered corner, mirrored from the panel's — the same instrument
+     family, pointing the other way because it hangs the other way. */
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 0.7em 100%, 0 calc(100% - 0.7em));
+  overflow: hidden;
+}
+
+.eye-alert .tag {
+  flex: 0 0 auto;
+  color: rgba(var(--amber-rgb), 0.95);
+  letter-spacing: 0.16em;
+}
+
+.eye-alert .value {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  /* `pre`, for the reason the panel's values are: the formatter pads to a fixed
+     character count and `nowrap` would collapse that padding. */
+  white-space: pre;
+  color: rgba(255, 236, 214, 0.96);
+}
+
 /* ----- The readout panel ----- */
 
 /* `container-type: inline-size` makes the panel's type scale with whatever
@@ -912,6 +988,62 @@
    the ring alerts and the panel reports. */
 .eye-readout .row.accent .value {
   color: rgba(var(--amber-rgb), 0.95);
+}
+
+/* ----- The panel's second reading: what the APP has spent -----
+   Informational throughout, and deliberately NO AMBER anywhere below: the
+   accent marks a measured host condition, and there is no magnitude at which a
+   token count is a fault. Heights are explicit on the two non-standard lines
+   because READOUT_GEOMETRY.height in src/lib/eye-hud.ts is the panel's whole
+   budget and is computed from these numbers — a line that sized itself would
+   make that arithmetic unverifiable, and `overflow: hidden` means it would fail
+   silently. */
+.eye-readout .rule {
+  display: flex;
+  align-items: center;
+  gap: 0.4em;
+  height: 0.9em;
+  flex: 0 0 auto;
+}
+
+/* Outlined rather than inverted — the head's SYS tag is the filled one, so the
+   two read as a heading and a subheading rather than as two headings. */
+.eye-readout .rule .tag {
+  padding: 0 0.3em;
+  color: rgba(var(--cyan-rgb), 0.75);
+  background: none;
+  box-shadow: inset 0 0 0 1px rgba(var(--cyan-rgb), 0.35);
+  letter-spacing: 0.14em;
+}
+
+.eye-readout .rule .line {
+  flex: 1 1 auto;
+  height: 1px;
+  background: rgba(var(--cyan-rgb), 0.22);
+}
+
+/* The delta column has a FIXED width: `formatTokens` pads every signed figure
+   to the same character count, and giving the column its own basis keeps the
+   total's column from resizing when the delta crosses a magnitude. */
+.eye-readout .row.tokens .delta {
+  flex: 0 0 auto;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  white-space: pre;
+  color: rgba(var(--cyan-rgb), 0.62);
+}
+
+/* The cache line reads as a footnote to the CLD row above it, which is exactly
+   what it is: a figure kept OUT of that headline rather than a third engine. */
+.eye-readout .row.cache {
+  height: 1.1em;
+  font-size: 0.85em;
+}
+
+.eye-readout .row.cache .label,
+.eye-readout .row.cache .value {
+  color: rgba(207, 238, 255, 0.6);
 }
 
 .eye-readout .cells {

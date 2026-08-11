@@ -116,6 +116,19 @@ entry and walking up.
 - **Use the exact Live model name `gemini-3.1-flash-live-preview`.** Live models
   are a distinct family from regular `gemini-*` chat models; a normal chat model
   name will fail to open a Live session. Keep the `models/` prefix.
+- **`usageMetadata`'s regime is not part of the Live API's contract, and the
+  token ledger does not assume one.** `LiveServerMessage.usageMetadata` is
+  documented only as "usage metadata about model response(s)"; whether
+  `totalTokenCount` is **per-message** or **cumulative for the session** is
+  unstated, and observed behaviour differs across model versions. So
+  `electron/token-ledger.mjs` treats a reading at or above the previous one as
+  cumulative and a reading below it as a restart-or-per-message, banking what it
+  has counted so far — correct under both, and monotone by construction. That
+  restart path is also what absorbs a rotated socket (Live sessions rotate on a
+  connection lifetime limit during ordinary use), so the panel's total never
+  drops mid-conversation. **This is the fact to re-check when the model pin
+  above moves**: a bump can change the regime, and the ledger will keep
+  producing a monotone total either way rather than reporting the change.
 - **The MediaPipe and onnxruntime-web WASM filesets are vendored, not
   CDN-fetched.** `scripts/vendor-runtime-assets.mjs` copies them straight from
   the installed `node_modules` package into `public/runtime/` (wired into

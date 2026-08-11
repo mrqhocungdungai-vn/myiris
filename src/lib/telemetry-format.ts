@@ -85,6 +85,51 @@ export function formatRate(bytesPerSecond: number | null): string {
   return `${pad(mantissa, 3)}${RATE_UNITS[unit]}/s`;
 }
 
+const TOKEN_UNITS = ["", "k", "M", "G"] as const;
+
+/**
+ * Every `formatTokens` result is exactly this wide, absent form included.
+ * Four is the maximum the formatter can produce — a three-character mantissa
+ * plus at most one unit letter — and the panel is only ~13 characters across at
+ * deck scale, so a wider fixed field would cost a column for nothing.
+ */
+export const TOKEN_WIDTH = 4;
+/** Every `formatTokens(value, { signed: true })` result is exactly this wide. */
+export const TOKEN_SIGNED_WIDTH = TOKEN_WIDTH + 1;
+
+/**
+ * A token count, ALWAYS exactly TOKEN_WIDTH characters (TOKEN_SIGNED_WIDTH when
+ * signed): "␣412", "412k", "1.8M", and the absent form at the same width.
+ * The signed variant prefixes "+" for the delta — "+3.1k".
+ *
+ * One formatter for every token figure in the app: the panel's rows, its cache
+ * line, and the badge beside the ring all render through this, so a figure
+ * cannot read one way in one place and another way three inches away.
+ *
+ * Decimal decades, and THE BOUNDS ARE THE SAME TRAP formatRate documents:
+ * 9.95 and 999.5 rather than 10 and 1000, because `(9.96).toFixed(1)` is "10.0"
+ * and `Math.round(999.6)` is 1000 — either naive bound widens the string at one
+ * value in a thousand. The width sweep in the test file is what holds it honest.
+ *
+ * Counts are integers, so the base unit has no decimal: a tenth of a token is
+ * not a quantity.
+ */
+export function formatTokens(value: number | null, { signed = false } = {}): string {
+  const width = signed ? TOKEN_SIGNED_WIDTH : TOKEN_WIDTH;
+  if (value === null || !Number.isFinite(value)) return absent(width);
+  let scaled = Math.max(0, value);
+  let unit = 0;
+  while (scaled >= 999.5 && unit < TOKEN_UNITS.length - 1) {
+    scaled /= 1000;
+    unit += 1;
+  }
+  // Out of units and still over the mantissa's range. Only reachable at absurd
+  // counts, but "only reachable absurdly" is how a width bug ships.
+  if (scaled >= 999.5) scaled = 999;
+  const mantissa = unit > 0 && scaled < 9.95 ? scaled.toFixed(1) : String(Math.round(scaled));
+  return pad(`${signed ? "+" : ""}${mantissa}${TOKEN_UNITS[unit]}`, width);
+}
+
 /** A 0..1 fraction, straight through, clamped. Absence reads as an empty meter. */
 export function meterLevel(value: number | null): number {
   if (value === null || !Number.isFinite(value)) return 0;

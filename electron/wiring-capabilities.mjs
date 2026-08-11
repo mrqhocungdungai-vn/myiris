@@ -14,6 +14,7 @@ import { createGeminiPrompts } from "./gemini-prompts.mjs";
 import { createCanvasCapability } from "./capabilities/canvas.mjs";
 import { createSecondBrainCapability } from "./capabilities/second-brain.mjs";
 import { createHudTelemetryCapability } from "./capabilities/hud-telemetry.mjs";
+import { createTokenUsageCapability } from "./capabilities/token-usage.mjs";
 import { createPreparedAnswers } from "./capabilities/prepared-answers.mjs";
 
 /**
@@ -151,6 +152,21 @@ export function createCapabilitiesWiring({
     getMainWindow,
   });
 
+  // The token account (token-accounting). Contributes no tool and no prompt
+  // fragment either, and here the spec forbids it outright — nothing in a
+  // model's surface may contain or derive from these figures. Both of its
+  // dependencies are already parameters here, exactly as above, so nothing new
+  // is threaded through wiring.mjs or main.mjs.
+  //
+  // Unlike hudTelemetryCapability it is fed rather than self-driving: the Live
+  // message handler and the run queue's onFinalized seam call its two
+  // recorders, and it counts from app start regardless of whether the camera
+  // overlays exist (design D6).
+  const tokenUsageCapability = createTokenUsageCapability({
+    emitToRenderer,
+    getMainWindow,
+  });
+
   // Prepared answers (iris-answers-from-the-open-folder): what the user already
   // wrote down in the folder this session has open. Contributes a declaration
   // and a prompt fragment and nothing else — it holds no state, owns no channel,
@@ -201,7 +217,13 @@ export function createCapabilitiesWiring({
   });
   const { startClaudeRun } = runExec;
 
-  const capabilities = [canvasCapability, secondBrainCapability, hudTelemetryCapability, preparedAnswersCapability];
+  const capabilities = [
+    canvasCapability,
+    secondBrainCapability,
+    hudTelemetryCapability,
+    tokenUsageCapability,
+    preparedAnswersCapability,
+  ];
 
   const geminiTools = createGeminiTools({
     getPipelineAvailable,
@@ -223,6 +245,7 @@ export function createCapabilitiesWiring({
     canvasCapability,
     secondBrainCapability,
     hudTelemetryCapability,
+    tokenUsageCapability,
     preparedAnswersCapability,
     startClaudeRun,
     capabilities,
