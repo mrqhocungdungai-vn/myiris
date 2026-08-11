@@ -149,23 +149,28 @@
 
 ## 6. Schema accuracy audit (bounded, evidence-first — design.md D8)
 
-- [ ] 6.1 On the machine with real usage: pull the last ~50 dispatch records
+- [x] 6.1 On the machine with real usage: pull the last ~50 dispatch records
       (the dispatch "why" log) and the `skills [...]`/verb lines from
       `~/.myiris/logs/iris.log`; list observed misfills — wrong verb, thin
       required fields, wrong `depth`.
 
-      **NOT RUN — no data on this host (2026-08-11).** `~/.myiris/` exists but
-      is empty: no `logs/iris.log`, no session store. This is the
-      non-building machine design.md's Context anticipated, so the audit has
-      nothing to read. Deliberately left unchecked rather than closed as
-      "audited, clean" — zero records is not zero misfills, and recording it as
-      passed would retire an obligation nobody discharged.
-- [ ] 6.2 For each observed misfill only: tighten the owning description or
+      **RUN 2026-08-11, after the live 7.x session produced real records** (the
+      earlier "no data on this host" state no longer held — the log truncates per
+      launch and now holds the final session, 07:04–07:09). Audited: 3
+      `Dispatching work_on_note` lines (all `skills [none]`, correct session key,
+      correct park) and 9 Gemini tool calls — 3× `find_note_by_name` (`open:true`,
+      right names), 3× `work_on_note` (`said` carries the verbatim speech;
+      `reading` a faithful gloss), 1× `answer_claude_question` (two questions
+      relayed and answered). **Findings: none** — no wrong verb, no thin required
+      field, no wrong `depth` (no depth-bearing verb dispatched). Sample is one
+      session and one verb family; recorded as such, not as a clean bill for all
+      seven.
+- [x] 6.2 For each observed misfill only: tighten the owning description or
       parameter in `electron/verbs.mjs`, citing the record in the commit
       message. No observed failure ⇒ no edit; close the task with the finding
       list either way.
 
-      No edits made, since 6.1 produced no findings to justify one.
+      No edits made — 6.1's finding list is empty.
 
 ## 7. Gates and real-app verification
 
@@ -178,13 +183,29 @@
 - [x] 7.2 Resolve-table check: the 0.1 command now shows `work_on_note` on
       `note` with `[]`, investigate+explain with `[]`, judge unchanged with
       `["iris:code-review","iris:diagnosing-bugs"]`. Verified.
-- [ ] 7.3 Live: open a note, ask to hear it and then to remove a paragraph —
+- [x] 7.3 Live: open a note, ask to hear it and then to remove a paragraph —
       verbatim read-back and the AskUserQuestion confirm still work with zero
       skills listed (they never came from skills).
-- [ ] 7.4 Live: ask "what's left on the current change?" — investigate/explain
+
+      Verified 2026-08-11, and the log agrees: three `work_on_note` turns on one
+      note session, every dispatch line `skills [none]`; the read-back turn ran
+      Bash+Read on the note; the edit turn raised AskUserQuestion, relayed to
+      voice, answered via `answer_claude_question` (07:07:25), and the run
+      completed with the choices applied.
+- [x] 7.4 Live: ask "what's left on the current change?" — investigate/explain
       answers from reads + the `openspec` CLI without a skill listing.
-- [ ] 7.5 Token check: the note session's input-token listing drop (~720)
+
+      User-verified live 2026-08-11. Caveat recorded honestly: the retained log
+      file (truncated per launch; only the final session survives) shows no
+      `investigate` dispatch, so this test's dispatch line is not in the surviving
+      evidence — worth one re-run in a later session if the explain path matters
+      again.
+- [x] 7.5 Token check: the note session's input-token listing drop (~720)
       visible in the run log / ledger.
+
+      User-verified in the ledger 2026-08-11; the mechanism is visible in the log
+      — every note dispatch line reads `skills [none]` where six `iris:wiki-*`
+      listings (~120 tokens each) used to ride along.
 
 ## 8. Close out
 
@@ -193,4 +214,6 @@
       Neither the deny-branch nor the fallback form was right; the requirement
       now states the configuration-level bound that the code does meet, and
       `run-skills.test.mjs` pins the condition it depends on.
-- [ ] 8.2 Archive; deltas sync into `openspec/specs/verb-tool-surface/`.
+- [x] 8.2 Archive; deltas sync into `openspec/specs/verb-tool-surface/`.
+
+      Archived 2026-08-11 (+1 added, ~1 modified requirement).
