@@ -18,6 +18,24 @@ practical summary.
 | `npm run scan:secrets` | Secret gate — `gitleaks` over the staged changes | Requires `brew install gitleaks`; **not** lockfile-pinned |
 | `npm run spec:check` | Spec-drift gate — `scripts/check-spec-drift.mjs` over `openspec/specs/` | The only gate that checks something other than code (below) |
 
+### Where they run
+
+Locally they are bound to editing events by `.claude/settings.json`. They also
+run in **CI** (`.github/workflows/gates.yml`) on every push and pull request —
+before that existed they ran *only* in the maintainer's Claude Code hooks, so a
+commit made from a terminal, another editor, or any other tool was completely
+ungated.
+
+Two differences from the local gates are deliberate:
+
+- CI scans for secrets with `gitleaks-action` over the checkout's **history**
+  (`fetch-depth: 0`) rather than `npm run scan:secrets`, which is
+  `--staged`-only and would pass vacuously with nothing staged.
+- CI caches `public/runtime/`, because `npm run build` vendors ~49 MB of WASM
+  and model assets and fetches two of them over the network. The cache key is
+  the lockfile plus `scripts/vendor-runtime-assets.mjs`, so a dependency bump or
+  a change to what gets vendored re-fetches and nothing else does.
+
 Each is runnable on its own, and `build` deliberately runs none of the last
 three — nothing here may make a typecheck depend on anything else.
 
@@ -408,12 +426,31 @@ re-measured post-split-main-process-modules):
   deferred, but the cost side of this tradeoff dropped sharply; a future
   change should re-evaluate rather than assume it's still not worth it.
 - **Files over the 250–450 line convention** (see Conventions in
-  [CLAUDE.md](../CLAUDE.md)): `src/App.tsx` (1738 lines),
-  `src/components/SetupPanel.tsx` (1023), `src/components/VaultGalaxy.tsx`
-  (1035), `electron/canvas-mcp.mjs` (557, a recorded pre-existing exception —
-  its split is an explicit non-goal of split-main-process-modules, tracked as
-  a follow-up). Enforcement is convention-only by deliberate decision, so
-  these are flagged here rather than silently accepted.
+  [CLAUDE.md](../CLAUDE.md)) are no longer listed here. This list was prose,
+  and prose rotted: it recorded `src/App.tsx` at 1738 lines when it was 2226
+  and `electron/canvas-mcp.mjs` at 557 when it was 804, omitted
+  `electron/capabilities/second-brain.mjs` (1317) entirely, and still listed
+  `src/components/SetupPanel.tsx` at 1023 after it had *shrunk* to 858 — stale
+  in both directions, so a reader could not tell a live constraint from a
+  fossil.
+
+  The live list is now `scripts/file-size-baseline.json`, enforced by a
+  **ratchet** in the lint gate (`scripts/check-file-size.mjs`). It requires no
+  file to be split today; it records what each oversized file measures and
+  fails if one grows past that, if a *new* file lands over the 450-line
+  ceiling, or if a file shrinks without the gain being banked into the
+  baseline. Run `node scripts/update-file-size-baseline.mjs` after a split.
+
+  It counts **code lines** — comments and blanks excluded — and that choice is
+  load-bearing. Measured raw, 24 files were over the ceiling; measured as code,
+  **6** are. The other 18 are heavily documented rather than large:
+  `src/hooks/useGalaxyCameraDrive.ts` is 812 raw lines but 405 of code (46%
+  comment), because its pure math was already extracted into tested `src/lib/`
+  modules and what remains is imperative glue plus the reasoning behind it.
+  A gate counting raw lines would tell authors to delete those explanations to
+  get under a number, which is the opposite of what the convention is for.
+  `electron/canvas-mcp.mjs` remains a recorded pre-existing exception — its
+  split is an explicit non-goal of split-main-process-modules.
 
 ## Troubleshooting
 
