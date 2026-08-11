@@ -634,7 +634,6 @@ export default function App() {
   // system prompt is told not to issue open_task_by_query in that state — see
   // design.md D2 and specs/voice-ui-control's question-precedence requirement.
   useEffect(() => {
-  useEffect(() => {
     if (!hasBridge) return;
     return window.iris.onUiAction(({ action, target_id, query }) => {
       // Which task an action refers to — and the two different fallback chains
@@ -658,7 +657,6 @@ export default function App() {
         },
       );
     });
-  }, [hasBridge, work.tasks, work.sorted, reader.taskId, work.focusedId, work.latestResult, claudeQuestion.pending, review.pending]);
   }, [hasBridge, work.tasks, work.sorted, reader.taskId, work.focusedId, work.latestResult, claudeQuestion.pending, review.pending]);
 
   // The precedence order is `resolveCaption` in lib/caption.ts, where it is

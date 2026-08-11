@@ -23,10 +23,25 @@
   // EXCLUDED ON VALUE -- vitest: +7. expect-expect misfires on custom assertion
   // helpers, and require-to-throw-message is style.
 
-  "plugins": ["unicorn", "typescript", "oxc", "import", "promise", "node"],
+  "plugins": ["unicorn", "typescript", "oxc", "import", "promise", "node", "react"],
 
   "categories": {
     "correctness": "warn"
+  },
+
+  "rules": {
+    // `rules-of-hooks` ON, `exhaustive-deps` OFF -- they are separate rules with
+    // opposite risk profiles, and the note above conflated them.
+    //
+    // rules-of-hooks catches a hook that is not at a component's top level. That
+    // is not a style opinion: a duplicated `useEffect(` line shipped a blank app
+    // (React #321), and it passed tsc, tests and this gate, because a nested
+    // useEffect is valid TypeScript and no vitest project renders a component.
+    //
+    // exhaustive-deps stays off for the reason recorded above -- mechanically
+    // adding named dependencies is a well-known way to introduce re-render loops,
+    // and each finding needs reading on its own.
+    "react-hooks/exhaustive-deps": "off"
   },
 
   "ignorePatterns": ["dist", "dist-electron", "release", "public/runtime", "node_modules"]

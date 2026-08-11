@@ -5,6 +5,33 @@ Defines which automated checks guard the editing workflow — lint, secret scann
 
 ## Requirements
 
+### Requirement: The lint gate enforces the Rules of Hooks
+
+The lint gate SHALL report a React hook that is not called at the top level of a
+component or of another hook.
+
+This is not a style preference. A hook nested inside a callback is **valid
+TypeScript** and no vitest project in this repo renders a component, so the
+typecheck gate and the behavioral suite both pass while the application renders
+nothing at all. That is not hypothetical: a duplicated `useEffect(` line shipped
+a completely blank app (React error #321) with all five gates green.
+
+`react-hooks/exhaustive-deps` SHALL remain disabled, and the two SHALL NOT be
+conflated. They are separate rules with opposite risk profiles: mechanically
+satisfying `exhaustive-deps` is a well-known way to introduce re-render loops,
+whereas a hook outside a component body has no correct form.
+
+#### Scenario: A hook nested inside a callback fails the gate
+
+- **WHEN** a `useEffect`, `useState` or other hook is called anywhere but the top level of a component or hook
+- **THEN** the lint command exits non-zero and names the file, line and rule
+- **AND** it does so even though the typecheck gate and the behavioral suite both pass
+
+#### Scenario: Dependency-array findings do not fail the gate
+
+- **WHEN** an effect's dependency array omits a value it reads
+- **THEN** the lint command does not report it
+
 ### Requirement: A lint gate exists and is invocable on its own
 
 The repo SHALL provide a lint check invocable as a single command, independent of the typecheck gate and the test runner. It SHALL exit non-zero when the check fails, so it can gate an editing step, a commit, or a future CI step.
