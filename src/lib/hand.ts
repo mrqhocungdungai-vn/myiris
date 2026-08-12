@@ -61,3 +61,42 @@ export function semanticEquals(a: HandState, b: HandState): boolean {
 export function handIdentity(label: string | null | undefined, isLeftmost: boolean): string {
   return label ? `hand:${label}` : isLeftmost ? "x0" : "x1";
 }
+
+/**
+ * How long a published `present: true` may stand on the strength of a frame
+ * that is no longer arriving, before the hand is declared gone.
+ *
+ * Presence used to be re-stated on EVERY frame, empty ones included, so it
+ * could not outlive the loop that published it. Publishing only on the
+ * transition into "no hand" made it a LATCH: the reticles mount off that one
+ * fact, while their position is written per frame from a ref, so any path
+ * where the loop stops producing frames — a stalled or ended camera track
+ * (`readyState` drops and neither branch runs), a throw out of
+ * `recognizeForVideo`, a tab that went to sleep mid-hold — leaves the circles
+ * frozen on screen for good, with the camera visibly showing no hand.
+ *
+ * 400ms: MediaPipe publishes at camera rate (30fps here, so ~33ms a frame) and
+ * a dropped frame or two is ordinary, while a quarter-second of nothing is not
+ * anything a running tracker does. Short enough that a user who pulls their
+ * hand away never sees a stranded cursor, long enough that a GC pause or a
+ * heavy render frame cannot blink the reticles off a hand that is still there.
+ */
+export const HAND_PRESENCE_TIMEOUT_MS = 400;
+
+/**
+ * Whether a published presence has outlived the frames that justified it.
+ *
+ * `lastHandAt` is when a frame last actually carried a hand — NOT when the
+ * loop last ran, which is the whole point: a loop spinning over a stalled
+ * video keeps running while saying nothing, and it is exactly that state the
+ * latch could not escape.
+ */
+export function handPresenceExpired(
+  hadHand: boolean,
+  lastHandAt: number,
+  now: number,
+  timeoutMs: number = HAND_PRESENCE_TIMEOUT_MS,
+): boolean {
+  if (!hadHand) return false;
+  return now - lastHandAt > timeoutMs;
+}

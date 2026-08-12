@@ -2,7 +2,7 @@
 // changed — semanticEquals is the pure gate extracted from useHandControl.ts,
 // see openspec/changes/bound-hand-and-orb-render-cost/design.md D1.
 import { describe, it, expect } from "vitest";
-import { handIdentity, semanticEquals, smoothPoint } from "./hand";
+import { HAND_PRESENCE_TIMEOUT_MS, handIdentity, handPresenceExpired, semanticEquals, smoothPoint } from "./hand";
 import type { HandState } from "../hooks/useHandControl";
 
 function makeState(overrides: Partial<HandState> = {}): HandState {
@@ -133,5 +133,37 @@ describe("handIdentity", () => {
 
   it("never collides a label with a positional fallback", () => {
     expect(handIdentity("x0", true)).not.toBe(handIdentity(null, true));
+  });
+});
+
+// A published `present: true` is a latch: the reticles mount off it, while
+// their position is written per frame from a ref. So the state has to be able
+// to end itself when the frames that justified it stop arriving — a stalled or
+// ended camera track, a throw out of the recognizer, a sleeping tab — or the
+// circles stay frozen on screen over a live picture of no hand.
+describe("handPresenceExpired", () => {
+  it("retires a presence no frame has renewed", () => {
+    expect(handPresenceExpired(true, 1_000, 1_000 + HAND_PRESENCE_TIMEOUT_MS + 1)).toBe(true);
+  });
+
+  it("survives ordinary dropped frames", () => {
+    // Two missed frames at camera rate is nothing a running tracker does not do.
+    expect(handPresenceExpired(true, 1_000, 1_066)).toBe(false);
+  });
+
+  it("does not fire exactly at the timeout", () => {
+    expect(handPresenceExpired(true, 1_000, 1_000 + HAND_PRESENCE_TIMEOUT_MS)).toBe(false);
+  });
+
+  it("says nothing when no hand is published", () => {
+    // Nothing to retire, however long ago the last hand was: with no presence
+    // standing, firing here would republish the empty state every frame — the
+    // per-frame work the semantic gate exists to avoid.
+    expect(handPresenceExpired(false, 0, 10_000)).toBe(false);
+  });
+
+  it("takes the timeout as a parameter rather than reading a clock", () => {
+    expect(handPresenceExpired(true, 0, 50, 40)).toBe(true);
+    expect(handPresenceExpired(true, 0, 50, 60)).toBe(false);
   });
 });

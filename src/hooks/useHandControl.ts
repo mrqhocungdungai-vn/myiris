@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { FilesetResolver, GestureRecognizer } from "@mediapipe/tasks-vision";
-import { handIdentity, semanticEquals, smoothPoint } from "../lib/hand";
+import { handIdentity, handPresenceExpired, semanticEquals, smoothPoint } from "../lib/hand";
 import { resolveVendoredAssetUrl } from "../lib/asset-url";
 
 export type HandPoint = { x: number; y: number };
@@ -162,6 +162,12 @@ export function useHandControl(enabled: boolean, deviceId: string = SYSTEM_DEFAU
     const candidateFramesById = new Map<string, number>();
     let published = EMPTY_STATE;
     let hadHand = false;
+    // When a frame last actually carried a hand. The watchdog in `loop` reads
+    // it, and it is deliberately not "when the loop last ran": a loop spinning
+    // over a stalled camera track runs forever while saying nothing.
+    let lastHandAt = 0;
+    // Whether the current run of failing frames has already been reported.
+    let loggedFrameError = false;
 
     function publish(next: HandState) {
       stateRef.current = next;
@@ -169,6 +175,27 @@ export function useHandControl(enabled: boolean, deviceId: string = SYSTEM_DEFAU
         published = next;
         setState(next);
       }
+    }
+
+    /**
+     * The one way presence ends, whatever ended it — an empty frame, a stalled
+     * or ended camera track, or a throw out of the recognizer. Every per-hand
+     * memory is dropped with it (two-hand-gestures: a hand that returns seeds
+     * afresh), so a hand that comes back is treated as one that appeared.
+     *
+     * One function rather than one clear per reason, because the defect being
+     * fixed here WAS a second exit that forgot to publish.
+     */
+    function clearHand() {
+      smoothById.clear();
+      smoothWristById.clear();
+      primaryId = "";
+      primaryPoint = null;
+      stableGestureById.clear();
+      candidateGestureById.clear();
+      candidateFramesById.clear();
+      hadHand = false;
+      publish({ ...EMPTY_STATE, active: true });
     }
 
     async function setup() {
@@ -192,7 +219,20 @@ export function useHandControl(enabled: boolean, deviceId: string = SYSTEM_DEFAU
         video.srcObject = stream;
         await video.play();
 
-        if (cancelled) return;
+        // Cancelled while awaiting. The cleanup below has already run — and
+        // ran when `recognizer` and `stream` were both still null, so it had
+        // nothing to release. Whatever this attempt opened after that point is
+        // therefore ownerless, and only this branch can close it: without
+        // this, StrictMode's mount/unmount/mount in dev leaked a camera track
+        // and a GPU recognizer per launch, with the camera light left on.
+        if (cancelled) {
+          recognizer?.close();
+          recognizer = null;
+          stream?.getTracks().forEach((track) => track.stop());
+          stream = null;
+          video.srcObject = null;
+          return;
+        }
         setStream(stream);
         setError(null);
         publish({ ...EMPTY_STATE, active: true });
@@ -249,8 +289,43 @@ export function useHandControl(enabled: boolean, deviceId: string = SYSTEM_DEFAU
 
     function loop() {
       if (cancelled || !recognizer) return;
+      const now = performance.now();
+      try {
+        frame(now);
+        loggedFrameError = false;
+        // The latch's escape hatch: presence that no frame has renewed inside
+        // the timeout is retired here, whatever stopped the frames. Without
+        // it, a camera track that stalls or ends (`readyState` drops, so
+        // neither branch inside `frame` runs) leaves `present: true` standing
+        // forever and the reticles frozen on screen over a live picture of no
+        // hand.
+        if (handPresenceExpired(hadHand, lastHandAt, now)) clearHand();
+      } catch (err) {
+        // A throw out of `recognizeForVideo` (a non-monotonic timestamp, a lost
+        // GPU context, a wasm abort) used to take the whole loop with it: the
+        // reschedule was the last statement of the body, so one bad frame ended
+        // hand tracking silently, with the last state — and the cursors drawn
+        // from it — stuck on screen. Same rule the galaxy's gesture loop states
+        // for itself: an error boundary does not catch a rAF throw, so the loop
+        // has to answer for its own.
+        clearHand();
+        // Once per run of failures, not once per frame: the loop deliberately
+        // keeps going, so a recognizer that is broken for good would otherwise
+        // write 60 identical lines a second into the diagnostic log.
+        if (!loggedFrameError) {
+          loggedFrameError = true;
+          console.error("[hand-control] recognizer frame failed:", err);
+        }
+      } finally {
+        // In `finally`, so no path out of a frame can end the loop. A cancelled
+        // effect is the ONLY thing that stops it.
+        if (!cancelled) raf = requestAnimationFrame(loop);
+      }
+    }
+
+    function frame(now: number) {
+      if (!recognizer) return;
       if (video.readyState >= 2) {
-        const now = performance.now();
         const result = recognizer.recognizeForVideo(video, now);
         const landmarks = result.landmarks ?? [];
         const gestures = result.gestures ?? [];
@@ -351,6 +426,7 @@ export function useHandControl(enabled: boolean, deviceId: string = SYSTEM_DEFAU
           primaryId = primary.id;
           primaryPoint = primary.point;
           hadHand = true;
+          lastHandAt = now;
 
           publish({
             active: true,
@@ -369,18 +445,9 @@ export function useHandControl(enabled: boolean, deviceId: string = SYSTEM_DEFAU
         } else if (hadHand) {
           // Only re-publish the empty state on the transition into "no
           // hand" — an empty frame after another empty frame does zero work.
-          smoothById.clear();
-          smoothWristById.clear();
-          primaryId = "";
-          primaryPoint = null;
-          stableGestureById.clear();
-          candidateGestureById.clear();
-          candidateFramesById.clear();
-          hadHand = false;
-          publish({ ...EMPTY_STATE, active: true });
+          clearHand();
         }
       }
-      raf = requestAnimationFrame(loop);
     }
 
     setup();
@@ -392,6 +459,14 @@ export function useHandControl(enabled: boolean, deviceId: string = SYSTEM_DEFAU
       stream?.getTracks().forEach((track) => track.stop());
       video.srcObject = null;
       setStream(null);
+      // The camera this state described is gone, so the state must go with it.
+      // Leaving it standing let a device change (or any remount) keep the
+      // previous session's `present: true` — and the reticles drawn from it —
+      // on screen for as long as the new camera took to warm up, or forever if
+      // it never did. Only the `!enabled` branch above used to do this, which
+      // covered exactly one of the ways this effect ends.
+      stateRef.current = EMPTY_STATE;
+      setState(EMPTY_STATE);
     };
   }, [enabled, deviceId]);
 

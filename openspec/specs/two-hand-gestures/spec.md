@@ -231,10 +231,27 @@ The per-frame gesture work for all of this SHALL only run while the hand-control
 
 The UI SHALL render one reticle per tracked hand (secondary hand visually distinct) via a `HandReticles` component, and the camera dock SHALL render a 21-landmark hand skeleton for each tracked hand.
 
+A reticle SHALL NOT outlive the hand it stands for. What mounts a reticle is the tracker's published presence, while what moves it is per-frame data read imperatively — so presence SHALL be capable of ending **on its own**, without a frame that positively reports "no hand". Tracking that stops producing frames at all — a camera track that stalls, mutes or ends, a recognizer that throws, a device change, a session torn down — SHALL retire the published presence within a bounded time, and the tracking loop SHALL NOT be able to end on an error: a single failed frame SHALL clear presence and the loop SHALL continue. A hand that has left the camera SHALL never be represented on screen by a cursor frozen where it was last seen.
+
 #### Scenario: Reticles follow hands
 
 - **WHEN** two hands are tracked
 - **THEN** two reticles render at their smoothed screen positions and the camera dock shows both skeletons
+
+#### Scenario: A hand that leaves takes its reticle with it
+
+- **WHEN** the hand leaves the camera's view while hand control stays on
+- **THEN** its reticle and its skeleton disappear rather than remaining on screen at the position the hand was last seen
+
+#### Scenario: Tracking that stops does not strand a cursor
+
+- **WHEN** the camera stops delivering frames the tracker can read, or a frame fails outright, while a hand was being tracked
+- **THEN** the presence is retired within a bounded time, every reticle drawn from it disappears, and tracking resumes on its own if frames come back
+
+#### Scenario: Restarting the camera does not carry the old hands over
+
+- **WHEN** the camera device is changed, or hand tracking is torn down and set up again
+- **THEN** no reticle from the previous camera session remains on screen while the new one starts
 
 ### Requirement: Fist rotates and pinch scales the orb
 
