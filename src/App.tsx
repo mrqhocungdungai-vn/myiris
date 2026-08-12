@@ -66,6 +66,8 @@ import type { GalaxyNode } from "./components/VaultGalaxy";
 import HistoryDrawer from "./components/HistoryDrawer";
 import TaskChooser from "./components/TaskChooser";
 import SetupPanel from "./components/SetupPanel";
+// Gated on the camera being on, not on a hand being present: the cursors are a
+// fixed pair of nodes whose visibility each frame decides (see HandReticles).
 import HandReticles from "./components/HandReticles";
 import HandoffLayer from "./components/HandoffLayer";
 import BootSequence from "./components/BootSequence";
@@ -992,8 +994,8 @@ export default function App() {
 
       <HandoffLayer pulses={pulses} onPulseEnd={removePulse} />
 
-      {handControl && hand.present ? (
-        <HandReticles hand={hand} handRef={liveHandRef} dwelling={gestures.dwellActive && !gestures.dwellFired} />
+      {handControl ? (
+        <HandReticles handRef={liveHandRef} dwelling={gestures.dwellActive && !gestures.dwellFired} />
       ) : null}
 
       <ListenOnlyNotice

@@ -231,7 +231,11 @@ The per-frame gesture work for all of this SHALL only run while the hand-control
 
 The UI SHALL render one reticle per tracked hand (secondary hand visually distinct) via a `HandReticles` component, and the camera dock SHALL render a 21-landmark hand skeleton for each tracked hand.
 
-A reticle SHALL NOT outlive the hand it stands for. What mounts a reticle is the tracker's published presence, while what moves it is per-frame data read imperatively — so presence SHALL be capable of ending **on its own**, without a frame that positively reports "no hand". Tracking that stops producing frames at all — a camera track that stalls, mutes or ends, a recognizer that throws, a device change, a session torn down — SHALL retire the published presence within a bounded time, and the tracking loop SHALL NOT be able to end on an error: a single failed frame SHALL clear presence and the loop SHALL continue. A hand that has left the camera SHALL never be represented on screen by a cursor frozen where it was last seen.
+A reticle SHALL NOT outlive the hand it stands for, and the cursors SHALL NOT be able to accumulate: the number of reticle elements SHALL be fixed at the tracker's own hand ceiling and SHALL NOT depend on how many hands are being tracked, on their identities, or on any render. Whether a given reticle is shown, where it sits and which pose it draws SHALL be decided **per frame** from live tracking data, so that a hand leaving the camera hides its cursor on the next frame even if the surrounding UI has stopped re-rendering entirely.
+
+Presence itself SHALL also be capable of ending on its own, without a frame that positively reports "no hand". Tracking that stops producing frames at all — a camera track that stalls, mutes or ends, a recognizer that throws, a device change, a session torn down — SHALL retire the published presence within a bounded time, and the tracking loop SHALL NOT be able to end on an error: a single failed frame SHALL clear presence and the loop SHALL continue.
+
+The renderer SHALL mount exactly one React root per document, so that a reloaded or re-executed entry point cannot leave a second tree drawing its own cursors, tracking its own camera and answering to nothing.
 
 #### Scenario: Reticles follow hands
 
@@ -242,6 +246,11 @@ A reticle SHALL NOT outlive the hand it stands for. What mounts a reticle is the
 
 - **WHEN** the hand leaves the camera's view while hand control stays on
 - **THEN** its reticle and its skeleton disappear rather than remaining on screen at the position the hand was last seen
+
+#### Scenario: Waving a hand does not strew cursors across the screen
+
+- **WHEN** the user waves a hand quickly through the camera's view, whatever the tracker makes of its identity from frame to frame
+- **THEN** at most one cursor per tracked hand is on screen at any moment, and none is left behind along the path the hand took
 
 #### Scenario: Tracking that stops does not strand a cursor
 
