@@ -95,7 +95,7 @@ export default function HudShell({
   secondBrainAvailable,
   secondBrainActive,
   onToggleSecondBrain,
-  galaxyPositionsRef,
+  secondBrainPositionsRef,
   onOpenNote,
   onForceCloseSecondBrain,
   readerOpen,
@@ -204,7 +204,7 @@ export default function HudShell({
   secondBrainActive: boolean;
   onToggleSecondBrain: () => void;
   /** Hoisted above this component in App.tsx (design.md M-3) so toggling off/on rehydrates positions instead of re-scrambling. */
-  galaxyPositionsRef: { current: Map<string, GalaxyNode> };
+  secondBrainPositionsRef: { current: Map<string, GalaxyNode> };
   onOpenNote: (id: string, title: string) => void;
   onForceCloseSecondBrain: () => void;
   // second-brain-gesture-nav design.md D5: `openNote != null || expandedTaskId
@@ -436,7 +436,7 @@ export default function HudShell({
           focus={secondBrainFocus}
           onFocusChanged={setSecondBrainFocus}
           running={running}
-          positionsRef={galaxyPositionsRef}
+          positionsRef={secondBrainPositionsRef}
           onOpenNote={onOpenNote}
           onForceClose={onForceCloseSecondBrain}
           handRef={handRef}

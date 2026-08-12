@@ -39,7 +39,7 @@ export type SidecarRouterDeps = {
   listenOnly: { refuse: (tool: string) => void; setHeardLive: (text: string) => void };
   orb: { ripple: () => void };
   workstreams: { apply: (snapshot: SessionsSnapshot) => void; refreshVerbs: () => void };
-  hud: { closeGalaxy: () => void };
+  hud: { closeSecondBrain: () => void };
   pushLog: (level: string, message: string, timestamp?: number) => void;
   pushTranscript: (speaker: string, text: string) => void;
   setPipelineAvailable: (available: boolean) => void;
@@ -70,9 +70,9 @@ export function routeSidecarEvent(event: SidecarEvent, deps: SidecarRouterDeps):
   if (event.type === "secondbrain_availability") {
     const available = Boolean(event.available);
     setSecondBrainAvailable(available);
-    // On disappearance, force-close the galaxy and hide the toggle
+    // On disappearance, force-close the second brain and hide the toggle
     // (design.md D7/M4/M-5/L2).
-    if (!available) hud.closeGalaxy();
+    if (!available) hud.closeSecondBrain();
     return;
   }
 

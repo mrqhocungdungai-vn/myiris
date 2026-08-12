@@ -196,7 +196,7 @@ export function createSecondBrainCapability({
   // exactly the terms that already clear an open note reader": the renderer
   // unmounts the galaxy (and so calls deactivate) on every one of those
   // routes today, independent of this change.
-  let galaxyActive = false;
+  let secondBrainActive = false;
 
   // The three SYSTEM_EVENT pushes and the two fenced content lines are pure
   // builders in second-brain-announcements.mjs, where the fencing of untrusted
@@ -383,7 +383,7 @@ export function createSecondBrainCapability({
     // the pipeline; the galaxy needs no Claude credential). This is a static
     // snapshot as of the last connect — announceFocusUpdate() above is what
     // keeps Gemini current with a focus that changes mid-session.
-    if (!galaxyActive) return base;
+    if (!secondBrainActive) return base;
 
     // open-note-session: the open note outranks the focus as the described
     // referent — exactly one is ever described, never both (D1). A note can
@@ -686,7 +686,7 @@ export function createSecondBrainCapability({
       channel: "secondbrain:activate",
       kind: "on",
       fn: () => {
-        galaxyActive = true;
+        secondBrainActive = true;
         notesVaultGraph.start();
       },
     },
@@ -703,7 +703,7 @@ export function createSecondBrainCapability({
       fn: () => {
         const hadFocus = focusState.ids.length > 0;
         const hadOpenNote = openNoteId !== null;
-        galaxyActive = false;
+        secondBrainActive = false;
         focusState = clearFocusState();
         // open-note-session: "the reader cannot outlive the galaxy" — cleared
         // on exactly the terms the focus already is above.

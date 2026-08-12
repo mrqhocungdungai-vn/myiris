@@ -34,7 +34,7 @@ export function useHandGestures({
   liveHandRef,
   readerOpen,
   drawingActive,
-  galaxyActive,
+  secondBrainActive,
   showHistory,
   uiMode,
   onFocusTask,
@@ -44,7 +44,7 @@ export function useHandGestures({
   /** An open reader paints a full-screen backdrop and takes every gesture. */
   readerOpen: boolean;
   drawingActive: boolean;
-  galaxyActive: boolean;
+  secondBrainActive: boolean;
   showHistory: boolean;
   uiMode: "deck" | "hud";
   /** The card under the hand, so voice references like "this one" resolve to it. */
@@ -96,7 +96,7 @@ export function useHandGestures({
       // mouse-clickable — so the hand reaches them too, and only the layer's
       // own surface is suppressed. Testing "is a layer active" instead left
       // every island but `.hud-controls` visible, clickable, and untouchable.
-      if ((drawingActive || galaxyActive) && !isHudChrome(actionable)) return null;
+      if ((drawingActive || secondBrainActive) && !isHudChrome(actionable)) return null;
 
       // Track which card the hand is hovering so voice references like "this
       // one" / "show its steps" can resolve to it (design.md D1 focusedTaskId).
@@ -110,7 +110,7 @@ export function useHandGestures({
 
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [handControl, readerOpen, drawingActive, galaxyActive]);
+  }, [handControl, readerOpen, drawingActive, secondBrainActive]);
 
   // Open-palm hold-to-scroll: scrolls whichever scrollable region (Comms or
   // Work Stream column, on the deck or in the HUD) is under the hand.
@@ -130,7 +130,7 @@ export function useHandGestures({
         const el = document.elementFromPoint(h.point.x, h.point.y);
         // Shared mode, same positional rule as the dwell: a coexisting layer
         // owns its own surface, the chrome above it keeps its own bindings.
-        const layerOwnsPoint = (drawingActive || galaxyActive) && !isHudChrome(el);
+        const layerOwnsPoint = (drawingActive || secondBrainActive) && !isHudChrome(el);
         const target = layerOwnsPoint ? null : el?.closest<HTMLElement>(SCROLLABLES) ?? null;
         if (target) {
           const rect = target.getBoundingClientRect();
@@ -148,7 +148,7 @@ export function useHandGestures({
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [handControl, readerOpen, showHistory, drawingActive, galaxyActive]);
+  }, [handControl, readerOpen, showHistory, drawingActive, secondBrainActive]);
 
   // Closed-fist rotates the Arc Reactor orb, pinch scales it — only on the
   // deck, with the reader closed and neither the drawing panel nor the
@@ -173,7 +173,7 @@ export function useHandGestures({
         uiMode: uiMode,
         readerOpen: !!readerOpen,
         drawingActive: drawingActive,
-        secondBrainActive: galaxyActive,
+        secondBrainActive,
       });
 
       if (engaged && h.fist && h.point) {
@@ -204,7 +204,7 @@ export function useHandGestures({
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [handControl, uiMode, readerOpen, drawingActive, galaxyActive]);
+  }, [handControl, uiMode, readerOpen, drawingActive, secondBrainActive]);
 
   return { dwellActive, dwellFired, orbRotationRef, orbScaleRef };
 }

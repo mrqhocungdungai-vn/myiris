@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { toggleLayer, isDrawing, isGalaxy, layerActive, type HudLayer } from "../lib/hud-layers";
+import { toggleLayer, isDrawing, isSecondBrain, layerActive, type HudLayer } from "../lib/hud-layers";
 
 // Deck ⇄ HUD, and which exclusive layer is up.
 //
@@ -27,15 +27,15 @@ export type HudModeControl = {
   mode: UiMode;
   transition: "to-hud" | "to-deck" | null;
   drawingActive: boolean;
-  galaxyActive: boolean;
+  secondBrainActive: boolean;
   /** True while either exclusive layer owns the screen. */
   layerActive: boolean;
   toggleDrawing: () => void;
-  toggleGalaxy: () => void;
+  toggleSecondBrain: () => void;
   closeDrawing: () => void;
-  closeGalaxy: () => void;
-  /** Opens the galaxy regardless of what was open — a voice request, not a toggle. */
-  openGalaxy: () => void;
+  closeSecondBrain: () => void;
+  /** Opens the second brain regardless of what was open — a voice request, not a toggle. */
+  openSecondBrain: () => void;
   /** Main reported the window changed mode. Leaving the HUD closes any layer. */
   applyMode: (mode: UiMode) => void;
   /** Clears any layer without changing mode — for an explicit exit. */
@@ -70,13 +70,13 @@ export function useHudMode(): HudModeControl {
     mode,
     transition,
     drawingActive: isDrawing(layer),
-    galaxyActive: isGalaxy(layer),
+    secondBrainActive: isSecondBrain(layer),
     layerActive: layerActive(layer),
     toggleDrawing: () => setLayer((current) => toggleLayer(current, "drawing")),
-    toggleGalaxy: () => setLayer((current) => toggleLayer(current, "galaxy")),
+    toggleSecondBrain: () => setLayer((current) => toggleLayer(current, "secondBrain")),
     closeDrawing: () => setLayer((current) => (isDrawing(current) ? null : current)),
-    closeGalaxy: () => setLayer((current) => (isGalaxy(current) ? null : current)),
-    openGalaxy: () => setLayer("galaxy"),
+    closeSecondBrain: () => setLayer((current) => (isSecondBrain(current) ? null : current)),
+    openSecondBrain: () => setLayer("secondBrain"),
     applyMode,
     closeLayers: () => setLayer(null),
   };

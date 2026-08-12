@@ -12,7 +12,7 @@ function fakes() {
     listenOnly: { refuse: vi.fn(), setHeardLive: vi.fn() },
     orb: { ripple: vi.fn() },
     workstreams: { apply: vi.fn(), refreshVerbs: vi.fn() },
-    hud: { closeGalaxy: vi.fn() },
+    hud: { closeSecondBrain: vi.fn() },
     pushLog: vi.fn(),
     pushTranscript: vi.fn(),
     setPipelineAvailable: vi.fn(),
@@ -29,19 +29,19 @@ describe("availability", () => {
     expect(deps.setPipelineAvailable).toHaveBeenCalledWith(true);
   });
 
-  // On disappearance the galaxy is force-closed, or the toggle hides while the
+  // On disappearance the second brain is force-closed, or the toggle hides while the
   // layer stays up (design.md D7/M4/M-5/L2).
-  it("force-closes the galaxy when the second brain disappears", () => {
+  it("force-closes the second brain when it disappears", () => {
     const { deps, send } = fakes();
     send({ type: "secondbrain_availability", available: false });
     expect(deps.setSecondBrainAvailable).toHaveBeenCalledWith(false);
-    expect(deps.hud.closeGalaxy).toHaveBeenCalled();
+    expect(deps.hud.closeSecondBrain).toHaveBeenCalled();
   });
 
-  it("does not close the galaxy when it becomes available", () => {
+  it("does not close the second brain when it becomes available", () => {
     const { deps, send } = fakes();
     send({ type: "secondbrain_availability", available: true });
-    expect(deps.hud.closeGalaxy).not.toHaveBeenCalled();
+    expect(deps.hud.closeSecondBrain).not.toHaveBeenCalled();
   });
 });
 

@@ -26,8 +26,8 @@ export type IrisSubscriptions = {
   onSleep: () => void;
   onWake: () => void;
   applyHudMode: (mode: UiMode) => void;
-  openNoteFromGalaxy: (id: string, title: string) => void;
-  openGalaxy: () => void;
+  openNoteFromSecondBrain: (id: string, title: string) => void;
+  openSecondBrain: () => void;
 };
 
 export function useIrisSubscriptions(deps: IrisSubscriptions): void {
@@ -44,8 +44,8 @@ export function useIrisSubscriptions(deps: IrisSubscriptions): void {
     onSleep,
     onWake,
     applyHudMode,
-    openNoteFromGalaxy,
-    openGalaxy,
+    openNoteFromSecondBrain,
+    openSecondBrain,
   } = deps;
 
   // Seed from main, then follow its stream. One effect: the queries seed the
@@ -115,10 +115,10 @@ export function useIrisSubscriptions(deps: IrisSubscriptions): void {
   // refused before this is emitted, so nothing here re-litigates the choice.
   useEffect(() => {
     return window.iris.onSecondBrainOpenNote(({ id, title }) => {
-      // openGalaxy closes the drawing layer by construction — the slot holds
+      // openSecondBrain closes the drawing layer by construction — the slot holds
       // the single active-layer invariant, so this call site does not.
-      openGalaxy();
-      void openNoteFromGalaxy(id, title);
+      openSecondBrain();
+      void openNoteFromSecondBrain(id, title);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

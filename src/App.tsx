@@ -133,7 +133,7 @@ export default function App() {
   // Hoisted above VaultGalaxy's own mount (design.md M-3) so toggling the
   // galaxy off and back on rehydrates node positions instead of
   // re-scrambling the force-directed layout on every reopen.
-  const galaxyPositionsRef = useRef<Map<string, GalaxyNode>>(new Map());
+  const secondBrainPositionsRef = useRef<Map<string, GalaxyNode>>(new Map());
   // Listen-only mode (replace-listening-mode-with-listen-only design.md D3):
   // main is the sole owner of this state — this is pure display, seeded from
   // a query on mount/reload and updated only by main's push. Never asserted
@@ -259,7 +259,7 @@ export default function App() {
     },
   );
 
-  async function openNoteFromGalaxy(id: string, title: string) {
+  async function openNoteFromSecondBrain(id: string, title: string) {
     const result = await window.iris.readSecondBrainNote(id);
     if (!result.ok) return;
     // The single-reader invariant is the slot's, not this call site's.
@@ -359,8 +359,8 @@ export default function App() {
     onSleep: stop,
     onWake: start,
     applyHudMode: hud.applyMode,
-    openNoteFromGalaxy,
-    openGalaxy: hud.openGalaxy,
+    openNoteFromSecondBrain,
+    openSecondBrain: hud.openSecondBrain,
   });
 
 
@@ -373,7 +373,7 @@ export default function App() {
   useHudClickThrough({
     hasBridge,
     hudMode: hud.mode,
-    layerActive: hud.galaxyActive || hud.drawingActive,
+    layerActive: hud.secondBrainActive || hud.drawingActive,
   });
 
 
@@ -381,7 +381,7 @@ export default function App() {
   // D9/L3 of second-brain-galaxy-view) — a crashed WebGL layer (caught by
   // VaultGalaxy's own error boundary, which also force-closes) must not be
   // the only way out of the fullscreen click-through-disabled overlay.
-  useEscapeToClose(hud.galaxyActive, hud.closeGalaxy);
+  useEscapeToClose(hud.secondBrainActive, hud.closeSecondBrain);
 
   // The same escape hatch for the drawing surface (the-canvas-stops-fighting-
   // back, task 3.4), with the two differences useEscapeToClose names: capture
@@ -392,15 +392,15 @@ export default function App() {
     standDown: () => Boolean(document.querySelector(".excalidraw-modal-container")),
   });
 
-  // The note reader's existence is derived from hud.galaxyActive at the
-  // render call site below (`hud.galaxyActive && reader.note`), which closes
-  // the openNoteFromGalaxy await race — but that only suppresses rendering,
+  // The note reader's existence is derived from hud.secondBrainActive at the
+  // render call site below (`hud.secondBrainActive && reader.note`), which closes
+  // the openNoteFromSecondBrain await race — but that only suppresses rendering,
   // leaving `reader.note` set. Without also clearing it here, toggling the
   // galaxy back on would pop the stale reader open again over a freshly-
   // loading graph (second-brain-gesture-nav design.md D7 — ship both).
   useEffect(() => {
-    if (!hud.galaxyActive) reader.closeNote();
-  }, [hud.galaxyActive]);
+    if (!hud.secondBrainActive) reader.closeNote();
+  }, [hud.secondBrainActive]);
 
 
 
@@ -527,7 +527,7 @@ export default function App() {
     liveHandRef,
     readerOpen: reader.isOpen,
     drawingActive: hud.drawingActive,
-    galaxyActive: hud.galaxyActive,
+    secondBrainActive: hud.secondBrainActive,
     showHistory: work.showHistory,
     uiMode: hud.mode,
     onFocusTask: work.focus,
@@ -564,16 +564,16 @@ export default function App() {
 
 
   // Single authoritative context for the indicator (second-brain-gesture-nav
-  // design.md D9/D10) — reader outranks the galaxy, which outranks the deck.
+  // design.md D9/D10) — reader outranks the second brain, which outranks the deck.
   const gestureContext = useMemo(
     () =>
       resolveGestureContext({
         readerOpen: reader.isOpen,
-        secondBrainActive: hud.galaxyActive,
+        secondBrainActive: hud.secondBrainActive,
         drawingActive: hud.drawingActive,
         historyOpen: work.showHistory,
       }),
-    [reader.isOpen, hud.galaxyActive, hud.drawingActive, work.showHistory],
+    [reader.isOpen, hud.secondBrainActive, hud.drawingActive, work.showHistory],
   );
 
   // The decision table itself is `handActionFor` in lib/gesture-label.ts,
@@ -777,11 +777,11 @@ export default function App() {
           drawingActive={hud.drawingActive}
           onToggleDrawing={hud.toggleDrawing}
           secondBrainAvailable={secondBrainAvailable}
-          secondBrainActive={hud.galaxyActive}
-          onToggleSecondBrain={hud.toggleGalaxy}
-          galaxyPositionsRef={galaxyPositionsRef}
-          onOpenNote={openNoteFromGalaxy}
-          onForceCloseSecondBrain={() => hud.closeGalaxy()}
+          secondBrainActive={hud.secondBrainActive}
+          onToggleSecondBrain={hud.toggleSecondBrain}
+          secondBrainPositionsRef={secondBrainPositionsRef}
+          onOpenNote={openNoteFromSecondBrain}
+          onForceCloseSecondBrain={() => hud.closeSecondBrain()}
           readerOpen={reader.isOpen}
           webglHighFidelity={webglHighFidelity}
         />
@@ -933,7 +933,7 @@ export default function App() {
         <ReaderOverlay task={expandedTask} hand={handControl ? hand : null} handRef={liveHandRef} onClose={closeReader} />
       ) : null}
 
-      {hud.galaxyActive && reader.note ? (
+      {hud.secondBrainActive && reader.note ? (
         <NoteReader
           noteId={reader.note.id}
           title={reader.note.title}

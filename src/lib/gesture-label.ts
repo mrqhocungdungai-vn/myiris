@@ -65,7 +65,7 @@ function readerAction(hand: LabelHand): HandAction {
  * recompute and the label would otherwise show whatever it was when some other
  * field last changed. `openPalm` is compared per hand, so it does.
  */
-function galaxyAction(hand: LabelHand): HandAction {
+function secondBrainAction(hand: LabelHand): HandAction {
   if (openPalmCount(hand) >= 2) return { label: "Two palms · zoom the view", tone: "open" };
   // Fist + palm reels in on the locked note (design.md D26) — a different zoom
   // from two palms, and the indicator has to separate them or the one thing
@@ -102,6 +102,6 @@ export function handActionFor(
 ): HandAction {
   if (!hand.present) return { label: "Show your hand", tone: "idle" };
   if (gestureContext === "reader") return readerAction(hand);
-  if (gestureContext === "galaxy") return galaxyAction(hand);
+  if (gestureContext === "secondBrain") return secondBrainAction(hand);
   return deckAction(hand, surface);
 }

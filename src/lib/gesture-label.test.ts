@@ -57,23 +57,23 @@ describe("reader context", () => {
 
 describe("galaxy context", () => {
   it("binds pointing to opening a node", () => {
-    expect(handActionFor(hand({ pointing: true }), "galaxy", DECK).label).toBe("Pointing_Up · open a node");
+    expect(handActionFor(hand({ pointing: true }), "secondBrain", DECK).label).toBe("Pointing_Up · open a node");
   });
 
   it("binds a fist to turning the view, not to closing", () => {
-    expect(handActionFor(hand({ fist: true }), "galaxy", DECK).label).toBe("Closed_Fist · turn the view");
+    expect(handActionFor(hand({ fist: true }), "secondBrain", DECK).label).toBe("Closed_Fist · turn the view");
   });
 
   it("names two palms as zoom", () => {
     const two = hand({ openPalm: true, hands: [tracked({ openPalm: true }), tracked({ id: "h2", openPalm: true })] });
-    expect(handActionFor(two, "galaxy", DECK).label).toBe("Two palms · zoom the view");
+    expect(handActionFor(two, "secondBrain", DECK).label).toBe("Two palms · zoom the view");
   });
 
   // Fist + palm is a different zoom from two palms and must be named apart, or
   // the one thing carried in the hands rather than in hidden state goes unnamed.
   it("separates fist+palm from two palms", () => {
     const mixed = hand({ hands: [tracked({ fist: true }), tracked({ id: "h2", openPalm: true })] });
-    expect(handActionFor(mixed, "galaxy", DECK).label).toBe("Fist + palm · reel to note");
+    expect(handActionFor(mixed, "secondBrain", DECK).label).toBe("Fist + palm · reel to note");
   });
 });
 
@@ -97,7 +97,7 @@ describe("the galaxy labels mirror driveFor's partition", () => {
       // driveFor decides the binding; handActionFor only names it. Both must
       // agree that this pose is bound to something.
       expect(driveFor(entry.hand as never, true)).toBe(entry.drive);
-      const action = handActionFor(entry.hand, "galaxy", DECK);
+      const action = handActionFor(entry.hand, "secondBrain", DECK);
       expect(action.label).not.toMatch(/· idle$/);
     });
   }
@@ -105,7 +105,7 @@ describe("the galaxy labels mirror driveFor's partition", () => {
   it("falls back to idle exactly when driveFor binds nothing", () => {
     const unbound = hand({ gesture: "Thumb_Up" });
     expect(driveFor(unbound as never, true)).toBeNull();
-    expect(handActionFor(unbound, "galaxy", DECK).label).toMatch(/· idle$/);
+    expect(handActionFor(unbound, "secondBrain", DECK).label).toMatch(/· idle$/);
   });
 
   // KNOWN GAP, pinned deliberately rather than fixed here.
@@ -125,7 +125,7 @@ describe("the galaxy labels mirror driveFor's partition", () => {
   it("promises 'turn the view' for a fist even when driveFor binds nothing", () => {
     const fist = hand({ fist: true });
     expect(driveFor(fist as never, false)).toBeNull();
-    expect(handActionFor(fist, "galaxy", DECK).label).toBe("Closed_Fist · turn the view");
+    expect(handActionFor(fist, "secondBrain", DECK).label).toBe("Closed_Fist · turn the view");
   });
 });
 

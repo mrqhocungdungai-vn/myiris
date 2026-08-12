@@ -6,7 +6,7 @@
 // loops keep their own existing guards untouched (deliberate, see D9's
 // known-debt note); this is not a drop-in replacement for those.
 
-export type GestureContext = "reader" | "galaxy" | "drawing" | "history" | "deck";
+export type GestureContext = "reader" | "secondBrain" | "drawing" | "history" | "deck";
 
 export function resolveGestureContext({
   readerOpen,
@@ -20,7 +20,7 @@ export function resolveGestureContext({
   historyOpen: boolean;
 }): GestureContext {
   if (readerOpen) return "reader";
-  if (secondBrainActive) return "galaxy";
+  if (secondBrainActive) return "secondBrain";
   if (drawingActive) return "drawing";
   if (historyOpen) return "history";
   return "deck";

@@ -17,9 +17,9 @@ describe("resolveGestureContext", () => {
   });
 
   it("resolves to galaxy when active and no reader is open", () => {
-    expect(resolveGestureContext({ ...NONE, secondBrainActive: true })).toBe("galaxy");
+    expect(resolveGestureContext({ ...NONE, secondBrainActive: true })).toBe("secondBrain");
     expect(resolveGestureContext({ ...NONE, secondBrainActive: true, drawingActive: true, historyOpen: true })).toBe(
-      "galaxy",
+      "secondBrain",
     );
   });
 

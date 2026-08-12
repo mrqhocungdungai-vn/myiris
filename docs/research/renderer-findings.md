@@ -337,7 +337,7 @@ is the single highest-value test debt in `src/`.
 and roughly 35 call sites guard on it. Six do not:
 
 - `:438` `closeNoteReader()` → `window.iris.reportNoteClosed()`
-- `:453-458` `openNoteFromGalaxy()` → `readSecondBrainNote` / `reportNoteOpened`
+- `:453-458` `openNoteFromSecondBrain()` (`openNoteFromGalaxy` when this was recorded) → `readSecondBrainNote` / `reportNoteOpened`
 - `:466` `exitHud()` → `window.iris.toggleHud()`
 - `:883` the `secondBrainActive` cleanup effect — and note this effect's body runs **on mount**, when `secondBrainActive` is already `false`, so it fires an unconditional `reportNoteClosed()` at startup
 - `:902-906` the `onSecondBrainOpenNote` subscription (`[]` deps, no guard)
