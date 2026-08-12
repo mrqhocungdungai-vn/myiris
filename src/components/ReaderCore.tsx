@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 
 import { X } from "lucide-react";
 import type { HandState } from "../hooks/useHandControl";
 
-// Extracted from ReaderOverlay (second-brain-galaxy-view design.md D6): the
+// Extracted from ReaderOverlay (second-brain-layer, "Opening a node shows the note's content"): the
 // `.reader-backdrop`/`.reader-card` DOM, drag-to-dismiss, two-palm zoom,
 // palm-scroll rAF loop, and Esc/X close — everything that isn't
 // task-specific chrome. `ReaderOverlay` passes its status/agent/run-id

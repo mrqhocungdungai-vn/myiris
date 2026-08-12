@@ -48,7 +48,7 @@ export function installRendererSecurity({
 
   // D9 (harden-security-boundaries): app-wide navigation containment,
   // replacing the old per-window will-navigate/setWindowOpenHandler pair
-  // (second-brain-galaxy-view D9/M1) so every web contents the app ever
+  // (second-brain-layer, "Untrusted note content is contained") so every web contents the app ever
   // creates is covered, not just the first window. The galaxy renders
   // genuinely untrusted note content (wiki-ingest pulls web articles/PDFs
   // into the vault) and react-markdown turns `[text](https://…)` into a real

@@ -377,8 +377,9 @@ export default function App() {
   });
 
 
-  // Esc force-closes the galaxy regardless of its internal state (design.md
-  // D9/L3 of second-brain-galaxy-view) — a crashed WebGL layer (caught by
+  // Esc force-closes the second brain regardless of its internal state
+  // (second-brain-layer, "The second-brain vault is shown as an exclusive HUD
+  // layer") — a crashed WebGL layer (caught by
   // VaultGalaxy's own error boundary, which also force-closes) must not be
   // the only way out of the fullscreen click-through-disabled overlay.
   useEscapeToClose(hud.secondBrainActive, hud.closeSecondBrain);

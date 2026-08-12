@@ -758,7 +758,7 @@ html:not(.hud-mode) .setup-backdrop {
   to { opacity: 1; }
 }
 
-/* ===== Second-brain galaxy (toggleable, second-brain-galaxy-view) =====
+/* ===== Second-brain galaxy (toggleable; second-brain-layer for the layer, galaxy-view for what it draws) =====
    Fullscreen — an immersive "fly through your vault" backdrop, and since the
    drawing surface became fullscreen too, the two exclusive HUD layers now
    share these terms exactly — but z-index 1 keeps it beneath `.hud-chrome` (above),

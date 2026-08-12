@@ -21,7 +21,7 @@ export default class GalaxyErrorBoundary extends Component<{ onCrash: () => void
     // whole galaxy closed, same as Esc. Logged (not swallowed silently) so a
     // regression like the d3AlphaTarget bug above is visible in devtools
     // instead of just "the galaxy closed for no apparent reason".
-    console.error("[second-brain-galaxy-view] galaxy layer crashed, force-closing:", error);
+    console.error("[second-brain-layer] galaxy layer crashed, force-closing:", error);
     this.props.onCrash();
   }
   render() {

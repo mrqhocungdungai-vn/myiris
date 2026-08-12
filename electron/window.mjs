@@ -167,7 +167,7 @@ export function createWindowModule({
     // A crashed renderer or a reload/navigation doesn't fire the window's
     // "closed" event, so an active vault-graph fs.watch stream would
     // otherwise orphan while a fresh renderer starts a second one
-    // (second-brain-galaxy-view design.md D3 M3).
+    // (second-brain-layer, "The vault graph is owned and kept fresh by the main process").
     mainWindow.webContents.on("render-process-gone", (_event, details) => {
       // The interface process dying is the single most important thing this app
       // can record about itself, and it is exactly what an in-memory log cannot.
@@ -228,8 +228,9 @@ export function createWindowModule({
     if (!mainWindow || uiMode === "hud") return;
     uiMode = "hud";
     deckBounds = mainWindow.getBounds();
-    // Re-check vault existence on every HUD open (design.md D7 of
-    // second-brain-galaxy-view) — cheap existsSync, only emits on a real
+    // Re-check vault existence on every HUD open (second-brain-layer, "The
+    // second-brain layer is gated on the vault existing, independent of the
+    // Claude pipeline") — cheap existsSync, only emits on a real
     // transition, so the "show second brain" toggle's visibility stays in
     // sync even if the vault appeared/disappeared since the last HUD session.
     probeSecondBrainAvailability();

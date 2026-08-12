@@ -1,7 +1,8 @@
 // Which fullscreen HUD layer is up, and the two rules that govern it.
 //
 // There are two exclusive layers — the drawing surface and the second brain —
-// and **at most one is ever open** (design.md D5 of second-brain-galaxy-view).
+// and **at most one is ever open** (second-brain-layer, "The second-brain
+// vault is shown as an exclusive HUD layer").
 // Both members name a *feature*; how either is currently drawn (the second
 // brain as a galaxy) is not what this slot is about. Like the reader slot, that
 // rule lived as two toggles each remembering to clear the other, with nothing

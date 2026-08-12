@@ -1,5 +1,5 @@
 // Pure, Electron-free coverage of the vault-graph parser in
-// openspec/changes/second-brain-galaxy-view/specs/second-brain-galaxy-view/spec.md:
+// openspec/specs/second-brain-layer/spec.md, "The vault graph is owned and kept fresh by the main process":
 // wikilink forms/case-insensitive resolution, code-span/embed skipping,
 // ghost-node synthesis, subfolder-collision id disambiguation, malformed
 // frontmatter degrading a single note rather than failing the build, and the

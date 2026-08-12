@@ -35,7 +35,7 @@ import GalaxyErrorBoundary from "./GalaxyErrorBoundary";
 import type { GalaxyNode, GalaxyLink, TrackballControlsLike } from "../lib/galaxy-types";
 import { readFlag, GESTURE_DEBUG_STORAGE_KEY } from "../lib/preferences";
 
-// second-brain-galaxy-view: 3d-force-graph is a vanilla (non-React) library
+// galaxy-view: 3d-force-graph is a vanilla (non-React) library
 // that attaches imperatively to a container element — it has no React
 // component to hand to `React.lazy`, so freshness-on-first-activation (the
 // same goal DrawingCanvas.tsx serves with `lazy(() => import(...))`) is done
@@ -307,7 +307,7 @@ function GalaxyCanvas({
           onOpenNoteRef.current(node.id, node.title);
         })
         // The mouse's half of the pointed-at highlight
-        // (second-brain-galaxy-view: "The node being pointed at reveals its
+        // (galaxy-view: "The node being pointed at reveals its
         // link cluster"). A ghost is never pointed at — the hand's target
         // resolution already excludes it as unopenable, and a highlight that
         // appeared under the mouse but never under the hand would make the same

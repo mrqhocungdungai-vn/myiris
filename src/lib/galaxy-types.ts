@@ -21,8 +21,8 @@ export type GalaxyNode = VaultGraphNode & {
 export type GalaxyLink = { source: string; target: string };
 
 // 3d-force-graph types `controls()` as `object` (it's a TrackballControls
-// instance internally — second-brain-galaxy-view design.md D3) — this is the
-// minimal shape the gesture loop actually touches, confirmed against
+// instance internally — see galaxy-view) — this is the minimal shape the
+// gesture loop actually touches, confirmed against
 // three-render-objects' source (tick() gates its `.update()` on `.enabled`;
 // `cameraPosition`'s `setLookAt` only writes `.target` while `.enabled` is
 // true, replacing the Vector3 outright rather than mutating it — R1/M5/L16).

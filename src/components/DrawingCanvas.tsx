@@ -630,8 +630,9 @@ class DrawingErrorBoundary extends Component<{ onCrash?: () => void; children: R
     return { crashed: true };
   }
   componentDidCatch(error: unknown) {
-    // Mirrors VaultGalaxy's boundary (second-brain-galaxy-view design.md
-    // D9/L3): a crashed canvas must not leave a panel-sized hole that owns
+    // Mirrors VaultGalaxy's boundary (second-brain-layer, "The second-brain
+    // vault is shown as an exclusive HUD layer"): a crashed canvas must not
+    // leave a panel-sized hole that owns
     // part of the screen and cannot be closed by anything inside it. Force the
     // panel closed, same as Esc, and log rather than swallow so the crash is
     // visible in devtools instead of "the drawing panel vanished".

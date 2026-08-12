@@ -67,7 +67,7 @@ export const DIM_LINK_ALPHA = 0.025;
 export const LINK_BASE_COLOR = "rgba(140, 170, 255, 0.175)";
 // The links incident to whatever node is being pointed at, lifted from the
 // faint base colour to near-opaque so the cluster reads at a glance
-// (second-brain-galaxy-view: "The node being pointed at reveals its link
+// (galaxy-view: "The node being pointed at reveals its link
 // cluster"). Colour is the ONLY lever used, deliberately — in
 // three-forcegraph `useCylinder = !!linkWidth`, so a non-zero width switches
 // that link from a `Line` primitive to cylinder geometry, and changing the

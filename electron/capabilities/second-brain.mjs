@@ -1,5 +1,5 @@
 // The second-brain capability (personal-knowledge-notes,
-// second-brain-galaxy-view): the LLM-Wiki notes vault's readiness checks,
+// second-brain-layer): the LLM-Wiki notes vault's readiness checks,
 // the read-only galaxy graph watcher, and this capability's slice of Gemini
 // prose / IPC / teardown — gathered here per design.md D10 rather than
 // spread across the layered core modules. Electron-free.
@@ -160,7 +160,7 @@ export function createSecondBrainCapability({
   });
   const { checkNotesSkillsStatus, ensureNotesVaultReady } = vaultSetup;
 
-  // Second-brain galaxy view (second-brain-galaxy-view): reads the same
+  // Second-brain galaxy view (second-brain-layer): reads the same
   // NOTES_VAULT_DIR the notes capability writes, purely for viewing — never
   // creates or writes to the vault. Module-level singleton, like canvasStore,
   // so its watcher/cache lifecycle survives window recreation.
@@ -646,7 +646,8 @@ export function createSecondBrainCapability({
 
   /** @type {Array<{ channel: string, kind: "handle"|"on", fn: Function }>} */
   const ipcHandlers = [
-    // Second-brain galaxy view (second-brain-galaxy-view design.md D3/D7/D8):
+    // Second-brain layer (second-brain-layer, "The second-brain layer is gated
+    // on the vault existing, independent of the Claude pipeline"): the
     // renderer's boot-time/HUD-open availability pull — the live push half of
     // this rides the existing sidecar:event stream (secondbrain_availability),
     // not a new dedicated channel (design.md D7, L2).
@@ -859,7 +860,7 @@ export function createSecondBrainCapability({
   ];
 
   async function teardown() {
-    // Tear down the vault-graph watcher, if it was running (second-brain-galaxy-view design.md D3).
+    // Tear down the vault-graph watcher, if it was running (second-brain-layer, "The vault graph is owned and kept fresh by the main process").
     notesVaultGraph.stop();
     // Quit-time flush (design D5): whatever accumulated since the last
     // periodic flush must not be lost to a clean shutdown any more than to a

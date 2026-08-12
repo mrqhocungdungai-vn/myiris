@@ -1,7 +1,7 @@
 # Proposal: the second brain becomes a workspace you talk to
 
 **Status:** proposal, not yet an OpenSpec change.
-**Scope:** `personal-knowledge-notes`, `second-brain-galaxy-view`,
+**Scope:** `personal-knowledge-notes`, `second-brain-layer`, `galaxy-view`,
 `second-brain-gesture-nav`, and the seam to `canvas-claude-mcp`.
 **Date:** 2026-08-04.
 
@@ -143,7 +143,7 @@ sentence a human would naturally say here is unavailable: *this*, *that*,
 ### 1.5 The heavy layers are mutually exclusive and mutually ignorant
 
 The galaxy and the excalidraw canvas are specified as mutually exclusive HUD
-layers (`hud-drawing-canvas` and `second-brain-galaxy-view` both require it), for
+layers (`hud-drawing-canvas` and `second-brain-layer` both require it), for
 a sound performance reason. The consequence is that **you cannot look at your
 knowledge and sketch at the same time**, and there is no path between them: you
 cannot diagram a cluster of notes, and you cannot save a board as a note. The
@@ -318,7 +318,7 @@ into a live graph update, already specified:
 
 > *"A note added or edited while the galaxy is open appears without reload …
 > existing nodes keeping their positions — the layout is not re-randomized."*
-> — `openspec/specs/second-brain-galaxy-view/spec.md`
+> — `openspec/specs/second-brain-layer/spec.md`, "The vault graph is owned and kept fresh by the main process"
 
 That requirement was written for "Claude edits a note mid-session." It is exactly
 the mechanism that makes "watch your knowledge reorganize itself while you talk"
@@ -376,7 +376,7 @@ deliberately after 2 because its privacy surface deserves its own review rather
 than riding in on someone else's change.
 
 Specs touched: `personal-knowledge-notes` (capture is a write, not a run),
-`second-brain-galaxy-view` (write channels, the inbox exclusion, focus
+`second-brain-layer` (write channels, the inbox exclusion, focus
 rendering), `second-brain-gesture-nav` (the selection gesture and the partition),
 `verb-tool-surface` + `voice-ui-control` (`capture_thought`, `curate_notes`),
 `canvas-claude-mcp` (M4 only).

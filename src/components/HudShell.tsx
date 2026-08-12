@@ -197,7 +197,7 @@ export default function HudShell({
   // default, unmounted when off so its lazy chunk never loads unless opened.
   drawingActive: boolean;
   onToggleDrawing: () => void;
-  // second-brain-galaxy-view: the toggle itself is shown only when the vault
+  // second-brain-layer: the toggle itself is shown only when the vault
   // exists (design.md D7), independent of pipelineAvailable. The galaxy
   // layer is unmounted when off, mirroring the drawing panel.
   secondBrainAvailable: boolean;

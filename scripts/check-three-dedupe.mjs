@@ -4,9 +4,11 @@
 // the `overrides.three` pin in package.json (+ `resolve.dedupe` in
 // vite.config.ts) the graph rendering canvas and the reactor/holo backdrop
 // could each get a different live `three` module instance, breaking
-// `instanceof THREE.Object3D` checks across the boundary. See design.md D2
-// of second-brain-galaxy-view — this gate is added only after confirming the
-// override collapses the pre-existing stats-gl@2.4.2 -> three@0.170.0 copy.
+// `instanceof THREE.Object3D` checks across the boundary. See galaxy-view,
+// "The galaxy renders over an immersive opaque deep-space backdrop", whose
+// last clause requires reusing the `three` instance already present — this
+// gate is added only after confirming the override collapses the pre-existing
+// stats-gl@2.4.2 -> three@0.170.0 copy.
 import { execSync } from "node:child_process";
 
 const tree = JSON.parse(execSync("npm ls three --json --all", { encoding: "utf8" }));

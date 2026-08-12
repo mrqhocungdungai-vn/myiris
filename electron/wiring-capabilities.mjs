@@ -100,7 +100,7 @@ export function createCapabilitiesWiring({
   openFolder,
 }) {
   // Canvas capability (canvas-claude-mcp) and second-brain capability
-  // (personal-knowledge-notes, second-brain-galaxy-view), gathered end to end
+  // (personal-knowledge-notes, second-brain-layer), gathered end to end
   // per design.md D10 rather than spread across the layered core modules.
   const canvasCapability = createCanvasCapability({
     canvasStoreFile,

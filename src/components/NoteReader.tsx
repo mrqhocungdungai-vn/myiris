@@ -5,8 +5,8 @@ import { ExternalLink, Pencil } from "lucide-react";
 import ReaderCore from "./ReaderCore";
 import type { HandState } from "../hooks/useHandControl";
 
-// Opens a vault note's markdown on a ReaderCore (second-brain-galaxy-view
-// design.md D6/D9): no headerSlot chrome of the run reader (no run id / agent /
+// Opens a vault note's markdown on a ReaderCore (second-brain-layer, "Opening
+// a node shows the note's content"): no headerSlot chrome of the run reader (no run id / agent /
 // status — just the note's own content), and — matching ReaderOverlay exactly —
 // no `rehype-raw`/`dangerouslySetInnerHTML`, so raw HTML in an untrusted note
 // (wiki-ingest pulls web content into the vault) stays escaped rather than

@@ -255,8 +255,9 @@ type CanvasScenePush = { scene: CanvasScene; baseRevision: number | null };
 
 type NativeFileResult = { canceled: true } | { canceled: false; filePath: string };
 
-// second-brain-galaxy-view (design.md D3): position-free — the renderer's
-// force simulation owns x/y/z. `path` is never sent over the wire (D8/L-1);
+// second-brain-layer, "The vault graph is owned and kept fresh by the main
+// process": position-free — the renderer's force simulation owns x/y/z.
+// `path` is never sent over the wire;
 // a ghost node (unresolved wikilink target) is not openable.
 type VaultGraphNode = {
   id: string;

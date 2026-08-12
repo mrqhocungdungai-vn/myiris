@@ -78,8 +78,8 @@ export default defineConfig(({ command }) => ({
     // bundler could resolve two live copies (r3f's + 3d-force-graph's),
     // breaking `instanceof THREE.Object3D` checks across the boundary. The
     // npm `overrides.three` pin in package.json collapses the copy on disk;
-    // this collapses it at the bundler graph level too. See design.md D2 of
-    // second-brain-galaxy-view.
+    // this collapses it at the bundler graph level too. See galaxy-view's
+    // single-`three` constraint.
     dedupe: ["three"],
   },
   server: {

@@ -143,7 +143,7 @@ contextBridge.exposeInMainWorld("iris", {
     ipcRenderer.on("sidecar:event", handler);
     return () => ipcRenderer.removeListener("sidecar:event", handler);
   },
-  // second-brain-galaxy-view (design.md D3/D7/D8): availability's live push
+  // second-brain-layer: availability's live push
   // half rides onSidecarEvent above (secondbrain_availability) — this is
   // just the boot-time/HUD-open pull. getSecondBrainGraph always triggers a
   // fresh main-process scan. activate/deactivateSecondBrain start/stop the
