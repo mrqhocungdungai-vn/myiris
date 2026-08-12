@@ -1,5 +1,6 @@
 import { useEffect, useState, type CSSProperties, type RefObject } from "react";
 import {
+  Brain,
   ChevronDown,
   Hand,
   Maximize2,
@@ -7,7 +8,6 @@ import {
   HeadphoneOff,
   Mic,
   MicOff,
-  Network,
   PenTool,
   Power,
   Radio,
@@ -397,7 +397,7 @@ export default function HudShell({
               onClick={onToggleSecondBrain}
               title={secondBrainActive ? "Hide second brain" : "Show second brain"}
             >
-              <Network size={14} />
+              <Brain size={14} />
             </button>
           ) : null}
           {/* second-brain-focus 5.2: not [data-no-dwell] — clearing a
